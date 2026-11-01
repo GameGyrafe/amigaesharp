@@ -33,7 +33,7 @@ must print the same 21 lines everywhere.
 | Inline arrays in structs (`unsafe struct` with `fixed byte X[8]`) | Done: C array member; indexed through a pointer, no span conversion |
 | Subset rule `ES0011`: no heap, jagged, multi-dimensional, reassigned or non-constant-length arrays; no array parameters or return types | Done |
 | Operators on structs (static `operator` methods, explicit conversions) and static methods in structs | Done: become C functions (`Fix_op_Multiply_Fix_Fix`) |
-| `Fix`: 16.16 fixed point (`+ - * /`, comparisons, `FromInt/FromRaw/ToInt/Frac`) in `ESharp.Runtime` | Done. Multiply uses 16x16 partial products (no 64-bit helper); divide by `Fix` uses a 64-bit intermediate, so it is slow on 68000. Speed on 68000 is **not measured** |
+| `Fix`: 16.16 fixed point (`+ - * /`, comparisons, `FromInt/FromRaw/ToInt/Frac`) in `ESharp.Runtime` | Done. Multiply is four unsigned 16x16 partial products: checked in the m68k-amigaos-gcc 6.5.0b `-m68000 -O2` assembly, it is four `mulu.w` and no `__mulsi3` call (a first signed version did call it), and it matches a 64-bit reference over about 6000 random and edge pairs. Divide by `Fix` uses a 64-bit intermediate (`__divdi3`), so it is slow on 68000. Cycle counts are **not measured** |
 | Host: sample runs under dotnet and as generated C with host gcc (`-Wall -Werror -fwrapv`) | Done, in tests |
 | m68k: sample built with m68k-amigaos-gcc 6.5.0b and run in FS-UAE 3.2.35 | Done: 21/21 ok on Kickstart 2.04 (37.175, A500+) and Kickstart 3.1 (40.069, A1200) |
 | os4 / morphos builds and runs of the phase 2 sample | **Not verified** (the PPC image was not built or run this session) |
@@ -53,7 +53,7 @@ Notes and limits:
 - Running the PPC builds needs a PPC-capable emulator (QEMU `amigaone`/`sam460ex` for OS4, `pegasos2` for MorphOS) or real hardware.
 - `esharp test` (run host tests, optionally the Amiga build in the emulator) and `esharp assets`.
 - `esharp run` (launch FS-UAE/WinUAE with output mounted as a hard drive), `esharp test`.
-- Finish phase 2: run the sample on the PPC targets once there is a way to run them; decide on optional bounds checks; measure `Fix` multiply on a 68000; instance methods on structs.
+- Finish phase 2: run the sample on the PPC targets once there is a way to run them; decide on optional bounds checks; instance methods on structs.
 - Phase 3: Intuition window, blitter rect, asset pipeline.
 
 ## Known limits of the emitter

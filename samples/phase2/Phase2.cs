@@ -106,5 +106,8 @@ public static class Program
         Check((Fix.FromInt(7) / 2).Raw == 229376, "divide by int");
         Check((Fix.FromRaw(0x28000) * Fix.FromRaw(0x28000)).Raw == 0x64000, "2.5 * 2.5 = 6.25");
         Check((Fix.FromInt(-1) * Fix.FromRaw(1)).Raw == -1, "smallest step keeps its sign");
+        Check((Fix.FromRaw(-98304) * Fix.FromRaw(-163840)).Raw == 245760, "-1.5 * -2.5 = 3.75");
+        Check((Fix.FromRaw(98304) * Fix.FromRaw(-163840)).Raw == -245760, "1.5 * -2.5 = -3.75");
+        Check((Fix.FromRaw(0x00644000) * Fix.FromRaw(-0x00C88000)).Raw == -1317281792, "100.25 * -200.5");
     }
 }

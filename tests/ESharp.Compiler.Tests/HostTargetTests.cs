@@ -20,6 +20,21 @@ public class HostTargetTests
         Phase2.Program.Main();
         Assert.Equal(Phase2Expected.Output, console.Output);
     }
+
+    [Fact]
+    public void Fix_multiply_matches_a_64_bit_reference()
+    {
+        var rng = new Random(1234);
+        var edges = new[] { 0, 1, -1, 0xFFFF, 0x10000, -0x10000, 0x7FFF0000, int.MinValue, int.MaxValue, 0x8000, -0x8000 };
+        var values = edges.Concat(Enumerable.Range(0, 400).Select(_ => rng.Next(int.MinValue, int.MaxValue))).ToArray();
+        foreach (var a in values)
+        foreach (var b in values.Take(120))
+        {
+            var expected = unchecked((int)(((long)a * b) >> 16));
+            var actual = (ESharp.Fix.FromRaw(a) * ESharp.Fix.FromRaw(b)).Raw;
+            Assert.True(expected == actual, $"{a} * {b}: expected {expected}, got {actual}");
+        }
+    }
 }
 
 /// <summary>What samples/phase2 prints: one "ok" line per check. Shared by the host, C and Amiga runs.</summary>
@@ -34,6 +49,6 @@ internal static class Phase2Expected
         "fixed buffer in a struct", "3 * 0.5 = 1.5", "integer and fraction parts", "3 / 0.5 = 6",
         "-2 * 1.5 = -3", "negation", "ToInt rounds towards negative infinity", "comparisons",
         "compound assignment", "multiply by int", "divide by int", "2.5 * 2.5 = 6.25",
-        "smallest step keeps its sign",
+        "smallest step keeps its sign", "-1.5 * -2.5 = 3.75", "1.5 * -2.5 = -3.75", "100.25 * -200.5",
     };
 }

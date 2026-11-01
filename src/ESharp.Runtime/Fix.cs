@@ -34,19 +34,23 @@ public struct Fix
     public static Fix operator -(Fix a) => FromRaw(-a.Raw);
 
     /// <summary>
-    /// Fixed-point multiply built from 16x16 partial products, so a 68000 needs only its native
-    /// 16x16 multiply instructions and never a 64-bit helper.
+    /// Fixed-point multiply built from four 16x16 partial products, so a 68000 uses only its native
+    /// <c>muls.w</c>/<c>mulu.w</c> and never a 32-bit multiply helper or 64-bit arithmetic. The
+    /// halves are multiplied as unsigned (the high product needs no correction because it is shifted
+    /// left by 16) and the cross terms are corrected for the sign of the high halves. Everything is
+    /// arithmetic modulo 2^32, so the result matches (a * b) >> 16 exactly.
     /// </summary>
     public static Fix operator *(Fix a, Fix b)
     {
-        int ah = a.Raw >> 16;
-        int bh = b.Raw >> 16;
-        ushort al = (ushort)(a.Raw & 0xFFFF);
-        ushort bl = (ushort)(b.Raw & 0xFFFF);
-        uint high = (uint)((short)ah * (short)bh) << 16;
-        uint mid = (uint)((short)ah * bl) + (uint)(al * (short)bh);
+        short ah = (short)(a.Raw >> 16);
+        short bh = (short)(b.Raw >> 16);
+        ushort al = (ushort)a.Raw;
+        ushort bl = (ushort)b.Raw;
+        uint high = (uint)((ushort)ah * (ushort)bh) << 16;
+        uint mid = (uint)((ushort)ah * bl) + (uint)(al * (ushort)bh);
+        uint fix = ((uint)(ah >> 15) & ((uint)bl << 16)) + ((uint)(bh >> 15) & ((uint)al << 16));
         uint low = (uint)(al * bl) >> 16;
-        return FromRaw((int)(high + mid + low));
+        return FromRaw((int)(high + mid - fix + low));
     }
 
     public static Fix operator *(Fix a, int b) => FromRaw(a.Raw * b);
