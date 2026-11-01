@@ -55,6 +55,10 @@ public static class Descriptors
         "ES0010", "Structs cannot hold references",
         "Field '{0}' of struct '{1}' is a reference type; E# structs have value semantics only");
 
+    public static readonly DiagnosticDescriptor FixedArrays = Error(
+        "ES0011", "Arrays must be fixed-size",
+        "{0}");
+
     public static readonly DiagnosticDescriptor NoEntryPoint = Error(
         "ES0020", "No entry point",
         "No method is marked [EntryPoint]");
@@ -70,5 +74,5 @@ public static class Descriptors
     public static System.Collections.Immutable.ImmutableArray<DiagnosticDescriptor> SubsetRules =>
         System.Collections.Immutable.ImmutableArray.Create(
             Exceptions, Linq, FloatingPoint, AsyncAwait, Dynamic, Reflection,
-            HeapClass, Generics, Interfaces, SlowArithmetic, ReferenceField);
+            HeapClass, Generics, Interfaces, SlowArithmetic, ReferenceField, FixedArrays);
 }

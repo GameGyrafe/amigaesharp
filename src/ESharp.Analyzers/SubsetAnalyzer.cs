@@ -43,6 +43,79 @@ public sealed class SubsetAnalyzer : DiagnosticAnalyzer
             SyntaxKind.PredefinedType, SyntaxKind.IdentifierName);
         context.RegisterSyntaxNodeAction(CheckLiteral, SyntaxKind.NumericLiteralExpression);
         context.RegisterSyntaxNodeAction(CheckStructFields, SyntaxKind.StructDeclaration);
+        context.RegisterSyntaxNodeAction(CheckArrayCreation,
+            SyntaxKind.ArrayCreationExpression, SyntaxKind.ImplicitArrayCreationExpression);
+        context.RegisterSyntaxNodeAction(CheckArrayShape, SyntaxKind.ArrayType);
+        context.RegisterSyntaxNodeAction(CheckArraySignature,
+            SyntaxKind.MethodDeclaration, SyntaxKind.OperatorDeclaration);
+        context.RegisterSyntaxNodeAction(CheckArrayVariable, SyntaxKind.VariableDeclarator);
+        context.RegisterSyntaxNodeAction(CheckArrayAssignment, SyntaxKind.SimpleAssignmentExpression);
+    }
+
+    private const string ArrayAdvice =
+        "arrays are fixed-size locals or static fields with a constant length ('int[] a = new int[16];'); pass them to methods as Span<T>";
+
+    private static void ReportArray(SyntaxNodeAnalysisContext c, Location at, string what) =>
+        c.ReportDiagnostic(Diagnostic.Create(Descriptors.FixedArrays, at, $"{what}: {ArrayAdvice}"));
+
+    private static bool IsArrayDeclaratorInitializer(SyntaxNode creation) =>
+        creation.Parent is EqualsValueClauseSyntax { Parent: VariableDeclaratorSyntax { Parent: VariableDeclarationSyntax { Parent: LocalDeclarationStatementSyntax or FieldDeclarationSyntax } } };
+
+    private static void CheckArrayCreation(SyntaxNodeAnalysisContext c)
+    {
+        if (!IsArrayDeclaratorInitializer(c.Node))
+        {
+            ReportArray(c, c.Node.GetLocation(), "array created outside a variable declaration (no heap arrays)");
+            return;
+        }
+        if (c.Node is ArrayCreationExpressionSyntax { Initializer: null } ac)
+        {
+            var size = ac.Type.RankSpecifiers[0].Sizes[0];
+            if (size is OmittedArraySizeExpressionSyntax || !c.SemanticModel.GetConstantValue(size, c.CancellationToken).HasValue)
+                ReportArray(c, size.GetLocation(), "array length is not a constant");
+        }
+    }
+
+    private static void CheckArrayShape(SyntaxNodeAnalysisContext c)
+    {
+        var t = (ArrayTypeSyntax)c.Node;
+        if (t.RankSpecifiers.Count > 1 || t.RankSpecifiers[0].Rank > 1)
+            ReportArray(c, t.GetLocation(), "multi-dimensional and jagged arrays are not supported");
+        else if (t.ElementType is ArrayTypeSyntax)
+            ReportArray(c, t.GetLocation(), "jagged arrays are not supported");
+    }
+
+    private static void CheckArraySignature(SyntaxNodeAnalysisContext c)
+    {
+        var (parameters, returnType) = c.Node switch
+        {
+            MethodDeclarationSyntax m => (m.ParameterList, m.ReturnType),
+            OperatorDeclarationSyntax o => (o.ParameterList, o.ReturnType),
+            _ => (null, null),
+        };
+        if (parameters == null) return;
+        foreach (var p in parameters.Parameters)
+            if (p.Type is ArrayTypeSyntax)
+                ReportArray(c, p.GetLocation(), $"array parameter '{p.Identifier.Text}'");
+        if (returnType is ArrayTypeSyntax)
+            ReportArray(c, returnType.GetLocation(), "array return type");
+    }
+
+    private static void CheckArrayVariable(SyntaxNodeAnalysisContext c)
+    {
+        var v = (VariableDeclaratorSyntax)c.Node;
+        if (v.Parent is not VariableDeclarationSyntax { Type: ArrayTypeSyntax or NullableTypeSyntax { ElementType: ArrayTypeSyntax } } decl) return;
+        if (decl.Parent is not (LocalDeclarationStatementSyntax or FieldDeclarationSyntax)) return;
+        var init = v.Initializer?.Value;
+        if (init is ArrayCreationExpressionSyntax or ImplicitArrayCreationExpressionSyntax or InitializerExpressionSyntax) return;
+        ReportArray(c, v.GetLocation(), $"array '{v.Identifier.Text}' must be initialised with 'new T[N]' or an initializer list");
+    }
+
+    private static void CheckArrayAssignment(SyntaxNodeAnalysisContext c)
+    {
+        var a = (AssignmentExpressionSyntax)c.Node;
+        if (c.SemanticModel.GetTypeInfo(a.Left, c.CancellationToken).Type is IArrayTypeSymbol)
+            ReportArray(c, a.GetLocation(), "arrays cannot be reassigned");
     }
 
     private static bool AllowFloat(SyntaxNodeAnalysisContext c)

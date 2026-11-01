@@ -131,4 +131,45 @@ Dos.PutStr(Pick(Max));
         var (code, _) = RunWithHostGcc(CompileOk(src));
         Assert.Equal(3, code);
     }
+
+    // ---- phase 2: arrays, spans, fixed point ----
+
+    private static string Phase2Source =>
+        File.ReadAllText(Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "..", "samples", "phase2", "Phase2.cs"));
+
+    [Fact]
+    public void Phase2_sample_compiles_and_runs_natively_with_the_same_output_as_dotnet()
+    {
+        if (!HasGcc) return;
+        var (code, output) = RunWithHostGcc(CompileOk(Phase2Source));
+        Assert.Equal(0, code);
+        Assert.Equal(Phase2Expected.Output, output);
+    }
+
+    [Fact]
+    public void Arrays_become_c_arrays_and_spans_become_pointer_and_length()
+    {
+        var c = CompileOk(Program(
+            "static int[] T = { 1, 2, 3 }; static int Sum(Span<int> s) { return s.Length > 0 ? s[0] : 0; }",
+            "int[] a = new int[4]; Sum(a);").Replace("using ESharp;", "using System;\nusing ESharp;"));
+        Assert.Contains("static int32_t P_T[3] = { 1, 2, 3 };", c);
+        Assert.Contains("int32_t a[4] = {0};", c);
+        Assert.Contains("typedef struct { int32_t *ptr; int32_t length; } ES_Span_int;", c);
+        Assert.Contains("s.ptr[0]", c);
+    }
+
+    [Fact]
+    public void Operators_on_structs_become_functions()
+    {
+        var c = CompileOk(Program("", "Fix a = Fix.FromInt(2); Fix b = a * a + a;"));
+        Assert.Contains("Fix_op_Multiply_Fix_Fix(a, a)", c);
+        Assert.Contains("Fix_op_Addition(", c);
+    }
+
+    [Fact]
+    public void Instance_methods_in_structs_still_report_ES0099()
+    {
+        var r = Compile(Program("struct S { public int V; public int Get() { return V; } }"));
+        Assert.Contains("ES0099", ErrorIds(r));
+    }
 }

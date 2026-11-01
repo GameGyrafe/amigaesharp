@@ -35,6 +35,29 @@ public class SubsetAnalyzerTests
         Assert.Contains(expectedId, ErrorIds(r));
     }
 
+    [Theory]
+    [InlineData("static int[] F() { return null; }")]
+    [InlineData("static void F(int[] a) { }")]
+    [InlineData("static void F(int n) { int[] a = new int[n]; }")]
+    [InlineData("static void F() { var a = new int[4]; var b = new int[4]; a = b; }")]
+    [InlineData("static void F() { int[] a = new int[4]; int[] b = a; }")]
+    [InlineData("static void F() { int[,] a = new int[2, 2]; }")]
+    [InlineData("static void F() { int[][] a = new int[2][]; }")]
+    [InlineData("static int Count(int[] a) { return a.Length; } static void G() { int x = Count(new int[3]); }")]
+    public void Heap_and_unsized_arrays_are_rejected(string members)
+    {
+        var r = Compile(Program(members));
+        Assert.Contains("ES0011", ErrorIds(r));
+    }
+
+    [Fact]
+    public void Fixed_size_arrays_and_spans_are_accepted()
+    {
+        var r = Compile(Program(
+            "const int N = 4; static int[] T = new int[N]; static int F(System.Span<int> s) { int[] a = { 1, 2 }; return s[0] + a[1]; }"));
+        Assert.True(r.Success, string.Join("\n", r.Diagnostics));
+    }
+
     [Fact]
     public void Float_is_allowed_when_opted_in()
     {

@@ -43,17 +43,17 @@ public static class Targets
     public static readonly TargetInfo M68k = new(
         "m68k", "AmigaOS 1.x-3.x on 68000 (amiga-gcc)",
         new[] { "AMIGA", "M68K", "AMIGAOS3" },
-        "m68k-amigaos-gcc", "-noixemul -m68000 -O2");
+        "m68k-amigaos-gcc", "-noixemul -m68000 -O2 -fwrapv");
 
     public static readonly TargetInfo Os4 = new(
         "os4", "AmigaOS 4 on PowerPC",
         new[] { "AMIGA", "PPC", "AMIGAOS4" },
-        "ppc-amigaos-gcc", "-O2 -D__USE_INLINE__", "-lauto");
+        "ppc-amigaos-gcc", "-O2 -fwrapv -D__USE_INLINE__", "-lauto");
 
     public static readonly TargetInfo MorphOs = new(
         "morphos", "MorphOS on PowerPC",
         new[] { "AMIGA", "PPC", "MORPHOS" },
-        "ppc-morphos-gcc", "-noixemul -O2");
+        "ppc-morphos-gcc", "-noixemul -O2 -fwrapv");
 
     public static IReadOnlyList<TargetInfo> All { get; } = new[] { M68k, Os4, MorphOs };
 

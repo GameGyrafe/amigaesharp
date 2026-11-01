@@ -21,18 +21,45 @@ Gate: runs in an emulator and on the host.
 | Run on real hardware | **Not done** |
 | Run the PowerPC builds (os4, morphos) | **Not done**: needs QEMU or hardware; `run` is m68k only |
 
+## Phase 2: data types (in progress)
+
+Gate: logic tests pass on host and Amiga. `samples/phase2` prints one `ok NAME` line per check and
+must print the same 21 lines everywhere.
+
+| Item | State |
+|---|---|
+| Fixed-size arrays: `T[] a = new T[N]`, `= { ... }`, `new[] { ... }` as locals and static fields; `Length`, indexing, `foreach` | Done: emitted as C arrays (`T a[N] = {0}`); `[ChipRam]` works on static arrays |
+| `Span<T>` / `ReadOnlySpan<T>`: indexing, `Length`, `Slice`, `foreach`, implicit array -> span and span -> read-only span | Done: emitted as `{ ptr, length }` structs; arrays are passed to methods as spans |
+| Inline arrays in structs (`unsafe struct` with `fixed byte X[8]`) | Done: C array member; indexed through a pointer, no span conversion |
+| Subset rule `ES0011`: no heap, jagged, multi-dimensional, reassigned or non-constant-length arrays; no array parameters or return types | Done |
+| Operators on structs (static `operator` methods, explicit conversions) and static methods in structs | Done: become C functions (`Fix_op_Multiply_Fix_Fix`) |
+| `Fix`: 16.16 fixed point (`+ - * /`, comparisons, `FromInt/FromRaw/ToInt/Frac`) in `ESharp.Runtime` | Done. Multiply uses 16x16 partial products (no 64-bit helper); divide by `Fix` uses a 64-bit intermediate, so it is slow on 68000. Speed on 68000 is **not measured** |
+| Host: sample runs under dotnet and as generated C with host gcc (`-Wall -Werror -fwrapv`) | Done, in tests |
+| m68k: sample built with m68k-amigaos-gcc 6.5.0b and run in FS-UAE 3.2.35 | Done: 21/21 ok on Kickstart 2.04 (37.175, A500+) and Kickstart 3.1 (40.069, A1200) |
+| os4 / morphos builds and runs of the phase 2 sample | **Not verified** (the PPC image was not built or run this session) |
+| Real hardware | **Not done** |
+
+Notes and limits:
+- No bounds checking: indexing an array or span out of range is undefined, unlike dotnet. A checked mode is not designed yet.
+- Overflow wraps: all targets now compile with `-fwrapv` to match unchecked C#.
+- Arrays have no heap form; a `Span<T>` is the only way to hand one to another method. Spans cannot be stored in fields (C# forbids it for ref structs).
+- `Slice`, `foreach` and `Length` on a span or array need a plain name or member access, not a call.
+- Only `Fix` (16.16) exists; an 8.8 `short` type and a `Fix` square root/trig table are not written.
+- Instance methods, constructors with arguments, properties and implicit user conversions are still `ES0099`.
+
 ## Next
 
 - Run hello on real hardware, the last open item in the phase 1 gate. The emulator side is done: AROS replacement, Kickstart 2.04 and Kickstart 3.1.
 - Running the PPC builds needs a PPC-capable emulator (QEMU `amigaone`/`sam460ex` for OS4, `pegasos2` for MorphOS) or real hardware.
 - `esharp test` (run host tests, optionally the Amiga build in the emulator) and `esharp assets`.
 - `esharp run` (launch FS-UAE/WinUAE with output mounted as a hard drive), `esharp test`.
-- Phase 2: arrays, fixed-point types, span views (emitter currently reports `ES0099` for them).
+- Finish phase 2: run the sample on the PPC targets once there is a way to run them; decide on optional bounds checks; measure `Fix` multiply on a 68000; instance methods on structs.
+- Phase 3: Intuition window, blitter rect, asset pipeline.
 
 ## Known limits of the emitter
 
-Reported as `ES0099` rather than miscompiled: arrays, string concatenation, instance methods,
-constructors with arguments, `ref`/`out`, `foreach`, properties, `[InlineAsm]`/`[Interrupt]` bodies.
+Reported as `ES0099` rather than miscompiled: string concatenation, instance methods,
+constructors with arguments, `ref`/`out`, `foreach` over anything but arrays and spans, properties, `[InlineAsm]`/`[Interrupt]` bodies.
 
 Namespaces are dropped when naming C symbols, so two types with the same name in different
 namespaces would collide.

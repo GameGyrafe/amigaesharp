@@ -55,7 +55,7 @@ public static class P
         File.WriteAllText(cFile, c);
         var exe = Path.Combine(dir, "prog");
 
-        var cc = Process.Start(new ProcessStartInfo("gcc", $"-std=gnu11 -Wall -Werror -I\"{dir}\" -o \"{exe}\" \"{cFile}\"")
+        var cc = Process.Start(new ProcessStartInfo("gcc", $"-std=gnu11 -fwrapv -Wall -Werror -I\"{dir}\" -o \"{exe}\" \"{cFile}\"")
         { RedirectStandardError = true })!;
         var err = cc.StandardError.ReadToEnd();
         cc.WaitForExit();

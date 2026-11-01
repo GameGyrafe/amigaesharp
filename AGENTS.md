@@ -62,5 +62,4 @@ is Kickstart 2.04 on `--model A500+` and Kickstart 3.1 (40.069) on `--model A120
 
 ## Next up
 
-See "Next" in `docs/STATUS.md`. At the time of writing: phase 1 passes on the emulator with Kickstart 2.04 and 3.1 (hardware not yet run), so start phase 2:
-arrays, fixed-point types and span views (the emitter currently reports `ES0099` for arrays).
+See "Next" in `docs/STATUS.md`. At the time of writing: phase 1 passes on the emulator with Kickstart 2.04 and 3.1 (hardware not yet run) and phase 2 (arrays, spans, `Fix`) passes on host and on both Kickstarts in FS-UAE; PPC runs and hardware are open.

@@ -26,6 +26,9 @@ internal sealed class CEmitter
     private string? _lastLineFile;
     private int _lastLine = -1;
     private readonly SortedSet<string> _headers = new(StringComparer.Ordinal);
+    private readonly SortedDictionary<string, string> _spans = new(StringComparer.Ordinal);
+    private bool _usesLen;
+    private int _temp;
 
     public CEmitter(CSharpCompilation compilation, HashSet<SyntaxTree> user, List<Diagnostic> diagnostics)
     {
@@ -66,13 +69,16 @@ internal sealed class CEmitter
         var body = new StringBuilder();
         foreach (var e in enums) EmitEnum(e);
         foreach (var s in structs) EmitStruct(s);
+        var typeText = _out.ToString();
+        _out.Clear();
 
         var fields = statics.SelectMany(t => t.GetMembers().OfType<IFieldSymbol>()).Where(f => !f.IsConst).ToList();
         foreach (var f in fields) EmitStaticField(f);
         if (fields.Count > 0) Line("");
 
         var methods = types.SelectMany(t => t.GetMembers().OfType<IMethodSymbol>())
-            .Where(m => m.MethodKind == MethodKind.Ordinary && !m.IsExtern && DeclaresBody(m))
+            .Where(m => m.MethodKind is MethodKind.Ordinary or MethodKind.UserDefinedOperator or MethodKind.Conversion
+                        && !m.IsExtern && DeclaresBody(m))
             .ToList();
 
         foreach (var m in methods) Line(Prototype(m) + ";");
@@ -82,6 +88,9 @@ internal sealed class CEmitter
 
         EmitMain();
 
+        body.Append(typeText);
+        foreach (var span in _spans.Values) body.Append(span);
+        if (_spans.Count > 0) body.Append('\n');
         body.Append(_out);
         _out.Clear();
 
@@ -92,6 +101,11 @@ internal sealed class CEmitter
         result.AppendLine("#include <stdint.h>");
         foreach (var h in _headers) result.AppendLine($"#include <{h}>");
         result.AppendLine();
+        if (_usesLen)
+        {
+            result.AppendLine("#define ES_LEN(a) ((int32_t)(sizeof(a) / sizeof((a)[0])))");
+            result.AppendLine();
+        }
         result.Append(body);
         return result.ToString();
     }
@@ -100,8 +114,8 @@ internal sealed class CEmitter
         _compilation.SyntaxTrees.FirstOrDefault(_user.Contains)?.Options.PreprocessorSymbolNames.Contains(symbol) ?? false;
 
     private static bool DeclaresBody(IMethodSymbol m) =>
-        m.DeclaringSyntaxReferences.Any(r => r.GetSyntax() is MethodDeclarationSyntax { Body: not null } or
-            MethodDeclarationSyntax { ExpressionBody: not null });
+        m.DeclaringSyntaxReferences.Any(r => r.GetSyntax() is BaseMethodDeclarationSyntax { Body: not null } or
+            BaseMethodDeclarationSyntax { ExpressionBody: not null });
 
     private SemanticModel Model(SyntaxTree tree)
     {
@@ -173,6 +187,7 @@ internal sealed class CEmitter
     {
         INamedTypeSymbol n => n.SpecialType != SpecialType.None ? n.ToDisplayString() : TypeName(n),
         IPointerTypeSymbol p => Mangle(p.PointedAtType) + "Ptr",
+        IArrayTypeSymbol a => Mangle(a.ElementType) + "Arr",
         _ => "t",
     };
 
@@ -183,6 +198,8 @@ internal sealed class CEmitter
         var overloads = m.ContainingType.GetMembers(m.Name).OfType<IMethodSymbol>().Count();
         if (overloads > 1)
             name += "_" + string.Join("_", m.Parameters.Select(p => Mangle(p.Type)));
+        if (m.MethodKind == MethodKind.Conversion)
+            name += "_" + Mangle(m.ReturnType);
         return name;
     }
 
@@ -218,12 +235,101 @@ internal sealed class CEmitter
             case IPointerTypeSymbol p:
                 var inner = CType(p.PointedAtType, at);
                 return inner.EndsWith("*") ? inner + "*" : inner + " *";
+            case INamedTypeSymbol { Name: "Span" or "ReadOnlySpan", TypeArguments.Length: 1 } sp when
+                sp.ContainingNamespace?.ToDisplayString() == "System":
+                return SpanType(sp, at);
             case INamedTypeSymbol { TypeKind: TypeKind.Enum or TypeKind.Struct } n:
                 return TypeName(n);
+            case IArrayTypeSymbol:
+                Unsupported(at, "array type here: arrays are fixed-size locals or static fields; pass them as Span<T>");
+                return "int32_t";
         }
 
         Unsupported(at, $"type {t.ToDisplayString()}");
         return "int32_t";
+    }
+
+    /// <summary>C struct for Span&lt;T&gt; / ReadOnlySpan&lt;T&gt;: a pointer and an element count.</summary>
+    private string SpanType(INamedTypeSymbol span, SyntaxNode at)
+    {
+        var elem = span.TypeArguments[0];
+        var readOnly = span.Name == "ReadOnlySpan";
+        var name = (readOnly ? "ES_ROSpan_" : "ES_Span_") + Mangle(elem);
+        if (!_spans.ContainsKey(name))
+        {
+            var ptr = CType(elem, at);
+            _spans[name] = $"typedef struct {{ {(readOnly ? "const " : "")}{ptr} *ptr; int32_t length; }} {name};\n";
+        }
+        return name;
+    }
+
+    private static bool IsSpan(ITypeSymbol? t) =>
+        t is INamedTypeSymbol { Name: "Span" or "ReadOnlySpan", TypeArguments.Length: 1 } n &&
+        n.ContainingNamespace?.ToDisplayString() == "System";
+
+    /// <summary>Only side-effect-free expressions may be written twice in the output.</summary>
+    private bool RequireSimple(ExpressionSyntax e, string what)
+    {
+        for (var x = e; ; )
+        {
+            switch (x)
+            {
+                case ParenthesizedExpressionSyntax p: x = p.Expression; continue;
+                case IdentifierNameSyntax: return true;
+                case MemberAccessExpressionSyntax ma: x = ma.Expression; continue;
+                default:
+                    Unsupported(e, $"{what} on a complex expression; assign it to a local first");
+                    return false;
+            }
+        }
+    }
+
+    /// <summary>
+    /// A C array declaration for a fixed-size E# array: <c>T name[N] = {...}</c>. Arrays live in
+    /// the frame or in static storage; there is no heap array.
+    /// </summary>
+    private string ArrayDeclarator(IArrayTypeSymbol t, string name, ExpressionSyntax? init, SyntaxNode at)
+    {
+        if (t.Rank != 1)
+        {
+            Unsupported(at, "multi-dimensional array");
+            return "int32_t " + name + "[1]";
+        }
+
+        InitializerExpressionSyntax? items = null;
+        ExpressionSyntax? sizeExpr = null;
+        switch (init)
+        {
+            case ArrayCreationExpressionSyntax ac:
+                items = ac.Initializer;
+                sizeExpr = ac.Type.RankSpecifiers[0].Sizes[0] is OmittedArraySizeExpressionSyntax ? null : ac.Type.RankSpecifiers[0].Sizes[0];
+                break;
+            case ImplicitArrayCreationExpressionSyntax iac:
+                items = iac.Initializer;
+                break;
+            case InitializerExpressionSyntax ie:
+                items = ie;
+                break;
+            default:
+                Unsupported(init ?? at, "array without a creation expression (use 'new T[N]' or an initializer list)");
+                break;
+        }
+
+        long length = items?.Expressions.Count ?? 0;
+        if (sizeExpr != null)
+        {
+            var c = Model(sizeExpr).GetConstantValue(sizeExpr);
+            if (c.HasValue && c.Value is int n && n > 0) length = n;
+            else Unsupported(sizeExpr, "array length that is not a positive constant");
+        }
+        else if (items == null) Unsupported(init ?? at, "array length");
+
+        var elem = CType(t.ElementType, at);
+        var text = (elem.EndsWith("*") ? elem : elem + " ") + $"{name}[{length}]";
+        if (items == null) return text + " = {0}";
+        var elements = items.Expressions.Select(e => Expr(e, top: true)).ToList();
+        if (elements.Count == 0) elements.Add("0");
+        return text + " = { " + string.Join(", ", elements) + " }";
     }
 
     private string Decl(ITypeSymbol t, string name, SyntaxNode at)
@@ -254,8 +360,10 @@ internal sealed class CEmitter
         var decl = (StructDeclarationSyntax)s.DeclaringSyntaxReferences.First().GetSyntax();
         foreach (var member in decl.Members)
         {
-            if (member is not (FieldDeclarationSyntax or EnumDeclarationSyntax or StructDeclarationSyntax))
-                Unsupported(member, $"{member.Kind()} in struct");
+            var staticMethod = member is MethodDeclarationSyntax or OperatorDeclarationSyntax or ConversionOperatorDeclarationSyntax
+                && member.ChildTokens().Any(t => t.IsKind(SyntaxKind.StaticKeyword));
+            if (member is not (FieldDeclarationSyntax or EnumDeclarationSyntax or StructDeclarationSyntax) && !staticMethod)
+                Unsupported(member, member is MethodDeclarationSyntax ? "instance method in struct" : $"{member.Kind()} in struct");
         }
 
         var name = TypeName(s);
@@ -263,7 +371,9 @@ internal sealed class CEmitter
         Line("{");
         _indent++;
         foreach (var f in s.GetMembers().OfType<IFieldSymbol>().Where(f => !f.IsStatic && !f.IsConst))
-            Line(Decl(f.Type, f.Name, decl) + ";");
+            Line(f.IsFixedSizeBuffer
+                ? Decl(((IPointerTypeSymbol)f.Type).PointedAtType, f.Name, decl) + $"[{f.FixedSize}];"
+                : Decl(f.Type, f.Name, decl) + ";");
         _indent--;
         Line($"}} {name};");
         Line("");
@@ -273,12 +383,14 @@ internal sealed class CEmitter
     {
         var decl = f.DeclaringSyntaxReferences.First().GetSyntax();
         var init = (decl as VariableDeclaratorSyntax)?.Initializer?.Value;
-        var text = Decl(f.Type, FieldName(f), decl);
+        var text = f.Type is IArrayTypeSymbol arr
+            ? ArrayDeclarator(arr, FieldName(f), init, decl)
+            : Decl(f.Type, FieldName(f), decl);
         // Chip RAM is a 68k-only concept in the C dialect: PowerPC systems allocate chip memory
         // at run time instead, so the attribute is a no-op there.
         if (HasAttribute(f, "ChipRamAttribute") && IsDefined("M68K"))
             text = "__chip " + text;
-        Line(init != null ? $"static {text} = {Expr(init, top: true)};" : $"static {text};");
+        Line(f.Type is IArrayTypeSymbol || init == null ? $"static {text};" : $"static {text} = {Expr(init, top: true)};");
     }
 
     private string Prototype(IMethodSymbol m)
@@ -294,11 +406,11 @@ internal sealed class CEmitter
 
     private void EmitMethod(IMethodSymbol m)
     {
-        var decl = (MethodDeclarationSyntax)m.DeclaringSyntaxReferences.First().GetSyntax();
+        var decl = (BaseMethodDeclarationSyntax)m.DeclaringSyntaxReferences.First().GetSyntax();
         if (HasAttribute(m, "InlineAsmAttribute") || HasAttribute(m, "InterruptAttribute"))
             Unsupported(decl, "[InlineAsm]/[Interrupt] methods");
 
-        LineDirective(decl.Identifier.GetLocation());
+        LineDirective(decl is MethodDeclarationSyntax md ? md.Identifier.GetLocation() : decl.GetLocation());
         Line(Prototype(m));
         Line("{");
         _indent++;
@@ -364,6 +476,11 @@ internal sealed class CEmitter
                 foreach (var v in l.Declaration.Variables)
                 {
                     var sym = (ILocalSymbol)Model(l).GetDeclaredSymbol(v)!;
+                    if (sym.Type is IArrayTypeSymbol localArray)
+                    {
+                        Line(ArrayDeclarator(localArray, sym.Name, v.Initializer?.Value, l) + ";");
+                        continue;
+                    }
                     var text = Decl(sym.Type, sym.Name, l);
                     if (l.IsConst) text = "const " + text;
                     Line(v.Initializer != null
@@ -397,6 +514,10 @@ internal sealed class CEmitter
 
             case ForStatementSyntax f:
                 EmitFor(f);
+                break;
+
+            case ForEachStatementSyntax fe:
+                EmitForEach(fe);
                 break;
 
             case BreakStatementSyntax:
@@ -479,6 +600,41 @@ internal sealed class CEmitter
         Body(f.Statement);
     }
 
+    private void EmitForEach(ForEachStatementSyntax fe)
+    {
+        var collType = Model(fe).GetTypeInfo(fe.Expression).Type;
+        if (collType is not IArrayTypeSymbol && !IsSpan(collType))
+        {
+            Unsupported(fe, "foreach over anything but an array or span");
+            return;
+        }
+        if (!RequireSimple(fe.Expression, "foreach")) return;
+
+        var local = (ILocalSymbol)Model(fe).GetDeclaredSymbol(fe)!;
+        var coll = Expr(fe.Expression);
+        var i = $"_i{++_temp}";
+        string len, elem;
+        if (collType is IArrayTypeSymbol)
+        {
+            _usesLen = true;
+            len = $"ES_LEN({coll})";
+            elem = $"{coll}[{i}]";
+        }
+        else
+        {
+            len = coll + ".length";
+            elem = $"{coll}.ptr[{i}]";
+        }
+
+        Line($"for (int32_t {i} = 0; {i} < {len}; {i}++)");
+        Line("{");
+        _indent++;
+        Line(Decl(local.Type, local.Name, fe) + $" = {elem};");
+        Statement(fe.Statement);
+        _indent--;
+        Line("}");
+    }
+
     private void EmitSwitch(SwitchStatementSyntax sw)
     {
         Line($"switch ({Expr(sw.Expression, top: true)})");
@@ -509,6 +665,31 @@ internal sealed class CEmitter
 
     private string Expr(ExpressionSyntax e, bool top = false)
     {
+        var text = ExprCore(e, top);
+        var info = Model(e).GetTypeInfo(e);
+
+        // Implicit array -> Span and Span -> ReadOnlySpan conversions.
+        if (info.ConvertedType is INamedTypeSymbol target && IsSpan(target))
+        {
+            if (info.Type is IArrayTypeSymbol && RequireSimple(e, "array to span conversion"))
+            {
+                _usesLen = true;
+                return $"(({SpanType(target, e)}){{ {text}, ES_LEN({text}) }})";
+            }
+            if (IsSpan(info.Type) && info.Type!.Name != target.Name)
+            {
+                var to = SpanType(target, e);
+                var from = SpanType((INamedTypeSymbol)info.Type, e);
+                var helper = "ES_ToReadOnly_" + Mangle(target.TypeArguments[0]);
+                _spans[helper] = $"static inline {to} {helper}({from} s) {{ return ({to}){{ s.ptr, s.length }}; }}\n";
+                return $"{helper}({text})";
+            }
+        }
+        return text;
+    }
+
+    private string ExprCore(ExpressionSyntax e, bool top)
+    {
         switch (e)
         {
             case ParenthesizedExpressionSyntax p:
@@ -526,6 +707,9 @@ internal sealed class CEmitter
             case MemberAccessExpressionSyntax ma:
                 return MemberAccess(ma);
 
+            case ElementAccessExpressionSyntax ea:
+                return ElementAccess(ea);
+
             case InvocationExpressionSyntax inv:
                 return Invocation(inv);
 
@@ -540,6 +724,14 @@ internal sealed class CEmitter
 
             case AssignmentExpressionSyntax a:
             {
+                if (a.Kind() != SyntaxKind.SimpleAssignmentExpression &&
+                    Model(a).GetSymbolInfo(a).Symbol is IMethodSymbol { MethodKind: MethodKind.UserDefinedOperator } op)
+                {
+                    if (!RequireSimple(a.Left, "compound assignment with an operator")) return "0";
+                    var l = Expr(a.Left);
+                    var call = $"{l} = {FuncName(op)}({l}, {Expr(a.Right, top: true)})";
+                    return top ? call : $"({call})";
+                }
                 var s = $"{Expr(a.Left)} {a.OperatorToken.Text} {Expr(a.Right)}";
                 return top ? s : $"({s})";
             }
@@ -552,6 +744,8 @@ internal sealed class CEmitter
 
             case CastExpressionSyntax cast:
             {
+                if (Model(cast).GetSymbolInfo(cast).Symbol is IMethodSymbol { MethodKind: MethodKind.Conversion } conv)
+                    return $"{FuncName(conv)}({Expr(cast.Expression, top: true)})";
                 var t = Model(cast).GetTypeInfo(cast.Type).Type!;
                 return $"(({CType(t, cast)}){Expr(cast.Expression)})";
             }
@@ -575,6 +769,15 @@ internal sealed class CEmitter
     private string Prefix(PrefixUnaryExpressionSyntax u)
     {
         var op = u.OperatorToken.Text;
+        if (Model(u).GetSymbolInfo(u).Symbol is IMethodSymbol { MethodKind: MethodKind.UserDefinedOperator } user)
+        {
+            if (u.IsKind(SyntaxKind.PreIncrementExpression) || u.IsKind(SyntaxKind.PreDecrementExpression))
+            {
+                Unsupported(u, "++/-- on an operator type");
+                return "0";
+            }
+            return $"{FuncName(user)}({Expr(u.Operand, top: true)})";
+        }
         return $"{op}{Expr(u.Operand)}";
     }
 
@@ -585,6 +788,9 @@ internal sealed class CEmitter
             Unsupported(b, b.Kind().ToString());
             return "0";
         }
+
+        if (Model(b).GetSymbolInfo(b).Symbol is IMethodSymbol { MethodKind: MethodKind.UserDefinedOperator } user)
+            return $"{FuncName(user)}({Expr(b.Left, top: true)}, {Expr(b.Right, top: true)})";
 
         var type = Model(b).GetTypeInfo(b).Type;
         if (type?.SpecialType == SpecialType.System_String)
@@ -656,6 +862,17 @@ internal sealed class CEmitter
     private string MemberAccess(MemberAccessExpressionSyntax ma)
     {
         var sym = Model(ma).GetSymbolInfo(ma).Symbol;
+        if (sym is IPropertySymbol { Name: "Length" })
+        {
+            var recvType = Model(ma).GetTypeInfo(ma.Expression).Type;
+            if (recvType is IArrayTypeSymbol && RequireSimple(ma.Expression, "Length"))
+            {
+                _usesLen = true;
+                return $"ES_LEN({Expr(ma.Expression)})";
+            }
+            if (IsSpan(recvType))
+                return $"{Expr(ma.Expression)}.length";
+        }
         if (sym is IFieldSymbol f)
         {
             if (f.IsStatic || f.IsConst || f.ContainingType.TypeKind == TypeKind.Enum)
@@ -668,6 +885,34 @@ internal sealed class CEmitter
         return "0";
     }
 
+    private string ElementAccess(ElementAccessExpressionSyntax ea)
+    {
+        var recvType = Model(ea).GetTypeInfo(ea.Expression).Type;
+        var args = ea.ArgumentList.Arguments;
+        if (args.Count != 1 || Model(ea).GetTypeInfo(args[0].Expression).Type?.Name is "Index" or "Range")
+        {
+            Unsupported(ea, "indexer other than a single integer index");
+            return "0";
+        }
+        var index = Expr(args[0].Expression, top: true);
+        var recv = Expr(ea.Expression);
+        if (IsSpan(recvType)) return $"{recv}.ptr[{index}]";
+        if (recvType is IArrayTypeSymbol or IPointerTypeSymbol) return $"{recv}[{index}]";
+        Unsupported(ea, "indexer");
+        return "0";
+    }
+
+    private string SpanSlice(InvocationExpressionSyntax inv, MemberAccessExpressionSyntax recvAccess, IMethodSymbol m)
+    {
+        var args = inv.ArgumentList.Arguments;
+        if (args.Count is < 1 or > 2 || !RequireSimple(recvAccess.Expression, "Slice")) return "0";
+        var recv = Expr(recvAccess.Expression);
+        var type = SpanType((INamedTypeSymbol)m.ContainingType, inv);
+        var start = Expr(args[0].Expression);
+        var length = args.Count == 2 ? Expr(args[1].Expression, top: true) : $"{recv}.length - {start}";
+        return $"(({type}){{ {recv}.ptr + {start}, {length} }})";
+    }
+
     private string Invocation(InvocationExpressionSyntax inv)
     {
         if (Model(inv).GetSymbolInfo(inv).Symbol is not IMethodSymbol m)
@@ -675,6 +920,9 @@ internal sealed class CEmitter
             Unsupported(inv, "call");
             return "0";
         }
+
+        if (IsSpan(m.ContainingType) && m.Name == "Slice" && inv.Expression is MemberAccessExpressionSyntax sliceAccess)
+            return SpanSlice(inv, sliceAccess, m);
 
         if (!m.IsStatic)
         {

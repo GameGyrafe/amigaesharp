@@ -9,6 +9,8 @@
     <IsTestProject>true</IsTestProject>
     <GenerateProgramFile>false</GenerateProgramFile>
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <!-- Several samples are compiled in, each with its own [EntryPoint] Main. -->
+    <StartupObject>Hello.Program</StartupObject>
   </PropertyGroup>
 
   <ItemGroup>
@@ -31,6 +33,7 @@
        source runs on the test host without any C step. -->
   <ItemGroup>
     <Compile Include="..\..\samples\hello\Hello.cs" Link="Samples\Hello.cs" />
+    <Compile Include="..\..\samples\phase2\Phase2.cs" Link="Samples\Phase2.cs" />
   </ItemGroup>
 
 </Project>
