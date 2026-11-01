@@ -81,13 +81,17 @@ internal sealed class CEmitter
         var typeText = _out.ToString();
         _out.Clear();
 
-        var fields = statics.SelectMany(t => t.GetMembers().OfType<IFieldSymbol>()).Where(f => !f.IsConst).ToList();
+        var fields = statics.SelectMany(t => t.GetMembers().OfType<IFieldSymbol>()).Where(f => !f.IsConst && f.AssociatedSymbol == null).ToList();
         foreach (var f in fields) EmitStaticField(f);
-        if (fields.Count > 0) Line("");
+        var staticProps = types.SelectMany(t => t.GetMembers().OfType<IPropertySymbol>())
+            .Where(p => p.IsStatic && IsAutoProperty(p)).ToList();
+        foreach (var p in staticProps) EmitStaticProperty(p);
+        if (fields.Count + staticProps.Count > 0) Line("");
 
         var methods = types.SelectMany(t => t.GetMembers().OfType<IMethodSymbol>())
             .Where(m => !m.IsGenericMethod)
             .Where(m => m.MethodKind is MethodKind.Ordinary or MethodKind.UserDefinedOperator or MethodKind.Conversion or MethodKind.Constructor
+                        or MethodKind.PropertyGet or MethodKind.PropertySet
                         && !m.IsExtern && DeclaresBody(m))
             .ToList();
 
@@ -139,9 +143,28 @@ internal sealed class CEmitter
     private bool IsDefined(string symbol) =>
         _compilation.SyntaxTrees.FirstOrDefault(_user.Contains)?.Options.PreprocessorSymbolNames.Contains(symbol) ?? false;
 
-    private static bool DeclaresBody(IMethodSymbol m) =>
-        m.DeclaringSyntaxReferences.Any(r => r.GetSyntax() is BaseMethodDeclarationSyntax { Body: not null } or
-            BaseMethodDeclarationSyntax { ExpressionBody: not null });
+    private static bool DeclaresBody(IMethodSymbol m)
+    {
+        if (m.AssociatedSymbol is IPropertySymbol { IsIndexer: true }) return false;
+        return m.DeclaringSyntaxReferences.Any(r => BodyOf(r.GetSyntax()) is (not null, _) or (_, not null));
+    }
+
+    /// <summary>The block or expression body of a method, operator, constructor or property accessor.</summary>
+    private static (BlockSyntax? Block, ArrowExpressionClauseSyntax? Arrow) BodyOf(SyntaxNode n) => n switch
+    {
+        BaseMethodDeclarationSyntax b => (b.Body, b.ExpressionBody),
+        AccessorDeclarationSyntax a => (a.Body, a.ExpressionBody),
+        ArrowExpressionClauseSyntax x => (null, x),
+        PropertyDeclarationSyntax p => (null, p.ExpressionBody),
+        _ => (null, null),
+    };
+
+    /// <summary>An auto-property ({ get; set; }): stored in a field of the same name.</summary>
+    private static bool IsAutoProperty(IPropertySymbol p) =>
+        !p.IsIndexer && p.DeclaringSyntaxReferences.FirstOrDefault()?.GetSyntax() is PropertyDeclarationSyntax
+        {
+            ExpressionBody: null, AccessorList: { } list
+        } && list.Accessors.All(a => a.Body == null && a.ExpressionBody == null);
 
     private SemanticModel Model(SyntaxTree tree)
     {
@@ -202,11 +225,15 @@ internal sealed class CEmitter
         void Visit(INamedTypeSymbol s)
         {
             if (!done.Add(s)) return;
-            foreach (var f in s.GetMembers().OfType<IFieldSymbol>().Where(f => !f.IsStatic && !f.IsConst))
+            foreach (var f in s.GetMembers().OfType<IFieldSymbol>().Where(f => !f.IsStatic && !f.IsConst && f.AssociatedSymbol == null))
                 if (f.Type is INamedTypeSymbol { TypeKind: TypeKind.Struct } nested && all.Contains(nested, SymbolEqualityComparer.Default))
+                    Visit(nested);
+            foreach (var pr in s.GetMembers().OfType<IPropertySymbol>().Where(pr => !pr.IsStatic && IsAutoProperty(pr)))
+                if (pr.Type is INamedTypeSymbol { TypeKind: TypeKind.Struct } nested && all.Contains(nested, SymbolEqualityComparer.Default))
                     Visit(nested);
             sorted.Add(s);
         }
+        // (auto-property types count as fields below)
 
         foreach (var s in all) Visit(s);
         return sorted;
@@ -407,6 +434,7 @@ internal sealed class CEmitter
             var isStatic = member.ChildTokens().Any(t => t.IsKind(SyntaxKind.StaticKeyword));
             var supported = member is FieldDeclarationSyntax or EnumDeclarationSyntax or StructDeclarationSyntax
                 or MethodDeclarationSyntax or OperatorDeclarationSyntax or ConversionOperatorDeclarationSyntax
+                or PropertyDeclarationSyntax
                 || member is ConstructorDeclarationSyntax { Initializer: null } && !isStatic;
             if (!supported)
                 Unsupported(member, member is ConstructorDeclarationSyntax ? "static constructor or constructor initializer" : $"{member.Kind()} in struct");
@@ -416,10 +444,16 @@ internal sealed class CEmitter
         Line($"typedef struct {name}");
         Line("{");
         _indent++;
-        foreach (var f in s.GetMembers().OfType<IFieldSymbol>().Where(f => !f.IsStatic && !f.IsConst))
+        foreach (var f in s.GetMembers().OfType<IFieldSymbol>().Where(f => !f.IsStatic && !f.IsConst && f.AssociatedSymbol == null))
             Line(f.IsFixedSizeBuffer
                 ? Decl(((IPointerTypeSymbol)f.Type).PointedAtType, f.Name, decl) + $"[{f.FixedSize}];"
                 : Decl(f.Type, f.Name, decl) + ";");
+        foreach (var p in s.GetMembers().OfType<IPropertySymbol>().Where(p => !p.IsStatic && IsAutoProperty(p)))
+        {
+            if (p.DeclaringSyntaxReferences.First().GetSyntax() is PropertyDeclarationSyntax { Initializer: not null } pd)
+                Unsupported(pd, "initializer on an instance property");
+            Line(Decl(p.Type, p.Name, decl) + ";");
+        }
         _indent--;
         Line($"}} {name};");
         Line("");
@@ -439,6 +473,14 @@ internal sealed class CEmitter
         Line(f.Type is IArrayTypeSymbol || init == null ? $"static {text};" : $"static {text} = {Expr(init, top: true)};");
     }
 
+    private void EmitStaticProperty(IPropertySymbol p)
+    {
+        var decl = (PropertyDeclarationSyntax)p.DeclaringSyntaxReferences.First().GetSyntax();
+        var name = $"{TypeName(p.ContainingType)}_{p.Name}";
+        var text = Decl(p.Type, name, decl);
+        Line(decl.Initializer == null ? $"static {text};" : $"static {text} = {Expr(decl.Initializer.Value, top: true)};");
+    }
+
     private string Prototype(IMethodSymbol m)
     {
         var node = m.DeclaringSyntaxReferences.First().GetSyntax();
@@ -456,7 +498,8 @@ internal sealed class CEmitter
 
     private void EmitMethod(IMethodSymbol m)
     {
-        var decl = (BaseMethodDeclarationSyntax)m.DeclaringSyntaxReferences.First().GetSyntax();
+        var decl = m.DeclaringSyntaxReferences.First().GetSyntax();
+        var (block, arrow) = BodyOf(decl);
         if (HasAttribute(m, "InlineAsmAttribute") || HasAttribute(m, "InterruptAttribute"))
             Unsupported(decl, "[InlineAsm]/[Interrupt] methods");
 
@@ -467,14 +510,14 @@ internal sealed class CEmitter
         var isCtor = m.MethodKind == MethodKind.Constructor;
         _this = isCtor ? ThisKind.Value : m.IsStatic ? ThisKind.None : ThisKind.Pointer;
         if (isCtor) Line($"{CType(m.ContainingType, decl)} {ThisName} = {{0}};");
-        if (decl.Body != null)
+        if (block != null)
         {
-            foreach (var st in decl.Body.Statements) Statement(st);
+            foreach (var st in block.Statements) Statement(st);
         }
-        else if (decl.ExpressionBody != null)
+        else if (arrow != null)
         {
-            LineDirective(decl.ExpressionBody.GetLocation());
-            var e = Expr(decl.ExpressionBody.Expression, top: true);
+            LineDirective(arrow.GetLocation());
+            var e = Expr(arrow.Expression, top: true);
             Line(m.ReturnsVoid ? e + ";" : "return " + e + ";");
         }
         if (isCtor) Line($"return {ThisName};");
@@ -793,10 +836,13 @@ internal sealed class CEmitter
                 return Prefix(u);
 
             case PostfixUnaryExpressionSyntax pu:
+                if (WrittenProperty(pu.Operand) is { } pp)
+                    return PropertyStep(pp, pu.Operand, pu, pu.IsKind(SyntaxKind.PostIncrementExpression));
                 return Expr(pu.Operand) + pu.OperatorToken.Text;
 
             case AssignmentExpressionSyntax a:
             {
+                if (WrittenProperty(a.Left) is { } wp) return PropertyAssignment(wp, a);
                 if (a.Kind() != SyntaxKind.SimpleAssignmentExpression &&
                     Model(a).GetSymbolInfo(a).Symbol is IMethodSymbol { MethodKind: MethodKind.UserDefinedOperator } op)
                 {
@@ -842,6 +888,9 @@ internal sealed class CEmitter
     private string Prefix(PrefixUnaryExpressionSyntax u)
     {
         var op = u.OperatorToken.Text;
+        if ((u.IsKind(SyntaxKind.PreIncrementExpression) || u.IsKind(SyntaxKind.PreDecrementExpression)) &&
+            WrittenProperty(u.Operand) is { } pp)
+            return PropertyStep(pp, u.Operand, u, u.IsKind(SyntaxKind.PreIncrementExpression));
         if (Model(u).GetSymbolInfo(u).Symbol is IMethodSymbol { MethodKind: MethodKind.UserDefinedOperator } user)
         {
             if (u.IsKind(SyntaxKind.PreIncrementExpression) || u.IsKind(SyntaxKind.PreDecrementExpression))
@@ -916,7 +965,8 @@ internal sealed class CEmitter
         var inits = new List<string>();
         foreach (var item in oc.Initializer.Expressions)
         {
-            if (item is AssignmentExpressionSyntax { Left: IdentifierNameSyntax field } a)
+            if (item is AssignmentExpressionSyntax { Left: IdentifierNameSyntax field } a &&
+                IsInitializable(Model(a).GetSymbolInfo(field).Symbol))
                 inits.Add($".{field.Identifier.Text} = {Expr(a.Right, top: true)}");
             else
                 Unsupported(item, "object initializer element");
@@ -933,6 +983,8 @@ internal sealed class CEmitter
                 return id.Identifier.Text;
             case IFieldSymbol f:
                 return FieldRef(f, id);
+            case IPropertySymbol p:
+                return PropertyRead(p, null, id);
             default:
                 Unsupported(id, $"identifier '{id.Identifier.Text}'");
                 return id.Identifier.Text;
@@ -968,6 +1020,8 @@ internal sealed class CEmitter
             if (IsSpan(recvType))
                 return $"{Expr(ma.Expression)}.length";
         }
+        if (sym is IPropertySymbol prop)
+            return PropertyRead(prop, ma.Expression, ma);
         if (sym is IFieldSymbol f)
         {
             if (f.IsStatic || f.IsConst || f.ContainingType.TypeKind == TypeKind.Enum)
@@ -1058,30 +1112,117 @@ internal sealed class CEmitter
     }
 
     /// <summary>The C pointer passed as the hidden first argument of a struct instance method.</summary>
-    private string? ReceiverAddress(InvocationExpressionSyntax inv, IMethodSymbol m)
+    private string? ReceiverAddress(InvocationExpressionSyntax inv, IMethodSymbol m) =>
+        ReceiverOf((inv.Expression as MemberAccessExpressionSyntax)?.Expression, inv, m.Name, "instance method call");
+
+    /// <summary>The address of the object an instance member is used on; <paramref name="recv"/> null means the current 'this'.</summary>
+    private string? ReceiverOf(ExpressionSyntax? recv, SyntaxNode at, string name, string what)
     {
-        if (inv.Expression is not MemberAccessExpressionSyntax ma)
+        if (recv == null)
         {
-            // Unqualified call: the receiver is the current 'this'.
+            // Unqualified use: the receiver is the current 'this'.
             return _this switch
             {
                 ThisKind.Pointer => ThisName,
                 ThisKind.Value => "&" + ThisName,
-                _ => Unsupported(inv, "instance method call outside a struct method"),
+                _ => Unsupported(at, what + " outside a struct method"),
             };
         }
 
-        var recv = ma.Expression;
         if (recv is ThisExpressionSyntax) return _this == ThisKind.Pointer ? ThisName : "&" + ThisName;
-        if (Model(inv).GetTypeInfo(recv).Type is IPointerTypeSymbol) return Expr(recv);
+        if (Model(at).GetTypeInfo(recv).Type is IPointerTypeSymbol) return Expr(recv);
 
         var core = recv;
         while (core is ParenthesizedExpressionSyntax pe) core = pe.Expression;
         if (core is IdentifierNameSyntax or MemberAccessExpressionSyntax or ElementAccessExpressionSyntax &&
-            Model(inv).GetSymbolInfo(core).Symbol is not IMethodSymbol and not IPropertySymbol)
+            Model(at).GetSymbolInfo(core).Symbol is not IMethodSymbol && !(Model(at).GetSymbolInfo(core).Symbol is IPropertySymbol cp && !IsAutoProperty(cp)))
             return "&" + Expr(core);
 
-        return Unsupported(recv, $"call of '{m.Name}' on a temporary value; assign it to a local first");
+        return Unsupported(recv, $"use of '{name}' on a temporary value; assign it to a local first");
+    }
+
+    // ------------------------------------------------------------------ properties
+
+    private static bool IsInitializable(ISymbol? s) =>
+        s is IFieldSymbol || s is IPropertySymbol p && IsAutoProperty(p);
+
+    private string PropertyRead(IPropertySymbol p, ExpressionSyntax? recv, SyntaxNode at)
+    {
+        if (p.IsIndexer) return Unsupported(at, "indexer");
+        if (IsAutoProperty(p))
+        {
+            if (p.IsStatic) return $"{TypeName(p.ContainingType)}_{p.Name}";
+            if (recv == null || recv is ThisExpressionSyntax)
+            {
+                switch (_this)
+                {
+                    case ThisKind.Pointer: return $"{ThisName}->{p.Name}";
+                    case ThisKind.Value: return $"{ThisName}.{p.Name}";
+                }
+                return Unsupported(at, "instance property access outside a struct method");
+            }
+            var op = Model(at).GetTypeInfo(recv).Type is IPointerTypeSymbol ? "->" : ".";
+            return $"{Expr(recv)}{op}{p.Name}";
+        }
+        if (p.GetMethod == null) return Unsupported(at, $"property '{p.Name}' without a getter");
+        if (p.IsStatic) return $"{FuncName(p.GetMethod)}()";
+        var receiver = ReceiverOf(recv, at, p.Name, "instance property access");
+        return receiver == null ? "0" : $"{FuncName(p.GetMethod)}({receiver})";
+    }
+
+    /// <summary>The non-auto property an assignment or ++/-- writes to, or null for fields, locals and auto-properties.</summary>
+    private IPropertySymbol? WrittenProperty(ExpressionSyntax target)
+    {
+        var sym = Model(target).GetSymbolInfo(target).Symbol;
+        return sym is IPropertySymbol { IsIndexer: false } p && !IsAutoProperty(p) ? p : null;
+    }
+
+    private static bool IsStatementContext(SyntaxNode n) => n.Parent is ExpressionStatementSyntax or ForStatementSyntax;
+
+    /// <summary>Property write as a call of the setter. Only allowed as a statement (the value of the expression is not kept).</summary>
+    private string PropertyWrite(IPropertySymbol p, ExpressionSyntax target, SyntaxNode whole, Func<string, string> newValue,
+        bool reads = true)
+    {
+        if (p.SetMethod == null) return Unsupported(whole, $"assignment to property '{p.Name}' without a setter");
+        if (!IsStatementContext(whole)) return Unsupported(whole, "property assignment used as a value; make it a statement");
+        var recv = (target as MemberAccessExpressionSyntax)?.Expression;
+        if (reads && recv != null && !IsPure(recv))
+            return Unsupported(recv, "compound assignment or ++/-- on a property of a complex expression; assign it to a local first");
+        var current = reads ? PropertyRead(p, recv, target) : "";
+        var value = newValue(current);
+        if (p.IsStatic) return $"{FuncName(p.SetMethod)}({value})";
+        var receiver = ReceiverOf(recv, whole, p.Name, "instance property access");
+        return receiver == null ? "0" : $"{FuncName(p.SetMethod)}({receiver}, {value})";
+    }
+
+    /// <summary>Names, literals, member accesses and element accesses of those: safe to evaluate twice.</summary>
+    private static bool IsPure(ExpressionSyntax e) => e switch
+    {
+        ParenthesizedExpressionSyntax p => IsPure(p.Expression),
+        IdentifierNameSyntax or ThisExpressionSyntax or LiteralExpressionSyntax => true,
+        MemberAccessExpressionSyntax ma => IsPure(ma.Expression),
+        ElementAccessExpressionSyntax ea => IsPure(ea.Expression) && ea.ArgumentList.Arguments.All(a => IsPure(a.Expression)),
+        _ => false,
+    };
+
+    private string PropertyAssignment(IPropertySymbol p, AssignmentExpressionSyntax a)
+    {
+        if (a.IsKind(SyntaxKind.SimpleAssignmentExpression))
+            return PropertyWrite(p, a.Left, a, _ => Expr(a.Right, top: true), reads: false);
+        var token = a.OperatorToken.Text;
+        var op = token.Substring(0, token.Length - 1);
+        if (op == "?" ) return Unsupported(a, "??=");
+        var user = Model(a).GetSymbolInfo(a).Symbol as IMethodSymbol;
+        return PropertyWrite(p, a.Left, a, cur => user is { MethodKind: MethodKind.UserDefinedOperator }
+            ? $"{FuncName(user)}({cur}, {Expr(a.Right, top: true)})"
+            : $"({cur} {op} {Expr(a.Right)})");
+    }
+
+    private string PropertyStep(IPropertySymbol p, ExpressionSyntax operand, SyntaxNode whole, bool increment)
+    {
+        if (p.Type.SpecialType == SpecialType.None || p.Type.SpecialType == SpecialType.System_Boolean)
+            return Unsupported(whole, "++/-- on a property of this type");
+        return PropertyWrite(p, operand, whole, cur => $"({cur} {(increment ? "+" : "-")} 1)");
     }
 
     private string Literal(LiteralExpressionSyntax lit)

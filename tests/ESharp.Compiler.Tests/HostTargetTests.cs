@@ -32,6 +32,14 @@ public class HostTargetTests
     }
 
     [Fact]
+    public void Properties_sample_runs_on_the_host()
+    {
+        using var console = HostConsole.Capture();
+        PropertiesSample.Program.Main();
+        Assert.Equal(PropertiesExpected.Output, console.Output);
+    }
+
+    [Fact]
     public void Memory_sample_runs_on_the_host_without_leaks()
     {
         using var mem = HostMem.Capture();
@@ -124,5 +132,33 @@ internal static class GenericsExpected
         "pool destroy returns the memory",
         "pool of int",
         "impossible pool fails cleanly",
+    };
+}
+
+/// <summary>What samples/properties prints.</summary>
+internal static class PropertiesExpected
+{
+    public static string Output => string.Concat(Names.Select(n => "ok " + n + "\n"));
+
+    private static readonly string[] Names =
+    {
+        "auto properties, get-only set in the constructor",
+        "property getter with a body, expression-bodied getter",
+        "setter with a body clamps",
+        "setter clamps low, Alive follows",
+        "-- on a property inside a method",
+        "compound assignment on properties",
+        "++ and -= on an auto-property",
+        "++ on a property with a setter",
+        "computed property",
+        "this.Property and unqualified property in a method",
+        "property of a by-value parameter",
+        "properties through a pointer",
+        "properties on array elements",
+        "properties in a generic struct",
+        "compound assignment with a user-defined operator",
+        "static properties",
+        "static property with accessors, compound",
+        "static property of a struct type",
     };
 }

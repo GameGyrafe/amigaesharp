@@ -147,6 +147,25 @@ Dos.PutStr(Pick(Max));
     }
 
     [Fact]
+    public void Properties_sample_compiles_and_runs_natively_with_the_same_output_as_dotnet()
+    {
+        if (!HasGcc) return;
+        var path = Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "..", "samples", "properties", "Properties.cs");
+        var (code, output) = RunWithHostGcc(CompileOk(File.ReadAllText(path)));
+        Assert.Equal(0, code);
+        Assert.Equal(PropertiesExpected.Output, output);
+    }
+
+    [Fact]
+    public void Property_assignment_used_as_a_value_reports_ES0099()
+    {
+        var r = Compile(Program(
+            "struct S { int _v; public int V { get { return _v; } set { _v = value; } } }",
+            "S s = default; int x = (s.V = 3);"));
+        Assert.Contains("ES0099", ErrorIds(r));
+    }
+
+    [Fact]
     public void Generics_sample_compiles_and_runs_natively_with_the_same_output_as_dotnet()
     {
         if (!HasGcc) return;
