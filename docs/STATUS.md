@@ -16,6 +16,7 @@ Gate: runs in an emulator and on the host.
 | Pinned toolchain image (`docker/Dockerfile`): m68k, AmigaOS 4 PPC, MorphOS PPC, by digest | Done |
 | Hello sample builds with the real compilers for m68k, os4 and morphos (`esharp build --target X --docker`) | Done: m68k yields a valid hunk executable, os4/morphos PPC ELF |
 | `esharp run` launches FS-UAE with the output mounted as DH0:; `--headless` captures output | Done: hello prints `Hello from E#!` on an emulated A500 (FS-UAE 3.1.66, built-in AROS ROM replacement) |
+| Same run on Dave's Linux dev host (Ubuntu, dotnet 10.0.402, FS-UAE 3.2.35, AROS ROM replacement) | Done: prints `Hello from E#!`, exit 0 |
 | Run in FS-UAE with a real Kickstart | **Not done**: the AROS ROM replacement is not a real Kickstart, so Kickstart 1.3/3.1 behaviour is unverified. Pass `--kickstart <rom>` with a ROM you own |
 | Run on real hardware | **Not done** |
 | Run the PowerPC builds (os4, morphos) | **Not done**: needs QEMU or hardware; `run` is m68k only |
