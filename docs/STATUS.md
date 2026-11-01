@@ -72,7 +72,7 @@ Notes and limits:
 
 ## Known limits of the emitter
 
-Reported as `ES0099` rather than miscompiled: string concatenation, `ref`/`out`, `foreach` over anything but arrays and spans, properties, `[InlineAsm]`/`[Interrupt]` bodies.
+Reported as `ES0099` rather than miscompiled: string concatenation, `ref`/`out`, `foreach` over anything but arrays and spans, `[InlineAsm]`/`[Interrupt]` bodies.
 
 Namespaces are dropped when naming C symbols, so two types with the same name in different
 namespaces would collide.
