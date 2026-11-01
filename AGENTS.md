@@ -57,5 +57,5 @@ them, and never copy them into the repo.
 
 ## Next up
 
-See "Next" in `docs/STATUS.md`. At the time of writing: verify hello against real Kickstart 2.04 and 3.1, then
-phase 2 (arrays, fixed-point types, span views).
+See "Next" in `docs/STATUS.md`. At the time of writing: phase 1 passes on the emulator with Kickstart 2.04 and 3.1 (hardware not yet run), so start phase 2:
+arrays, fixed-point types and span views (the emitter currently reports `ES0099` for arrays).
