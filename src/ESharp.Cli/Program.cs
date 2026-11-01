@@ -31,6 +31,9 @@ Run options (build options also apply; run is m68k only):
   --headless        No window: run on a virtual display, print the program's output, exit
   --timeout <sec>   Headless time limit (default 120; AROS needs ~20 s to boot)
   --kickstart <rom> Use a real Kickstart ROM instead of FS-UAE's built-in AROS replacement
+                    (or set ESHARP_KICKSTART)
+  --model <name>    Amiga model for FS-UAE: A500 (default), A500+, A600, A1200
+  --fsuae <path>    FS-UAE executable (or set ESHARP_FSUAE)
 
 Targets:
 " + string.Join("\n", Targets.All.Select(t => $"  {t.Name,-9} {t.Description}")) + "\n";
@@ -194,7 +197,9 @@ public static class Program
     {
         bool headless = false;
         int timeout = 120;
-        string? kickstart = null;
+        string? kickstart = Environment.GetEnvironmentVariable("ESHARP_KICKSTART");
+        string model = "A500";
+        string? fsuae = null;
         var buildArgs = new List<string>();
         for (var i = 0; i < args.Length; i++)
         {
@@ -202,7 +207,9 @@ public static class Program
             {
                 case "--headless": headless = true; break;
                 case "--timeout" when i + 1 < args.Length && int.TryParse(args[i + 1], out timeout): i++; break;
-                case "--kickstart" when i + 1 < args.Length: kickstart = Path.GetFullPath(args[++i]); break;
+                case "--kickstart" when i + 1 < args.Length: kickstart = args[++i]; break;
+                case "--model" when i + 1 < args.Length: model = args[++i]; break;
+                case "--fsuae" when i + 1 < args.Length: fsuae = args[++i]; break;
                 default: buildArgs.Add(args[i]); break;
             }
         }
@@ -212,9 +219,15 @@ public static class Program
             return Fail("run uses FS-UAE, which emulates 68k Amigas only; use --target m68k");
         if (buildArgs.Contains("--emit-only")) return Fail("--emit-only cannot be combined with run");
 
+        if (kickstart != null)
+        {
+            kickstart = Path.GetFullPath(kickstart.Replace("~", Environment.GetFolderPath(Environment.SpecialFolder.UserProfile)));
+            if (!File.Exists(kickstart)) return Fail($"Kickstart ROM not found: {kickstart}");
+        }
+
         var rc = Build(buildArgs.ToArray(), out var exe);
         if (rc != 0 || exe == null) return rc;
-        return FsUae.Run(exe, headless, TimeSpan.FromSeconds(timeout), kickstart);
+        return FsUae.Run(exe, headless, TimeSpan.FromSeconds(timeout), kickstart, model, fsuae);
     }
 
     private static List<string> CollectSources(string path)

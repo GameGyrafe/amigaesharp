@@ -60,7 +60,9 @@ Run it on an emulated Amiga (needs `fs-uae`; add `--headless` for no window, whi
 dotnet run --project src/ESharp.Cli -- run samples/hello --docker --headless   # prints: Hello from E#!
 ```
 
-`run` uses FS-UAE's built-in AROS ROM replacement unless you pass `--kickstart <rom>`.
+`run` uses FS-UAE's built-in AROS ROM replacement unless you pass `--kickstart <rom>` (or set
+`ESHARP_KICKSTART`). Use a ROM you own; ROMs are git-ignored and must never be committed. On macOS
+pass `--fsuae /Applications/FSUAE.app/Contents/MacOS/fs-uae` (or set `ESHARP_FSUAE`).
 
 Without Docker, install the compiler yourself and drop `--docker` (`--cc` and `--cflags` override it).
 

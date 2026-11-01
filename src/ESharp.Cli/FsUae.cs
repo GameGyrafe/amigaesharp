@@ -11,7 +11,7 @@ namespace ESharp.Cli;
 /// </summary>
 internal static class FsUae
 {
-    public static int Run(string exe, bool headless, TimeSpan timeout, string? kickstart)
+    public static int Run(string exe, bool headless, TimeSpan timeout, string? kickstart, string model = "A500", string? fsuaePath = null)
     {
         var name = Path.GetFileName(exe);
         var runDir = Path.Combine(Path.GetDirectoryName(Path.GetFullPath(exe))!, "run");
@@ -29,7 +29,7 @@ internal static class FsUae
         var config = Path.Combine(runDir, "run.fs-uae");
         File.WriteAllText(config,
             "[fs-uae]\n" +
-            "amiga_model = A500\n" +
+            $"amiga_model = {model}\n" +
             $"kickstart_file = {(kickstart ?? "internal")}\n" +
             $"hard_drive_0 = {dh0}\n" +
             "hard_drive_0_label = DH0\n" +
@@ -38,14 +38,14 @@ internal static class FsUae
         Process? xvfb = null;
         try
         {
-            var psi = new ProcessStartInfo("fs-uae") { UseShellExecute = false };
+            var psi = new ProcessStartInfo(fsuaePath ?? Environment.GetEnvironmentVariable("ESHARP_FSUAE") ?? "fs-uae") { UseShellExecute = false };
             psi.ArgumentList.Add($"--base-dir={Path.Combine(runDir, "fsuae")}");
             psi.ArgumentList.Add(config);
 
             if (headless)
             {
                 psi.Environment["SDL_AUDIODRIVER"] = "dummy";
-                if (string.IsNullOrEmpty(Environment.GetEnvironmentVariable("DISPLAY")))
+                if (OperatingSystem.IsLinux() && string.IsNullOrEmpty(Environment.GetEnvironmentVariable("DISPLAY")))
                 {
                     xvfb = StartXvfb(psi);
                     if (xvfb == null) return Fail("headless run needs a display: install xvfb or set DISPLAY");
@@ -57,7 +57,7 @@ internal static class FsUae
             try { proc = Process.Start(psi)!; }
             catch (System.ComponentModel.Win32Exception)
             {
-                return Fail("fs-uae not found. Install FS-UAE (apt install fs-uae) and try again.");
+                return Fail($"'{psi.FileName}' not found. Install FS-UAE, then put it on PATH or pass --fsuae <path> (macOS: /Applications/FSUAE.app/Contents/MacOS/fs-uae).");
             }
 
             using (proc)
