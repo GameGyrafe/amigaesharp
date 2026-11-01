@@ -50,5 +50,8 @@ internal static class Phase2Expected
         "-2 * 1.5 = -3", "negation", "ToInt rounds towards negative infinity", "comparisons",
         "compound assignment", "multiply by int", "divide by int", "2.5 * 2.5 = 6.25",
         "smallest step keeps its sign", "-1.5 * -2.5 = 3.75", "1.5 * -2.5 = -3.75", "100.25 * -200.5",
+        "constructor sets fields", "instance method calling another", "method mutates its receiver",
+        "method on an array element", "constructor with early return", "constructor overloads",
+        "method on a by-value parameter", "inline array in an instance method",
     };
 }

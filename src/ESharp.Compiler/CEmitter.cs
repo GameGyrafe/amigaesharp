@@ -28,6 +28,11 @@ internal sealed class CEmitter
     private readonly SortedSet<string> _headers = new(StringComparer.Ordinal);
     private readonly SortedDictionary<string, string> _spans = new(StringComparer.Ordinal);
     private bool _usesLen;
+
+    /// <summary>How <c>this</c> is spelled inside the method being emitted.</summary>
+    private enum ThisKind { None, Pointer, Value }
+    private ThisKind _this = ThisKind.None;
+    private const string ThisName = "_this";
     private int _temp;
 
     public CEmitter(CSharpCompilation compilation, HashSet<SyntaxTree> user, List<Diagnostic> diagnostics)
@@ -77,7 +82,7 @@ internal sealed class CEmitter
         if (fields.Count > 0) Line("");
 
         var methods = types.SelectMany(t => t.GetMembers().OfType<IMethodSymbol>())
-            .Where(m => m.MethodKind is MethodKind.Ordinary or MethodKind.UserDefinedOperator or MethodKind.Conversion
+            .Where(m => m.MethodKind is MethodKind.Ordinary or MethodKind.UserDefinedOperator or MethodKind.Conversion or MethodKind.Constructor
                         && !m.IsExtern && DeclaresBody(m))
             .ToList();
 
@@ -126,8 +131,11 @@ internal sealed class CEmitter
 
     private SemanticModel Model(SyntaxNode node) => Model(node.SyntaxTree);
 
-    private void Unsupported(SyntaxNode node, string what) =>
+    private string Unsupported(SyntaxNode node, string what)
+    {
         _diagnostics.Add(Diagnostic.Create(Descriptors.Unsupported, node.GetLocation(), what));
+        return "0";
+    }
 
     // ------------------------------------------------------------------ type collection
 
@@ -194,6 +202,12 @@ internal sealed class CEmitter
     private static string FuncName(IMethodSymbol m)
     {
         if (HasAttribute(m, "AmigaLibAttribute")) return m.Name;
+        if (m.MethodKind == MethodKind.Constructor)
+        {
+            var ctors = m.ContainingType.InstanceConstructors.Where(c => !c.IsImplicitlyDeclared).Count();
+            var ctorName = $"{TypeName(m.ContainingType)}_new";
+            return ctors > 1 ? ctorName + "_" + string.Join("_", m.Parameters.Select(p => Mangle(p.Type))) : ctorName;
+        }
         var name = $"{TypeName(m.ContainingType)}_{m.Name}";
         var overloads = m.ContainingType.GetMembers(m.Name).OfType<IMethodSymbol>().Count();
         if (overloads > 1)
@@ -360,10 +374,12 @@ internal sealed class CEmitter
         var decl = (StructDeclarationSyntax)s.DeclaringSyntaxReferences.First().GetSyntax();
         foreach (var member in decl.Members)
         {
-            var staticMethod = member is MethodDeclarationSyntax or OperatorDeclarationSyntax or ConversionOperatorDeclarationSyntax
-                && member.ChildTokens().Any(t => t.IsKind(SyntaxKind.StaticKeyword));
-            if (member is not (FieldDeclarationSyntax or EnumDeclarationSyntax or StructDeclarationSyntax) && !staticMethod)
-                Unsupported(member, member is MethodDeclarationSyntax ? "instance method in struct" : $"{member.Kind()} in struct");
+            var isStatic = member.ChildTokens().Any(t => t.IsKind(SyntaxKind.StaticKeyword));
+            var supported = member is FieldDeclarationSyntax or EnumDeclarationSyntax or StructDeclarationSyntax
+                or MethodDeclarationSyntax or OperatorDeclarationSyntax or ConversionOperatorDeclarationSyntax
+                || member is ConstructorDeclarationSyntax { Initializer: null } && !isStatic;
+            if (!supported)
+                Unsupported(member, member is ConstructorDeclarationSyntax ? "static constructor or constructor initializer" : $"{member.Kind()} in struct");
         }
 
         var name = TypeName(s);
@@ -396,12 +412,16 @@ internal sealed class CEmitter
     private string Prototype(IMethodSymbol m)
     {
         var node = m.DeclaringSyntaxReferences.First().GetSyntax();
-        var ps = m.Parameters.Length == 0
-            ? "void"
-            : string.Join(", ", m.Parameters.Select(p => Decl(p.Type, p.Name, node)));
+        var parts = new List<string>();
+        if (!m.IsStatic && m.MethodKind != MethodKind.Constructor)
+            parts.Add($"{CType(m.ContainingType, node)} *{ThisName}");
+        parts.AddRange(m.Parameters.Select(p => Decl(p.Type, p.Name, node)));
+        var ps = parts.Count == 0 ? "void" : string.Join(", ", parts);
         if (m.Parameters.Any(p => p.RefKind != RefKind.None))
             Unsupported(node, "ref/out parameters");
-        return Decl(m.ReturnType, FuncName(m) + "(" + ps + ")", node);
+        // A constructor is a function that builds and returns the struct.
+        var ret = m.MethodKind == MethodKind.Constructor ? m.ContainingType : m.ReturnType;
+        return Decl(ret, FuncName(m) + "(" + ps + ")", node);
     }
 
     private void EmitMethod(IMethodSymbol m)
@@ -414,6 +434,9 @@ internal sealed class CEmitter
         Line(Prototype(m));
         Line("{");
         _indent++;
+        var isCtor = m.MethodKind == MethodKind.Constructor;
+        _this = isCtor ? ThisKind.Value : m.IsStatic ? ThisKind.None : ThisKind.Pointer;
+        if (isCtor) Line($"{CType(m.ContainingType, decl)} {ThisName} = {{0}};");
         if (decl.Body != null)
         {
             foreach (var st in decl.Body.Statements) Statement(st);
@@ -424,6 +447,8 @@ internal sealed class CEmitter
             var e = Expr(decl.ExpressionBody.Expression, top: true);
             Line(m.ReturnsVoid ? e + ";" : "return " + e + ";");
         }
+        if (isCtor) Line($"return {ThisName};");
+        _this = ThisKind.None;
         _indent--;
         Line("}");
         Line("");
@@ -494,7 +519,9 @@ internal sealed class CEmitter
                 break;
 
             case ReturnStatementSyntax r:
-                Line(r.Expression == null ? "return;" : $"return {Expr(r.Expression, top: true)};");
+                Line(r.Expression == null
+                    ? (_this == ThisKind.Value ? $"return {ThisName};" : "return;")
+                    : $"return {Expr(r.Expression, top: true)};");
                 break;
 
             case IfStatementSyntax i:
@@ -710,6 +737,14 @@ internal sealed class CEmitter
             case ElementAccessExpressionSyntax ea:
                 return ElementAccess(ea);
 
+            case ThisExpressionSyntax:
+                return _this switch
+                {
+                    ThisKind.Pointer => $"(*{ThisName})",
+                    ThisKind.Value => ThisName,
+                    _ => Unsupported(e, "'this' outside a struct method"),
+                };
+
             case InvocationExpressionSyntax inv:
                 return Invocation(inv);
 
@@ -814,6 +849,13 @@ internal sealed class CEmitter
     private string ObjectCreation(ObjectCreationExpressionSyntax oc)
     {
         var type = Model(oc).GetTypeInfo(oc).Type!;
+        if (type.TypeKind == TypeKind.Struct && Model(oc).GetSymbolInfo(oc).Symbol is IMethodSymbol { IsImplicitlyDeclared: false } ctor)
+        {
+            if (oc.Initializer != null) return Unsupported(oc, "constructor call combined with an object initializer");
+            if (ctor.Parameters.Any(p => p.RefKind != RefKind.None)) return Unsupported(oc, "ref/out constructor argument");
+            var ctorArgs = string.Join(", ", (oc.ArgumentList?.Arguments ?? default).Select(a => Expr(a.Expression, top: true)));
+            return $"{FuncName(ctor)}({ctorArgs})";
+        }
         if (type.TypeKind != TypeKind.Struct || (oc.ArgumentList?.Arguments.Count ?? 0) > 0)
         {
             Unsupported(oc, "constructor call");
@@ -855,7 +897,12 @@ internal sealed class CEmitter
         if (f.IsConst && f.ConstantValue != null)
             return ConstantLiteral(f.ConstantValue, f.Type);
         if (f.IsStatic) return FieldName(f);
-        Unsupported(at, "implicit 'this' field access");
+        switch (_this)
+        {
+            case ThisKind.Pointer: return $"{ThisName}->{f.Name}";
+            case ThisKind.Value: return $"{ThisName}.{f.Name}";
+        }
+        Unsupported(at, "instance field access outside a struct method");
         return f.Name;
     }
 
@@ -924,10 +971,13 @@ internal sealed class CEmitter
         if (IsSpan(m.ContainingType) && m.Name == "Slice" && inv.Expression is MemberAccessExpressionSyntax sliceAccess)
             return SpanSlice(inv, sliceAccess, m);
 
+        string? receiver = null;
         if (!m.IsStatic)
         {
-            Unsupported(inv, "instance method call");
-            return "0";
+            if (m.ContainingType.TypeKind != TypeKind.Struct || m.MethodKind != MethodKind.Ordinary)
+                return Unsupported(inv, "instance method call");
+            receiver = ReceiverAddress(inv, m);
+            if (receiver == null) return "0";
         }
 
         foreach (var arg in inv.ArgumentList.Arguments)
@@ -940,8 +990,36 @@ internal sealed class CEmitter
         if (lib != null)
             _headers.Add($"proto/{lib.ConstructorArguments[0].Value}.h");
 
-        var args = string.Join(", ", inv.ArgumentList.Arguments.Select(a => Expr(a.Expression, top: true)));
-        return $"{FuncName(m)}({args})";
+        var argList = inv.ArgumentList.Arguments.Select(a => Expr(a.Expression, top: true));
+        if (receiver != null) argList = argList.Prepend(receiver);
+        return $"{FuncName(m)}({string.Join(", ", argList)})";
+    }
+
+    /// <summary>The C pointer passed as the hidden first argument of a struct instance method.</summary>
+    private string? ReceiverAddress(InvocationExpressionSyntax inv, IMethodSymbol m)
+    {
+        if (inv.Expression is not MemberAccessExpressionSyntax ma)
+        {
+            // Unqualified call: the receiver is the current 'this'.
+            return _this switch
+            {
+                ThisKind.Pointer => ThisName,
+                ThisKind.Value => "&" + ThisName,
+                _ => Unsupported(inv, "instance method call outside a struct method"),
+            };
+        }
+
+        var recv = ma.Expression;
+        if (recv is ThisExpressionSyntax) return _this == ThisKind.Pointer ? ThisName : "&" + ThisName;
+        if (Model(inv).GetTypeInfo(recv).Type is IPointerTypeSymbol) return Expr(recv);
+
+        var core = recv;
+        while (core is ParenthesizedExpressionSyntax pe) core = pe.Expression;
+        if (core is IdentifierNameSyntax or MemberAccessExpressionSyntax or ElementAccessExpressionSyntax &&
+            Model(inv).GetSymbolInfo(core).Symbol is not IMethodSymbol and not IPropertySymbol)
+            return "&" + Expr(core);
+
+        return Unsupported(recv, $"call of '{m.Name}' on a temporary value; assign it to a local first");
     }
 
     private string Literal(LiteralExpressionSyntax lit)

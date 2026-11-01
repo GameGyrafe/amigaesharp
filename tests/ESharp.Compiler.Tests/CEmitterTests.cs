@@ -167,9 +167,30 @@ Dos.PutStr(Pick(Max));
     }
 
     [Fact]
-    public void Instance_methods_in_structs_still_report_ES0099()
+    public void Struct_instance_methods_take_a_pointer_and_constructors_return_the_struct()
     {
-        var r = Compile(Program("struct S { public int V; public int Get() { return V; } }"));
+        var c = CompileOk(Program(
+            "struct S { public int V; public S(int v) { V = v; } public int Get() { return V; } }",
+            "S s = new S(3); s.Get();"));
+        Assert.Contains("P_S P_S_new(int32_t v)", c);
+        Assert.Contains("int32_t P_S_Get(P_S *_this)", c);
+        Assert.Contains("_this->V", c);
+        Assert.Contains("P_S_Get(&s)", c);
+    }
+
+    [Fact]
+    public void Calls_on_temporaries_report_ES0099()
+    {
+        var r = Compile(Program(
+            "struct S { public int V; public int Get() { return V; } } static S Make() { return default; }",
+            "Make().Get();"));
+        Assert.Contains("ES0099", ErrorIds(r));
+    }
+
+    [Fact]
+    public void Constructor_initializers_report_ES0099()
+    {
+        var r = Compile(Program("struct S { public int V; public S(int v) : this() { V = v; } }"));
         Assert.Contains("ES0099", ErrorIds(r));
     }
 }

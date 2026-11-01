@@ -11,6 +11,59 @@ public unsafe struct Palette
     public int Count;
 }
 
+/// <summary>A struct with constructors and instance methods (the shape of a card-game Card).</summary>
+public struct Card
+{
+    public int Rank;
+    public int Suit;
+
+    public Card(int rank, int suit)
+    {
+        if (rank < 0)
+        {
+            Rank = 0;
+            Suit = 0;
+            return;
+        }
+        Rank = rank;
+        Suit = suit;
+    }
+
+    public Card(int rank)
+    {
+        Rank = rank;
+        Suit = 0;
+    }
+
+    public bool IsRed() { return Suit == 1 || Suit == 2; }
+
+    public int Points() { return IsRed() ? this.Rank * 2 : Rank; }
+
+    public void Bump(int by) { Rank += by; }
+}
+
+/// <summary>A struct whose instance methods work on an inline array.</summary>
+public unsafe struct Hand
+{
+    public fixed int Ranks[4];
+    public int Count;
+
+    public bool Add(int rank)
+    {
+        if (Count >= 4) return false;
+        Ranks[Count] = rank;
+        Count++;
+        return true;
+    }
+
+    public int Total()
+    {
+        int t = 0;
+        for (int i = 0; i < Count; i++) t += Ranks[i];
+        return t;
+    }
+}
+
 /// <summary>
 /// Phase 2 data types: fixed-size arrays, spans and 16.16 fixed point. Every check prints
 /// "ok NAME" or "FAIL NAME", so the same output is expected under dotnet, host gcc and on an Amiga.
@@ -69,6 +122,12 @@ public static class Program
         return total;
     }
 
+    static int Describe(Card k)
+    {
+        k.Bump(1);
+        return k.Points();
+    }
+
     [EntryPoint]
     public static void Main()
     {
@@ -109,5 +168,24 @@ public static class Program
         Check((Fix.FromRaw(-98304) * Fix.FromRaw(-163840)).Raw == 245760, "-1.5 * -2.5 = 3.75");
         Check((Fix.FromRaw(98304) * Fix.FromRaw(-163840)).Raw == -245760, "1.5 * -2.5 = -3.75");
         Check((Fix.FromRaw(0x00644000) * Fix.FromRaw(-0x00C88000)).Raw == -1317281792, "100.25 * -200.5");
+
+        // Structs with constructors and instance methods.
+        Card c2 = new Card(5, 1);
+        Check(c2.Rank == 5 && c2.Suit == 1, "constructor sets fields");
+        Check(c2.IsRed() && c2.Points() == 10, "instance method calling another");
+        c2.Bump(2);
+        Check(c2.Rank == 7, "method mutates its receiver");
+        Card[] cards = new Card[3];
+        cards[1] = new Card(4, 0);
+        cards[1].Bump(1);
+        Check(cards[1].Rank == 5 && cards[0].Rank == 0, "method on an array element");
+        Card bad = new Card(-3, 2);
+        Check(bad.Rank == 0 && bad.Suit == 0, "constructor with early return");
+        Card solo = new Card(9);
+        Check(solo.Rank == 9 && solo.Suit == 0, "constructor overloads");
+        Check(Describe(c2) == 16 && c2.Rank == 7, "method on a by-value parameter");
+        Hand hand = default;
+        bool a1 = hand.Add(1), a2 = hand.Add(2), a3 = hand.Add(3), a4 = hand.Add(4), a5 = hand.Add(5);
+        Check(a1 && a2 && a3 && a4 && !a5 && hand.Total() == 10, "inline array in an instance method");
     }
 }
