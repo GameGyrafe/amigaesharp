@@ -31,3 +31,9 @@ jobs:
           for t in m68k os4 morphos; do
             dotnet run --project src/ESharp.Cli -- build samples/hello --target $t --docker
           done
+      - name: Run hello in FS-UAE (m68k, AROS ROM replacement)
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq fs-uae xvfb
+          dotnet run --project src/ESharp.Cli -- run samples/hello --docker --headless | tee run.log
+          grep -qx 'Hello from E#!' run.log

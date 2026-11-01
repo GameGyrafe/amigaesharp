@@ -15,7 +15,8 @@ internal static class Program
 Usage:
   esharp new <name>                 Create a new hello-world project
   esharp build [path] [options]     Check the subset, emit C, and run the target C compiler
-  esharp run | test | assets        Not implemented yet (phase 1 covers build only)
+  esharp run [path] [options]       Build for m68k and run it in FS-UAE
+  esharp test | assets              Not implemented yet
 
 Build options:
   --target <name>   m68k (default), os4 or morphos
@@ -25,6 +26,11 @@ Build options:
   --cc <compiler>   Override the target's C compiler
   --cflags <flags>  Override the target's C compiler flags
   --allow-float     Permit float/double
+
+Run options (build options also apply; run is m68k only):
+  --headless        No window: run on a virtual display, print the program's output, exit
+  --timeout <sec>   Headless time limit (default 120; AROS needs ~20 s to boot)
+  --kickstart <rom> Use a real Kickstart ROM instead of FS-UAE's built-in AROS replacement
 
 Targets:
 " + string.Join("\n", Targets.All.Select(t => $"  {t.Name,-9} {t.Description}")) + "\n";
@@ -40,8 +46,9 @@ Targets:
         return args[0] switch
         {
             "new" => New(args.Skip(1).ToArray()),
-            "build" => Build(args.Skip(1).ToArray()),
-            "run" or "test" or "assets" => NotYet(args[0]),
+            "build" => Build(args.Skip(1).ToArray(), out _),
+            "run" => Run(args.Skip(1).ToArray()),
+            "test" or "assets" => NotYet(args[0]),
             _ => Fail($"unknown command '{args[0]}'"),
         };
     }
@@ -83,8 +90,9 @@ public static class Program
         return 0;
     }
 
-    private static int Build(string[] args)
+    private static int Build(string[] args, out string? builtExe)
     {
+        builtExe = null;
         string path = ".";
         string? outDir = null;
         bool emitOnly = false, allowFloat = false;
@@ -178,7 +186,35 @@ public static class Program
         }
 
         Console.WriteLine($"Built {exe}");
+        builtExe = exe;
         return 0;
+    }
+
+    private static int Run(string[] args)
+    {
+        bool headless = false;
+        int timeout = 120;
+        string? kickstart = null;
+        var buildArgs = new List<string>();
+        for (var i = 0; i < args.Length; i++)
+        {
+            switch (args[i])
+            {
+                case "--headless": headless = true; break;
+                case "--timeout" when i + 1 < args.Length && int.TryParse(args[i + 1], out timeout): i++; break;
+                case "--kickstart" when i + 1 < args.Length: kickstart = Path.GetFullPath(args[++i]); break;
+                default: buildArgs.Add(args[i]); break;
+            }
+        }
+
+        var targetIndex = buildArgs.IndexOf("--target");
+        if (targetIndex >= 0 && targetIndex + 1 < buildArgs.Count && buildArgs[targetIndex + 1] != "m68k")
+            return Fail("run uses FS-UAE, which emulates 68k Amigas only; use --target m68k");
+        if (buildArgs.Contains("--emit-only")) return Fail("--emit-only cannot be combined with run");
+
+        var rc = Build(buildArgs.ToArray(), out var exe);
+        if (rc != 0 || exe == null) return rc;
+        return FsUae.Run(exe, headless, TimeSpan.FromSeconds(timeout), kickstart);
     }
 
     private static List<string> CollectSources(string path)

@@ -54,6 +54,14 @@ docker build -t esharp-amiga-toolchain docker
 dotnet run --project src/ESharp.Cli -- build samples/hello --target m68k --docker   # or os4, morphos
 ```
 
+Run it on an emulated Amiga (needs `fs-uae`; add `--headless` for no window, which also needs `xvfb`):
+
+```bash
+dotnet run --project src/ESharp.Cli -- run samples/hello --docker --headless   # prints: Hello from E#!
+```
+
+`run` uses FS-UAE's built-in AROS ROM replacement unless you pass `--kickstart <rom>`.
+
 Without Docker, install the compiler yourself and drop `--docker` (`--cc` and `--cflags` override it).
 
 ## Layout
