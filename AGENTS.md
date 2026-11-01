@@ -50,10 +50,15 @@ cannot run the PowerPC builds; that needs QEMU or real hardware (not done yet).
 ## Dev host (Linux, shared)
 
 Dave's Linux machine runs other agents' build and test gates, so: check free memory before heavy
-work, run long jobs in their own tmux session, clone into a scratch directory, and do not install
-packages or change the host without asking Dave. Docker runs without sudo. fs-uae and xvfb are
-installed. Kickstart ROMs are not on the host unless Dave has put them there; do not go looking for
-them, and never copy them into the repo.
+work, run long jobs (full toolchain image builds, big test runs) in their own tmux session, and do
+not install packages or change the host without asking Dave. Docker runs without sudo. fs-uae and
+xvfb are installed. This repo's persistent clone is the main E# dev checkout; use scratch
+directories only for throwaway experiments.
+
+Kickstart ROMs: Dave keeps them outside any repo, and this file deliberately does not give the
+path. Ask Dave for the location, or use `ESHARP_KICKSTART` if he has set it. Read ROMs in place,
+quote the path, never copy them into the repo, a branch, an artifact or a message. The test matrix
+is Kickstart 2.04 on `--model A500+` and Kickstart 3.1 (40.069) on `--model A1200`.
 
 ## Next up
 
