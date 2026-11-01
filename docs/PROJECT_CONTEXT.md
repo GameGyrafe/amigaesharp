@@ -1,5 +1,7 @@
 # E# project context (handoff)
 
+The original design document is kept at [design/E_Design_Document.pdf](design/E_Design_Document.pdf) (1 Nov 2026). Where this repo and the PDF disagree, this repo is newer: for example PowerPC targets (AmigaOS 4, MorphOS) are first-class here, not "later".
+
 Condensed from the design document and the original planning chat. Treat `docs/STATUS.md` as the source of truth for progress.
 
 ## Decisions
