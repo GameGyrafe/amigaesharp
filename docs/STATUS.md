@@ -55,6 +55,7 @@ Notes and limits:
 - `esharp test` (run host tests, optionally the Amiga build in the emulator) and `esharp assets`.
 - `esharp run` (launch FS-UAE/WinUAE with output mounted as a hard drive), `esharp test`.
 - Finish phase 2: run the sample on the PPC targets once there is a way to run them; decide on optional bounds checks; properties.
+- Memory management: design proposal in [MEMORY.md](MEMORY.md), waiting for Dave's decisions (arena and `Mem.AllocChip`/`AllocFast` first, then pools).
 - Phase 3: Intuition window, blitter rect, asset pipeline.
 
 ## Known limits of the emitter
