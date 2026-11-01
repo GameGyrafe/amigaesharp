@@ -179,9 +179,8 @@ public sealed class SubsetAnalyzer : DiagnosticAnalyzer
     {
         var (list, name, loc) = c.Node switch
         {
+            // Generic structs and methods are monomorphised; generic classes would be heap types.
             ClassDeclarationSyntax x => (x.TypeParameterList, x.Identifier.Text, x.Identifier.GetLocation()),
-            StructDeclarationSyntax x => (x.TypeParameterList, x.Identifier.Text, x.Identifier.GetLocation()),
-            MethodDeclarationSyntax x => (x.TypeParameterList, x.Identifier.Text, x.Identifier.GetLocation()),
             _ => (null, "", Location.None),
         };
         if (list != null)
@@ -202,7 +201,7 @@ public sealed class SubsetAnalyzer : DiagnosticAnalyzer
                  (type == "System.Object" && method.Name == "GetType"))
             c.ReportDiagnostic(Diagnostic.Create(Descriptors.Reflection, c.Node.GetLocation(), method.Name));
 
-        if (method.IsGenericMethod)
+        if (method.IsGenericMethod && !method.OriginalDefinition.Locations.Any(l => l.IsInSource))
             c.ReportDiagnostic(Diagnostic.Create(Descriptors.Generics, c.Node.GetLocation(), method.Name));
     }
 

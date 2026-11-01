@@ -100,12 +100,12 @@ public unsafe struct Pool
 }
 ```
 
-Until generics exist this is untyped (`(Card*)pool.Alloc()`), which is less safe. Once generics are
-monomorphised (phase 2 in the design document) this becomes `Pool<Card>`. Alternatively the
-compiler could generate one typed pool wrapper per struct. I would prefer waiting for generics
-over building a generator.
+**Done** as `Pool<T> where T : unmanaged` (generics are monomorphised, see STATUS.md): `new Pool<Card>(capacity, chip)`,
+`T* Alloc()` (zeroed, null when full), `bool Free(T*)` (false for a foreign, misaligned or already free pointer; this
+check is on in every build), `Reset()`, `Destroy()`, `InUse()`, `Capacity()`. Layout is one block: free list of slot numbers,
+items, one in-use byte per slot. With `--debug` freed slots are filled with 0xDD.
 
-## Step 3: debug checks (build with `--debug`; arena poisoning and bounds checks done, pool checks wait for pools)
+## Step 3: debug checks (build with `--debug`; arena and pool poisoning and bounds checks done)
 
 - Freed pool slots are filled with `0xDD`; arena `Reset` fills with `0xDD`.
 - A pool `Free` of an item that is not in the pool, or is already free, is an error.
@@ -132,8 +132,7 @@ be needed at all. This proposal does not decide that.
 1. **Names:** `Mem.AllocChip` / `Mem.AllocFast`, matching the design document.
 2. **Failure:** null return only. No `OnFail` hook for now.
 3. **Alignment:** `Arena.Alloc` takes an explicit alignment (a power of two); no hidden default.
-4. **Pools:** wait for generics before building typed pools. An untyped pool may come earlier if a
-   sample needs it.
+4. **Pools:** typed `Pool<T>` after generics (done).
 5. **Budget:** the host fake defaults to 512 KB chip (a stock A500) and is configurable.
 
 ## What step 1 actually does today

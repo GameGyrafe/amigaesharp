@@ -25,7 +25,7 @@ public class SubsetAnalyzerTests
     [InlineData("static void F() { dynamic d = 1; }", "ES0005")]
     [InlineData("static string F() { return typeof(P).FullName; }", "ES0006")]
     [InlineData("class Heap { }", "ES0007")]
-    [InlineData("static void F<T>() { }", "ES0008")]
+    [InlineData("class G<T> { }", "ES0008")]
     [InlineData("interface IThing { }", "ES0009")]
     [InlineData("struct S { public string Name; public object O; }", "ES0010")]
     public void Out_of_subset_code_is_rejected(string members, string expectedId)

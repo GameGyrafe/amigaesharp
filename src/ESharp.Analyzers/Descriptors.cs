@@ -39,8 +39,12 @@ public static class Descriptors
         "Class '{0}' must be static: heap classes arrive in language phase 2");
 
     public static readonly DiagnosticDescriptor Generics = Error(
-        "ES0008", "Generics are not supported yet",
-        "'{0}' is generic: monomorphised generics arrive in language phase 2");
+        "ES0008", "Generic classes and library generics are not supported",
+        "'{0}' is generic: only generic structs and generic static methods declared in E# source are supported (they are monomorphised)");
+
+    public static readonly DiagnosticDescriptor GenericDepth = Error(
+        "ES0098", "Generic instantiation too deep",
+        "Expanding generic '{0}' did not finish: recursive instantiation?");
 
     public static readonly DiagnosticDescriptor Interfaces = Error(
         "ES0009", "Interfaces are not supported yet",

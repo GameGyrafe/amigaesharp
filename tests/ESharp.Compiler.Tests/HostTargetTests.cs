@@ -22,6 +22,16 @@ public class HostTargetTests
     }
 
     [Fact]
+    public void Generics_sample_runs_on_the_host_without_leaks()
+    {
+        using var mem = HostMem.Capture();
+        using var console = HostConsole.Capture();
+        GenericsSample.Program.Main();
+        Assert.Equal(GenericsExpected.Output, console.Output);
+        Assert.Equal(0, mem.LiveBlocks);
+    }
+
+    [Fact]
     public void Memory_sample_runs_on_the_host_without_leaks()
     {
         using var mem = HostMem.Capture();
@@ -80,5 +90,39 @@ internal static class MemoryExpected
         "arena aligns allocations", "arena tracks what is left", "arena returns null when full",
         "typed allocation with sizeof", "typed arena memory is usable and zeroed", "span over arena memory",
         "reset reuses the arena", "destroy releases the arena", "an impossible arena fails cleanly", "chip arena",
+    };
+}
+
+/// <summary>What samples/generics prints.</summary>
+internal static class GenericsExpected
+{
+    public static string Output => string.Concat(Names.Select(n => "ok " + n + "\n"));
+
+    private static readonly string[] Names =
+    {
+        "generic struct with int",
+        "generic struct method",
+        "generic struct with Fix",
+        "generic struct with a user struct",
+        "nested instantiation",
+        "generic method, inferred and explicit",
+        "generic method with Fix",
+        "generic method with only an explicit argument",
+        "generic struct instance method mutates",
+        "generic method over Span",
+        "pool created",
+        "pool hands out distinct items",
+        "pool items are writable",
+        "pool free",
+        "pool ignores a double free",
+        "pool reuses a freed slot, zeroed",
+        "pool returns null when full",
+        "pool is full",
+        "pool rejects a foreign pointer",
+        "pool rejects a misaligned pointer",
+        "pool reset",
+        "pool destroy returns the memory",
+        "pool of int",
+        "impossible pool fails cleanly",
     };
 }

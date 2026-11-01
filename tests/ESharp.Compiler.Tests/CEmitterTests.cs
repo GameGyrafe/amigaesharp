@@ -147,6 +147,17 @@ Dos.PutStr(Pick(Max));
     }
 
     [Fact]
+    public void Generics_sample_compiles_and_runs_natively_with_the_same_output_as_dotnet()
+    {
+        if (!HasGcc) return;
+        var path = Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "..", "samples", "generics", "Generics.cs");
+        var options = new CompileOptions { Defines = new[] { "AMIGA", "ESHARP_HOSTC" } };
+        var (code, output) = RunWithHostGcc(CompileOk(File.ReadAllText(path), options));
+        Assert.Equal(0, code);
+        Assert.Equal(GenericsExpected.Output, output);
+    }
+
+    [Fact]
     public void Memory_sample_compiles_and_runs_natively_with_the_same_output_as_dotnet()
     {
         if (!HasGcc) return;
@@ -240,5 +251,29 @@ Dos.PutStr(Pick(Max));
         Assert.Equal("poisoned\n", debug.output);
         var release = RunWithHostGcc(CompileOk(src, Targets.M68k.ToOptions()));
         Assert.Equal("", release.output);
+    }
+
+    [Fact]
+    public void Generic_structs_and_methods_are_monomorphised()
+    {
+        const string members = @"
+struct Pair<T> { public T A; public T B; public Pair(T a, T b) { A = a; B = b; } public T First() { return A; } }
+static T Max<T>(T a, T b) where T : unmanaged { return Cmp(a, b) ? a : b; }
+static bool Cmp<T>(T a, T b) where T : unmanaged { return false; }
+static int Twice<T>(Pair<T> p) where T : unmanaged { return 2; }
+";
+        const string body = @"
+Pair<int> p = new Pair<int>(3, 4);
+var q = new Pair<Fix>(Fix.FromInt(1), Fix.FromInt(2));
+int m = Max(p.First(), 9);
+if (p.First() == 3 && Fix.ToInt(q.B) == 2 && Twice(p) == 2 && m == 9) Dos.PutStr(""ok\n"");
+";
+        var c = CompileOk(Program(members, body));
+        Assert.Contains("Pair__int", c);
+        Assert.Contains("Pair__Fix", c);
+        Assert.DoesNotContain("Pair_T", c);
+        var (code, output) = RunWithHostGcc(c);
+        Assert.Equal(0, code);
+        Assert.Equal("ok\n", output);
     }
 }

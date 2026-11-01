@@ -57,7 +57,17 @@ public static class EsCompiler
         if (diagnostics.Any(d => d.Severity == DiagnosticSeverity.Error))
             return new CompileResult(null, Sorted(diagnostics));
 
-        // 4. Emit C.
+        // 4. Monomorphise generics, then check the expanded program still compiles.
+        var expanded = Monomorphizer.Expand(compilation, userSet, parse);
+        compilation = expanded.Compilation;
+        userSet = expanded.User;
+        diagnostics.AddRange(expanded.Errors);
+        diagnostics.AddRange(compilation.GetDiagnostics()
+                .Where(d => d.Severity == DiagnosticSeverity.Error && IsUser(d, userSet)));
+        if (diagnostics.Any(d => d.Severity == DiagnosticSeverity.Error))
+            return new CompileResult(null, Sorted(diagnostics));
+
+        // 5. Emit C.
         var emitter = new CEmitter(compilation, userSet, diagnostics, options.BoundsChecks);
         var c = emitter.Emit();
         return new CompileResult(

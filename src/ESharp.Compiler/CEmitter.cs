@@ -86,6 +86,7 @@ internal sealed class CEmitter
         if (fields.Count > 0) Line("");
 
         var methods = types.SelectMany(t => t.GetMembers().OfType<IMethodSymbol>())
+            .Where(m => !m.IsGenericMethod)
             .Where(m => m.MethodKind is MethodKind.Ordinary or MethodKind.UserDefinedOperator or MethodKind.Conversion or MethodKind.Constructor
                         && !m.IsExtern && DeclaresBody(m))
             .ToList();
@@ -169,11 +170,20 @@ internal sealed class CEmitter
             {
                 if (model.GetDeclaredSymbol(decl) is not INamedTypeSymbol sym) continue;
                 if (sym.TypeKind == TypeKind.Class && IsAttributeType(sym)) continue;
+                if (IsGenericDefinition(sym)) continue;
                 if (sym.TypeKind is TypeKind.Class or TypeKind.Struct or TypeKind.Enum)
                     result.Add(sym);
             }
         }
         return result;
+    }
+
+    /// <summary>Generic originals are only templates; the monomorphiser added concrete copies.</summary>
+    private static bool IsGenericDefinition(INamedTypeSymbol t)
+    {
+        for (var c = t; c != null; c = c.ContainingType)
+            if (c.IsGenericType) return true;
+        return false;
     }
 
     private static bool IsAttributeType(INamedTypeSymbol t)
@@ -1144,9 +1154,9 @@ internal sealed class CEmitter
     {
         var tree = location.SourceTree;
         if (tree == null || !_user.Contains(tree)) return;
-        var span = location.GetLineSpan();
+        var span = location.GetMappedLineSpan();
         var line = span.StartLinePosition.Line + 1;
-        var file = tree.FilePath;
+        var file = span.Path;
         if (file == _lastLineFile && line == _lastLine) return;
         _lastLineFile = file;
         _lastLine = line;

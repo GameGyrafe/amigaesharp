@@ -97,22 +97,22 @@ internal static class FsUae
 
     private static Process? StartXvfb(ProcessStartInfo target)
     {
-        for (var n = 99; n < 120; n++)
+        // -displayfd lets Xvfb pick a free display itself, so stale sockets from other users do not matter.
+        try
         {
-            if (File.Exists($"/tmp/.X{n}-lock")) continue;
-            try
+            var x = Process.Start(new ProcessStartInfo("Xvfb", "-displayfd 1 -screen 0 800x600x24")
+            { UseShellExecute = false, RedirectStandardError = true, RedirectStandardOutput = true });
+            if (x == null) return null;
+            var line = x.StandardOutput.ReadLine();
+            if (x.HasExited || !int.TryParse(line, out var n))
             {
-                var x = Process.Start(new ProcessStartInfo("Xvfb", $":{n} -screen 0 800x600x24")
-                { UseShellExecute = false, RedirectStandardError = true, RedirectStandardOutput = true });
-                if (x == null) return null;
-                Thread.Sleep(1500);
-                if (x.HasExited) continue;
-                target.Environment["DISPLAY"] = $":{n}";
-                return x;
+                if (!x.HasExited) x.Kill();
+                return null;
             }
-            catch (System.ComponentModel.Win32Exception) { return null; }
+            target.Environment["DISPLAY"] = $":{n}";
+            return x;
         }
-        return null;
+        catch (System.ComponentModel.Win32Exception) { return null; }
     }
 
     private static int Fail(string message)
