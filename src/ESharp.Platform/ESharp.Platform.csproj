@@ -1,0 +1,17 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <RootNamespace>ESharp.Platform</RootNamespace>
+    <!-- The same sources are built by dotnet as the HOST target, and parsed by the
+         E# compiler with AMIGA defined. Target-specific code is chosen with #if. -->
+    <DefineConstants>$(DefineConstants);HOST</DefineConstants>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\ESharp.Runtime\ESharp.Runtime.csproj" />
+  </ItemGroup>
+
+</Project>

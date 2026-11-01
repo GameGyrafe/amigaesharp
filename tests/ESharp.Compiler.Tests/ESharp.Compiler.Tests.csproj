@@ -1,0 +1,36 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+
+    <IsPackable>false</IsPackable>
+    <IsTestProject>true</IsTestProject>
+    <GenerateProgramFile>false</GenerateProgramFile>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="coverlet.collector" Version="6.0.0" />
+    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.8.0" />
+    <PackageReference Include="xunit" Version="2.5.3" />
+    <PackageReference Include="xunit.runner.visualstudio" Version="2.5.3" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Using Include="Xunit" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\ESharp.Compiler\ESharp.Compiler.csproj" />
+    <ProjectReference Include="..\..\src\ESharp.Target.Host\ESharp.Target.Host.csproj" />
+  </ItemGroup>
+
+  <!-- The hello sample is compiled by dotnet here as the HOST target, proving the same
+       source runs on the test host without any C step. -->
+  <ItemGroup>
+    <Compile Include="..\..\samples\hello\Hello.cs" Link="Samples\Hello.cs" />
+  </ItemGroup>
+
+</Project>
