@@ -1,6 +1,6 @@
 # Memory management (proposal)
 
-**Status: approved by Dave on 2026-11-01 "go with the recommendations"; step 1 is being implemented, the rest is not.** It follows the design document
+**Status: approved by Dave on 2026-11-01 "go with the recommendations"; step 1 (Mem + Arena) is implemented and verified; steps 2-4 are not.** It follows the design document
 (`docs/design/E_Design_Document.pdf`): no garbage collector, "explicit pools or arenas" for heap
 objects, `[ChipRam]` and `Mem.AllocChip` for chip memory, and chip use reported against a budget.
 
@@ -20,7 +20,7 @@ objects, `[ChipRam]` and `Mem.AllocChip` for chip memory, and chip use reported 
 6. **Same API on every target and the host.** Host fakes behave like a small Amiga so tests
    catch overruns under dotnet.
 
-## Step 1: raw memory and arenas (proposed first code)
+## Step 1: raw memory and arenas (implemented)
 
 Platform layer (`ESharp.Platform`), same pattern as `Dos`: Amiga implementation under `#if AMIGA`,
 managed fake otherwise.
@@ -61,7 +61,7 @@ PowerPC: `AllocChip` and `AllocFast` are the same call. The AmigaOS 4 and MorphO
 **not verified**; AmigaOS 4 prefers `AllocVecTags`, and I would check that `AllocVec` is still
 exported before relying on it.
 
-### Compiler work this needs
+### Compiler work (done)
 
 - `sizeof(T)` for structs and primitives (not supported by the emitter today) -> C `sizeof`.
 - `new Span<T>(T* pointer, int length)` -> `{ pointer, length }`, so arena memory can be handed
@@ -79,8 +79,7 @@ exported before relying on it.
 
 ### Tests
 
-- Host (xUnit): alignment, exhaustion returns null, `Reset` reuses space, double `Free` is a
-  no-op in release, chip budget enforced, leak check.
+- Host (xUnit, `samples/memory`): alignment, exhaustion returns null, `Reset` reuses space, double `Free` (the host fake throws; on a real Amiga it would corrupt the free list), chip budget enforced, leak check.
 - Generated C against a `proto/exec.h` shim (calloc/free), as the `dos.h` shim does today.
 - Amiga: the sample allocates a chip arena and checks the address is in chip RAM (below 2 MB on
   A500+ and A1200), writes and reads a pattern, then frees and checks `AvailChip` returned to
@@ -136,3 +135,16 @@ be needed at all. This proposal does not decide that.
 4. **Pools:** wait for generics before building typed pools. An untyped pool may come earlier if a
    sample needs it.
 5. **Budget:** the host fake defaults to 512 KB chip (a stock A500) and is configurable.
+
+## What step 1 actually does today
+
+- `Mem`, `Arena`, `Exec` live in `src/ESharp.Platform`; `HostMem` in `src/ESharp.Target.Host`.
+- The host fake defaults to 512 KB chip and **0 fast** (a stock A500, so `AllocFast` uses chip);
+  `HostMem.Capture(chip, fast)` sets budgets and `LiveBlocks`/`ChipUsed` detect leaks.
+- `Mem.Free` on the host throws for an unknown or already-freed block. On a real Amiga that would
+  corrupt memory, so the fake is stricter on purpose.
+- `Arena` is bump-pointer with explicit alignment; `Reset` does not clear (no poison yet, step 3).
+- `samples/memory` has 19 checks and runs identically under dotnet (no leaks), host gcc (against an
+  exec shim) and on m68k, where it also asserts the chip block address is below 2 MB.
+- **Not verified:** AmigaOS 4 and MorphOS (`AllocVec` availability), fast RAM paths (FS-UAE has no
+  fast RAM in the default config), and large allocations near the limit of a real machine.

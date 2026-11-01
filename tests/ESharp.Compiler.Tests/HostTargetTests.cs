@@ -22,6 +22,17 @@ public class HostTargetTests
     }
 
     [Fact]
+    public void Memory_sample_runs_on_the_host_without_leaks()
+    {
+        using var mem = HostMem.Capture();
+        using var console = HostConsole.Capture();
+        MemorySample.Program.Main();
+        Assert.Equal(MemoryExpected.Output, console.Output);
+        Assert.Equal(0, mem.LiveBlocks);
+        Assert.Equal(0u, mem.ChipUsed);
+    }
+
+    [Fact]
     public void Fix_multiply_matches_a_64_bit_reference()
     {
         var rng = new Random(1234);
@@ -53,5 +64,21 @@ internal static class Phase2Expected
         "constructor sets fields", "instance method calling another", "method mutates its receiver",
         "method on an array element", "constructor with early return", "constructor overloads",
         "method on a by-value parameter", "inline array in an instance method",
+    };
+}
+
+/// <summary>What samples/memory prints.</summary>
+internal static class MemoryExpected
+{
+    public static string Output => string.Concat(Names.Select(n => "ok " + n + "\n"));
+
+    private static readonly string[] Names =
+    {
+        "chip allocation succeeds", "chip memory is zeroed", "chip memory keeps what is written",
+        "allocation reduces free chip RAM", "chip block is in the chip address range", "free returns the chip RAM",
+        "fast allocation works and is zeroed", "zero-size allocation returns null", "arena reports its size",
+        "arena aligns allocations", "arena tracks what is left", "arena returns null when full",
+        "typed allocation with sizeof", "typed arena memory is usable and zeroed", "span over arena memory",
+        "reset reuses the arena", "destroy releases the arena", "an impossible arena fails cleanly", "chip arena",
     };
 }

@@ -737,6 +737,14 @@ internal sealed class CEmitter
             case ElementAccessExpressionSyntax ea:
                 return ElementAccess(ea);
 
+            case SizeOfExpressionSyntax so:
+            {
+                var constant = Model(so).GetConstantValue(so);
+                if (constant.HasValue) return ConstantLiteral(constant.Value!, Model(so).GetTypeInfo(so).Type!);
+                var sized = Model(so).GetTypeInfo(so.Type).Type!;
+                return $"((int32_t)sizeof({CType(sized, so)}))";
+            }
+
             case ThisExpressionSyntax:
                 return _this switch
                 {
@@ -849,6 +857,16 @@ internal sealed class CEmitter
     private string ObjectCreation(ObjectCreationExpressionSyntax oc)
     {
         var type = Model(oc).GetTypeInfo(oc).Type!;
+        if (IsSpan(type))
+        {
+            // new Span<T>(T* pointer, int length): a view over memory from an arena or the OS.
+            var spanArgs = oc.ArgumentList?.Arguments ?? default;
+            if (spanArgs.Count != 2 || Model(oc).GetTypeInfo(spanArgs[0].Expression).Type is not IPointerTypeSymbol)
+                return Unsupported(oc, "Span constructor other than (pointer, length)");
+            var spanType = (INamedTypeSymbol)type;
+            var elemPtr = CType(spanType.TypeArguments[0], oc) + " *";
+            return $"(({SpanType(spanType, oc)}){{ ({elemPtr}){Expr(spanArgs[0].Expression)}, {Expr(spanArgs[1].Expression, top: true)} }})";
+        }
         if (type.TypeKind == TypeKind.Struct && Model(oc).GetSymbolInfo(oc).Symbol is IMethodSymbol { IsImplicitlyDeclared: false } ctor)
         {
             if (oc.Initializer != null) return Unsupported(oc, "constructor call combined with an object initializer");

@@ -48,6 +48,15 @@ Notes and limits:
 - Only `Fix` (16.16) exists; an 8.8 `short` type and a `Fix` square root/trig table are not written.
 - Properties, implicit user conversions, constructor initializers (`: this(...)`), static constructors, calls on temporaries (`Make().Get()`) and a constructor combined with an object initializer are still `ES0099`.
 
+## Memory (step 1 done)
+
+| Item | State |
+|---|---|
+| `Mem.AllocChip/AllocFast/Free/AvailChip/AvailFast`, `Arena` (design in MEMORY.md) | Done: exec `AllocVec`/`FreeVec`/`AvailMem`; host fake with a 512 KB chip budget and leak tracking |
+| `sizeof(T)` and `new Span<T>(pointer, length)` in the emitter | Done |
+| `samples/memory`: 19 checks | Done: same output on dotnet (no leaks), host gcc, and m68k on Kickstart 2.04 (A500+) and 3.1 (A1200), including a check that chip blocks are below 2 MB |
+| AmigaOS 4 / MorphOS allocation calls, fast-RAM paths | **Not verified** |
+
 ## Next
 
 - Run hello on real hardware, the last open item in the phase 1 gate. The emulator side is done: AROS replacement, Kickstart 2.04 and Kickstart 3.1.
@@ -55,7 +64,7 @@ Notes and limits:
 - `esharp test` (run host tests, optionally the Amiga build in the emulator) and `esharp assets`.
 - `esharp run` (launch FS-UAE/WinUAE with output mounted as a hard drive), `esharp test`.
 - Finish phase 2: run the sample on the PPC targets once there is a way to run them; decide on optional bounds checks; properties.
-- Memory management: design proposal in [MEMORY.md](MEMORY.md), waiting for Dave's decisions (arena and `Mem.AllocChip`/`AllocFast` first, then pools).
+- Memory management ([MEMORY.md](MEMORY.md)): step 1 (`Mem.AllocChip`/`AllocFast`/`Free`, `Arena`) is done; next are pools (after generics), debug poisoning and bounds checks, and the chip budget report.
 - Phase 3: Intuition window, blitter rect, asset pipeline.
 
 ## Known limits of the emitter

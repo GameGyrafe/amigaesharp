@@ -34,6 +34,7 @@
   <ItemGroup>
     <Compile Include="..\..\samples\hello\Hello.cs" Link="Samples\Hello.cs" />
     <Compile Include="..\..\samples\phase2\Phase2.cs" Link="Samples\Phase2.cs" />
+    <Compile Include="..\..\samples\memory\Memory.cs" Link="Samples\Memory.cs" />
   </ItemGroup>
 
 </Project>

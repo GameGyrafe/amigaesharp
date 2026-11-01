@@ -51,6 +51,20 @@ public static class P
         Directory.CreateDirectory(Path.Combine(dir, "proto"));
         File.WriteAllText(Path.Combine(dir, "proto", "dos.h"),
             "#include <stdio.h>\nstatic inline long PutStr(const char *s) { return fputs(s, stdout) < 0; }\n");
+        // A tiny exec.library: AllocVec/FreeVec on calloc, with a 512 KB "chip" pool tracked by flags.
+        File.WriteAllText(Path.Combine(dir, "proto", "exec.h"),
+            "#include <stdlib.h>\n#include <stdint.h>\n#include <stddef.h>\n" +
+            "#define MEMF_CHIP 2UL\n" +
+            "typedef struct { uint32_t size; uint32_t chip; } EsHdr;\n" +
+            "static uint32_t es_chip_used;\n" +
+            "static inline void *AllocVec(uint32_t size, uint32_t req) {\n" +
+            "  int chip = (req & 2UL) != 0;\n" +
+            "  if (size == 0 || (chip && size > 524288u - es_chip_used)) return NULL;\n" +
+            "  EsHdr *h = (EsHdr *)calloc(1, 16 + size);\n  if (!h) { return NULL; }\n" +
+            "  h->size = size;\n  h->chip = chip;\n  if (chip) { es_chip_used += size; }\n  return (char *)h + 16;\n}\n" +
+            "static inline void FreeVec(void *p) {\n  if (!p) { return; }\n  EsHdr *h = (EsHdr *)((char *)p - 16);\n" +
+            "  if (h->chip) { es_chip_used -= h->size; }\n  free(h);\n}\n" +
+            "static inline uint32_t AvailMem(uint32_t req) { return (req & 2UL) ? 524288u - es_chip_used : 0u; }\n");
         var cFile = Path.Combine(dir, "prog.c");
         File.WriteAllText(cFile, c);
         var exe = Path.Combine(dir, "prog");

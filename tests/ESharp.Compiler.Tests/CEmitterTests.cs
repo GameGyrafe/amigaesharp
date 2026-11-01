@@ -147,6 +147,17 @@ Dos.PutStr(Pick(Max));
     }
 
     [Fact]
+    public void Memory_sample_compiles_and_runs_natively_with_the_same_output_as_dotnet()
+    {
+        if (!HasGcc) return;
+        var path = Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "..", "samples", "memory", "Memory.cs");
+        var options = new CompileOptions { Defines = new[] { "AMIGA", "ESHARP_HOSTC" } };
+        var (code, output) = RunWithHostGcc(CompileOk(File.ReadAllText(path), options));
+        Assert.Equal(0, code);
+        Assert.Equal(MemoryExpected.Output, output);
+    }
+
+    [Fact]
     public void Arrays_become_c_arrays_and_spans_become_pointer_and_length()
     {
         var c = CompileOk(Program(
