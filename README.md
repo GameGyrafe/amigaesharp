@@ -40,7 +40,7 @@ Phase 1 (hello world) is under way. See [docs/STATUS.md](docs/STATUS.md) for wha
 
 ## Building
 
-Requires the .NET 8 SDK.
+Requires the .NET 10 SDK.
 
 ```bash
 dotnet test
