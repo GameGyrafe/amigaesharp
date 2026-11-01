@@ -34,8 +34,14 @@ public sealed class TargetInfo
 
     public bool IsM68k => Defines.Contains("M68K");
 
-    public CompileOptions ToOptions(bool allowFloat = false) =>
-        new() { Defines = Defines, AllowFloat = allowFloat };
+    /// <summary>With <paramref name="debug"/>, defines DEBUG (poisoned arenas) and turns bounds checks on.</summary>
+    public CompileOptions ToOptions(bool allowFloat = false, bool debug = false) =>
+        new()
+        {
+            Defines = debug ? Defines.Append("DEBUG").ToArray() : Defines,
+            AllowFloat = allowFloat,
+            BoundsChecks = debug,
+        };
 }
 
 public static class Targets

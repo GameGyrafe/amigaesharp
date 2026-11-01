@@ -41,7 +41,7 @@ must print the same 32 lines everywhere.
 | Real hardware | **Not done** |
 
 Notes and limits:
-- No bounds checking: indexing an array or span out of range is undefined, unlike dotnet. A checked mode is not designed yet.
+- Bounds checking is off by default: indexing out of range is undefined in a normal build. `esharp build --debug` (or `CompileOptions.BoundsChecks`) checks every array and span index (`ES_IDX`), prints `file(line): index N out of range 0..M` to stderr and exits with 20; `--debug` also defines `DEBUG`, which makes `Arena.Reset` fill with 0xDD. Raw pointer indexing is never checked. Verified: host gcc tests, and the memory and phase2 samples built with `--debug` pass on Kickstart 2.04 (A500+) and 3.1 (A1200). Not verified: where the stderr message appears on a real Amiga (a program started from the Workbench may show nothing), and the cost on a 68000.
 - Overflow wraps: all targets now compile with `-fwrapv` to match unchecked C#.
 - Arrays have no heap form; a `Span<T>` is the only way to hand one to another method. Spans cannot be stored in fields (C# forbids it for ref structs).
 - `Slice`, `foreach` and `Length` on a span or array need a plain name or member access, not a call.
@@ -64,7 +64,7 @@ Notes and limits:
 - `esharp test` (run host tests, optionally the Amiga build in the emulator) and `esharp assets`.
 - `esharp run` (launch FS-UAE/WinUAE with output mounted as a hard drive), `esharp test`.
 - Finish phase 2: run the sample on the PPC targets once there is a way to run them; decide on optional bounds checks; properties.
-- Memory management ([MEMORY.md](MEMORY.md)): step 1 (`Mem.AllocChip`/`AllocFast`/`Free`, `Arena`) is done; next are pools (after generics), debug poisoning and bounds checks, and the chip budget report.
+- Memory management ([MEMORY.md](MEMORY.md)): step 1 (`Mem.AllocChip`/`AllocFast`/`Free`, `Arena`) is done; step 3 is partly done (`--debug`: bounds checks, arena poisoning); next are pools (after generics), pool poisoning and double-free checks, and the chip budget report.
 - Phase 3: Intuition window, blitter rect, asset pipeline.
 
 ## Known limits of the emitter

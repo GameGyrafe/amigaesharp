@@ -26,6 +26,7 @@ Build options:
   --cc <compiler>   Override the target's C compiler
   --cflags <flags>  Override the target's C compiler flags
   --allow-float     Permit float/double
+  --debug           Define DEBUG: bounds-checked arrays and spans, poisoned arena Reset
 
 Run options (build options also apply; run is m68k only):
   --headless        No window: run on a virtual display, print the program's output, exit
@@ -98,7 +99,7 @@ public static class Program
         builtExe = null;
         string path = ".";
         string? outDir = null;
-        bool emitOnly = false, allowFloat = false;
+        bool emitOnly = false, allowFloat = false, debug = false;
         var target = Targets.M68k;
         string? cc = null, cflags = null, docker = null;
 
@@ -109,6 +110,7 @@ public static class Program
                 case "-o" when i + 1 < args.Length: outDir = args[++i]; break;
                 case "--emit-only": emitOnly = true; break;
                 case "--allow-float": allowFloat = true; break;
+                case "--debug": debug = true; break;
                 case "--target" when i + 1 < args.Length:
                     var found = Targets.Find(args[++i]);
                     if (found == null)
@@ -132,7 +134,7 @@ public static class Program
 
         var baseDir = Directory.Exists(path) ? path : Path.GetDirectoryName(Path.GetFullPath(path)) ?? ".";
         var sources = files.Select(f => new SourceFile(Path.GetRelativePath(Directory.GetCurrentDirectory(), f), File.ReadAllText(f))).ToList();
-        var result = EsCompiler.Compile(sources, target.ToOptions(allowFloat));
+        var result = EsCompiler.Compile(sources, target.ToOptions(allowFloat, debug));
 
         foreach (var d in result.Diagnostics)
             Console.Error.WriteLine(d.ToString());

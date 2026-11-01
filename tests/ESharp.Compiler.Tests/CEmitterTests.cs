@@ -204,4 +204,41 @@ Dos.PutStr(Pick(Max));
         var r = Compile(Program("struct S { public int V; public S(int v) : this() { V = v; } }"));
         Assert.Contains("ES0099", ErrorIds(r));
     }
+
+    [Fact]
+    public void Bounds_checks_pass_in_range_and_exit_20_out_of_range()
+    {
+        if (!HasGcc) return;
+        const string members = "static int Get(Span<int> s, int i) { return s[i]; }";
+        string P(string body) => Program(members, body).Replace("using ESharp;", "using System;\nusing ESharp;");
+        string Arr(string idx) => "int[] a = new int[4]; Dos.PutStr(\"start\\n\"); int k = " + idx + "; a[k] = 1; Dos.PutStr(\"after\\n\");";
+        var opts = new CompileOptions { BoundsChecks = true };
+
+        var ok = RunWithHostGcc(CompileOk(P(Arr("3")), opts));
+        Assert.Equal(0, ok.exitCode);
+        Assert.Equal("start\nafter\n", ok.output);
+
+        var bad = RunWithHostGcc(CompileOk(P(Arr("4")), opts));
+        Assert.Equal(20, bad.exitCode);
+        Assert.Equal("start\n", bad.output);
+
+        var span = RunWithHostGcc(CompileOk(P(
+            "int[] a = new int[4]; Span<int> s = a; Dos.PutStr(\"start\\n\"); if (Get(s, 9) == 1) Dos.PutStr(\"after\\n\");"), opts));
+        Assert.Equal(20, span.exitCode);
+
+        Assert.DoesNotContain("ES_IDX", CompileOk(P(Arr("3"))));
+    }
+
+    [Fact]
+    public void Debug_define_poisons_arena_on_reset()
+    {
+        if (!HasGcc) return;
+        const string body = "Arena a = new Arena(64, true); byte* p = a.Alloc(8, 4); p[0] = 1; a.Reset(); " +
+            "if (p[0] == 0xDD) Dos.PutStr(\"poisoned\\n\"); a.Destroy();";
+        var src = Program("", body).Replace("public static void Main()", "public static unsafe void Main()");
+        var debug = RunWithHostGcc(CompileOk(src, Targets.M68k.ToOptions(debug: true)));
+        Assert.Equal("poisoned\n", debug.output);
+        var release = RunWithHostGcc(CompileOk(src, Targets.M68k.ToOptions()));
+        Assert.Equal("", release.output);
+    }
 }

@@ -33,7 +33,13 @@ public unsafe struct Arena
     public uint Remaining() { return Size - Used; }
 
     /// <summary>Makes the whole arena available again. Earlier pointers must no longer be used.</summary>
-    public void Reset() { Used = 0; }
+    public void Reset()
+    {
+#if DEBUG
+        for (uint i = 0; i < Used; i++) Base[i] = 0xDD;
+#endif
+        Used = 0;
+    }
 
     /// <summary>Returns the block to the system.</summary>
     public void Destroy()

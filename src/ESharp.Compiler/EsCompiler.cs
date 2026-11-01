@@ -58,7 +58,7 @@ public static class EsCompiler
             return new CompileResult(null, Sorted(diagnostics));
 
         // 4. Emit C.
-        var emitter = new CEmitter(compilation, userSet, diagnostics);
+        var emitter = new CEmitter(compilation, userSet, diagnostics, options.BoundsChecks);
         var c = emitter.Emit();
         return new CompileResult(
             diagnostics.Any(d => d.Severity == DiagnosticSeverity.Error) ? null : c,

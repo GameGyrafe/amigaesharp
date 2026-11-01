@@ -35,8 +35,12 @@ internal sealed class CEmitter
     private const string ThisName = "_this";
     private int _temp;
 
-    public CEmitter(CSharpCompilation compilation, HashSet<SyntaxTree> user, List<Diagnostic> diagnostics)
+    private readonly bool _bounds;
+    private bool _usesBounds;
+
+    public CEmitter(CSharpCompilation compilation, HashSet<SyntaxTree> user, List<Diagnostic> diagnostics, bool boundsChecks = false)
     {
+        _bounds = boundsChecks;
         _compilation = compilation;
         _user = user;
         _diagnostics = diagnostics;
@@ -106,6 +110,22 @@ internal sealed class CEmitter
         result.AppendLine("#include <stdint.h>");
         foreach (var h in _headers) result.AppendLine($"#include <{h}>");
         result.AppendLine();
+        if (_usesBounds)
+        {
+            result.AppendLine("#include <stdio.h>");
+            result.AppendLine("#include <stdlib.h>");
+            result.AppendLine("static inline int32_t es_idx(int32_t i, int32_t n, const char *file, int line)");
+            result.AppendLine("{");
+            result.AppendLine("    if ((uint32_t)i >= (uint32_t)n)");
+            result.AppendLine("    {");
+            result.AppendLine("        fprintf(stderr, \"%s(%d): index %ld out of range 0..%ld\\n\", file, line, (long)i, (long)n - 1);");
+            result.AppendLine("        exit(20);");
+            result.AppendLine("    }");
+            result.AppendLine("    return i;");
+            result.AppendLine("}");
+            result.AppendLine("#define ES_IDX(i, n) es_idx((i), (n), __FILE__, __LINE__)");
+            result.AppendLine();
+        }
         if (_usesLen)
         {
             result.AppendLine("#define ES_LEN(a) ((int32_t)(sizeof(a) / sizeof((a)[0])))");
@@ -961,7 +981,21 @@ internal sealed class CEmitter
         }
         var index = Expr(args[0].Expression, top: true);
         var recv = Expr(ea.Expression);
-        if (IsSpan(recvType)) return $"{recv}.ptr[{index}]";
+        if (IsSpan(recvType))
+        {
+            if (_bounds && RequireSimple(ea.Expression, "bounds-checked index"))
+            {
+                _usesBounds = true;
+                return $"{recv}.ptr[ES_IDX({index}, {recv}.length)]";
+            }
+            return $"{recv}.ptr[{index}]";
+        }
+        if (recvType is IArrayTypeSymbol && _bounds && RequireSimple(ea.Expression, "bounds-checked index"))
+        {
+            _usesBounds = true;
+            _usesLen = true;
+            return $"{recv}[ES_IDX({index}, ES_LEN({recv}))]";
+        }
         if (recvType is IArrayTypeSymbol or IPointerTypeSymbol) return $"{recv}[{index}]";
         Unsupported(ea, "indexer");
         return "0";

@@ -105,7 +105,7 @@ monomorphised (phase 2 in the design document) this becomes `Pool<Card>`. Altern
 compiler could generate one typed pool wrapper per struct. I would prefer waiting for generics
 over building a generator.
 
-## Step 3: debug checks (build with `DEBUG` defined)
+## Step 3: debug checks (build with `--debug`; arena poisoning and bounds checks done, pool checks wait for pools)
 
 - Freed pool slots are filled with `0xDD`; arena `Reset` fills with `0xDD`.
 - A pool `Free` of an item that is not in the pool, or is already free, is an error.
@@ -143,7 +143,7 @@ be needed at all. This proposal does not decide that.
   `HostMem.Capture(chip, fast)` sets budgets and `LiveBlocks`/`ChipUsed` detect leaks.
 - `Mem.Free` on the host throws for an unknown or already-freed block. On a real Amiga that would
   corrupt memory, so the fake is stricter on purpose.
-- `Arena` is bump-pointer with explicit alignment; `Reset` does not clear (no poison yet, step 3).
+- `Arena` is bump-pointer with explicit alignment; `Reset` does not clear in a normal build; with `DEBUG` (`esharp build --debug`) it fills the used part with 0xDD.
 - `samples/memory` has 19 checks and runs identically under dotnet (no leaks), host gcc (against an
   exec shim) and on m68k, where it also asserts the chip block address is below 2 MB.
 - **Not verified:** AmigaOS 4 and MorphOS (`AllocVec` availability), fast RAM paths (FS-UAE has no

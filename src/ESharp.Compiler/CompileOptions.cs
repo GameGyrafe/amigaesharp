@@ -22,4 +22,7 @@ public sealed class CompileOptions
 
     /// <summary>Allow float/double (needs an FPU or a software float library).</summary>
     public bool AllowFloat { get; init; }
+
+    /// <summary>Check array and span indexes at run time; a bad index prints its source line and exits with 20.</summary>
+    public bool BoundsChecks { get; init; }
 }
