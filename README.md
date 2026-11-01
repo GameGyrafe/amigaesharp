@@ -47,8 +47,14 @@ dotnet test
 dotnet run --project src/ESharp.Cli -- build samples/hello --emit-only
 ```
 
-To build for the Amiga, install Bebbo's `amiga-gcc` and drop `--emit-only`
-(`--cc` and `--cflags` override the compiler).
+To build for the Amiga, use the pinned toolchain image (68000, AmigaOS 4 PowerPC and MorphOS PowerPC):
+
+```bash
+docker build -t esharp-amiga-toolchain docker
+dotnet run --project src/ESharp.Cli -- build samples/hello --target m68k --docker   # or os4, morphos
+```
+
+Without Docker, install the compiler yourself and drop `--docker` (`--cc` and `--cflags` override it).
 
 ## Layout
 
@@ -60,6 +66,7 @@ src/
   ESharp.Runtime/      attributes and intrinsics
   ESharp.Platform/     Video, Audio, Input, Storage, Timing, Dos contracts
   ESharp.Target.Host/  managed fakes for tests
+docker/                pinned Amiga toolchain image and smoke test
 samples/               hello, ...
 tests/
 docs/

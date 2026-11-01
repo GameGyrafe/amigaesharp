@@ -96,6 +96,9 @@ internal sealed class CEmitter
         return result.ToString();
     }
 
+    private bool IsDefined(string symbol) =>
+        _compilation.SyntaxTrees.FirstOrDefault(_user.Contains)?.Options.PreprocessorSymbolNames.Contains(symbol) ?? false;
+
     private static bool DeclaresBody(IMethodSymbol m) =>
         m.DeclaringSyntaxReferences.Any(r => r.GetSyntax() is MethodDeclarationSyntax { Body: not null } or
             MethodDeclarationSyntax { ExpressionBody: not null });
@@ -271,7 +274,9 @@ internal sealed class CEmitter
         var decl = f.DeclaringSyntaxReferences.First().GetSyntax();
         var init = (decl as VariableDeclaratorSyntax)?.Initializer?.Value;
         var text = Decl(f.Type, FieldName(f), decl);
-        if (HasAttribute(f, "ChipRamAttribute"))
+        // Chip RAM is a 68k-only concept in the C dialect: PowerPC systems allocate chip memory
+        // at run time instead, so the attribute is a no-op there.
+        if (HasAttribute(f, "ChipRamAttribute") && IsDefined("M68K"))
             text = "__chip " + text;
         Line(init != null ? $"static {text} = {Expr(init, top: true)};" : $"static {text};");
     }

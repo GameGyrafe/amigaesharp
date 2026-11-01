@@ -13,12 +13,13 @@ Gate: runs in an emulator and on the host.
 | `esharp new` / `esharp build` | Done (build needs `--cc` or amiga-gcc to go past C emission) |
 | .NET test host + xUnit | Done (`HostConsole` captures `Dos.PutStr`) |
 | Generated C compiled and run natively (host gcc + `proto/dos.h` shim) | Done, in tests |
-| Build with real `m68k-amigaos-gcc` | **Not verified**: toolchain not available in the dev container |
-| Run in FS-UAE | **Not done**: needs the pinned toolchain container image |
+| Pinned toolchain image (`docker/Dockerfile`): m68k, AmigaOS 4 PPC, MorphOS PPC, by digest | Done |
+| Hello sample builds with the real compilers for m68k, os4 and morphos (`esharp build --target X --docker`) | Done: m68k yields a valid hunk executable, os4/morphos PPC ELF |
+| Run in FS-UAE / on hardware | **Not done**: binaries are built but never executed (no emulator in the image yet) |
 
 ## Next
 
-- Pinned amiga-gcc container image, then verify the hello sample builds and runs in FS-UAE (closes the phase 1 gate).
+- Add an emulator to the workflow and run hello: FS-UAE for m68k first (closes the phase 1 gate). Running the PPC builds needs a PPC-capable emulator (QEMU `amigaone`/`sam460ex` for OS4, `pegasos2` for MorphOS) or real hardware.
 - `esharp run` (launch FS-UAE/WinUAE with output mounted as a hard drive), `esharp test`.
 - Phase 2: arrays, fixed-point types, span views (emitter currently reports `ES0099` for them).
 
@@ -29,3 +30,15 @@ constructors with arguments, `ref`/`out`, `foreach`, properties, `[InlineAsm]`/`
 
 Namespaces are dropped when naming C symbols, so two types with the same name in different
 namespaces would collide.
+
+## Targets
+
+CPU and OS are separate axes. `AMIGA` is defined for every Amiga-family target; narrow with `M68K` / `PPC` and `AMIGAOS3` / `AMIGAOS4` / `MORPHOS`.
+
+| `--target` | Compiler | Symbols |
+|---|---|---|
+| `m68k` (default) | `m68k-amigaos-gcc` 6.5.0b | AMIGA M68K AMIGAOS3 |
+| `os4` | `ppc-amigaos-gcc` 11.5.0 | AMIGA PPC AMIGAOS4 |
+| `morphos` | `ppc-morphos-gcc` 15.2.0 | AMIGA PPC MORPHOS |
+
+PowerPC notes: both PPC targets are big-endian, so asset formats need no change. `[ChipRam]` is a no-op on PPC (chip memory is allocated at run time there). `[InlineAsm]` will be 68k-only, so shared code needs an `#if M68K` fallback. `[AmigaLib]` offsets are 68k library vectors; the PPC targets call through the same `proto/*.h` names, so the emitter output is identical. Not yet covered: WarpOS/PowerUP (no prebuilt toolchain found) and AROS.

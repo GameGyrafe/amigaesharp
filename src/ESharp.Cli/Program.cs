@@ -10,7 +10,7 @@ namespace ESharp.Cli;
 
 internal static class Program
 {
-    private const string Usage = @"esharp - C# for the Amiga
+    private static readonly string Usage = @"esharp - C# for the Amiga
 
 Usage:
   esharp new <name>                 Create a new hello-world project
@@ -18,12 +18,16 @@ Usage:
   esharp run | test | assets        Not implemented yet (phase 1 covers build only)
 
 Build options:
+  --target <name>   m68k (default), os4 or morphos
   -o <dir>          Output directory (default: obj next to the sources)
   --emit-only       Stop after writing the C file
-  --cc <compiler>   C compiler (default: m68k-amigaos-gcc)
-  --cflags <flags>  Extra C compiler flags (default: -noixemul -m68000 -O2)
+  --docker [image]  Run the C compiler inside the toolchain image (default: esharp-amiga-toolchain)
+  --cc <compiler>   Override the target's C compiler
+  --cflags <flags>  Override the target's C compiler flags
   --allow-float     Permit float/double
-";
+
+Targets:
+" + string.Join("\n", Targets.All.Select(t => $"  {t.Name,-9} {t.Description}")) + "\n";
 
     private static int Main(string[] args)
     {
@@ -84,8 +88,8 @@ public static class Program
         string path = ".";
         string? outDir = null;
         bool emitOnly = false, allowFloat = false;
-        string cc = "m68k-amigaos-gcc";
-        string cflags = "-noixemul -m68000 -O2";
+        var target = Targets.M68k;
+        string? cc = null, cflags = null, docker = null;
 
         for (var i = 0; i < args.Length; i++)
         {
@@ -94,6 +98,15 @@ public static class Program
                 case "-o" when i + 1 < args.Length: outDir = args[++i]; break;
                 case "--emit-only": emitOnly = true; break;
                 case "--allow-float": allowFloat = true; break;
+                case "--target" when i + 1 < args.Length:
+                    var found = Targets.Find(args[++i]);
+                    if (found == null)
+                        return Fail($"unknown target '{args[i]}' (known: {string.Join(", ", Targets.All.Select(t => t.Name))})");
+                    target = found;
+                    break;
+                case "--docker":
+                    docker = i + 1 < args.Length && !args[i + 1].StartsWith("-") ? args[++i] : "esharp-amiga-toolchain";
+                    break;
                 case "--cc" when i + 1 < args.Length: cc = args[++i]; break;
                 case "--cflags" when i + 1 < args.Length: cflags = args[++i]; break;
                 default:
@@ -108,7 +121,7 @@ public static class Program
 
         var baseDir = Directory.Exists(path) ? path : Path.GetDirectoryName(Path.GetFullPath(path)) ?? ".";
         var sources = files.Select(f => new SourceFile(Path.GetRelativePath(Directory.GetCurrentDirectory(), f), File.ReadAllText(f))).ToList();
-        var result = EsCompiler.Compile(sources, new CompileOptions { AllowFloat = allowFloat });
+        var result = EsCompiler.Compile(sources, target.ToOptions(allowFloat));
 
         foreach (var d in result.Diagnostics)
             Console.Error.WriteLine(d.ToString());
@@ -120,7 +133,7 @@ public static class Program
             return 1;
         }
 
-        outDir ??= Path.Combine(baseDir, "obj");
+        outDir ??= Path.Combine(baseDir, "obj", target.Name);
         Directory.CreateDirectory(outDir);
         var name = Path.GetFileNameWithoutExtension(files[0]);
         if (Directory.Exists(path)) name = new DirectoryInfo(Path.GetFullPath(path)).Name;
@@ -129,12 +142,29 @@ public static class Program
         Console.WriteLine($"Wrote {cFile}");
         if (emitOnly) return 0;
 
+        cc ??= target.Compiler;
+        cflags ??= target.CFlags;
         var exe = Path.Combine(outDir, name);
-        var psi = new ProcessStartInfo(cc) { UseShellExecute = false };
-        foreach (var f in cflags.Split(' ', StringSplitOptions.RemoveEmptyEntries)) psi.ArgumentList.Add(f);
-        psi.ArgumentList.Add("-o");
-        psi.ArgumentList.Add(exe);
-        psi.ArgumentList.Add(cFile);
+
+        // Inside the container the output directory is mounted at /work.
+        var compilerArgs = new List<string>();
+        compilerArgs.AddRange(cflags.Split(' ', StringSplitOptions.RemoveEmptyEntries));
+        compilerArgs.AddRange(new[] { "-o", docker == null ? exe : name, docker == null ? cFile : name + ".c" });
+        compilerArgs.AddRange(target.Libs.Split(' ', StringSplitOptions.RemoveEmptyEntries));
+
+        ProcessStartInfo psi;
+        if (docker == null)
+        {
+            psi = new ProcessStartInfo(cc) { UseShellExecute = false };
+            foreach (var a in compilerArgs) psi.ArgumentList.Add(a);
+        }
+        else
+        {
+            psi = new ProcessStartInfo("docker") { UseShellExecute = false };
+            foreach (var a in new[] { "run", "--rm", "-v", $"{Path.GetFullPath(outDir)}:/work", "-w", "/work", docker, cc })
+                psi.ArgumentList.Add(a);
+            foreach (var a in compilerArgs) psi.ArgumentList.Add(a);
+        }
 
         try
         {
@@ -144,7 +174,7 @@ public static class Program
         }
         catch (System.ComponentModel.Win32Exception)
         {
-            return Fail($"C compiler '{cc}' not found. Install Bebbo's amiga-gcc, or pass --cc, or use --emit-only.");
+            return Fail($"'{psi.FileName}' not found. Install {cc} (see docker/Dockerfile), pass --docker, or use --emit-only.");
         }
 
         Console.WriteLine($"Built {exe}");

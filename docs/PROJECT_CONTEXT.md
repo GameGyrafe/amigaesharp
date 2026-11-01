@@ -9,6 +9,9 @@ Condensed from the design document and the original planning chat. Treat `docs/S
 - Repo public on GitHub, private until there is something to show. Licence MIT (Apache-2.0 was the alternative); copyright Gyrafe Software. Avoid GPL/LGPL for anything linked into games.
 - Phase 1 front end is a library driven by the CLI (a standalone tool). A source-generator front end stays an open question.
 
+## Targets
+Modern "Amigas" are often PowerPC (AmigaOS 4, MorphOS), so PPC is a first-class target, not a "later" one: CPU and OS are separate axes, with `AMIGA` as the umbrella symbol plus `M68K`/`PPC` and `AMIGAOS3`/`AMIGAOS4`/`MORPHOS`. See `docs/STATUS.md` for the target table. The 68000 baseline stays the default and the performance-constrained one.
+
 ## Language subset
 Supported: static classes/methods, structs (no reference fields), enums, small integer types, fixed-point types, fixed-size arrays and span views, `unsafe` pointers.
 Slow/opt-in: long/ulong (software 64-bit), float/double (off by default, no FPU).

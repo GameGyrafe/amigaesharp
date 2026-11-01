@@ -14,3 +14,20 @@ jobs:
         with:
           dotnet-version: 8.0.x
       - run: dotnet test --configuration Release
+
+  toolchain:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.0.x
+      - name: Build the Amiga toolchain image
+        run: docker build -t esharp-amiga-toolchain docker
+      - name: Smoke-test every target compiler
+        run: docker/smoke-test.sh
+      - name: Build the hello sample for every target
+        run: |
+          for t in m68k os4 morphos; do
+            dotnet run --project src/ESharp.Cli -- build samples/hello --target $t --docker
+          done
