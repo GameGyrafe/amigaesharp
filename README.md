@@ -82,6 +82,10 @@ tests/
 docs/
 ```
 
+## Requirements on the Amiga
+
+Classic Amiga builds need Kickstart/AmigaOS 2.04 or later (68000 or better). AmigaOS 4 and MorphOS builds target their current releases.
+
 ## Licence
 
 MIT. See [LICENSE](LICENSE).

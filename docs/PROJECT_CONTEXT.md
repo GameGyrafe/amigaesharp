@@ -14,6 +14,9 @@ Condensed from the design document and the original planning chat. Treat `docs/S
 ## Targets
 Modern "Amigas" are often PowerPC (AmigaOS 4, MorphOS), so PPC is a first-class target, not a "later" one: CPU and OS are separate axes, with `AMIGA` as the umbrella symbol plus `M68K`/`PPC` and `AMIGAOS3`/`AMIGAOS4`/`MORPHOS`. See `docs/STATUS.md` for the target table. The 68000 baseline stays the default and the performance-constrained one.
 
+## Minimum OS
+Classic Amiga builds require **Kickstart/AmigaOS 2.04 (v37) or later**; Kickstart 1.x is not supported. This matches AMOSNG's floor. Consequences: library stubs and the asset/platform code may assume v37 `exec`, `dos`, `graphics` and `intuition` (open libraries with version 37), and the emulator test matrix starts at 2.04 (A500+). The CPU baseline is unchanged (`-m68000`). Raising or lowering the floor is a decision for Dave.
+
 ## Language subset
 Supported: static classes/methods, structs (no reference fields), enums, small integer types, fixed-point types, fixed-size arrays and span views, `unsafe` pointers.
 Slow/opt-in: long/ulong (software 64-bit), float/double (off by default, no FPU).

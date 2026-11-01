@@ -33,6 +33,7 @@ Requires the .NET 10 SDK (`global.json`). `src/ESharp.Analyzers` stays on `netst
 
 ## Rules
 
+- Minimum OS for classic Amiga builds is Kickstart/AmigaOS 2.04 (v37); no Kickstart 1.x support. Open libraries with version 37 or higher.
 - Symbols: `AMIGA` is defined for every Amiga-family target; `M68K`/`PPC` and `AMIGAOS3`/`AMIGAOS4`/`MORPHOS` narrow it. Nothing in the front end or platform contracts may assume a single target. 68000 is the performance baseline.
 - Test the behaviour, not just the text: new emitter features need a test that compiles the generated C and runs it (see `CEmitterTests`).
 - Never commit Kickstart ROMs or other copyrighted Amiga files (`*.rom` is git-ignored). Never copy code from Amiga E (its compiler is GPL); design inspiration only. Avoid GPL/LGPL in anything linked into games.
@@ -56,5 +57,5 @@ them, and never copy them into the repo.
 
 ## Next up
 
-See "Next" in `docs/STATUS.md`. At the time of writing: verify hello against a real Kickstart, then
+See "Next" in `docs/STATUS.md`. At the time of writing: verify hello against real Kickstart 2.04 and 3.1, then
 phase 2 (arrays, fixed-point types, span views).
