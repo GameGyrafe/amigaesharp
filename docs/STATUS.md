@@ -1,5 +1,9 @@
 # Status
 
+## Regression after classes and interfaces
+
+All ten samples (hello, phase2, memory, generics, properties, operators, language, screen, cards, rummy) re-run on Kickstart 2.04 (A500+) and 3.1 (A1200) after the class and interface work: 360 checks ok, no failures. `samples/language` also passes with `--debug` (22 ok on both ROMs). Not verified: PowerPC, real hardware.
+
 ## Rummy sample (samples/rummy)
 
 A two-player rummy against a greedy bot (draw from stock or pile, discard, knock at 10 or less deadwood), written from scratch from the public rules with original code and the shared card sprite sheet. It exercises `Vec<byte>`, `ref`/`out` parameters, tuples, switch expressions, a lambda, the `Font` and the mouse. Verified: 35 checks on the host (including 40 bot-against-bot games with all 52 cards accounted for), and on Kickstart 2.04 (A500+) and 3.1 (A1200) the self-checks (3 bot games there) plus a scripted mouse game (draw, discard, bot reply, second turn on the A1200; the A500+ is slow enough that the script's later clicks arrive while the bot is still thinking) with a screenshot (`docs/images/phase4-rummy-a1200.png`). Not verified: real hardware, how long a bot turn takes on a real 68000 (a few hundred hand analyses; it is noticeable on the emulated A500+), knocking by mouse on the emulator, a full game played to the end on the emulator.
@@ -105,8 +109,10 @@ Found by comparing what a real card game needs (heavy use of collections, tuples
 | Static constructors, `: this(...)` constructor initializers (structs) | Done. **Static constructors run once at start-up in type order**, not lazily like in C#. Before this fix a static constructor was silently ignored |
 | `Vec<T>` (`ESharp.Platform`, named so as not to clash with `System.Collections.Generic.List<T>`): growable list of an unmanaged `T` | Done: `Add`, `Insert`, `RemoveAt`, `SwapRemoveAt`, `Clear`, indexer, `Count`, `Capacity`, `AsSpan`, `Destroy`; no exceptions (false / zero value). Counted in the chip budget by its initial capacity only |
 | `Dos.PutInt` | Done |
+| Heap classes (non-static `class`) | Done: fields, auto-properties, methods, constructors, static members, `new` (also with an object initializer), `null`, reference equality, arrays of references, `this`. A class variable is a C pointer (`Foo *`), `new` is `calloc` (stops with exit 20 when memory runs out), and objects are freed with `Heap.Free(ref obj)` (frees and sets the variable to null); objects never freed are released when the program ends. There is no garbage collector: keep one owner per object. **No inheritance, no `virtual`/`abstract`/`override` (ES0007), no generic classes (ES0008), no instance field initializers or `: this(...)` in classes (ES0099, assign in the constructor)**. Class names live in C's single namespace, so a name that is also in the NDK headers (`Node`, `List`, `Window`, ...) fails in gcc: pick another. Two E# types with the same name in different namespaces are reported (ES0099) |
+| Interfaces | Static dispatch only: declare them, implement them in structs or classes, and use them as generic constraints (`static int Total<T>(ref T s) where T : IScorer`): generic code is monomorphised, so every call resolves to the concrete type. A variable, field, parameter or return of an interface type is ES0009 (it would need dynamic dispatch, which is not done) |
 | Lambdas, method groups and delegates (`Func<>`, `Action<>`, `Predicate<>`, user `delegate` types) | Done for lambdas that **capture nothing** and static methods: a delegate is a C function pointer, a lambda becomes a C function. A lambda that uses an enclosing local, parameter or `this` is `ES0099`. Calls `f(x)` and `f.Invoke(x)` work. Not done: delegates as struct fields, `null` checks and `?.Invoke` on delegates (not tested), `delegate { }` anonymous methods, instance-method groups, combining delegates (`+=`) |
-| Still missing (needed by bigger games) | Capturing lambdas, LINQ (rewrite as loops), string interpolation and a string buffer, classes and interfaces (ES0007/ES0009), `HashSet`/`Dictionary`, sound, AGA |
+| Still missing (needed by bigger games) | Capturing lambdas, LINQ (rewrite as loops), string interpolation and a string buffer, inheritance and interface-typed variables (dynamic dispatch), `HashSet`/`Dictionary`, sound, AGA |
 
 ## Phase 4: card demo (in progress)
 
@@ -139,7 +145,7 @@ Screenshot: [images/phase4-cards-a1200.png](images/phase4-cards-a1200.png) (Kick
 
 ## Known limits of the emitter
 
-Reported as `ES0099` rather than miscompiled: string concatenation and interpolation, capturing lambdas, delegates in struct fields, classes and interfaces (ES0007/ES0009), `ref` locals and returns, `foreach` over anything but arrays and spans, positional/list patterns, `[InlineAsm]`/`[Interrupt]` bodies.
+Reported as `ES0099` rather than miscompiled: string concatenation and interpolation, capturing lambdas, delegates in struct fields, inheritance and interface-typed variables, `ref` locals and returns, `foreach` over anything but arrays and spans, positional/list patterns, `[InlineAsm]`/`[Interrupt]` bodies.
 
 Namespaces are dropped when naming C symbols, so two types with the same name in different
 namespaces would collide.

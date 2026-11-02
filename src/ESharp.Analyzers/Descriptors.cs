@@ -35,8 +35,8 @@ public static class Descriptors
         "E# has no reflection ('{0}')");
 
     public static readonly DiagnosticDescriptor HeapClass = Error(
-        "ES0007", "Classes are not supported yet",
-        "Class '{0}' must be static: heap classes arrive in language phase 2");
+        "ES0007", "This kind of class is not supported yet",
+        "Class '{0}': {1}. Supported: static classes and plain heap classes (fields, properties, methods, constructors; no inheritance)");
 
     public static readonly DiagnosticDescriptor Generics = Error(
         "ES0008", "Generic classes and library generics are not supported",
@@ -47,8 +47,8 @@ public static class Descriptors
         "Expanding generic '{0}' did not finish: recursive instantiation?");
 
     public static readonly DiagnosticDescriptor Interfaces = Error(
-        "ES0009", "Interfaces are not supported yet",
-        "Interface '{0}': static-dispatch interfaces arrive in language phase 2");
+        "ES0009", "Interfaces are only supported as generic constraints",
+        "Interface '{0}' used as a type: E# interfaces are static-dispatch (use them as 'where T : {0}' on generic structs and methods); a variable, field or parameter of interface type would need dynamic dispatch");
 
     public static readonly DiagnosticDescriptor SlowArithmetic = new(
         "ES0100", "Slow arithmetic on 68000",

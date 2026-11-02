@@ -61,6 +61,12 @@ internal sealed class CEmitter
         }
     }
 
+    /// <summary>A non-static class: a heap object that variables hold by pointer.</summary>
+    private static bool IsHeapClass(ITypeSymbol t) => t is INamedTypeSymbol { TypeKind: TypeKind.Class, IsStatic: false };
+
+    /// <summary>A C pointer at run time: raw pointers and class references.</summary>
+    private static bool IsRef(ITypeSymbol? t) => t is IPointerTypeSymbol || t != null && IsHeapClass(t);
+
     private static AttributeData? GetAttribute(ISymbol s, string name) =>
         s.GetAttributes().FirstOrDefault(a => a.AttributeClass?.Name == name);
 
@@ -71,7 +77,13 @@ internal sealed class CEmitter
     public string Emit()
     {
         var types = CollectTypes();
+        // C has no namespaces: two types with the same name (in different namespaces) would collide in the generated C.
+        foreach (var group in types.GroupBy(TypeName).Where(g => g.Count() > 1))
+            foreach (var dup in group.Skip(1))
+                Unsupported(dup.DeclaringSyntaxReferences.First().GetSyntax(),
+                    $"type name '{group.Key}' is already used by another type ({group.First().ContainingNamespace}); type names must be unique across namespaces in E#");
         var structs = SortStructs(types.OfType<INamedTypeSymbol>().Where(t => t.TypeKind == TypeKind.Struct));
+        var heapClasses = types.Where(IsHeapClass).ToList();
         var enums = types.Where(t => t.TypeKind == TypeKind.Enum).ToList();
         var statics = types.Where(t => t.TypeKind == TypeKind.Class).ToList();
 
@@ -80,11 +92,13 @@ internal sealed class CEmitter
         foreach (var u in _usedSymbols) usedStatics.Add(u);
         var body = new StringBuilder();
         foreach (var e in enums) EmitEnum(e);
+        foreach (var c in heapClasses) Line($"typedef struct {TypeName(c)} {TypeName(c)};");   // forward declarations: classes point to each other
         foreach (var s in structs) EmitStruct(s);
+        foreach (var c in heapClasses) EmitClass(c);
         var typeText = _out.ToString();
         _out.Clear();
 
-        var fields = statics.SelectMany(t => t.GetMembers().OfType<IFieldSymbol>()).Where(f => !f.IsConst && f.AssociatedSymbol == null && usedStatics.Contains(f)).ToList();
+        var fields = statics.SelectMany(t => t.GetMembers().OfType<IFieldSymbol>()).Where(f => f.IsStatic && !f.IsConst && f.AssociatedSymbol == null && usedStatics.Contains(f)).ToList();
         foreach (var f in fields) EmitStaticField(f);
         var staticProps = types.SelectMany(t => t.GetMembers().OfType<IPropertySymbol>())
             .Where(p => p.IsStatic && IsAutoProperty(p) && usedStatics.Contains(p)).ToList();
@@ -138,6 +152,18 @@ internal sealed class CEmitter
             result.AppendLine("}");
             result.AppendLine("#define ES_IDX(i, n) es_idx((i), (n), __FILE__, __LINE__)");
             result.AppendLine();
+        }
+        if (_usesAlloc)
+        {
+            result.AppendLine("#include <stdio.h>");
+            result.AppendLine("#include <stdlib.h>");
+            result.AppendLine("static void *es_new(size_t n)");
+            result.AppendLine("{");
+            result.AppendLine("    void *p = calloc(1, n);");
+            result.AppendLine("    if (p == NULL) { fputs(\"out of memory\\n\", stderr); exit(20); }");
+            result.AppendLine("    return p;");
+            result.AppendLine("}");
+            result.AppendLine("#define ES_NEW(T) ((T *)es_new(sizeof(T)))");
         }
         if (_usesLen)
         {
@@ -225,6 +251,9 @@ internal sealed class CEmitter
     /// a console program) is not emitted, so it neither bloats the executable nor needs its headers.
     /// </summary>
     private readonly List<IMethodSymbol> _staticConstructors = new();
+    private bool _thisIsClass;
+    private bool _usesAlloc;
+    private int _objectTemps;
     private readonly HashSet<ISymbol> _usedSymbols = new(SymbolEqualityComparer.Default);
 
     private HashSet<IMethodSymbol> ReachableMethods(List<INamedTypeSymbol> types)
@@ -401,6 +430,8 @@ internal sealed class CEmitter
                 return TupleType(tuple, at);
             case INamedTypeSymbol { TypeKind: TypeKind.Delegate } del:
                 return DelegateType(del, at);
+            case INamedTypeSymbol cls when IsHeapClass(cls):
+                return TypeName(cls) + " *";
             case INamedTypeSymbol { TypeKind: TypeKind.Enum or TypeKind.Struct } n:
                 return TypeName(n);
             case IArrayTypeSymbol:
@@ -582,8 +613,45 @@ internal sealed class CEmitter
                 Unsupported(pd, "initializer on an instance property");
             Line(Decl(p.Type, p.Name, decl) + ";");
         }
+        if (!s.GetMembers().Any(m => m is IFieldSymbol { IsStatic: false, IsConst: false, AssociatedSymbol: null } || m is IPropertySymbol { IsStatic: false } pp && IsAutoProperty(pp)))
+            Line("char ES_empty;");   // C has no empty structs
         _indent--;
         Line($"}} {name};");
+        Line("");
+    }
+
+    private void EmitClass(INamedTypeSymbol c)
+    {
+        var decl = (ClassDeclarationSyntax)c.DeclaringSyntaxReferences.First().GetSyntax();
+        foreach (var member in decl.Members)
+        {
+            var supported = member is FieldDeclarationSyntax or EnumDeclarationSyntax or StructDeclarationSyntax
+                or MethodDeclarationSyntax or OperatorDeclarationSyntax or ConversionOperatorDeclarationSyntax
+                or PropertyDeclarationSyntax or IndexerDeclarationSyntax or ConstructorDeclarationSyntax;
+            if (!supported) Unsupported(member, $"{member.Kind()} in a class");
+            if (member is ConstructorDeclarationSyntax { Initializer: not null } ctor && !ctor.Modifiers.Any(m => m.IsKind(SyntaxKind.StaticKeyword)))
+                Unsupported(ctor.Initializer!, "constructor initializer in a class");
+            if (member is FieldDeclarationSyntax f && !f.Modifiers.Any(m => m.IsKind(SyntaxKind.StaticKeyword) || m.IsKind(SyntaxKind.ConstKeyword)))
+                foreach (var v in f.Declaration.Variables.Where(v => v.Initializer != null))
+                    Unsupported(v.Initializer!, "initializer on an instance field of a class (assign it in the constructor)");
+        }
+
+        var name = TypeName(c);
+        Line($"struct {name}");
+        Line("{");
+        _indent++;
+        foreach (var field in c.GetMembers().OfType<IFieldSymbol>().Where(f => !f.IsStatic && !f.IsConst && f.AssociatedSymbol == null))
+            Line(Decl(field.Type, field.Name, decl) + ";");
+        foreach (var p in c.GetMembers().OfType<IPropertySymbol>().Where(p => !p.IsStatic && IsAutoProperty(p)))
+        {
+            if (p.DeclaringSyntaxReferences.First().GetSyntax() is PropertyDeclarationSyntax { Initializer: not null } pd)
+                Unsupported(pd, "initializer on an instance property");
+            Line(Decl(p.Type, p.Name, decl) + ";");
+        }
+        if (!c.GetMembers().Any(m => m is IFieldSymbol { IsStatic: false, IsConst: false, AssociatedSymbol: null } || m is IPropertySymbol { IsStatic: false } pp && IsAutoProperty(pp)))
+            Line("char ES_empty;");   // C has no empty structs
+        _indent--;
+        Line("};");
         Line("");
     }
 
@@ -614,7 +682,7 @@ internal sealed class CEmitter
         var node = m.DeclaringSyntaxReferences.First().GetSyntax();
         var parts = new List<string>();
         if (!m.IsStatic && m.MethodKind is not (MethodKind.Constructor or MethodKind.LocalFunction or MethodKind.AnonymousFunction))
-            parts.Add($"{CType(m.ContainingType, node)} *{ThisName}");
+            parts.Add($"{TypeName(m.ContainingType)} *{ThisName}");
         parts.AddRange(m.Parameters.Select(p => p.RefKind switch
         {
             RefKind.None => Decl(p.Type, p.Name, node),
@@ -640,9 +708,12 @@ internal sealed class CEmitter
         Line("{");
         _indent++;
         var isCtor = m.MethodKind == MethodKind.Constructor;
-        _this = isCtor ? ThisKind.Value : m.IsStatic || m.MethodKind is MethodKind.LocalFunction or MethodKind.AnonymousFunction ? ThisKind.None : ThisKind.Pointer;
+        var isClassCtor = isCtor && IsHeapClass(m.ContainingType);
+        _thisIsClass = IsHeapClass(m.ContainingType) && !m.IsStatic;
+        _this = isCtor && !isClassCtor ? ThisKind.Value : m.IsStatic || m.MethodKind is MethodKind.LocalFunction or MethodKind.AnonymousFunction ? ThisKind.None : ThisKind.Pointer;
         if (m.MethodKind == MethodKind.AnonymousFunction) CheckNoCapture(decl, "lambda");
-        if (isCtor) Line($"{CType(m.ContainingType, decl)} {ThisName} = {{0}};");
+        if (isClassCtor) { _usesAlloc = true; Line($"{TypeName(m.ContainingType)} *{ThisName} = ES_NEW({TypeName(m.ContainingType)});"); }
+        else if (isCtor) Line($"{CType(m.ContainingType, decl)} {ThisName} = {{0}};");
         if (isCtor && decl is ConstructorDeclarationSyntax { Initializer: { } init } &&
             Model(init).GetSymbolInfo(init).Symbol is IMethodSymbol { IsImplicitlyDeclared: false } chained)
             Line($"{ThisName} = {FuncName(chained)}({string.Join(", ", init.ArgumentList.Arguments.Select(a => Argument(a, chained)))});");
@@ -660,6 +731,7 @@ internal sealed class CEmitter
         }
         if (isCtor) Line($"return {ThisName};");
         _this = ThisKind.None;
+        _thisIsClass = false;
         _indent--;
         Line("}");
         Line("");
@@ -1095,6 +1167,7 @@ internal sealed class CEmitter
             }
 
             case ThisExpressionSyntax:
+                if (_thisIsClass && _this == ThisKind.Pointer) return ThisName;   // a class 'this' is the pointer itself
                 return _this switch
                 {
                     ThisKind.Pointer => $"(*{ThisName})",
@@ -1238,6 +1311,29 @@ internal sealed class CEmitter
             var elemPtr = CType(spanType.TypeArguments[0], oc) + " *";
             return $"(({SpanType(spanType, oc)}){{ ({elemPtr}){Expr(spanArgs[0].Expression)}, {Expr(spanArgs[1].Expression, top: true)} }})";
         }
+        if (IsHeapClass(type))
+        {
+            _usesAlloc = true;
+            string create;
+            if (Model(oc).GetSymbolInfo(oc).Symbol is IMethodSymbol { IsImplicitlyDeclared: false } cctor)
+            {
+                if (cctor.Parameters.Any(p => p.RefKind != RefKind.None)) return Unsupported(oc, "ref/out constructor argument");
+                create = $"{FuncName(cctor)}({string.Join(", ", (oc.ArgumentList?.Arguments ?? default).Select(a => Expr(a.Expression, top: true)))})";
+            }
+            else if ((oc.ArgumentList?.Arguments.Count ?? 0) > 0) return Unsupported(oc, "constructor call");
+            else create = $"ES_NEW({TypeName((INamedTypeSymbol)type)})";
+            if (oc.Initializer == null) return create;
+            var temp = $"ES_o{_objectTemps++}";
+            var sets = new StringBuilder();
+            foreach (var item in oc.Initializer.Expressions)
+            {
+                if (item is AssignmentExpressionSyntax { Left: IdentifierNameSyntax field } a && IsInitializable(Model(a).GetSymbolInfo(field).Symbol))
+                    sets.Append($"{temp}->{field.Identifier.Text} = {Expr(a.Right, top: true)}; ");
+                else
+                    Unsupported(item, "object initializer element");
+            }
+            return $"({{ {TypeName((INamedTypeSymbol)type)} *{temp} = {create}; {sets}{temp}; }})";
+        }
         if (type.TypeKind == TypeKind.Struct && Model(oc).GetSymbolInfo(oc).Symbol is IMethodSymbol { IsImplicitlyDeclared: false } ctor)
         {
             if (oc.Initializer != null) return Unsupported(oc, "constructor call combined with an object initializer");
@@ -1328,7 +1424,7 @@ internal sealed class CEmitter
             if (f.IsStatic || f.IsConst || f.ContainingType.TypeKind == TypeKind.Enum)
                 return FieldRef(f, ma);
             var exprType = Model(ma).GetTypeInfo(ma.Expression).Type;
-            var op = exprType is IPointerTypeSymbol ? "->" : ".";
+            var op = IsRef(exprType) ? "->" : ".";
             return $"{Expr(ma.Expression)}{op}{FieldCName(f)}";
         }
         Unsupported(ma, $"member access '{ma}'");
@@ -1392,6 +1488,14 @@ internal sealed class CEmitter
             return "0";
         }
 
+        if (m.ContainingType is { Name: "Heap" } && m.Name.StartsWith("Free") && m.ContainingNamespace?.ToDisplayString() == "ESharp.Platform"
+            && inv.ArgumentList.Arguments.Count == 1)
+        {
+            _usesAlloc = true;
+            var target = Expr(inv.ArgumentList.Arguments[0].Expression, top: true);
+            return $"(free({target}), {target} = NULL)";
+        }
+
         if (m.MethodKind == MethodKind.DelegateInvoke)
         {
             // f(x) and f.Invoke(x) call through the function pointer.
@@ -1405,7 +1509,7 @@ internal sealed class CEmitter
         string? receiver = null;
         if (!m.IsStatic && m.MethodKind != MethodKind.LocalFunction)
         {
-            if (m.ContainingType.TypeKind != TypeKind.Struct || m.MethodKind != MethodKind.Ordinary)
+            if (m.ContainingType.TypeKind is not (TypeKind.Struct or TypeKind.Class) || m.MethodKind != MethodKind.Ordinary)
                 return Unsupported(inv, "instance method call");
             receiver = ReceiverAddress(inv, m);
             if (receiver == null) return "0";
@@ -1649,7 +1753,7 @@ internal sealed class CEmitter
         }
 
         if (recv is ThisExpressionSyntax) return _this == ThisKind.Pointer ? ThisName : "&" + ThisName;
-        if (Model(at).GetTypeInfo(recv).Type is IPointerTypeSymbol) return Expr(recv);
+        if (IsRef(Model(at).GetTypeInfo(recv).Type)) return Expr(recv);   // a pointer or a class reference is already the address
 
         var core = recv;
         while (core is ParenthesizedExpressionSyntax pe) core = pe.Expression;
@@ -1680,7 +1784,7 @@ internal sealed class CEmitter
                 }
                 return Unsupported(at, "instance property access outside a struct method");
             }
-            var op = Model(at).GetTypeInfo(recv).Type is IPointerTypeSymbol ? "->" : ".";
+            var op = IsRef(Model(at).GetTypeInfo(recv).Type) ? "->" : ".";
             return $"{Expr(recv)}{op}{p.Name}";
         }
         if (p.GetMethod == null) return Unsupported(at, $"property '{p.Name}' without a getter");

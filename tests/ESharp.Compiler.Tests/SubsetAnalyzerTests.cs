@@ -24,9 +24,10 @@ public class SubsetAnalyzerTests
     [InlineData("static async System.Threading.Tasks.Task F() { await System.Threading.Tasks.Task.Delay(1); }", "ES0004")]
     [InlineData("static void F() { dynamic d = 1; }", "ES0005")]
     [InlineData("static string F() { return typeof(P).FullName; }", "ES0006")]
-    [InlineData("class Heap { }", "ES0007")]
+    [InlineData("class Base { } class Derived : Base { }", "ES0007")]
+    [InlineData("class Shape { public virtual int Area() { return 0; } }", "ES0007")]
     [InlineData("class G<T> { }", "ES0008")]
-    [InlineData("interface IThing { }", "ES0009")]
+    [InlineData("interface IThing { } static class Use { static void F(IThing t) { } }", "ES0009")]
     [InlineData("struct S { public string Name; public object O; }", "ES0010")]
     public void Out_of_subset_code_is_rejected(string members, string expectedId)
     {

@@ -21,6 +21,33 @@ public struct Box
 
 public enum Color { Red, Green, Blue }
 
+/// <summary>A heap class: a linked list node that is allocated with new and freed with Heap.Free.</summary>
+public class ListNode
+{
+    public int Value;
+    public ListNode Next;
+
+    public ListNode(int value, ListNode next) { Value = value; Next = next; }
+
+    public int Sum() { return Value + (Next == null ? 0 : Next.Sum()); }
+}
+
+public interface IScorer
+{
+    int Score(int card);
+}
+
+public struct DoubleScorer : IScorer
+{
+    public int Score(int card) { return card * 2; }
+}
+
+public class BonusScorer : IScorer
+{
+    public int Bonus;
+    public int Score(int card) { return card + Bonus; }
+}
+
 public static class Table
 {
     public static int[] Squares = new int[6];
@@ -80,6 +107,13 @@ public static class Program
 
     static int Double(int x) => x * 2;
 
+    static int Total<T>(ref T scorer, int n) where T : IScorer
+    {
+        int sum = 0;
+        for (int i = 1; i <= n; i++) sum += scorer.Score(i);
+        return sum;
+    }
+
     static int Fact(int n)
     {
         int Go(int k) { return k <= 1 ? 1 : k * Go(k - 1); }
@@ -126,6 +160,19 @@ public static class Program
         Check(CountWhere(list.AsSpan(), it => it.Weight > 5) == 7 && CountWhere(list.AsSpan(), it => it.Id < 100) == 10, "lambda as a predicate");
         list.Destroy();
         Check(list.Count == 0, "list destroy");
+
+        ListNode head = new ListNode(1, new ListNode(2, new ListNode(3, null)));
+        Check(head.Sum() == 6 && head.Next.Next.Next == null, "heap objects linked by reference");
+        ListNode alias = head;
+        alias.Value = 10;
+        Check(head.Value == 10 && head == alias, "an object is shared, not copied");
+        Heap.Free(ref head.Next.Next);
+        Heap.Free(ref head.Next);
+        Heap.Free(ref head);
+        Check(head == null && alias != null, "Heap.Free clears the variable");
+        DoubleScorer doubled = default;
+        BonusScorer bonus = new BonusScorer { Bonus = 100 };
+        Check(Total(ref doubled, 3) == 12 && Total(ref bonus, 3) == 306, "interface constraint with a struct and a class");
 
         int[] nums = new int[4];
         for (int i = 0; i < nums.Length; i++) nums[i] = i + 1;

@@ -71,7 +71,9 @@ internal static class Monomorphizer
                         newName = Mangle(t.Name, t.TypeArguments);
                         key = "T:" + t.OriginalDefinition.ToDisplayString() + "|" + newName;
                     }
+                    // Heap.Free<T> is an emitter intrinsic (free + null): it is not copied per type.
                     else if (symbol is IMethodSymbol { IsGenericMethod: true } m && !m.ContainingType.IsGenericType &&
+                             !(m.ContainingType.Name == "Heap" && m.ContainingNamespace?.ToDisplayString() == "ESharp.Platform") &&
                              IsSource(m.OriginalDefinition) && Concrete(m.TypeArguments))
                     {
                         def = m.OriginalDefinition.DeclaringSyntaxReferences[0].GetSyntax();

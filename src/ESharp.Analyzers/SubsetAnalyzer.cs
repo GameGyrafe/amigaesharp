@@ -35,7 +35,7 @@ public sealed class SubsetAnalyzer : DiagnosticAnalyzer
             SyntaxKind.SimpleLambdaExpression, SyntaxKind.ParenthesizedLambdaExpression,
             SyntaxKind.AnonymousMethodExpression);
         context.RegisterSyntaxNodeAction(CheckClass, SyntaxKind.ClassDeclaration);
-        context.RegisterSyntaxNodeAction(CheckInterface, SyntaxKind.InterfaceDeclaration);
+        context.RegisterSyntaxNodeAction(CheckInterfaceUse, SyntaxKind.IdentifierName);
         context.RegisterSyntaxNodeAction(CheckGenericDeclaration,
             SyntaxKind.ClassDeclaration, SyntaxKind.StructDeclaration, SyntaxKind.MethodDeclaration);
         context.RegisterSyntaxNodeAction(CheckInvocation, SyntaxKind.InvocationExpression);
@@ -161,18 +161,53 @@ public sealed class SubsetAnalyzer : DiagnosticAnalyzer
         }
     }
 
+    /// <summary>
+    /// Classes are heap objects (allocated by <c>new</c>, freed with <c>Heap.Free</c>) held by pointer. There is no
+    /// inheritance and no virtual dispatch: a class may implement interfaces (for generic constraints) but has no base
+    /// class, and no member may be abstract, virtual, override or sealed-override.
+    /// </summary>
     private static void CheckClass(SyntaxNodeAnalysisContext c)
     {
         var decl = (ClassDeclarationSyntax)c.Node;
         foreach (var m in decl.Modifiers)
             if (m.IsKind(SyntaxKind.StaticKeyword)) return;
-        c.ReportDiagnostic(Diagnostic.Create(Descriptors.HeapClass, decl.Identifier.GetLocation(), decl.Identifier.Text));
+        if (c.SemanticModel.GetDeclaredSymbol(decl, c.CancellationToken) is { BaseType: { SpecialType: not SpecialType.System_Object } baseType })
+        {
+            c.ReportDiagnostic(Diagnostic.Create(Descriptors.HeapClass, decl.Identifier.GetLocation(), decl.Identifier.Text,
+                $"it inherits from '{baseType.Name}': classes cannot inherit yet"));
+            return;
+        }
+        foreach (var m in decl.Modifiers)
+            if (m.IsKind(SyntaxKind.AbstractKeyword))
+                c.ReportDiagnostic(Diagnostic.Create(Descriptors.HeapClass, m.GetLocation(), decl.Identifier.Text, "abstract classes are not supported"));
+        foreach (var member in decl.Members)
+        {
+            var mods = member switch
+            {
+                BaseMethodDeclarationSyntax x => x.Modifiers,
+                BasePropertyDeclarationSyntax x => x.Modifiers,
+                _ => default,
+            };
+            foreach (var m in mods)
+                if (m.IsKind(SyntaxKind.VirtualKeyword) || m.IsKind(SyntaxKind.AbstractKeyword) || m.IsKind(SyntaxKind.OverrideKeyword))
+                    c.ReportDiagnostic(Diagnostic.Create(Descriptors.HeapClass, m.GetLocation(), decl.Identifier.Text,
+                        $"'{m.Text}' members need dynamic dispatch, which is not supported yet"));
+        }
     }
 
-    private static void CheckInterface(SyntaxNodeAnalysisContext c)
+    /// <summary>
+    /// An interface may be declared and used as a generic constraint or in a base list (static dispatch: generic code is
+    /// monomorphised, so every call resolves to the concrete type). A variable, field, parameter or return of an interface
+    /// type would need dynamic dispatch and is reported.
+    /// </summary>
+    private static void CheckInterfaceUse(SyntaxNodeAnalysisContext c)
     {
-        var decl = (InterfaceDeclarationSyntax)c.Node;
-        c.ReportDiagnostic(Diagnostic.Create(Descriptors.Interfaces, decl.Identifier.GetLocation(), decl.Identifier.Text));
+        if (c.Node.Parent is TypeConstraintSyntax or BaseTypeSyntax or QualifiedNameSyntax or UsingDirectiveSyntax or AttributeSyntax) return;
+        if (c.Node.Parent is MemberAccessExpressionSyntax { Name: var n } && n == c.Node) return;
+        var symbol = c.SemanticModel.GetSymbolInfo(c.Node, c.CancellationToken).Symbol as ITypeSymbol;
+        if (symbol is not { TypeKind: TypeKind.Interface }) return;
+        if (symbol.ContainingNamespace?.ToDisplayString().StartsWith("System") == true) return;
+        c.ReportDiagnostic(Diagnostic.Create(Descriptors.Interfaces, c.Node.GetLocation(), symbol.Name));
     }
 
     private static void CheckGenericDeclaration(SyntaxNodeAnalysisContext c)

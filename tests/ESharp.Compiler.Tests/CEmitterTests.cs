@@ -343,6 +343,89 @@ Check(Run(8) == 8 + 2 + 4 + 2, ""variables used after their if"");
     }
 
     [Fact]
+    public void Heap_classes_and_static_dispatch_interfaces_work_natively()
+    {
+        if (!HasGcc) return;
+        const string members = @"
+class Node
+{
+    public int Value;
+    public Node Next;
+    public Node(int v) { Value = v; }
+    public int Sum() { int s = Value; if (Next != null) s += Next.Sum(); return s; }
+}
+class Counter
+{
+    public int Count { get; set; }
+    public void Hit() { Count++; }
+    public Counter Self() { return this; }
+    public static int Made;
+    public static Counter Make() { Made++; return new Counter(); }
+}
+interface IScorer { int Score(int card); }
+struct DoubleScorer : IScorer { public int Score(int card) { return card * 2; } }
+class FlatScorer : IScorer
+{
+    public int Bonus;
+    public int Score(int card) { return card + Bonus; }
+}
+static int Total<T>(ref T scorer, int n) where T : IScorer
+{
+    int sum = 0;
+    for (int i = 1; i <= n; i++) sum += scorer.Score(i);
+    return sum;
+}
+static Node Head;
+static void Check(bool ok, string name) { Dos.PutStr(ok ? ""ok "" : ""FAIL ""); Dos.PutStr(name); Dos.PutStr(""\n""); }
+";
+        const string body = @"
+Node a = new Node(1);
+a.Next = new Node(2);
+a.Next.Next = new Node(3);
+Check(a.Sum() == 6, ""linked objects and methods"");
+Node b = a;
+Check(b == a && a.Next != null && a.Next.Next.Next == null && a.Next.Next.Next is null, ""references compare and null"");
+b.Value = 10;
+Check(a.Value == 10, ""assignment copies the reference, not the object"");
+Head = a;
+Check(Head.Sum() == 15, ""static field holding an object"");
+Counter c = new Counter { Count = 5 };
+c.Hit(); c.Self().Hit();
+Check(c.Count == 7, ""properties, this and object initializer"");
+Counter made = Counter.Make();
+Check(Counter.Made == 1 && made.Count == 0, ""static members of a class"");
+Node[] nodes = new Node[3];
+nodes[1] = new Node(7);
+Check(nodes[0] == null && nodes[1].Value == 7, ""array of references starts null"");
+DoubleScorer ds = default;
+FlatScorer fs = new FlatScorer { Bonus = 100 };
+Check(Total(ref ds, 3) == 12 && Total(ref fs, 3) == 306, ""interface constraint: struct and class, resolved statically"");
+Heap.Free(ref a);
+Check(a == null, ""Heap.Free clears the variable"");
+Heap.Free(ref a);
+Check(a == null, ""freeing null again is harmless"");
+";
+        var (code, output) = RunWithHostGcc(CompileOk(Program(members, body)));
+        Assert.Equal(0, code);
+        Assert.Equal(string.Concat(new[] { "linked objects and methods", "references compare and null", "assignment copies the reference, not the object",
+            "static field holding an object", "properties, this and object initializer", "static members of a class", "array of references starts null",
+            "interface constraint: struct and class, resolved statically", "Heap.Free clears the variable", "freeing null again is harmless" }.Select(n => "ok " + n + "\n")), output);
+    }
+
+    [Fact]
+    public void Inheritance_virtual_members_and_interface_typed_variables_are_reported()
+    {
+        var inherit = Compile(Program("class A { public int X; } class B : A { }"));
+        Assert.Contains("ES0007", ErrorIds(inherit));
+        var virt = Compile(Program("class A { public virtual int F() { return 1; } }"));
+        Assert.Contains("ES0007", ErrorIds(virt));
+        var iface = Compile(Program("interface I { int F(); } struct S : I { public int F() { return 1; } } static int Use(I x) { return x.F(); }"));
+        Assert.Contains("ES0009", ErrorIds(iface));
+        var generic = Compile(Program("class Box<T> { public T V; }"));
+        Assert.Contains("ES0008", ErrorIds(generic));
+    }
+
+    [Fact]
     public void Lambdas_and_method_groups_become_function_pointers()
     {
         if (!HasGcc) return;
