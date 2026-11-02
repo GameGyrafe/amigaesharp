@@ -69,6 +69,17 @@ public static class Program
         Check(Video.GetPixel(cx + 32, cy + 44) == CardIndex(32, 44) && CardIndex(32, 44) != 0, "card centre is not background");
         Check(Video.GetPixel(cx - 1, cy) == 11 && Video.GetPixel(cx + 64, cy) == 11, "blit does not spill outside the card");
 
+        // Text: 'A' has rows .###. / #...# / #...# / ##### ...
+        Font.DrawChar('A', 10, 170, 10, 1);
+        Check(Video.GetPixel(10, 170) == 11 && Video.GetPixel(11, 170) == 10 && Video.GetPixel(13, 170) == 10 && Video.GetPixel(14, 170) == 11, "font: top row of A");
+        Check(Video.GetPixel(10, 173) == 10 && Video.GetPixel(14, 173) == 10 && Video.GetPixel(12, 171) == 11, "font: crossbar of A");
+        Font.DrawChar('A', 30, 170, 10, 2);
+        Check(Video.GetPixel(32, 170) == 10 && Video.GetPixel(33, 171) == 10 && Video.GetPixel(30, 170) == 11 && Video.GetPixel(38, 176) == 10, "font: scale 2 doubles pixels");
+        Font.Draw("Hi\nA", 60, 170, 9, 1);
+        Check(Video.GetPixel(60, 170) == 9 && Video.GetPixel(61, 179) == 9 && Font.Width("Hi", 1) == 11, "font: strings, newline and width");
+        int w = Font.DrawInt(-305, 100, 170, 9, 1);
+        Check(w == 23 && Video.GetPixel(100, 173) == 9, "font: numbers");
+
         Dos.PutStr("SHOT\n");
         Dos.FlushOutput();
         Video.WaitFrames(150);

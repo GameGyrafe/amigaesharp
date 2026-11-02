@@ -1,5 +1,9 @@
 # Status
 
+## Bitmap font and strings
+
+`Font` (`src/ESharp.Platform/Font.cs`) is a built-in 5x7 font for printable ASCII (`Draw`, `DrawChar`, `DrawInt`, `Width`, integer `scale`), drawn with filled rectangles in one colour on a transparent background, so it needs no assets and works at any screen depth. Strings now support `s.Length` (bytes) and `s[i]` (a byte). Verified by 5 pixel-exact checks in `samples/screen` on the host and on Kickstart 2.04 (A500+) and 3.1 (A1200). The previously unrun samples (hello, phase2, memory, generics, properties, operators, language, screen, cards with scripted input) were all re-run on both Kickstarts after the language batch: 296 checks ok, no failures. Not verified: speed of long texts on a 68000 (one `RectFill` per pixel run), non-ASCII text.
+
 ## Phase 1: Hello world (emulator gate met; real hardware not yet run)
 
 Gate: runs in an emulator and on the host.
@@ -95,7 +99,7 @@ Found by comparing what a real card game needs (heavy use of collections, tuples
 | Static constructors, `: this(...)` constructor initializers (structs) | Done. **Static constructors run once at start-up in type order**, not lazily like in C#. Before this fix a static constructor was silently ignored |
 | `Vec<T>` (`ESharp.Platform`, named so as not to clash with `System.Collections.Generic.List<T>`): growable list of an unmanaged `T` | Done: `Add`, `Insert`, `RemoveAt`, `SwapRemoveAt`, `Clear`, indexer, `Count`, `Capacity`, `AsSpan`, `Destroy`; no exceptions (false / zero value). Counted in the chip budget by its initial capacity only |
 | `Dos.PutInt` | Done |
-| Still missing (needed by bigger games) | Lambdas/delegates (non-capturing ones could become function pointers), LINQ (rewrite as loops), string interpolation and a string buffer, classes and interfaces (ES0007/ES0009), `HashSet`/`Dictionary`, text drawing (bitmap font), sound, AGA |
+| Still missing (needed by bigger games) | Lambdas/delegates (non-capturing ones could become function pointers), LINQ (rewrite as loops), string interpolation and a string buffer, classes and interfaces (ES0007/ES0009), `HashSet`/`Dictionary`, sound, AGA |
 
 ## Phase 4: card demo (in progress)
 

@@ -1274,6 +1274,9 @@ internal sealed class CEmitter
             }
             if (IsSpan(recvType))
                 return $"{Expr(ma.Expression)}.length";
+            // A string is a NUL-terminated byte string in C: Length counts bytes (the same as characters for ASCII).
+            if (recvType?.SpecialType == SpecialType.System_String)
+                return $"((int)__builtin_strlen({Expr(ma.Expression)}))";
         }
         if (sym is IPropertySymbol prop)
             return PropertyRead(prop, ma.Expression, ma);
@@ -1305,6 +1308,8 @@ internal sealed class CEmitter
         }
         var index = Expr(args[0].Expression, top: true);
         var recv = Expr(ea.Expression);
+        if (recvType?.SpecialType == SpecialType.System_String)
+            return $"((uint8_t){recv}[{index}])";
         if (IsSpan(recvType))
         {
             if (_bounds && RequireSimple(ea.Expression, "bounds-checked index"))

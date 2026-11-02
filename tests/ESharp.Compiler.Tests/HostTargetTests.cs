@@ -251,6 +251,11 @@ internal static class ScreenExpected
         "blitted card matches the planar data pixel for pixel",
         "card centre is not background",
         "blit does not spill outside the card",
+        "font: top row of A",
+        "font: crossbar of A",
+        "font: scale 2 doubles pixels",
+        "font: strings, newline and width",
+        "font: numbers",
     };
 }
 
