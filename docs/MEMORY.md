@@ -113,7 +113,7 @@ items, one in-use byte per slot. With `--debug` freed slots are filled with 0xDD
   switch, with a `#line` location in the failure message.
 - These cost nothing in release builds.
 
-## Step 4: budgets in the build
+## Step 4: budgets in the build (done: `esharp build --chip-budget`, constant sizes only, see STATUS.md)
 
 - Compile-time: sum the size of static `[ChipRam]` arrays and report it; fail over a budget given
   on the command line (design document: "a budget overrun fails the build rather than the

@@ -17,5 +17,8 @@ public sealed class CompileResult
 
     public ImmutableArray<Diagnostic> Diagnostics { get; }
 
+    /// <summary>Chip RAM the program reserves where the sizes are constants (68k only).</summary>
+    public System.Collections.Generic.IReadOnlyList<ChipEntry> Chip { get; init; } = System.Array.Empty<ChipEntry>();
+
     public bool Success => C != null && !Diagnostics.Any(d => d.Severity == DiagnosticSeverity.Error);
 }

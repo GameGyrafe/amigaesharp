@@ -26,6 +26,7 @@ Build options:
   --cc <compiler>   Override the target's C compiler
   --cflags <flags>  Override the target's C compiler flags
   --allow-float     Permit float/double
+  --chip-budget <n> Fail if constant chip RAM reservations exceed n bytes (k/m suffix ok; 68k)
   --debug           Define DEBUG: bounds-checked arrays and spans, poisoned arena Reset
 
 Run options (build options also apply; run is m68k only):
@@ -94,12 +95,34 @@ public static class Program
         return 0;
     }
 
+    private static long? ParseSize(string text)
+    {
+        var t = text.Trim().ToLowerInvariant();
+        long scale = 1;
+        if (t.EndsWith("k")) { scale = 1024; t = t[..^1]; }
+        else if (t.EndsWith("m")) { scale = 1024 * 1024; t = t[..^1]; }
+        return long.TryParse(t, out var n) && n >= 0 ? n * scale : null;
+    }
+
+    private static void PrintChip(IReadOnlyList<ChipEntry> chip, long? budget)
+    {
+        if (chip.Count == 0 && budget == null) return;
+        Console.WriteLine("Chip RAM reserved at constant sizes (each call site counted once):");
+        foreach (var e in chip)
+            Console.WriteLine($"  {e.Kind,-7} {e.What,-28} {(e.Bytes < 0 ? "run-time size" : e.Bytes.ToString("N0") + " bytes"),-16} {e.Location}");
+        var total = chip.Where(e => e.Bytes >= 0).Sum(e => e.Bytes);
+        var unknown = chip.Count(e => e.Bytes < 0);
+        Console.WriteLine($"  total   {total:N0} bytes" + (unknown > 0 ? $" (+ {unknown} sized at run time)" : "") +
+                          (budget != null ? $", budget {budget:N0} ({total * 100.0 / Math.Max(1, budget.Value):0.#}%)" : ""));
+    }
+
     private static int Build(string[] args, out string? builtExe)
     {
         builtExe = null;
         string path = ".";
         string? outDir = null;
         bool emitOnly = false, allowFloat = false, debug = false;
+        long? chipBudget = null;
         var target = Targets.M68k;
         string? cc = null, cflags = null, docker = null;
 
@@ -111,6 +134,10 @@ public static class Program
                 case "--emit-only": emitOnly = true; break;
                 case "--allow-float": allowFloat = true; break;
                 case "--debug": debug = true; break;
+                case "--chip-budget" when i + 1 < args.Length:
+                    chipBudget = ParseSize(args[++i]);
+                    if (chipBudget == null) return Fail($"bad --chip-budget '{args[i]}' (use bytes, or a number followed by k or m)");
+                    break;
                 case "--target" when i + 1 < args.Length:
                     var found = Targets.Find(args[++i]);
                     if (found == null)
@@ -134,10 +161,12 @@ public static class Program
 
         var baseDir = Directory.Exists(path) ? path : Path.GetDirectoryName(Path.GetFullPath(path)) ?? ".";
         var sources = files.Select(f => new SourceFile(Path.GetRelativePath(Directory.GetCurrentDirectory(), f), File.ReadAllText(f))).ToList();
-        var result = EsCompiler.Compile(sources, target.ToOptions(allowFloat, debug));
+        var result = EsCompiler.Compile(sources, target.ToOptions(allowFloat, debug, chipBudget));
 
         foreach (var d in result.Diagnostics)
             Console.Error.WriteLine(d.ToString());
+
+        PrintChip(result.Chip, chipBudget);
 
         if (!result.Success)
         {

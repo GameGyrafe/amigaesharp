@@ -25,4 +25,7 @@ public sealed class CompileOptions
 
     /// <summary>Check array and span indexes at run time; a bad index prints its source line and exits with 20.</summary>
     public bool BoundsChecks { get; init; }
+
+    /// <summary>Fail the build when the constant chip RAM reservations exceed this many bytes (68k only).</summary>
+    public long? ChipBudget { get; init; }
 }

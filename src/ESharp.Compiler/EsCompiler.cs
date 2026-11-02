@@ -54,8 +54,13 @@ public static class EsCompiler
         // 3. Entry point rules.
         CheckEntryPoint(compilation, userSet, diagnostics);
 
+        // Chip RAM budget (constant sizes only).
+        var chip = ChipBudget.Analyze(compilation, userSet, options.Defines.Contains("M68K"));
+        if (options.ChipBudget is { } budget && ChipBudget.Total(chip) > budget)
+            diagnostics.Add(Diagnostic.Create(Descriptors.ChipBudgetExceeded, Location.None, ChipBudget.Total(chip), budget));
+
         if (diagnostics.Any(d => d.Severity == DiagnosticSeverity.Error))
-            return new CompileResult(null, Sorted(diagnostics));
+            return new CompileResult(null, Sorted(diagnostics)) { Chip = chip };
 
         // 4. Monomorphise generics, then check the expanded program still compiles.
         var expanded = Monomorphizer.Expand(compilation, userSet, parse);
@@ -63,16 +68,16 @@ public static class EsCompiler
         userSet = expanded.User;
         diagnostics.AddRange(expanded.Errors);
         diagnostics.AddRange(compilation.GetDiagnostics()
-                .Where(d => d.Severity == DiagnosticSeverity.Error && IsUser(d, userSet)));
+                .Where(d => d.Severity == DiagnosticSeverity.Error)); // library copies too: a private type argument breaks them
         if (diagnostics.Any(d => d.Severity == DiagnosticSeverity.Error))
-            return new CompileResult(null, Sorted(diagnostics));
+            return new CompileResult(null, Sorted(diagnostics)) { Chip = chip };
 
         // 5. Emit C.
         var emitter = new CEmitter(compilation, userSet, diagnostics, options.BoundsChecks);
         var c = emitter.Emit();
         return new CompileResult(
             diagnostics.Any(d => d.Severity == DiagnosticSeverity.Error) ? null : c,
-            Sorted(diagnostics));
+            Sorted(diagnostics)) { Chip = chip };
     }
 
     private static ImmutableArray<Diagnostic> Sorted(List<Diagnostic> diagnostics) =>

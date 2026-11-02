@@ -63,6 +63,10 @@ public static class Descriptors
         "ES0011", "Arrays must be fixed-size",
         "{0}");
 
+    public static readonly DiagnosticDescriptor ChipBudgetExceeded = Error(
+        "ES0030", "Chip RAM budget exceeded",
+        "The program reserves {0} bytes of chip RAM at constant sizes; the budget is {1}");
+
     public static readonly DiagnosticDescriptor NoEntryPoint = Error(
         "ES0020", "No entry point",
         "No method is marked [EntryPoint]");
