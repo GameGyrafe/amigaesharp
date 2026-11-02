@@ -39,6 +39,7 @@
     <Compile Include="..\..\samples\generics\Generics.cs" Link="Samples\Generics.cs" />
     <Compile Include="..\..\samples\properties\Properties.cs" Link="Samples\Properties.cs" />
     <Compile Include="..\..\samples\operators\Operators.cs" Link="Samples\Operators.cs" />
+    <Compile Include="..\..\samples\language\Language.cs" Link="Samples\Language.cs" />
     <Compile Include="..\..\samples\screen\Screen.cs" Link="Samples\Screen.cs" />
     <Compile Include="..\..\samples\screen\Assets.g.cs" Link="Samples\Assets.g.cs" />
     <Compile Include="..\..\samples\cards\Cards.cs" Link="Samples\Cards\Cards.cs" />

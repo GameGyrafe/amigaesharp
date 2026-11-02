@@ -40,6 +40,16 @@ public class HostTargetTests
     }
 
     [Fact]
+    public void Language_sample_runs_on_the_host()
+    {
+        using var mem = HostMem.Capture();
+        using var console = HostConsole.Capture();
+        LanguageSample.Program.Main();
+        Assert.Equal(LanguageExpected.Output, console.Output);
+        Assert.Equal(0, mem.LiveBlocks);
+    }
+
+    [Fact]
     public void Operators_sample_runs_on_the_host()
     {
         using var console = HostConsole.Capture();
@@ -270,5 +280,18 @@ internal static class CardsExpected
         "click on Lower guesses lower",
         "Esc quits",
         "nothing queued: nothing happens",
+    };
+}
+
+/// <summary>What samples/language prints.</summary>
+internal static class LanguageExpected
+{
+    public static string Output => string.Concat(Names.Select(n => "ok " + n + "\n"));
+
+    private static readonly string[] Names =
+    {
+        "out declaration", "ref swap", "in parameter", "named tuple elements", "deconstruction", "tuple swap",
+        "switch expression", "property patterns", "is patterns", "local function", "static constructor",
+        "this initializer", "list add insert remove", "list as span", "list destroy",
     };
 }

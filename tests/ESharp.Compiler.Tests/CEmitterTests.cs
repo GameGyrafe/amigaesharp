@@ -184,6 +184,213 @@ Dos.PutStr(Pick(Max));
     }
 
     [Fact]
+    public void Ref_out_and_in_parameters_work_natively()
+    {
+        if (!HasGcc) return;
+        const string members = @"
+struct V { public int A; public int B; }
+static void Inc(ref int v) { v++; v += 2; }
+static bool TryHalf(int n, out int half) { if (n % 2 != 0) { half = 0; return false; } half = n / 2; return true; }
+static void Swap(ref int a, ref int b) { int t = a; a = b; b = t; }
+static int Sum(in V v) { return v.A + v.B; }
+static void Fill(out V v, int a) { v = default; v.A = a; v.B = a * 2; }
+static void Twice(ref int v) { Inc(ref v); Inc(ref v); }
+static int[] Arr = new int[3];
+static int Field;
+static void Check(bool ok, string name) { Dos.PutStr(ok ? ""ok "" : ""FAIL ""); Dos.PutStr(name); Dos.PutStr(""\n""); }
+";
+        const string body = @"
+int n = 1; Inc(ref n); Check(n == 4, ""ref local"");
+if (TryHalf(10, out int h)) Check(h == 5, ""out declaration in if"");
+if (TryHalf(7, out var h2)) Check(false, ""odd""); else Check(h2 == 0, ""out var in else"");
+if (TryHalf(3, out int h3)) { Check(false, ""no""); } else if (TryHalf(8, out int h4)) { Check(h4 == 4, ""else if out""); }
+int a = 1, b = 2; Swap(ref a, ref b); Check(a == 2 && b == 1, ""swap"");
+V v; Fill(out v, 5); Check(Sum(v) == 15, ""struct out and in"");
+Check(Sum(new V()) == 0, ""in with a temporary"");
+Arr[1] = 3; Inc(ref Arr[1]); Check(Arr[1] == 6, ""ref array element"");
+Inc(ref Field); Check(Field == 3, ""ref static field"");
+Twice(ref n); Check(n == 10, ""pass a ref parameter on"");
+TryHalf(4, out _); TryHalf(4, out int _); Check(true, ""discards"");
+V w = default; Inc(ref w.A); Check(w.A == 3, ""ref struct field"");
+";
+        var (code, output) = RunWithHostGcc(CompileOk(Program(members, body)));
+        Assert.Equal(0, code);
+        Assert.DoesNotContain("FAIL", output);
+        Assert.Equal(12, output.Split('\n', StringSplitOptions.RemoveEmptyEntries).Length);
+    }
+
+    [Fact]
+    public void Patterns_and_switch_expressions_work_natively()
+    {
+        if (!HasGcc) return;
+        const string members = @"
+enum Color { Red, Green, Blue }
+struct Pt { public int X; public int Y; }
+static int Calls;
+static int Next() { Calls++; return 7; }
+static int Classify(int n) => n switch { < 0 => -1, 0 => 0, > 0 and < 10 => 1, >= 10 and < 100 => 2, _ => 3 };
+static int Name(Color c) => c switch { Color.Red => 1, Color.Green => 2, _ => 3 };
+static int Weight(Pt p) => p switch { { X: 0, Y: 0 } => 0, { X: > 5 } => 2, { Y: var y } when y > 3 => y, _ => 1 };
+static void Check(bool ok, string name) { Dos.PutStr(ok ? ""ok "" : ""FAIL ""); Dos.PutStr(name); Dos.PutStr(""\n""); }
+";
+        const string body = @"
+Check(Classify(-5) == -1 && Classify(0) == 0 && Classify(5) == 1 && Classify(50) == 2 && Classify(500) == 3, ""relative and logical patterns"");
+Check(Name(Color.Green) == 2 && Name(Color.Blue) == 3 && Name(Color.Red) == 1, ""enum arms"");
+Check(Weight(new Pt()) == 0 && Weight(new Pt { X = 9 }) == 2 && Weight(new Pt { Y = 8 }) == 8 && Weight(new Pt { Y = 1 }) == 1, ""property patterns with when and var"");
+int n = 5;
+Check(n is > 3 and < 9, ""is relational"");
+Check(!(n is 1 or 2 or 3), ""is or"");
+Check(n is not 4, ""is not"");
+Check(n is int m && m == 5, ""is declaration"");
+Check(Next() is 7 && Calls == 1, ""subject evaluated once"");
+Pt q = new Pt { X = 3 };
+if (q is { X: 3 } found && found.X == 3) Check(true, ""is property with designation"");
+int s = n switch { 5 => 50, _ => 0 };
+Check(s == 50, ""switch expression assigned"");
+";
+        var (code, output) = RunWithHostGcc(CompileOk(Program(members, body)));
+        Assert.Equal(0, code);
+        Assert.DoesNotContain("FAIL", output);
+        Assert.Equal(10, output.Split('\n', StringSplitOptions.RemoveEmptyEntries).Length);
+    }
+
+    [Fact]
+    public void Tuples_work_natively()
+    {
+        if (!HasGcc) return;
+        const string members = @"
+struct Pt { public int X; public int Y; }
+static (int, int) MinMax(int a, int b) { return a < b ? (a, b) : (b, a); }
+static (int Sum, int Product) Both(int a, int b) => (a + b, a * b);
+static (Pt, bool) Make(int x) { Pt p = new Pt { X = x }; return (p, x > 0); }
+static int Use((int, int) t) { return t.Item1 * 10 + t.Item2; }
+static void Check(bool ok, string name) { Dos.PutStr(ok ? ""ok "" : ""FAIL ""); Dos.PutStr(name); Dos.PutStr(""\n""); }
+";
+        const string body = @"
+var mm = MinMax(9, 4);
+Check(mm.Item1 == 4 && mm.Item2 == 9, ""return and Item fields"");
+var both = Both(3, 5);
+Check(both.Sum == 8 && both.Product == 15, ""named elements"");
+(int lo, int hi) = MinMax(7, 2);
+Check(lo == 2 && hi == 7, ""deconstruction declaration"");
+var (s, p) = Both(2, 6);
+Check(s == 8 && p == 12, ""var deconstruction"");
+int a = 1, b = 2;
+(a, b) = (b, a);
+Check(a == 2 && b == 1, ""swap"");
+(int, int) t = (3, 4);
+Check(Use(t) == 34 && Use((5, 6)) == 56, ""tuple parameters"");
+var (pt, ok) = Make(5);
+Check(pt.X == 5 && ok, ""tuple holding a struct"");
+(int first, _) = MinMax(8, 1);
+Check(first == 1, ""discard in deconstruction"");
+long big = 0; int small = 0;
+(big, small) = (5, 6);
+Check(big == 5 && small == 6, ""conversions in assignment"");
+";
+        var (code, output) = RunWithHostGcc(CompileOk(Program(members, body)));
+        Assert.Equal(0, code);
+        Assert.DoesNotContain("FAIL", output);
+        Assert.Equal(9, output.Split('\n', StringSplitOptions.RemoveEmptyEntries).Length);
+    }
+
+    [Fact]
+    public void Local_functions_that_capture_nothing_work_natively()
+    {
+        if (!HasGcc) return;
+        const string members = @"
+static int Run(int n)
+{
+    int Fact(int k) { return k <= 1 ? 1 : k * Fact(k - 1); }
+    int Twice(int k) => k * 2;
+    static int Square(int k) { return k * k; }
+    return Fact(n) + Twice(n) + Square(n);
+}
+static void Check(bool ok, string name) { Dos.PutStr(ok ? ""ok "" : ""FAIL ""); Dos.PutStr(name); Dos.PutStr(""\n""); }
+";
+        const string body = @"
+Check(Run(4) == 24 + 8 + 16, ""local functions"");
+int Add(int a, int b) { return a + b; }
+Check(Add(2, 3) == 5, ""local function in the entry point"");
+";
+        var (code, output) = RunWithHostGcc(CompileOk(Program(members, body)));
+        Assert.Equal(0, code);
+        Assert.Equal("ok local functions\nok local function in the entry point\n", output);
+    }
+
+    [Fact]
+    public void Local_function_that_captures_a_local_reports_ES0099()
+    {
+        var r = Compile(Program("", "int x = 3; int Get() { return x; } Dos.PutStr(Get() == 3 ? \"y\" : \"n\");"));
+        Assert.Contains("ES0099", ErrorIds(r));
+    }
+
+    [Fact]
+    public void Static_constructors_and_this_initializers_work_natively()
+    {
+        if (!HasGcc) return;
+        const string members = @"
+static class Table
+{
+    public static int[] Squares = new int[5];
+    public static int Count = 1;
+    static Table() { for (int i = 0; i < Squares.Length; i++) Squares[i] = i * i; Count = Squares.Length; }
+}
+struct Box
+{
+    public int W; public int H; public int Tag;
+    public Box(int w, int h) { W = w; H = h; Tag = 1; }
+    public Box(int side) : this(side, side) { Tag += 10; }
+    public Box(bool unit) : this() { W = unit ? 1 : 0; }
+}
+static void Check(bool ok, string name) { Dos.PutStr(ok ? ""ok "" : ""FAIL ""); Dos.PutStr(name); Dos.PutStr(""\n""); }
+";
+        const string body = @"
+Check(Table.Count == 5 && Table.Squares[4] == 16, ""static constructor runs before Main"");
+Box b = new Box(3);
+Check(b.W == 3 && b.H == 3 && b.Tag == 11, ""this(...) initializer runs first"");
+Box u = new Box(true);
+Check(u.W == 1 && u.H == 0 && u.Tag == 0, ""this() initializer"");
+";
+        var (code, output) = RunWithHostGcc(CompileOk(Program(members, body)));
+        Assert.Equal(0, code);
+        Assert.Equal("ok static constructor runs before Main\nok this(...) initializer runs first\nok this() initializer\n", output);
+    }
+
+    [Fact]
+    public void List_of_structs_grows_inserts_and_removes_natively()
+    {
+        if (!HasGcc) return;
+        const string members = @"
+public struct Item { public int Id; public int Weight; }
+static void Check(bool ok, string name) { Dos.PutStr(ok ? ""ok "" : ""FAIL ""); Dos.PutStr(name); Dos.PutStr(""\n""); }
+static int Total(System.Span<Item> items) { int t = 0; foreach (Item it in items) t += it.Weight; return t; }
+";
+        const string body = @"
+Vec<Item> list = default;
+for (int i = 0; i < 10; i++) { Item it = new Item { Id = i, Weight = i * 2 }; list.Add(it); }
+Check(list.Count == 10 && list.Capacity >= 10, ""grows from nothing"");
+Check(list[3].Id == 3 && list[9].Weight == 18, ""indexer read"");
+Item changed = list[2]; changed.Weight = 100; list[2] = changed;
+Check(list[2].Weight == 100, ""indexer write"");
+list.Insert(0, new Item { Id = 77 });
+Check(list.Count == 11 && list[0].Id == 77 && list[1].Id == 0, ""insert at the front"");
+list.RemoveAt(0);
+Check(list.Count == 10 && list[0].Id == 0, ""remove keeps order"");
+list.SwapRemoveAt(0);
+Check(list.Count == 9 && list[0].Id == 9, ""swap remove"");
+Check(list[50].Id == 0 && !list.RemoveAt(50) && !list.Insert(99, changed), ""out of range is harmless"");
+Check(Total(list.AsSpan()) == 186, ""span over the items"");
+list.Destroy();
+Check(list.Count == 0, ""destroy"");
+";
+        var (code, output) = RunWithHostGcc(CompileOk(Program(members, body)));
+        Assert.Equal(0, code);
+        Assert.DoesNotContain("FAIL", output);
+        Assert.Equal(9, output.Split('\n', StringSplitOptions.RemoveEmptyEntries).Length);
+    }
+
+    [Fact]
     public void Null_passed_as_a_span_is_the_empty_span()
     {
         if (!HasGcc) return;
@@ -216,6 +423,19 @@ Dos.PutStr(Pick(Max));
             "struct S { int _v; public int V { get { return _v; } set { _v = value; } } }",
             "S s = default; int x = (s.V = 3);"));
         Assert.Contains("ES0099", ErrorIds(r));
+    }
+
+    [Fact]
+    public void Language_sample_compiles_and_runs_natively_with_the_same_output_as_dotnet()
+    {
+        if (!HasGcc) return;
+        var path = Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "..", "samples", "language", "Language.cs");
+        var options = new CompileOptions { Defines = new[] { "AMIGA", "ESHARP_HOSTC" } };
+        var r = EsCompiler.Compile(new[] { new SourceFile(path, File.ReadAllText(path)) }, options);
+        Assert.True(r.Success, string.Join("\n", r.Diagnostics));
+        var (code, output) = RunWithHostGcc(r.C!);
+        Assert.Equal(0, code);
+        Assert.Equal(LanguageExpected.Output, output);
     }
 
     [Fact]
@@ -282,10 +502,10 @@ Dos.PutStr(Pick(Max));
     }
 
     [Fact]
-    public void Constructor_initializers_report_ES0099()
+    public void This_initializer_in_a_struct_is_accepted()
     {
         var r = Compile(Program("struct S { public int V; public S(int v) : this() { V = v; } }"));
-        Assert.Contains("ES0099", ErrorIds(r));
+        Assert.DoesNotContain("ES0099", ErrorIds(r));
     }
 
     [Fact]

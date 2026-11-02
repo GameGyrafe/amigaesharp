@@ -82,9 +82,24 @@ the planar data (12 checks), then prints `SHOT` so `esharp run --headless --scre
 | m68k: `samples/screen` in FS-UAE 3.2.35 | Done: 12/12 on Kickstart 2.04 (A500+) and 3.1 (A1200), also built with `--debug`; the screenshot shows the rectangles and the card. All other samples re-run on both ROMs after the library pruning change: unchanged |
 | Not verified | Parity of the generated C against host gcc for the screen sample (no graphics shim), PAL/NTSC and screen modes other than the default, closing the program while a window is open, AmigaOS 4 / MorphOS (`OpenScreenTagList` etc. unchanged there but unrun), real hardware |
 
+## Language additions for card games
+
+Found by comparing what a real card game needs (heavy use of collections, tuples, patterns and out-parameters) with what the emitter did. All verified by tests that compile the C and run it with host gcc, and by `samples/language` (15 checks) on host, Kickstart 2.04 (A500+) and 3.1 (A1200), also with `--debug`.
+
+| Item | State |
+|---|---|
+| `ref`, `out`, `in` parameters (passed as C pointers); `out var x`, `out int x`, `out _`, `in` with a temporary | Done. Arguments must be variables, fields or array elements (not properties). Constructors with ref parameters are still `ES0099` |
+| Value tuples: return values, parameters, locals, `Item1`/named elements, `(a, b) = (b, a)`, `var (x, y) = f()`, discards | Done: each tuple type is a C struct (`ES_Tuple_int_int`). A tuple as a struct field, tuple equality and nested deconstruction are not supported |
+| Patterns: constant, relational, `and`/`or`/`not`, `var`, declaration, property patterns on fields, `when`; `is` and `switch` expressions | Done (GNU statement expressions in the C; gcc only, which is all we target). No match in a switch expression traps instead of throwing. Positional/list patterns, type tests and property patterns on real properties are `ES0099`. The `switch` *statement* is unchanged |
+| Local functions (no capture) | Done: a local function that uses a local, parameter or `this` of the method around it is `ES0099` |
+| Static constructors, `: this(...)` constructor initializers (structs) | Done. **Static constructors run once at start-up in type order**, not lazily like in C#. Before this fix a static constructor was silently ignored |
+| `Vec<T>` (`ESharp.Platform`, named so as not to clash with `System.Collections.Generic.List<T>`): growable list of an unmanaged `T` | Done: `Add`, `Insert`, `RemoveAt`, `SwapRemoveAt`, `Clear`, indexer, `Count`, `Capacity`, `AsSpan`, `Destroy`; no exceptions (false / zero value). Counted in the chip budget by its initial capacity only |
+| `Dos.PutInt` | Done |
+| Still missing (needed by bigger games) | Lambdas/delegates (non-capturing ones could become function pointers), LINQ (rewrite as loops), string interpolation and a string buffer, classes and interfaces (ES0007/ES0009), `HashSet`/`Dictionary`, text drawing (bitmap font), sound, AGA |
+
 ## Phase 4: card demo (in progress)
 
-`samples/cards` is a playable higher-or-lower game on the Amiga screen. It is a **proof of the building blocks**, not Cardzania: I know nothing of Cardzania's rules or code yet, so the gate "Cardzania logic playable" is not met.
+`samples/cards` is a playable higher-or-lower game on the Amiga screen. It is a **proof of the building blocks**, not the real target game, so the phase 4 gate (the real game's logic playable on an Amiga) is not met yet.
 Mouse: Higher/Lower buttons; Esc quits; it also quits after 10 seconds without input (so headless runs end).
 Screenshot: [images/phase4-cards-a1200.png](images/phase4-cards-a1200.png) (Kickstart 3.1, A1200, after scripted play).
 
@@ -109,11 +124,11 @@ Screenshot: [images/phase4-cards-a1200.png](images/phase4-cards-a1200.png) (Kick
 - `esharp test` (run host tests, optionally the Amiga build in the emulator).
 - Finish phase 2: run the samples on the PPC targets once there is a way to run them.
 - Memory management ([MEMORY.md](MEMORY.md)): step 1 (`Mem.AllocChip`/`AllocFast`/`Free`, `Arena`) is done; step 2 (`Pool<T>`) and most of step 3 (`--debug`: bounds checks, arena and pool poisoning) are done; the chip budget report (step 4) is done for constant sizes.
-- Phase 4 (rest): get the real Cardzania rules and card layout (needs input from Dave), a shared card library, timing, dithering and IFF/sample assets, an MSBuild step for `assets.json`.
+- Phase 4 (rest): a bigger card game (rummy-style: melds, bots), a shared card library, timing, dithering and IFF/sample assets, an MSBuild step for `assets.json`.
 
 ## Known limits of the emitter
 
-Reported as `ES0099` rather than miscompiled: string concatenation, `ref`/`out`, `foreach` over anything but arrays and spans, `[InlineAsm]`/`[Interrupt]` bodies.
+Reported as `ES0099` rather than miscompiled: string concatenation and interpolation, lambdas and delegates, classes and interfaces (ES0007/ES0009), `ref` locals and returns, `foreach` over anything but arrays and spans, positional/list patterns, `[InlineAsm]`/`[Interrupt]` bodies.
 
 Namespaces are dropped when naming C symbols, so two types with the same name in different
 namespaces would collide.

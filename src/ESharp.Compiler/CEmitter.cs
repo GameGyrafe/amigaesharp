@@ -95,10 +95,12 @@ internal sealed class CEmitter
             .Where(m => !m.IsGenericMethod)
             .Where(m => reachable.Contains(m))
             .Where(m => m.MethodKind is MethodKind.Ordinary or MethodKind.UserDefinedOperator or MethodKind.Conversion or MethodKind.Constructor
-                        or MethodKind.PropertyGet or MethodKind.PropertySet
+                        or MethodKind.PropertyGet or MethodKind.PropertySet or MethodKind.StaticConstructor
                         && !m.IsExtern && DeclaresBody(m))
             .ToList();
 
+        methods.AddRange(reachable.Where(m => m.MethodKind == MethodKind.LocalFunction));
+        _staticConstructors.AddRange(methods.Where(m => m.MethodKind == MethodKind.StaticConstructor));
         foreach (var m in methods) Line(Prototype(m) + ";");
         if (methods.Count > 0) Line("");
 
@@ -156,6 +158,7 @@ internal sealed class CEmitter
     private static (BlockSyntax? Block, ArrowExpressionClauseSyntax? Arrow) BodyOf(SyntaxNode n) => n switch
     {
         BaseMethodDeclarationSyntax b => (b.Body, b.ExpressionBody),
+        LocalFunctionStatementSyntax lf => (lf.Body, lf.ExpressionBody),
         AccessorDeclarationSyntax a => (a.Body, a.ExpressionBody),
         ArrowExpressionClauseSyntax x => (null, x),
         PropertyDeclarationSyntax p => (null, p.ExpressionBody),
@@ -218,6 +221,7 @@ internal sealed class CEmitter
     /// bodies and static field initializers). Library code that is never used (a whole screen API in
     /// a console program) is not emitted, so it neither bloats the executable nor needs its headers.
     /// </summary>
+    private readonly List<IMethodSymbol> _staticConstructors = new();
     private readonly HashSet<ISymbol> _usedSymbols = new(SymbolEqualityComparer.Default);
 
     private HashSet<IMethodSymbol> ReachableMethods(List<INamedTypeSymbol> types)
@@ -330,6 +334,9 @@ internal sealed class CEmitter
     private static string FuncName(IMethodSymbol m)
     {
         if (HasAttribute(m, "AmigaLibAttribute")) return m.Name;
+        if (m.MethodKind == MethodKind.LocalFunction && m.ContainingSymbol is IMethodSymbol outer)
+            return FuncName(outer) + "_" + m.Name;
+        if (m.MethodKind == MethodKind.StaticConstructor) return $"{TypeName(m.ContainingType)}_cctor";
         if (m.MethodKind == MethodKind.Constructor)
         {
             var ctors = m.ContainingType.InstanceConstructors.Where(c => !c.IsImplicitlyDeclared).Count();
@@ -380,6 +387,8 @@ internal sealed class CEmitter
             case INamedTypeSymbol { Name: "Span" or "ReadOnlySpan", TypeArguments.Length: 1 } sp when
                 sp.ContainingNamespace?.ToDisplayString() == "System":
                 return SpanType(sp, at);
+            case INamedTypeSymbol { IsTupleType: true } tuple:
+                return TupleType(tuple, at);
             case INamedTypeSymbol { TypeKind: TypeKind.Enum or TypeKind.Struct } n:
                 return TypeName(n);
             case IArrayTypeSymbol:
@@ -404,6 +413,22 @@ internal sealed class CEmitter
         }
         return name;
     }
+
+    /// <summary>C struct for a value tuple: fields Item1, Item2, ...</summary>
+    private string TupleType(INamedTypeSymbol tuple, SyntaxNode at)
+    {
+        var elements = tuple.TupleElements;
+        var name = "ES_Tuple_" + string.Join("_", elements.Select(e => Mangle(e.Type).Replace('.', '_')));
+        if (!_spans.ContainsKey(name))
+        {
+            _spans[name] = ""; // reserve first: an element type may refer back
+            var fields = string.Join(" ", elements.Select((e, i) => $"{CType(e.Type, at)} Item{i + 1};"));
+            _spans[name] = $"typedef struct {{ {fields} }} {name};\n";
+        }
+        return name;
+    }
+
+    private static string FieldCName(IFieldSymbol f) => f.ContainingType.IsTupleType ? (f.CorrespondingTupleField ?? f).Name : f.Name;
 
     private static bool IsSpan(ITypeSymbol? t) =>
         t is INamedTypeSymbol { Name: "Span" or "ReadOnlySpan", TypeArguments.Length: 1 } n &&
@@ -506,9 +531,9 @@ internal sealed class CEmitter
             var supported = member is FieldDeclarationSyntax or EnumDeclarationSyntax or StructDeclarationSyntax
                 or MethodDeclarationSyntax or OperatorDeclarationSyntax or ConversionOperatorDeclarationSyntax
                 or PropertyDeclarationSyntax or IndexerDeclarationSyntax
-                || member is ConstructorDeclarationSyntax { Initializer: null } && !isStatic;
+                || member is ConstructorDeclarationSyntax { Initializer: null or { RawKind: (int)SyntaxKind.ThisConstructorInitializer } };
             if (!supported)
-                Unsupported(member, member is ConstructorDeclarationSyntax ? "static constructor or constructor initializer" : $"{member.Kind()} in struct");
+                Unsupported(member, member is ConstructorDeclarationSyntax ? "constructor initializer other than this(...)" : $"{member.Kind()} in struct");
         }
 
         var name = TypeName(s);
@@ -556,12 +581,16 @@ internal sealed class CEmitter
     {
         var node = m.DeclaringSyntaxReferences.First().GetSyntax();
         var parts = new List<string>();
-        if (!m.IsStatic && m.MethodKind != MethodKind.Constructor)
+        if (!m.IsStatic && m.MethodKind is not (MethodKind.Constructor or MethodKind.LocalFunction))
             parts.Add($"{CType(m.ContainingType, node)} *{ThisName}");
-        parts.AddRange(m.Parameters.Select(p => Decl(p.Type, p.Name, node)));
+        parts.AddRange(m.Parameters.Select(p => p.RefKind switch
+        {
+            RefKind.None => Decl(p.Type, p.Name, node),
+            RefKind.Ref or RefKind.Out => Decl(p.Type, "*" + p.Name, node),
+            RefKind.In or RefKind.RefReadOnlyParameter => Decl(p.Type, "*" + p.Name, node),
+            _ => Unsupported(node, "this kind of ref parameter"),
+        }));
         var ps = parts.Count == 0 ? "void" : string.Join(", ", parts);
-        if (m.Parameters.Any(p => p.RefKind != RefKind.None))
-            Unsupported(node, "ref/out parameters");
         // A constructor is a function that builds and returns the struct.
         var ret = m.MethodKind == MethodKind.Constructor ? m.ContainingType : m.ReturnType;
         return Decl(ret, FuncName(m) + "(" + ps + ")", node);
@@ -579,8 +608,11 @@ internal sealed class CEmitter
         Line("{");
         _indent++;
         var isCtor = m.MethodKind == MethodKind.Constructor;
-        _this = isCtor ? ThisKind.Value : m.IsStatic ? ThisKind.None : ThisKind.Pointer;
+        _this = isCtor ? ThisKind.Value : m.IsStatic || m.MethodKind == MethodKind.LocalFunction ? ThisKind.None : ThisKind.Pointer;
         if (isCtor) Line($"{CType(m.ContainingType, decl)} {ThisName} = {{0}};");
+        if (isCtor && decl is ConstructorDeclarationSyntax { Initializer: { } init } &&
+            Model(init).GetSymbolInfo(init).Symbol is IMethodSymbol { IsImplicitlyDeclared: false } chained)
+            Line($"{ThisName} = {FuncName(chained)}({string.Join(", ", init.ArgumentList.Arguments.Select(a => Argument(a, chained)))});");
         if (block != null)
         {
             foreach (var st in block.Statements) Statement(st);
@@ -588,6 +620,7 @@ internal sealed class CEmitter
         else if (arrow != null)
         {
             LineDirective(arrow.GetLocation());
+            foreach (var h in HoistedDeclarations(new SyntaxNode[] { arrow.Expression })) Line(h);
             var e = Expr(arrow.Expression, top: true);
             Line(m.ReturnsVoid ? e + ";" : "return " + e + ";");
         }
@@ -609,6 +642,8 @@ internal sealed class CEmitter
         Line("int main(void)");
         Line("{");
         _indent++;
+        // Static constructors run once at start-up, in the order the types appear (C# runs them lazily).
+        foreach (var cctor in _staticConstructors) Line(FuncName(cctor) + "();");
         if (entry.ReturnsVoid)
         {
             Line(FuncName(entry) + "();");
@@ -624,7 +659,84 @@ internal sealed class CEmitter
 
     // ------------------------------------------------------------------ statements
 
+    /// <summary>
+    /// Variables declared inside an expression (<c>out var x</c>, <c>out int _</c>, <c>out _</c>) are declared in C
+    /// just before the statement. Statements that scope them to themselves (if, while, ...) get a block of their own.
+    /// </summary>
     private void Statement(StatementSyntax st)
+    {
+        var hoisted = HoistedDeclarations(st);
+        if (hoisted.Count == 0)
+        {
+            StatementCore(st);
+            return;
+        }
+        var scoped = st is IfStatementSyntax or WhileStatementSyntax or DoStatementSyntax or ForStatementSyntax
+            or ForEachStatementSyntax or SwitchStatementSyntax;
+        LineDirective(st.GetLocation());
+        if (scoped) { Line("{"); _indent++; }
+        foreach (var h in hoisted) Line(h);
+        StatementCore(st);
+        if (scoped) { _indent--; Line("}"); }
+    }
+
+    private List<string> HoistedDeclarations(StatementSyntax st) => HoistedDeclarations(HoistRoots(st));
+
+    private static List<SyntaxNode> HoistRoots(StatementSyntax st)
+    {
+        var roots = new List<SyntaxNode>();
+        switch (st)
+        {
+            case ExpressionStatementSyntax e: roots.Add(e.Expression); break;
+            case LocalDeclarationStatementSyntax l: roots.AddRange(l.Declaration.Variables.Where(v => v.Initializer != null).Select(v => (SyntaxNode)v.Initializer!.Value)); break;
+            case ReturnStatementSyntax { Expression: { } r }: roots.Add(r); break;
+            case IfStatementSyntax i:
+                for (StatementSyntax? cur = i; cur is IfStatementSyntax ci; cur = ci.Else?.Statement) roots.Add(ci.Condition);
+                break;
+            case WhileStatementSyntax w: roots.Add(w.Condition); break;
+            case DoStatementSyntax d: roots.Add(d.Condition); break;
+            case ForStatementSyntax f:
+                if (f.Declaration != null) roots.AddRange(f.Declaration.Variables.Where(v => v.Initializer != null).Select(v => (SyntaxNode)v.Initializer!.Value));
+                roots.AddRange(f.Initializers);
+                if (f.Condition != null) roots.Add(f.Condition);
+                roots.AddRange(f.Incrementors);
+                break;
+            case ForEachStatementSyntax fe: roots.Add(fe.Expression); break;
+            case SwitchStatementSyntax sw: roots.Add(sw.Expression); break;
+        }
+        return roots;
+    }
+
+    private List<string> HoistedDeclarations(IEnumerable<SyntaxNode> roots)
+    {
+        var lines = new List<string>();
+        foreach (var node in roots.SelectMany(r => r.DescendantNodesAndSelf()))
+        {
+            if (node is DeclarationExpressionSyntax { Designation: ParenthesizedVariableDesignationSyntax }) continue;
+            if (node is DeclarationExpressionSyntax decl)
+            {
+                if (decl.Designation is SingleVariableDesignationSyntax single &&
+                    Model(decl).GetDeclaredSymbol(single) is ILocalSymbol local)
+                    lines.Add(Decl(local.Type, local.Name, decl) + ";");
+                else if (Model(decl).GetTypeInfo(decl).Type is { } t)
+                    lines.Add(Decl(t, DiscardName(decl), decl) + ";");
+            }
+            else if (node is SingleVariableDesignationSyntax pd && pd.Parent is not DeclarationExpressionSyntax &&
+                     !pd.Ancestors().OfType<SwitchExpressionArmSyntax>().Any() &&
+                     Model(pd).GetDeclaredSymbol(pd) is ILocalSymbol pl)
+            {
+                lines.Add(Decl(pl.Type, pl.Name, pd) + ";");
+            }
+            else if (node is IdentifierNameSyntax { Identifier.Text: "_", Parent: ArgumentSyntax { Parent: ArgumentListSyntax { Parent: InvocationExpressionSyntax } } } id &&
+                     Model(id).GetSymbolInfo(id).Symbol is IDiscardSymbol discard)
+            {
+                lines.Add(Decl(discard.Type, DiscardName(id), id) + ";");
+            }
+        }
+        return lines;
+    }
+
+    private void StatementCore(StatementSyntax st)
     {
         LineDirective(st.GetLocation());
         switch (st)
@@ -710,6 +822,11 @@ internal sealed class CEmitter
             case EmptyStatementSyntax:
                 Line(";");
                 break;
+
+            case LocalFunctionStatementSyntax lf:
+                CheckNoCapture(lf);
+                break; // emitted as a function of its own
+
 
             default:
                 Unsupported(st, st.Kind().ToString());
@@ -962,6 +1079,8 @@ internal sealed class CEmitter
 
             case AssignmentExpressionSyntax a:
             {
+                if (a.IsKind(SyntaxKind.SimpleAssignmentExpression) && (a.Left is TupleExpressionSyntax || a.Left is DeclarationExpressionSyntax { Designation: ParenthesizedVariableDesignationSyntax }))
+                    return Deconstruction(a);
                 if (WrittenProperty(a.Left) is { } wp) return PropertyAssignment(wp, a);
                 if (a.Kind() != SyntaxKind.SimpleAssignmentExpression &&
                     Model(a).GetSymbolInfo(a).Symbol is IMethodSymbol { MethodKind: MethodKind.UserDefinedOperator } op)
@@ -974,6 +1093,20 @@ internal sealed class CEmitter
                 var s = $"{Expr(a.Left)} {a.OperatorToken.Text} {Expr(a.Right)}";
                 return top ? s : $"({s})";
             }
+
+            case TupleExpressionSyntax te:
+            {
+                var tt = Model(te).GetTypeInfo(te).ConvertedType as INamedTypeSymbol;
+                if (tt is not { IsTupleType: true }) tt = Model(te).GetTypeInfo(te).Type as INamedTypeSymbol;
+                if (tt is not { IsTupleType: true }) return Unsupported(te, "tuple without a type");
+                return $"(({TupleType(tt, te)}){{ {string.Join(", ", te.Arguments.Select(a => Expr(a.Expression, top: true)))} }})";
+            }
+
+            case IsPatternExpressionSyntax ip:
+                return IsPattern(ip);
+
+            case SwitchExpressionSyntax swe:
+                return SwitchExpression(swe);
 
             case ConditionalExpressionSyntax c:
             {
@@ -1099,6 +1232,8 @@ internal sealed class CEmitter
         var sym = Model(id).GetSymbolInfo(id).Symbol;
         switch (sym)
         {
+            case IParameterSymbol { RefKind: not RefKind.None } rp:
+                return $"(*{rp.Name})";
             case ILocalSymbol or IParameterSymbol:
                 return id.Identifier.Text;
             case IFieldSymbol f:
@@ -1148,7 +1283,7 @@ internal sealed class CEmitter
                 return FieldRef(f, ma);
             var exprType = Model(ma).GetTypeInfo(ma.Expression).Type;
             var op = exprType is IPointerTypeSymbol ? "->" : ".";
-            return $"{Expr(ma.Expression)}{op}{f.Name}";
+            return $"{Expr(ma.Expression)}{op}{FieldCName(f)}";
         }
         Unsupported(ma, $"member access '{ma}'");
         return "0";
@@ -1213,7 +1348,7 @@ internal sealed class CEmitter
             return SpanSlice(inv, sliceAccess, m);
 
         string? receiver = null;
-        if (!m.IsStatic)
+        if (!m.IsStatic && m.MethodKind != MethodKind.LocalFunction)
         {
             if (m.ContainingType.TypeKind != TypeKind.Struct || m.MethodKind != MethodKind.Ordinary)
                 return Unsupported(inv, "instance method call");
@@ -1221,20 +1356,222 @@ internal sealed class CEmitter
             if (receiver == null) return "0";
         }
 
-        foreach (var arg in inv.ArgumentList.Arguments)
-        {
-            if (!arg.RefKindKeyword.IsKind(SyntaxKind.None))
-                Unsupported(arg, "ref/out argument");
-        }
-
         var lib = GetAttribute(m, "AmigaLibAttribute");
         if (lib != null)
             _headers.Add($"proto/{lib.ConstructorArguments[0].Value}.h");
 
-        var argList = inv.ArgumentList.Arguments.Select(a => Expr(a.Expression, top: true));
+        var argList = inv.ArgumentList.Arguments.Select(a => Argument(a, m));
         if (receiver != null) argList = argList.Prepend(receiver);
         return $"{FuncName(m)}({string.Join(", ", argList)})";
     }
+
+    /// <summary><c>(a, b) = t;</c> and <c>var (x, y) = t;</c>: the right side is evaluated once, then each part is assigned.</summary>
+    private string Deconstruction(AssignmentExpressionSyntax a)
+    {
+        var rightInfo = Model(a).GetTypeInfo(a.Right);
+        var rightType = (a.Right is TupleExpressionSyntax ? rightInfo.ConvertedType : rightInfo.Type) as INamedTypeSymbol;
+        if (rightType is not { IsTupleType: true }) return Unsupported(a, "deconstruction of anything but a tuple");
+        var targets = new List<string?>();
+        void Collect(SyntaxNode left)
+        {
+            switch (left)
+            {
+                case TupleExpressionSyntax t:
+                    foreach (var arg in t.Arguments) Collect(arg.Expression);
+                    break;
+                case DeclarationExpressionSyntax { Designation: ParenthesizedVariableDesignationSyntax pd }:
+                    foreach (var v in pd.Variables) Collect(v);
+                    break;
+                case DeclarationExpressionSyntax { Designation: SingleVariableDesignationSyntax sd }:
+                    targets.Add(sd.Identifier.Text);
+                    break;
+                case SingleVariableDesignationSyntax sv:
+                    targets.Add(sv.Identifier.Text);
+                    break;
+                case DiscardDesignationSyntax or DeclarationExpressionSyntax { Designation: DiscardDesignationSyntax }:
+                    targets.Add(null);
+                    break;
+                case IdentifierNameSyntax { Identifier.Text: "_" } id when Model(id).GetSymbolInfo(id).Symbol is IDiscardSymbol:
+                    targets.Add(null);
+                    break;
+                case ParenthesizedVariableDesignationSyntax nested:
+                    foreach (var v in nested.Variables) Collect(v);
+                    break;
+                case ExpressionSyntax other:
+                    targets.Add(Expr(other));
+                    break;
+            }
+        }
+        Collect(a.Left);
+        if (targets.Count != rightType.TupleElements.Length) return Unsupported(a, "nested deconstruction");
+        var tmp = "es_t" + _patternTemp++;
+        var sb = new StringBuilder($"({{ {Decl(rightType, tmp, a)} = {Expr(a.Right, top: true)}; ");
+        for (var i = 0; i < targets.Count; i++)
+            if (targets[i] != null) sb.Append($"{targets[i]} = {tmp}.Item{i + 1}; ");
+        sb.Append("(void)0; })");
+        return sb.ToString();
+    }
+
+    // ------------------------------------------------------------------ patterns
+
+    private int _patternTemp;
+
+    private string IsPattern(IsPatternExpressionSyntax ip)
+    {
+        var type = Model(ip).GetTypeInfo(ip.Expression).Type;
+        if (type == null) return Unsupported(ip, "pattern on an expression without a type");
+        if (IsPure(ip.Expression))
+            return $"({PatternTest(ip.Pattern, Expr(ip.Expression), type)})";
+        var tmp = "es_p" + _patternTemp++;
+        return $"({{ {Decl(type, tmp, ip)} = {Expr(ip.Expression, top: true)}; {PatternTest(ip.Pattern, tmp, type)}; }})";
+    }
+
+    private string SwitchExpression(SwitchExpressionSyntax sw)
+    {
+        var type = Model(sw).GetTypeInfo(sw.GoverningExpression).Type;
+        var result = Model(sw).GetTypeInfo(sw).ConvertedType ?? Model(sw).GetTypeInfo(sw).Type;
+        if (type == null || result == null) return Unsupported(sw, "switch expression without a type");
+        var id = _patternTemp++;
+        string subject = "es_sw" + id, value = "es_sv" + id;
+        var sb = new StringBuilder();
+        sb.Append($"({{ {Decl(type, subject, sw)} = {Expr(sw.GoverningExpression, top: true)}; {Decl(result, value, sw)}; ");
+        var first = true;
+        foreach (var d in sw.Arms.SelectMany(a => a.Pattern.DescendantNodesAndSelf()).OfType<SingleVariableDesignationSyntax>())
+            if (Model(d).GetDeclaredSymbol(d) is ILocalSymbol dl) sb.Append(Decl(dl.Type, dl.Name, d) + "; ");
+        foreach (var arm in sw.Arms)
+        {
+            var test = PatternTest(arm.Pattern, subject, type);
+            if (arm.WhenClause != null) test = $"({test}) && ({Expr(arm.WhenClause.Condition, top: true)})";
+            sb.Append($"{(first ? "" : "else ")}if ({test}) {value} = {Expr(arm.Expression, top: true)}; ");
+            first = false;
+        }
+        sb.Append($"else __builtin_trap(); {value}; }})");
+        return sb.ToString();
+    }
+
+    /// <summary>A C condition that is true when <paramref name="subject"/> (of <paramref name="type"/>) matches the pattern.</summary>
+    private string PatternTest(PatternSyntax pattern, string subject, ITypeSymbol type)
+    {
+        switch (pattern)
+        {
+            case ParenthesizedPatternSyntax p:
+                return PatternTest(p.Pattern, subject, type);
+            case DiscardPatternSyntax:
+                return "1";
+            case ConstantPatternSyntax c:
+                return $"({subject} == {Expr(c.Expression)})";
+            case RelationalPatternSyntax r:
+                return $"({subject} {r.OperatorToken.Text} {Expr(r.Expression)})";
+            case BinaryPatternSyntax b:
+                return $"({PatternTest(b.Left, subject, type)} {(b.IsKind(SyntaxKind.AndPattern) ? "&&" : "||")} {PatternTest(b.Right, subject, type)})";
+            case UnaryPatternSyntax u when u.IsKind(SyntaxKind.NotPattern):
+                return $"(!{PatternTest(u.Pattern, subject, type)})";
+            case VarPatternSyntax v:
+                return Bind(v.Designation, subject, v);
+            case DeclarationPatternSyntax d:
+                return Bind(d.Designation, subject, d);
+            case TypePatternSyntax t:
+                return Model(t).GetTypeInfo(t.Type).Type is { } tt && SymbolEqualityComparer.Default.Equals(tt, type) ? "1" : Unsupported(t, "type test");
+            case RecursivePatternSyntax rec:
+            {
+                if (rec.PositionalPatternClause != null) return Unsupported(rec, "positional pattern");
+                var parts = new List<string>();
+                if (rec.Type != null && !(Model(rec).GetTypeInfo(rec.Type).Type is { } rt && SymbolEqualityComparer.Default.Equals(rt, type)))
+                    return Unsupported(rec, "type test");
+                if (rec.PropertyPatternClause != null)
+                {
+                    foreach (var sub in rec.PropertyPatternClause.Subpatterns)
+                    {
+                        if (sub.NameColon == null || Model(sub).GetSymbolInfo(sub.NameColon.Name).Symbol is not IFieldSymbol field)
+                            return Unsupported(sub, "property pattern on anything but a field");
+                        var access = type.TypeKind == TypeKind.Pointer ? $"{subject}->{field.Name}" : $"({subject}).{field.Name}";
+                        parts.Add(PatternTest(sub.Pattern, access, field.Type));
+                    }
+                }
+                if (rec.Designation != null) parts.Add(Bind(rec.Designation, subject, rec));
+                return parts.Count == 0 ? "1" : "(" + string.Join(" && ", parts) + ")";
+            }
+        }
+        return Unsupported(pattern, pattern.Kind().ToString());
+    }
+
+    private string Bind(VariableDesignationSyntax? designation, string subject, SyntaxNode at)
+    {
+        if (designation is SingleVariableDesignationSyntax single)
+            return $"(({single.Identifier.Text} = {subject}), 1)";
+        return "1";
+    }
+
+    /// <summary>Local functions become C functions of their own, so they may not use the locals, parameters or 'this' of the method around them.</summary>
+    private void CheckNoCapture(LocalFunctionStatementSyntax lf)
+    {
+        var model = Model(lf);
+        foreach (var n in lf.DescendantNodes())
+        {
+            ISymbol? sym = n switch
+            {
+                IdentifierNameSyntax id => model.GetSymbolInfo(id).Symbol,
+                ThisExpressionSyntax => model.GetEnclosingSymbol(n.SpanStart),
+                _ => null,
+            };
+            if (n is ThisExpressionSyntax) { Unsupported(n, "local function that uses 'this'"); continue; }
+            var captured = sym switch
+            {
+                ILocalSymbol or IParameterSymbol => !sym.DeclaringSyntaxReferences.Any(r => r.SyntaxTree == lf.SyntaxTree && lf.Span.Contains(r.Span)),
+                IFieldSymbol { IsStatic: false, IsConst: false } or IPropertySymbol { IsStatic: false } => true,
+                IMethodSymbol { IsStatic: false, MethodKind: MethodKind.Ordinary } => true,
+                _ => false,
+            };
+            if (captured) Unsupported(n, $"local function that captures '{n}'; pass it as a parameter or make it a static method");
+        }
+    }
+
+    /// <summary>One call argument; ref/out/in parameters take the address of the argument.</summary>
+    private string Argument(ArgumentSyntax a, IMethodSymbol m)
+    {
+        IParameterSymbol? param = null;
+        if (a.NameColon != null)
+            param = m.Parameters.FirstOrDefault(p => p.Name == a.NameColon.Name.Identifier.Text);
+        else if (a.Parent is ArgumentListSyntax list)
+        {
+            var index = list.Arguments.IndexOf(a);
+            param = index < m.Parameters.Length ? m.Parameters[index] : m.Parameters.LastOrDefault(p => p.IsParams);
+        }
+        if (param == null || param.RefKind == RefKind.None) return Expr(a.Expression, top: true);
+
+        var e = a.Expression;
+        while (e is ParenthesizedExpressionSyntax pe) e = pe.Expression;
+        switch (e)
+        {
+            case DeclarationExpressionSyntax decl when decl.Designation is SingleVariableDesignationSyntax single:
+                return "&" + single.Identifier.Text;
+            case DeclarationExpressionSyntax:
+            case IdentifierNameSyntax { Identifier.Text: "_" } when Model(e).GetSymbolInfo(e).Symbol is IDiscardSymbol:
+                return "&" + DiscardName(e);
+        }
+        if (Model(e).GetTypeInfo(e).Type is { } && IsAddressable(e))
+            return "&" + Expr(e);
+        if (param.RefKind is RefKind.In or RefKind.RefReadOnlyParameter)
+            return $"&(({CType(param.Type, a)}[1]){{ {Expr(e, top: true)} }})[0]"; // a temporary, as C# allows for 'in'
+        return Unsupported(a, "ref/out argument that is not a variable, field or array element");
+    }
+
+    private bool IsAddressable(ExpressionSyntax e)
+    {
+        switch (e)
+        {
+            case IdentifierNameSyntax or MemberAccessExpressionSyntax or ElementAccessExpressionSyntax:
+                var sym = Model(e).GetSymbolInfo(e).Symbol;
+                if (sym is IPropertySymbol prop) return IsAutoProperty(prop);
+                if (sym is IFieldSymbol { IsConst: true }) return false;
+                return sym is ILocalSymbol or IParameterSymbol or IFieldSymbol || (sym == null);
+            case PrefixUnaryExpressionSyntax { RawKind: (int)SyntaxKind.PointerIndirectionExpression }:
+                return true;
+        }
+        return false;
+    }
+
+    private static string DiscardName(SyntaxNode e) => "es_discard_" + e.SpanStart;
 
     /// <summary>The C pointer passed as the hidden first argument of a struct instance method.</summary>
     private string? ReceiverAddress(InvocationExpressionSyntax inv, IMethodSymbol m) =>

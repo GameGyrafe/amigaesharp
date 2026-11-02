@@ -43,6 +43,12 @@ internal static class ChipBudget
                             // Must match the layout in Pool.cs: free list (4) + item + in-use flag (1) per slot.
                             Reservation(result, "pool", $"new Pool<{t.TypeArguments[0].Name}>", oc, model, 0, 1, _ => item < 0 ? -1 : 4 + item + 1);
                         }
+                        else if (t.Name == "Vec" && t.TypeArguments.Length == 1 && t.ContainingNamespace?.ToDisplayString() == "ESharp.Platform")
+                        {
+                            // Initial capacity only: a list that grows in chip RAM allocates more at run time.
+                            var item = SizeOf(t.TypeArguments[0]);
+                            Reservation(result, "vec", $"new Vec<{t.TypeArguments[0].Name}> (initial)", oc, model, 0, 1, _ => item);
+                        }
                         break;
 
                     case InvocationExpressionSyntax inv when model.GetSymbolInfo(inv).Symbol is IMethodSymbol { Name: "AllocChip" } m &&
