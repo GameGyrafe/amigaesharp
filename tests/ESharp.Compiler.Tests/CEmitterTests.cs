@@ -157,6 +157,16 @@ Dos.PutStr(Pick(Max));
     }
 
     [Fact]
+    public void Operators_sample_compiles_and_runs_natively_with_the_same_output_as_dotnet()
+    {
+        if (!HasGcc) return;
+        var path = Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "..", "samples", "operators", "Operators.cs");
+        var (code, output) = RunWithHostGcc(CompileOk(File.ReadAllText(path)));
+        Assert.Equal(0, code);
+        Assert.Equal(OperatorsExpected.Output, output);
+    }
+
+    [Fact]
     public void Property_assignment_used_as_a_value_reports_ES0099()
     {
         var r = Compile(Program(

@@ -145,7 +145,6 @@ internal sealed class CEmitter
 
     private static bool DeclaresBody(IMethodSymbol m)
     {
-        if (m.AssociatedSymbol is IPropertySymbol { IsIndexer: true }) return false;
         return m.DeclaringSyntaxReferences.Any(r => BodyOf(r.GetSyntax()) is (not null, _) or (_, not null));
     }
 
@@ -156,6 +155,7 @@ internal sealed class CEmitter
         AccessorDeclarationSyntax a => (a.Body, a.ExpressionBody),
         ArrowExpressionClauseSyntax x => (null, x),
         PropertyDeclarationSyntax p => (null, p.ExpressionBody),
+        IndexerDeclarationSyntax i => (null, i.ExpressionBody),
         _ => (null, null),
     };
 
@@ -434,7 +434,7 @@ internal sealed class CEmitter
             var isStatic = member.ChildTokens().Any(t => t.IsKind(SyntaxKind.StaticKeyword));
             var supported = member is FieldDeclarationSyntax or EnumDeclarationSyntax or StructDeclarationSyntax
                 or MethodDeclarationSyntax or OperatorDeclarationSyntax or ConversionOperatorDeclarationSyntax
-                or PropertyDeclarationSyntax
+                or PropertyDeclarationSyntax or IndexerDeclarationSyntax
                 || member is ConstructorDeclarationSyntax { Initializer: null } && !isStatic;
             if (!supported)
                 Unsupported(member, member is ConstructorDeclarationSyntax ? "static constructor or constructor initializer" : $"{member.Kind()} in struct");
@@ -768,6 +768,11 @@ internal sealed class CEmitter
         var text = ExprCore(e, top);
         var info = Model(e).GetTypeInfo(e);
 
+        // Implicit user-defined conversion (operator implicit): call the conversion function.
+        var conversion = Model(e).GetConversion(e);
+        if (conversion.IsUserDefined && conversion.MethodSymbol is { } userConv && e is not CastExpressionSyntax)
+            return $"{FuncName(userConv)}({text})";
+
         // Implicit array -> Span and Span -> ReadOnlySpan conversions.
         if (info.ConvertedType is INamedTypeSymbol target && IsSpan(target))
         {
@@ -1038,6 +1043,11 @@ internal sealed class CEmitter
     {
         var recvType = Model(ea).GetTypeInfo(ea.Expression).Type;
         var args = ea.ArgumentList.Arguments;
+        if (Model(ea).GetSymbolInfo(ea).Symbol is IPropertySymbol { IsIndexer: true } indexer && recvType is INamedTypeSymbol { TypeKind: TypeKind.Struct } && !IsSpan(recvType))
+        {
+            var parts = AccessParts(ea);
+            return PropertyRead(indexer, parts.recv, ea, parts.indexes);
+        }
         if (args.Count != 1 || Model(ea).GetTypeInfo(args[0].Expression).Type?.Name is "Index" or "Range")
         {
             Unsupported(ea, "indexer other than a single integer index");
@@ -1146,9 +1156,9 @@ internal sealed class CEmitter
     private static bool IsInitializable(ISymbol? s) =>
         s is IFieldSymbol || s is IPropertySymbol p && IsAutoProperty(p);
 
-    private string PropertyRead(IPropertySymbol p, ExpressionSyntax? recv, SyntaxNode at)
+    private string PropertyRead(IPropertySymbol p, ExpressionSyntax? recv, SyntaxNode at,
+        IReadOnlyList<ExpressionSyntax>? indexes = null)
     {
-        if (p.IsIndexer) return Unsupported(at, "indexer");
         if (IsAutoProperty(p))
         {
             if (p.IsStatic) return $"{TypeName(p.ContainingType)}_{p.Name}";
@@ -1167,14 +1177,26 @@ internal sealed class CEmitter
         if (p.GetMethod == null) return Unsupported(at, $"property '{p.Name}' without a getter");
         if (p.IsStatic) return $"{FuncName(p.GetMethod)}()";
         var receiver = ReceiverOf(recv, at, p.Name, "instance property access");
-        return receiver == null ? "0" : $"{FuncName(p.GetMethod)}({receiver})";
+        if (receiver == null) return "0";
+        var all = new List<string> { receiver };
+        if (indexes != null) all.AddRange(indexes.Select(i => Expr(i, top: true)));
+        return $"{FuncName(p.GetMethod)}({string.Join(", ", all)})";
     }
+
+    /// <summary>The receiver and index arguments of a property or indexer access.</summary>
+    private static (ExpressionSyntax? recv, IReadOnlyList<ExpressionSyntax> indexes) AccessParts(ExpressionSyntax target) => target switch
+    {
+        MemberAccessExpressionSyntax ma => (ma.Expression, System.Array.Empty<ExpressionSyntax>()),
+        ElementAccessExpressionSyntax ea => (ea.Expression, ea.ArgumentList.Arguments.Select(a => a.Expression).ToList()),
+        _ => (null, System.Array.Empty<ExpressionSyntax>()),
+    };
 
     /// <summary>The non-auto property an assignment or ++/-- writes to, or null for fields, locals and auto-properties.</summary>
     private IPropertySymbol? WrittenProperty(ExpressionSyntax target)
     {
         var sym = Model(target).GetSymbolInfo(target).Symbol;
-        return sym is IPropertySymbol { IsIndexer: false } p && !IsAutoProperty(p) ? p : null;
+        // Span<T> and array indexers are plain C indexing, not accessor calls.
+        return sym is IPropertySymbol p && !IsAutoProperty(p) && !(p.IsIndexer && IsSpan(p.ContainingType)) ? p : null;
     }
 
     private static bool IsStatementContext(SyntaxNode n) => n.Parent is ExpressionStatementSyntax or ForStatementSyntax;
@@ -1185,14 +1207,18 @@ internal sealed class CEmitter
     {
         if (p.SetMethod == null) return Unsupported(whole, $"assignment to property '{p.Name}' without a setter");
         if (!IsStatementContext(whole)) return Unsupported(whole, "property assignment used as a value; make it a statement");
-        var recv = (target as MemberAccessExpressionSyntax)?.Expression;
-        if (reads && recv != null && !IsPure(recv))
+        var (recv, indexes) = AccessParts(target);
+        if (reads && recv != null && (!IsPure(recv) || !indexes.All(IsPure)))
             return Unsupported(recv, "compound assignment or ++/-- on a property of a complex expression; assign it to a local first");
-        var current = reads ? PropertyRead(p, recv, target) : "";
+        var current = reads ? PropertyRead(p, recv, target, indexes) : "";
         var value = newValue(current);
         if (p.IsStatic) return $"{FuncName(p.SetMethod)}({value})";
         var receiver = ReceiverOf(recv, whole, p.Name, "instance property access");
-        return receiver == null ? "0" : $"{FuncName(p.SetMethod)}({receiver}, {value})";
+        if (receiver == null) return "0";
+        var all = new List<string> { receiver };
+        all.AddRange(indexes.Select(i => Expr(i, top: true)));
+        all.Add(value);
+        return $"{FuncName(p.SetMethod)}({string.Join(", ", all)})";
     }
 
     /// <summary>Names, literals, member accesses and element accesses of those: safe to evaluate twice.</summary>

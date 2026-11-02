@@ -23,6 +23,9 @@ public struct Fix
     /// <summary>Converts an integer in -32768..32767 to fixed point.</summary>
     public static Fix FromInt(int value) => FromRaw(value << 16);
 
+    /// <summary>An integer in -32768..32767 converts implicitly, so <c>Fix f = 3;</c> and <c>f + 1</c> work.</summary>
+    public static implicit operator Fix(int value) => FromRaw(value << 16);
+
     /// <summary>The integer part, rounding towards negative infinity.</summary>
     public static int ToInt(Fix f) => f.Raw >> 16;
 

@@ -37,6 +37,7 @@
     <Compile Include="..\..\samples\memory\Memory.cs" Link="Samples\Memory.cs" />
     <Compile Include="..\..\samples\generics\Generics.cs" Link="Samples\Generics.cs" />
     <Compile Include="..\..\samples\properties\Properties.cs" Link="Samples\Properties.cs" />
+    <Compile Include="..\..\samples\operators\Operators.cs" Link="Samples\Operators.cs" />
   </ItemGroup>
 
 </Project>

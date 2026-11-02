@@ -40,6 +40,14 @@ public class HostTargetTests
     }
 
     [Fact]
+    public void Operators_sample_runs_on_the_host()
+    {
+        using var console = HostConsole.Capture();
+        OperatorsSample.Program.Main();
+        Assert.Equal(OperatorsExpected.Output, console.Output);
+    }
+
+    [Fact]
     public void Memory_sample_runs_on_the_host_without_leaks()
     {
         using var mem = HostMem.Capture();
@@ -160,5 +168,35 @@ internal static class PropertiesExpected
         "static properties",
         "static property with accessors, compound",
         "static property of a struct type",
+    };
+}
+
+/// <summary>What samples/operators prints.</summary>
+internal static class OperatorsExpected
+{
+    public static string Output => string.Concat(Names.Select(n => "ok " + n + "\n"));
+
+    private static readonly string[] Names =
+    {
+        "implicit conversion in an initializer",
+        "implicit conversion in an assignment",
+        "implicit conversion of an argument",
+        "implicit conversion of a return value",
+        "implicit conversion of an operand",
+        "explicit conversion still works",
+        "Fix from int in an initializer",
+        "Fix plus int",
+        "Fix compared with int",
+        "Fix argument from int",
+        "Fix times int is still the int overload",
+        "indexer get and set",
+        "indexer setter runs its body",
+        "compound assignment and ++ on an indexer",
+        "indexer with an expression index",
+        "this[...] inside a method",
+        "two-index indexer, expression-bodied",
+        "indexer on an array element",
+        "indexer in a generic struct",
+        "generic indexer with an implicit conversion",
     };
 }
