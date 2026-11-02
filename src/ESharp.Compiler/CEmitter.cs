@@ -705,8 +705,10 @@ internal sealed class CEmitter
             StatementCore(st);
             return;
         }
-        var scoped = st is IfStatementSyntax or WhileStatementSyntax or DoStatementSyntax or ForStatementSyntax
-            or ForEachStatementSyntax or SwitchStatementSyntax;
+        // C# lets a variable declared in an 'if' condition ('if (!TryX(out var v)) return; Use(v);') live on in the
+        // enclosing block, so an 'if' written directly in a block is not wrapped; loops and switches scope theirs.
+        var scoped = st is IfStatementSyntax && st.Parent is not (BlockSyntax or SwitchSectionSyntax) or WhileStatementSyntax or DoStatementSyntax
+            or ForStatementSyntax or ForEachStatementSyntax or SwitchStatementSyntax;
         LineDirective(st.GetLocation());
         if (scoped) { Line("{"); _indent++; }
         foreach (var h in hoisted) Line(h);

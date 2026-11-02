@@ -14,6 +14,8 @@ public static unsafe class Input
     private static bool _leftDown;
     private static bool _leftPressed;
     private static bool _leftReleased;
+    private static int _pressX;
+    private static int _pressY;
     private static int _lastKey;
 
     public static int MouseX { get { return _mouseX; } }
@@ -24,6 +26,11 @@ public static unsafe class Input
 
     /// <summary>The left button went down since the last <see cref="Poll"/>.</summary>
     public static bool LeftPressed { get { return _leftPressed; } }
+
+    /// <summary>Where the pointer was when the left button last went down (what a click should act on, even if the pointer moved before <see cref="Poll"/>).</summary>
+    public static int PressX { get { return _pressX; } }
+
+    public static int PressY { get { return _pressY; } }
 
     /// <summary>The left button went up since the last <see cref="Poll"/>.</summary>
     public static bool LeftReleased { get { return _leftReleased; } }
@@ -56,7 +63,7 @@ public static unsafe class Input
             _mouseY = y;
             if (cls == Intuition.IDCMP_MOUSEBUTTONS)
             {
-                if (code == 0x68) { _leftDown = true; _leftPressed = true; }      // SELECTDOWN
+                if (code == 0x68) { _leftDown = true; _leftPressed = true; _pressX = x; _pressY = y; }      // SELECTDOWN
                 else if (code == 0xE8) { _leftDown = false; _leftReleased = true; } // SELECTUP
             }
             else if (cls == Intuition.IDCMP_RAWKEY)
@@ -85,7 +92,7 @@ public static unsafe class Input
     /// <summary>Host: applies queued events (called by <see cref="Poll"/> through <see cref="Apply"/>).</summary>
     internal static void Apply()
     {
-        if (_pendingPress) { _leftDown = true; _leftPressed = true; _pendingPress = false; }
+        if (_pendingPress) { _leftDown = true; _leftPressed = true; _pressX = _mouseX; _pressY = _mouseY; _pendingPress = false; }
         if (_pendingRelease) { _leftDown = false; _leftReleased = true; _pendingRelease = false; }
         if (_pendingKey != 0) { _lastKey = _pendingKey; _pendingKey = 0; }
     }

@@ -42,10 +42,12 @@
     <Compile Include="..\..\samples\language\Language.cs" Link="Samples\Language.cs" />
     <Compile Include="..\..\samples\screen\Screen.cs" Link="Samples\Screen.cs" />
     <Compile Include="..\..\samples\screen\Assets.g.cs" Link="Samples\Assets.g.cs" />
-    <Compile Include="..\..\samples\cards\Cards.cs" Link="Samples\Cards\Cards.cs" />
     <Compile Include="..\..\samples\cards\HigherLower.cs" Link="Samples\Cards\HigherLower.cs" />
     <Compile Include="..\..\samples\cards\Program.cs" Link="Samples\Cards\Program.cs" />
     <Compile Include="..\..\samples\cards\Assets.g.cs" Link="Samples\Cards\Assets.g.cs" />
+    <Compile Include="..\..\samples\rummy\Game.cs" Link="Samples\Rummy\Game.cs" />
+    <Compile Include="..\..\samples\rummy\Program.cs" Link="Samples\Rummy\Program.cs" />
+    <Compile Include="..\..\samples\rummy\Assets.g.cs" Link="Samples\Rummy\Assets.g.cs" />
   </ItemGroup>
 
 </Project>

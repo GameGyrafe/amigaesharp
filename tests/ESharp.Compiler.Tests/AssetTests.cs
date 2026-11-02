@@ -140,4 +140,12 @@ public class AssetTests
         Assert.Contains("CardsMask", generated.Source);
         Assert.Equal(44800, generated.Reports.Single().ChipBytes); // 3 planes + mask
     }
+
+    [Fact]
+    public void Committed_rummy_Assets_g_cs_matches_what_the_pipeline_generates()
+    {
+        var dir = Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "..", "samples", "rummy");
+        var generated = AssetBuilder.Build(Path.Combine(dir, "assets.json"));
+        Assert.Equal(File.ReadAllText(Path.Combine(dir, "Assets.g.cs")), generated.Source);
+    }
 }

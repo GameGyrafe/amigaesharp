@@ -319,6 +319,30 @@ Check(Add(2, 3) == 5, ""local function in the entry point"");
     }
 
     [Fact]
+    public void Out_variable_declared_in_an_if_condition_stays_in_scope_after_the_if()
+    {
+        if (!HasGcc) return;
+        const string members = @"
+static bool TryHalf(int n, out int half) { half = n / 2; return n % 2 == 0; }
+static int Run(int n)
+{
+    if (!TryHalf(n, out int h)) return -1;
+    int twice = h * 2;
+    if (TryHalf(h, out int q) && q > 0) twice += q;
+    return twice + h + q;
+}
+static void Check(bool ok, string name) { Dos.PutStr(ok ? ""ok "" : ""FAIL ""); Dos.PutStr(name); Dos.PutStr(""\n""); }
+";
+        const string body = @"
+Check(Run(7) == -1, ""early return"");
+Check(Run(8) == 8 + 2 + 4 + 2, ""variables used after their if"");
+";
+        var (code, output) = RunWithHostGcc(CompileOk(Program(members, body)));
+        Assert.Equal(0, code);
+        Assert.Equal("ok early return\nok variables used after their if\n", output);
+    }
+
+    [Fact]
     public void Lambdas_and_method_groups_become_function_pointers()
     {
         if (!HasGcc) return;
@@ -466,7 +490,7 @@ Check(list.Count == 0, ""destroy"");
     public void Cards_sample_compiles_to_masked_blits_and_input_polling()
     {
         var dir = Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "..", "samples", "cards");
-        var sources = new[] { "Cards.cs", "HigherLower.cs", "Program.cs", "Assets.g.cs" }
+        var sources = new[] { "HigherLower.cs", "Program.cs", "Assets.g.cs" }
             .Select(f => new SourceFile(f, File.ReadAllText(Path.Combine(dir, f)))).ToArray();
         var r = EsCompiler.Compile(sources, Targets.M68k.ToOptions());
         Assert.True(r.Success, string.Join("\n", r.Diagnostics));
@@ -474,6 +498,17 @@ Check(list.Count == 0, ""destroy"");
         Assert.Contains("GetMsg(", r.C!);
         Assert.Contains("ReplyMsg(", r.C!);
         Assert.Equal(44800, r.Chip.Sum(c => c.Bytes));
+    }
+
+    [Fact]
+    public void Rummy_sample_compiles_for_m68k()
+    {
+        var dir = Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "..", "samples", "rummy");
+        var sources = new[] { "Game.cs", "Program.cs", "Assets.g.cs" }
+            .Select(f => new SourceFile(f, File.ReadAllText(Path.Combine(dir, f)))).ToArray();
+        var r = EsCompiler.Compile(sources, Targets.M68k.ToOptions());
+        Assert.True(r.Success, string.Join("\n", r.Diagnostics));
+        Assert.Contains("BltMaskBitMapRastPort(", r.C!);
     }
 
     [Fact]

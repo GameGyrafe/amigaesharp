@@ -80,6 +80,15 @@ public class HostTargetTests
     }
 
     [Fact]
+    public void Rummy_sample_runs_on_the_host()
+    {
+        using var console = HostConsole.Capture();
+        RummyDemo.Program.Main();
+        Assert.Equal(RummyExpected.Output, console.Output);
+        Assert.False(ESharp.Platform.Video.IsOpen());
+    }
+
+    [Fact]
     public void Memory_sample_runs_on_the_host_without_leaks()
     {
         using var mem = HostMem.Capture();
@@ -285,6 +294,26 @@ internal static class CardsExpected
         "click on Lower guesses lower",
         "Esc quits",
         "nothing queued: nothing happens",
+    };
+}
+
+/// <summary>What samples/rummy prints on the host (the Amiga run has no scripted input checks).</summary>
+internal static class RummyExpected
+{
+    public static string Output => string.Concat(Names.Select(n => "ok " + n + "\n")) + "SHOT\nok screen closes\n";
+
+    private static readonly string[] Names =
+    {
+        "card points", "deadwood leaves only the king", "melds are numbered per group", "run of three",
+        "two ranks of a run plus a stray card are no meld", "ace is low only", "a set needs different suits",
+        "best discard is the king", "no melds: every point counts", "counting with lambdas",
+        "deal: 7 + 7 + pile + stock", "deal: 52 distinct cards", "player moves first", "same seed deals the same hand",
+        "cannot discard or knock before drawing", "draw from the stock", "no second draw",
+        "discard hands the move to the bot", "the bot draws and discards", "draw from the pile",
+        "bot-against-bot games all end cleanly", "both sides win some games", "games are not endless",
+        "screen opens", "table is drawn", "stock and pile are drawn", "the hand is drawn", "no eighth card yet",
+        "click on the table does nothing", "click on the stock draws", "eighth card and knock button appear",
+        "click on a card discards it", "bot replies", "Esc quits", "nothing queued: nothing happens",
     };
 }
 
