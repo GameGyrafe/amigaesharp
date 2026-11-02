@@ -28,5 +28,37 @@ public static unsafe class Exec
     /// <summary>exec.library AvailMem(), LVO -216.</summary>
     [AmigaLib("exec", -216)]
     public static extern uint AvailMem(uint requirements);
+
+    /// <summary>exec.library CreateMsgPort(), LVO -666 (v36).</summary>
+    [AmigaLib("exec", -666)]
+    public static extern void* CreateMsgPort();
+
+    /// <summary>exec.library DeleteMsgPort(), LVO -672.</summary>
+    [AmigaLib("exec", -672)]
+    public static extern void DeleteMsgPort(void* port);
+
+    /// <summary>exec.library OpenDevice(), LVO -444: 0 on success.</summary>
+    [AmigaLib("exec", -444)]
+    public static extern int OpenDevice(string devName, uint unit, void* ioRequest, uint flags);
+
+    /// <summary>exec.library CloseDevice(), LVO -450.</summary>
+    [AmigaLib("exec", -450)]
+    public static extern void CloseDevice(void* ioRequest);
+
+    /// <summary>exec.library CheckIO(), LVO -468: the request if it has completed, else null.</summary>
+    [AmigaLib("exec", -468)]
+    public static extern void* CheckIO(void* ioRequest);
+
+    /// <summary>exec.library WaitIO(), LVO -474.</summary>
+    [AmigaLib("exec", -474)]
+    public static extern int WaitIO(void* ioRequest);
+
+    /// <summary>exec.library AbortIO(), LVO -480.</summary>
+    [AmigaLib("exec", -480)]
+    public static extern int AbortIO(void* ioRequest);
+
+    /// <summary>amiga.lib BeginIO(): starts a request without clearing its flags (SendIO would clear audio's ADIOF_PERVOL).</summary>
+    [AmigaLib("alib", 0)]
+    public static extern void BeginIO(void* ioRequest);
 }
 #endif

@@ -48,6 +48,7 @@
     <Compile Include="..\..\samples\rummy\Game.cs" Link="Samples\Rummy\Game.cs" />
     <Compile Include="..\..\samples\rummy\Program.cs" Link="Samples\Rummy\Program.cs" />
     <Compile Include="..\..\samples\rummy\Assets.g.cs" Link="Samples\Rummy\Assets.g.cs" />
+    <Compile Include="..\..\samples\sound\Sound.cs" Link="Samples\Sound.cs" />
   </ItemGroup>
 
 </Project>

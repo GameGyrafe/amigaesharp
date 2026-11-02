@@ -50,6 +50,21 @@ public class HostTargetTests
     }
 
     [Fact]
+    public void Sound_sample_runs_on_the_host_without_leaks()
+    {
+        using var mem = HostMem.Capture();
+        using var console = HostConsole.Capture();
+        ESharp.Platform.Sound.HostReset();
+        SoundSample.Program.Main();
+        Assert.Equal(SoundExpected.Output, console.Output);
+        Assert.Equal(0, mem.LiveBlocks);
+        Assert.Equal(4, ESharp.Platform.Sound.HostPlays);
+        Assert.Equal(300, ESharp.Platform.Sound.HostLastPeriod);
+        Assert.Equal(64, ESharp.Platform.Sound.HostLastVolume);
+        ESharp.Platform.Sound.HostReset();
+    }
+
+    [Fact]
     public void Operators_sample_runs_on_the_host()
     {
         using var console = HostConsole.Capture();
@@ -131,6 +146,20 @@ internal static class Phase2Expected
         "constructor sets fields", "instance method calling another", "method mutates its receiver",
         "method on an array element", "constructor with early return", "constructor overloads",
         "method on a by-value parameter", "inline array in an instance method",
+    };
+}
+
+/// <summary>What samples/sound prints.</summary>
+internal static class SoundExpected
+{
+    public static string Output => string.Concat(Names.Select(n => "ok " + n + "\n"));
+
+    private static readonly string[] Names =
+    {
+        "period for a frequency", "samples are allocated", "sample contents", "audio.device opens and gives a channel",
+        "a playing voice is busy", "the voice is free when the sample has finished", "a looping sample keeps playing",
+        "two voices play together", "Stop silences every voice", "a voice can be reused after Stop",
+        "Close releases the channels", "samples are freed",
     };
 }
 

@@ -1796,7 +1796,7 @@ internal sealed class CEmitter
 
         var lib = GetAttribute(m, "AmigaLibAttribute");
         if (lib != null)
-            _headers.Add($"proto/{lib.ConstructorArguments[0].Value}.h");
+            _headers.Add(lib.ConstructorArguments[0].Value is "alib" ? "clib/alib_protos.h" : $"proto/{lib.ConstructorArguments[0].Value}.h");
 
         var argList = inv.ArgumentList.Arguments.Select(a => Argument(a, m));
         if (receiver != null) argList = argList.Prepend(receiver);

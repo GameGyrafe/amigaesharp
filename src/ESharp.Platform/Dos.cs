@@ -39,7 +39,7 @@ public static class Dos
     public static void FlushOutput() { Out.Flush(); }
 
     /// <summary>The host does not wait.</summary>
-    public static void Delay(int ticks) { }
+    public static void Delay(int ticks) { Sound.HostAdvance(ticks); }
 #endif
 
     /// <summary>Writes a decimal number.</summary>

@@ -1,5 +1,13 @@
 # Status
 
+## Sound (samples/sound)
+
+`Sound` (in `ESharp.Platform`) plays 8-bit samples through audio.device: up to four voices, one Paula channel each, allocated by `Sound.Open()`. Samples are generated in code (`Square`, `Triangle`, `Noise`; chip RAM, freed with `Sound.Free`), so no sound file is involved. `Play(in sample, period, volume, cycles)` uses a free voice (or the oldest), `Busy`, `Stop`, `Close`, and `PeriodFor(hz, length)` convert a pitch. On the host the calls are recorded (`Sound.HostPlays` etc.) and `Dos.Delay` lets voices finish, so game logic that plays sounds can be tested under dotnet.
+
+- Verified: `samples/sound` prints 12 `ok` lines on Kickstart 2.04 (A500+) and 3.1 (A1200) in FS-UAE, and on the host. That shows audio.device opens, accepts writes, reports a voice busy and then free, and that Stop and Close work.
+- **Not verified:** how it sounds (the headless emulator gives no audible output), real hardware, volume and period accuracy, PPC. Sample loading from files (IFF 8SVX, WAV) is not implemented.
+- Full ten-sample regression re-run after string interpolation: no failures on both ROMs.
+
 ## Regression after classes and interfaces
 
 All ten samples (hello, phase2, memory, generics, properties, operators, language, screen, cards, rummy) re-run on Kickstart 2.04 (A500+) and 3.1 (A1200) after the class and interface work: 360 checks ok, no failures. `samples/language` also passes with `--debug` (22 ok on both ROMs). After interface values were added the ten samples were run again: 366 ok, no failures, and `samples/language` passes with `--debug` too (26 ok on both ROMs). Not verified: PowerPC, real hardware.
@@ -113,7 +121,7 @@ Found by comparing what a real card game needs (heavy use of collections, tuples
 | Heap classes (non-static `class`) | Done: fields, auto-properties, methods, constructors, static members, `new` (also with an object initializer), `null`, reference equality, arrays of references, `this`. A class variable is a C pointer (`Foo *`), `new` is `calloc` (stops with exit 20 when memory runs out), and objects are freed with `Heap.Free(ref obj)` (frees and sets the variable to null); objects never freed are released when the program ends. There is no garbage collector: keep one owner per object. **No inheritance, no `virtual`/`abstract`/`override` (ES0007), no generic classes (ES0008), no instance field initializers or `: this(...)` in classes (ES0099, assign in the constructor)**. Class names live in C's single namespace, so a name that is also in the NDK headers (`Node`, `List`, `Window`, ...) fails in gcc: pick another. Two E# types with the same name in different namespaces are reported (ES0099) |
 | Interfaces | Plain-method interfaces (no properties, events, generic methods or default implementations). Two ways to use them: as generic constraints (`where T : IScorer`, monomorphised, any struct or class, static dispatch), and as **variable types** (`IRules rules = new FlatRules();`, fields, parameters, returns, statics): an interface value is a C struct of the object pointer and a table of functions, so the call is dynamic. Only **classes** can be converted to an interface value (a struct would need boxing: ES0099). `x == null`, `x is null`, `default`, equality (same object) and `Heap.Free(ref x)` (frees the object) work. Not done: interface-to-interface conversion, inheritance between interfaces, explicit casts back to the class (`as`/`is Foo`) |
 | Lambdas, method groups and delegates (`Func<>`, `Action<>`, `Predicate<>`, user `delegate` types) | Done for lambdas that **capture nothing** and static methods: a delegate is a C function pointer, a lambda becomes a C function. A lambda that uses an enclosing local, parameter or `this` is `ES0099`. Calls `f(x)` and `f.Invoke(x)` work. Not done: delegates as struct fields, `null` checks and `?.Invoke` on delegates (not tested), `delegate { }` anonymous methods, instance-method groups, combining delegates (`+=`) |
-| Still missing (needed by bigger games) | Capturing lambdas, LINQ (rewrite as loops), `long`/enum/float values in strings, inheritance, `as`/`is` type tests, `HashSet`/`Dictionary`, sound, AGA |
+| Still missing (needed by bigger games) | Capturing lambdas, LINQ (rewrite as loops), `long`/enum/float values in strings, inheritance, `as`/`is` type tests, `HashSet`/`Dictionary`, AGA |
 
 ## Phase 4: card demo (in progress)
 
@@ -133,7 +141,7 @@ Screenshot: [images/phase4-cards-a1200.png](images/phase4-cards-a1200.png) (Kick
 | Emitter: `null` as a span argument | Fixed: it was emitted as a call to a BCL conversion that does not exist in C (found when the screen sample failed to compile after the library change); implicit conversions are only applied for operators written in E# source |
 | m68k: `samples/cards` in FS-UAE 3.2.35 | Done: 15/15 self-checks plus scripted play (3 clicks on Higher/Lower, right answers, Esc quits cleanly back to Workbench) on Kickstart 2.04 (A500+) and 3.1 (A1200, also built with `--debug`). All other samples re-run on both ROMs after the changes: unchanged |
 | Host tests | Done: host run with scripted input (19 checks), drift test for the generated sheet, emit shape (`BltMaskBitMapRastPort`, `GetMsg`), null span, mask |
-| Not verified | Keyboard other than Esc, mouse moves (`MOUSEMOVE` is read but only the position is used), real mouse hardware, PPC targets, 1.x-style left-handed button swaps, timing/frame counters beyond `Delay`, dithering, IFF ILBM, samples/sound |
+| Not verified | Keyboard other than Esc, mouse moves (`MOUSEMOVE` is read but only the position is used), real mouse hardware, PPC targets, 1.x-style left-handed button swaps, timing/frame counters beyond `Delay`, dithering, IFF ILBM, how samples/sound sounds |
 
 ## Next
 

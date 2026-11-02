@@ -687,6 +687,17 @@ Check(list.Count == 0, ""destroy"");
     }
 
     [Fact]
+    public void Sound_sample_compiles_for_m68k_and_calls_audio_device()
+    {
+        var path = Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "..", "samples", "sound", "Sound.cs");
+        var r = EsCompiler.Compile(new[] { new SourceFile(path, File.ReadAllText(path)) }, Targets.M68k.ToOptions());
+        Assert.True(r.Success, string.Join("\n", r.Diagnostics));
+        Assert.Contains("OpenDevice(", r.C!);
+        Assert.Contains("BeginIO(", r.C!);
+        Assert.Contains("#include <clib/alib_protos.h>", r.C!);
+    }
+
+    [Fact]
     public void Property_assignment_used_as_a_value_reports_ES0099()
     {
         var r = Compile(Program(
