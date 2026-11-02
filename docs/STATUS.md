@@ -99,7 +99,8 @@ Found by comparing what a real card game needs (heavy use of collections, tuples
 | Static constructors, `: this(...)` constructor initializers (structs) | Done. **Static constructors run once at start-up in type order**, not lazily like in C#. Before this fix a static constructor was silently ignored |
 | `Vec<T>` (`ESharp.Platform`, named so as not to clash with `System.Collections.Generic.List<T>`): growable list of an unmanaged `T` | Done: `Add`, `Insert`, `RemoveAt`, `SwapRemoveAt`, `Clear`, indexer, `Count`, `Capacity`, `AsSpan`, `Destroy`; no exceptions (false / zero value). Counted in the chip budget by its initial capacity only |
 | `Dos.PutInt` | Done |
-| Still missing (needed by bigger games) | Lambdas/delegates (non-capturing ones could become function pointers), LINQ (rewrite as loops), string interpolation and a string buffer, classes and interfaces (ES0007/ES0009), `HashSet`/`Dictionary`, sound, AGA |
+| Lambdas, method groups and delegates (`Func<>`, `Action<>`, `Predicate<>`, user `delegate` types) | Done for lambdas that **capture nothing** and static methods: a delegate is a C function pointer, a lambda becomes a C function. A lambda that uses an enclosing local, parameter or `this` is `ES0099`. Calls `f(x)` and `f.Invoke(x)` work. Not done: delegates as struct fields, `null` checks and `?.Invoke` on delegates (not tested), `delegate { }` anonymous methods, instance-method groups, combining delegates (`+=`) |
+| Still missing (needed by bigger games) | Capturing lambdas, LINQ (rewrite as loops), string interpolation and a string buffer, classes and interfaces (ES0007/ES0009), `HashSet`/`Dictionary`, sound, AGA |
 
 ## Phase 4: card demo (in progress)
 
@@ -132,7 +133,7 @@ Screenshot: [images/phase4-cards-a1200.png](images/phase4-cards-a1200.png) (Kick
 
 ## Known limits of the emitter
 
-Reported as `ES0099` rather than miscompiled: string concatenation and interpolation, lambdas and delegates, classes and interfaces (ES0007/ES0009), `ref` locals and returns, `foreach` over anything but arrays and spans, positional/list patterns, `[InlineAsm]`/`[Interrupt]` bodies.
+Reported as `ES0099` rather than miscompiled: string concatenation and interpolation, capturing lambdas, delegates in struct fields, classes and interfaces (ES0007/ES0009), `ref` locals and returns, `foreach` over anything but arrays and spans, positional/list patterns, `[InlineAsm]`/`[Interrupt]` bodies.
 
 Namespaces are dropped when naming C symbols, so two types with the same name in different
 namespaces would collide.

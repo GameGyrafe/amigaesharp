@@ -319,6 +319,66 @@ Check(Add(2, 3) == 5, ""local function in the entry point"");
     }
 
     [Fact]
+    public void Lambdas_and_method_groups_become_function_pointers()
+    {
+        if (!HasGcc) return;
+        const string members = @"
+delegate int Combine(int a, int b);
+struct Card { public int Rank; public int Suit; }
+static int Triple(int x) { return x * 3; }
+static int CountIf(System.ReadOnlySpan<Card> cards, System.Func<Card, bool> test)
+{
+    int n = 0;
+    for (int i = 0; i < cards.Length; i++) if (test(cards[i])) n++;
+    return n;
+}
+static int Fold(System.ReadOnlySpan<int> xs, int start, Combine f)
+{
+    int acc = start;
+    for (int i = 0; i < xs.Length; i++) acc = f(acc, xs[i]);
+    return acc;
+}
+static void Each(System.Span<int> xs, System.Action<int> act) { for (int i = 0; i < xs.Length; i++) act(xs[i]); }
+static int Sum;
+static void Add(int v) { Sum += v; }
+static int Apply(System.Func<int, int> f, int v) { return f.Invoke(v); }
+static System.Func<int, int> Pick(bool dbl) { if (dbl) return x => x * 2; return Triple; }
+static void Check(bool ok, string name) { Dos.PutStr(ok ? ""ok "" : ""FAIL ""); Dos.PutStr(name); Dos.PutStr(""\n""); }
+";
+        const string body = @"
+Card[] hand = new Card[4];
+for (int i = 0; i < 4; i++) { hand[i].Rank = i + 1; hand[i].Suit = i % 2; }
+Check(CountIf(hand, c => c.Suit == 1) == 2, ""expression lambda as a predicate"");
+Check(CountIf(hand, (Card c) => { return c.Rank > 2; }) == 2, ""block lambda"");
+int[] xs = new int[3]; xs[0] = 1; xs[1] = 2; xs[2] = 3;
+Check(Fold(xs, 0, (a, b) => a + b) == 6, ""user delegate type with two parameters"");
+Check(Fold(xs, 1, (a, b) => a * b) == 6, ""second lambda gets its own function"");
+Sum = 0;
+Each(xs, Add);
+Check(Sum == 6, ""method group converted to Action"");
+Each(xs, v => Sum += v * 10);
+Check(Sum == 66, ""lambda that assigns a static field"");
+System.Func<int, int> f = Triple;
+Check(f(4) == 12 && Apply(f, 5) == 15, ""delegate variable, call and Invoke"");
+Check(Pick(true)(7) == 14 && Pick(false)(7) == 21, ""delegate returned from a method"");
+System.Func<int> zero = () => 0;
+Check(zero() == 0, ""lambda without parameters"");
+";
+        var (code, output) = RunWithHostGcc(CompileOk(Program(members, body)));
+        Assert.Equal(0, code);
+        Assert.Equal(string.Concat(new[] { "expression lambda as a predicate", "block lambda", "user delegate type with two parameters",
+            "second lambda gets its own function", "method group converted to Action", "lambda that assigns a static field",
+            "delegate variable, call and Invoke", "delegate returned from a method", "lambda without parameters" }.Select(n => "ok " + n + "\n")), output);
+    }
+
+    [Fact]
+    public void Lambda_that_captures_a_local_reports_ES0099()
+    {
+        var r = Compile(Program("static int Run(System.Func<int, int> f) { return f(1); }", "int k = 3; Dos.PutStr(Run(x => x + k) == 4 ? \"y\" : \"n\");"));
+        Assert.Contains("ES0099", ErrorIds(r));
+    }
+
+    [Fact]
     public void Local_function_that_captures_a_local_reports_ES0099()
     {
         var r = Compile(Program("", "int x = 3; int Get() { return x; } Dos.PutStr(Get() == 3 ? \"y\" : \"n\");"));

@@ -100,6 +100,8 @@ internal sealed class CEmitter
             .ToList();
 
         methods.AddRange(reachable.Where(m => m.MethodKind == MethodKind.LocalFunction));
+        methods.AddRange(reachable.Where(m => m.MethodKind == MethodKind.AnonymousFunction)
+            .GroupBy(m => FuncName(m)).Select(g => g.First()));
         _staticConstructors.AddRange(methods.Where(m => m.MethodKind == MethodKind.StaticConstructor));
         foreach (var m in methods) Line(Prototype(m) + ";");
         if (methods.Count > 0) Line("");
@@ -159,6 +161,7 @@ internal sealed class CEmitter
     {
         BaseMethodDeclarationSyntax b => (b.Body, b.ExpressionBody),
         LocalFunctionStatementSyntax lf => (lf.Body, lf.ExpressionBody),
+        LambdaExpressionSyntax lam => (lam.Block, null),
         AccessorDeclarationSyntax a => (a.Body, a.ExpressionBody),
         ArrowExpressionClauseSyntax x => (null, x),
         PropertyDeclarationSyntax p => (null, p.ExpressionBody),
@@ -336,6 +339,13 @@ internal sealed class CEmitter
         if (HasAttribute(m, "AmigaLibAttribute")) return m.Name;
         if (m.MethodKind == MethodKind.LocalFunction && m.ContainingSymbol is IMethodSymbol outer)
             return FuncName(outer) + "_" + m.Name;
+        if (m.MethodKind == MethodKind.AnonymousFunction)
+        {
+            var at = m.DeclaringSyntaxReferences.First();
+            uint h = 17;
+            foreach (var ch in at.SyntaxTree.FilePath) h = h * 31 + ch;
+            return $"ES_lambda_{h:x}_{at.Span.Start}";
+        }
         if (m.MethodKind == MethodKind.StaticConstructor) return $"{TypeName(m.ContainingType)}_cctor";
         if (m.MethodKind == MethodKind.Constructor)
         {
@@ -389,6 +399,8 @@ internal sealed class CEmitter
                 return SpanType(sp, at);
             case INamedTypeSymbol { IsTupleType: true } tuple:
                 return TupleType(tuple, at);
+            case INamedTypeSymbol { TypeKind: TypeKind.Delegate } del:
+                return DelegateType(del, at);
             case INamedTypeSymbol { TypeKind: TypeKind.Enum or TypeKind.Struct } n:
                 return TypeName(n);
             case IArrayTypeSymbol:
@@ -413,6 +425,26 @@ internal sealed class CEmitter
         }
         return name;
     }
+
+    /// <summary>
+    /// A delegate type (Func, Action, Predicate, a user's <c>delegate</c>) is a C function pointer. Only lambdas that
+    /// capture nothing and static methods can be converted to it, so there is no closure to carry around.
+    /// </summary>
+    private string DelegateType(INamedTypeSymbol del, SyntaxNode at)
+    {
+        var invoke = del.DelegateInvokeMethod!;
+        var ps = invoke.Parameters.Select(p => p.RefKind == RefKind.None ? CType(p.Type, at) : CType(p.Type, at) + " *").ToList();
+        var signature = $"{CType(invoke.ReturnType, at)} (*{{0}})({(ps.Count == 0 ? "void" : string.Join(", ", ps))})";
+        if (!_delegateNames.TryGetValue(signature, out var name))
+        {
+            name = "ES_Fn_" + _delegateNames.Count;
+            _delegateNames[signature] = name;
+            _spans[name] = $"typedef {string.Format(signature, name)};\n";
+        }
+        return name;
+    }
+
+    private readonly Dictionary<string, string> _delegateNames = new();
 
     /// <summary>C struct for a value tuple: fields Item1, Item2, ...</summary>
     private string TupleType(INamedTypeSymbol tuple, SyntaxNode at)
@@ -581,7 +613,7 @@ internal sealed class CEmitter
     {
         var node = m.DeclaringSyntaxReferences.First().GetSyntax();
         var parts = new List<string>();
-        if (!m.IsStatic && m.MethodKind is not (MethodKind.Constructor or MethodKind.LocalFunction))
+        if (!m.IsStatic && m.MethodKind is not (MethodKind.Constructor or MethodKind.LocalFunction or MethodKind.AnonymousFunction))
             parts.Add($"{CType(m.ContainingType, node)} *{ThisName}");
         parts.AddRange(m.Parameters.Select(p => p.RefKind switch
         {
@@ -608,7 +640,8 @@ internal sealed class CEmitter
         Line("{");
         _indent++;
         var isCtor = m.MethodKind == MethodKind.Constructor;
-        _this = isCtor ? ThisKind.Value : m.IsStatic || m.MethodKind == MethodKind.LocalFunction ? ThisKind.None : ThisKind.Pointer;
+        _this = isCtor ? ThisKind.Value : m.IsStatic || m.MethodKind is MethodKind.LocalFunction or MethodKind.AnonymousFunction ? ThisKind.None : ThisKind.Pointer;
+        if (m.MethodKind == MethodKind.AnonymousFunction) CheckNoCapture(decl, "lambda");
         if (isCtor) Line($"{CType(m.ContainingType, decl)} {ThisName} = {{0}};");
         if (isCtor && decl is ConstructorDeclarationSyntax { Initializer: { } init } &&
             Model(init).GetSymbolInfo(init).Symbol is IMethodSymbol { IsImplicitlyDeclared: false } chained)
@@ -617,11 +650,12 @@ internal sealed class CEmitter
         {
             foreach (var st in block.Statements) Statement(st);
         }
-        else if (arrow != null)
+        else if (arrow != null || decl is LambdaExpressionSyntax)
         {
-            LineDirective(arrow.GetLocation());
-            foreach (var h in HoistedDeclarations(new SyntaxNode[] { arrow.Expression })) Line(h);
-            var e = Expr(arrow.Expression, top: true);
+            var body = arrow?.Expression ?? ((LambdaExpressionSyntax)decl).ExpressionBody!;
+            LineDirective(body.GetLocation());
+            foreach (var h in HoistedDeclarations(new SyntaxNode[] { body })) Line(h);
+            var e = Expr(body, top: true);
             Line(m.ReturnsVoid ? e + ";" : "return " + e + ";");
         }
         if (isCtor) Line($"return {ThisName};");
@@ -824,7 +858,7 @@ internal sealed class CEmitter
                 break;
 
             case LocalFunctionStatementSyntax lf:
-                CheckNoCapture(lf);
+                CheckNoCapture(lf, "local function");
                 break; // emitted as a function of its own
 
 
@@ -1041,6 +1075,9 @@ internal sealed class CEmitter
             case IdentifierNameSyntax id:
                 return Name(id);
 
+            case LambdaExpressionSyntax lam:
+                return Model(lam).GetSymbolInfo(lam).Symbol is IMethodSymbol lm ? FuncName(lm) : Unsupported(lam, "lambda");
+
             case MemberAccessExpressionSyntax ma:
                 return MemberAccess(ma);
 
@@ -1240,6 +1277,8 @@ internal sealed class CEmitter
                 return FieldRef(f, id);
             case IPropertySymbol p:
                 return PropertyRead(p, null, id);
+            case IMethodSymbol { IsStatic: true, MethodKind: MethodKind.Ordinary } mg:
+                return FuncName(mg);   // a method group converted to a delegate
             default:
                 Unsupported(id, $"identifier '{id.Identifier.Text}'");
                 return id.Identifier.Text;
@@ -1278,6 +1317,8 @@ internal sealed class CEmitter
             if (recvType?.SpecialType == SpecialType.System_String)
                 return $"((int)__builtin_strlen({Expr(ma.Expression)}))";
         }
+        if (sym is IMethodSymbol { IsStatic: true, MethodKind: MethodKind.Ordinary } group)
+            return FuncName(group);   // a method group converted to a delegate
         if (sym is IPropertySymbol prop)
             return PropertyRead(prop, ma.Expression, ma);
         if (sym is IFieldSymbol f)
@@ -1347,6 +1388,13 @@ internal sealed class CEmitter
         {
             Unsupported(inv, "call");
             return "0";
+        }
+
+        if (m.MethodKind == MethodKind.DelegateInvoke)
+        {
+            // f(x) and f.Invoke(x) call through the function pointer.
+            var callee = inv.Expression is MemberAccessExpressionSyntax { Name.Identifier.Text: "Invoke" } inva ? inva.Expression : inv.Expression;
+            return $"{Expr(callee)}({string.Join(", ", inv.ArgumentList.Arguments.Select(a => Argument(a, m)))})";
         }
 
         if (IsSpan(m.ContainingType) && m.Name == "Slice" && inv.Expression is MemberAccessExpressionSyntax sliceAccess)
@@ -1508,7 +1556,7 @@ internal sealed class CEmitter
     }
 
     /// <summary>Local functions become C functions of their own, so they may not use the locals, parameters or 'this' of the method around them.</summary>
-    private void CheckNoCapture(LocalFunctionStatementSyntax lf)
+    private void CheckNoCapture(SyntaxNode lf, string what)
     {
         var model = Model(lf);
         foreach (var n in lf.DescendantNodes())
@@ -1519,7 +1567,9 @@ internal sealed class CEmitter
                 ThisExpressionSyntax => model.GetEnclosingSymbol(n.SpanStart),
                 _ => null,
             };
-            if (n is ThisExpressionSyntax) { Unsupported(n, "local function that uses 'this'"); continue; }
+            if (n is ThisExpressionSyntax) { Unsupported(n, $"{what} that uses 'this'"); continue; }
+            // 'c.Suit': the name after a dot belongs to the thing before it, not to an implicit 'this'.
+            if (n.Parent is MemberAccessExpressionSyntax dot && dot.Name == n) continue;
             var captured = sym switch
             {
                 ILocalSymbol or IParameterSymbol => !sym.DeclaringSyntaxReferences.Any(r => r.SyntaxTree == lf.SyntaxTree && lf.Span.Contains(r.Span)),
@@ -1527,7 +1577,7 @@ internal sealed class CEmitter
                 IMethodSymbol { IsStatic: false, MethodKind: MethodKind.Ordinary } => true,
                 _ => false,
             };
-            if (captured) Unsupported(n, $"local function that captures '{n}'; pass it as a parameter or make it a static method");
+            if (captured) Unsupported(n, $"{what} that captures '{n}'; pass it as a parameter or make it a static method");
         }
     }
 

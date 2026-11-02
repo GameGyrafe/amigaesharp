@@ -64,6 +64,22 @@ public static class Program
 
     static int Rank(Item it) => it switch { { Id: 0 } => 100, { Weight: > 5 } => 50, _ => 1 };
 
+    static int CountWhere(ReadOnlySpan<Item> items, Func<Item, bool> test)
+    {
+        int n = 0;
+        for (int i = 0; i < items.Length; i++) if (test(items[i])) n++;
+        return n;
+    }
+
+    static int Fold(ReadOnlySpan<int> xs, int start, Func<int, int, int> f)
+    {
+        int acc = start;
+        for (int i = 0; i < xs.Length; i++) acc = f(acc, xs[i]);
+        return acc;
+    }
+
+    static int Double(int x) => x * 2;
+
     static int Fact(int n)
     {
         int Go(int k) { return k <= 1 ? 1 : k * Go(k - 1); }
@@ -107,7 +123,14 @@ public static class Program
         Span<Item> items = list.AsSpan();
         foreach (Item it in items) total += it.Weight;
         Check(total == 90, "list as span");
+        Check(CountWhere(list.AsSpan(), it => it.Weight > 5) == 7 && CountWhere(list.AsSpan(), it => it.Id < 100) == 10, "lambda as a predicate");
         list.Destroy();
         Check(list.Count == 0, "list destroy");
+
+        int[] nums = new int[4];
+        for (int i = 0; i < nums.Length; i++) nums[i] = i + 1;
+        Check(Fold(nums, 0, (a, b) => a + b) == 10 && Fold(nums, 1, (a, b) => a * b) == 24, "lambdas with two parameters");
+        Func<int, int> twice = Double;
+        Check(twice(21) == 42 && Fold(nums, 0, (a, b) => a + Double(b)) == 20, "method group and delegate variable");
     }
 }

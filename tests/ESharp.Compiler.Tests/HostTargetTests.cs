@@ -297,6 +297,7 @@ internal static class LanguageExpected
     {
         "out declaration", "ref swap", "in parameter", "named tuple elements", "deconstruction", "tuple swap",
         "switch expression", "property patterns", "is patterns", "local function", "static constructor",
-        "this initializer", "list add insert remove", "list as span", "list destroy",
+        "this initializer", "list add insert remove", "list as span", "lambda as a predicate", "list destroy",
+        "lambdas with two parameters", "method group and delegate variable",
     };
 }
