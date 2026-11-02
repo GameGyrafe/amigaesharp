@@ -31,6 +31,9 @@ public sealed class PlanarImage
     public byte[] Indices { get; }
 
     public int BytesPerRow => (Width + 15) / 16 * 2;
+
+    /// <summary>One bitplane laid out like a plane of <see cref="Planes"/>: a 1 bit marks an opaque pixel (alpha of 128 or more). Used for masked blits.</summary>
+    public byte[] Mask { get; init; } = Array.Empty<byte>();
 }
 
 public static class Planar
@@ -39,7 +42,7 @@ public static class Planar
     /// Reduces <paramref name="image"/> to at most <paramref name="maxColors"/> colours and packs it into bitplanes.
     /// Colours are first rounded to 4 bits per channel (what OCS can show). If that leaves no more than
     /// <paramref name="maxColors"/> distinct colours the mapping is exact, otherwise median cut chooses the palette.
-    /// Pixels with alpha below 128 become palette entry 0, which is black. No dithering yet.
+    /// Pixels with alpha below 128 become palette entry 0, which is black (opaque black pixels use it too; the mask tells them apart). No dithering yet.
     /// </summary>
     public static PlanarImage Convert(RgbaImage image, int maxColors)
     {
@@ -74,7 +77,7 @@ public static class Planar
             if (transparent[i]) { indices[i] = 0; continue; }
             if (!cache.TryGetValue(rgb12[i], out var best))
             {
-                best = Nearest(palette, rgb12[i], hasTransparent ? 1 : 0);
+                best = Nearest(palette, rgb12[i], 0); // black may use entry 0: the mask, not the index, says what is transparent
                 cache[rgb12[i]] = best;
             }
             indices[i] = (byte)best;
@@ -88,7 +91,13 @@ public static class Planar
                     if ((indices[y * image.Width + x] >> p & 1) != 0)
                         planes[p * bytesPerRow * image.Height + y * bytesPerRow + (x >> 3)] |= (byte)(0x80 >> (x & 7));
 
-        return new PlanarImage(image.Width, image.Height, depth, planes, entries, indices);
+        var mask = new byte[bytesPerRow * image.Height];
+        for (var y = 0; y < image.Height; y++)
+            for (var x = 0; x < image.Width; x++)
+                if (!transparent[y * image.Width + x])
+                    mask[y * bytesPerRow + (x >> 3)] |= (byte)(0x80 >> (x & 7));
+
+        return new PlanarImage(image.Width, image.Height, depth, planes, entries, indices) { Mask = mask };
     }
 
     private static int Round4(int v) => (v * 15 + 127) / 255;

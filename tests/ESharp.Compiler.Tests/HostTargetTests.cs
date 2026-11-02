@@ -60,6 +60,16 @@ public class HostTargetTests
     }
 
     [Fact]
+    public void Cards_sample_runs_on_the_host_and_draws_masked_sprites()
+    {
+        using var console = HostConsole.Capture();
+        CardsDemo.Program.Main();
+        Assert.Equal(CardsExpected.Output, console.Output);
+        Assert.False(ESharp.Platform.Video.IsOpen());
+        Assert.Equal(8, ESharp.Platform.Video.HostPixels[0]);   // the table colour at the top left corner
+    }
+
+    [Fact]
     public void Memory_sample_runs_on_the_host_without_leaks()
     {
         using var mem = HostMem.Capture();
@@ -231,5 +241,34 @@ internal static class ScreenExpected
         "blitted card matches the planar data pixel for pixel",
         "card centre is not background",
         "blit does not spill outside the card",
+    };
+}
+
+/// <summary>What samples/cards prints on the host (the Amiga run has no scripted input checks).</summary>
+internal static class CardsExpected
+{
+    public static string Output => string.Concat(Names.Select(n => "ok " + n + "\n")) + "SHOT\nok screen closes\n";
+
+    private static readonly string[] Names =
+    {
+        "deal: 52 distinct cards",
+        "rank and suit",
+        "same seed gives the same shuffle",
+        "other seed shuffles again",
+        "deck with eight suits",
+        "streak matches an independent count",
+        "game ends on a miss",
+        "no guesses after the end",
+        "screen opens",
+        "buttons are drawn",
+        "button edge is exact",
+        "masked card matches the sheet pixel for pixel",
+        "masked corner shows the table",
+        "card face is drawn",
+        "click outside the buttons does nothing",
+        "click on Higher guesses higher",
+        "click on Lower guesses lower",
+        "Esc quits",
+        "nothing queued: nothing happens",
     };
 }

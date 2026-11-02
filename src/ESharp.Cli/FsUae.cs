@@ -11,7 +11,7 @@ namespace ESharp.Cli;
 /// </summary>
 internal static class FsUae
 {
-    public static int Run(string exe, bool headless, TimeSpan timeout, string? kickstart, string model = "A500", string? fsuaePath = null, string? screenshot = null)
+    public static int Run(string exe, bool headless, TimeSpan timeout, string? kickstart, string model = "A500", string? fsuaePath = null, string? screenshot = null, string? input = null)
     {
         var name = Path.GetFileName(exe);
         var runDir = Path.Combine(Path.GetDirectoryName(Path.GetFullPath(exe))!, "run");
@@ -77,7 +77,7 @@ internal static class FsUae
                 var marker = Path.Combine(dh0, "done");
                 var outPath = Path.Combine(dh0, "out.txt");
                 var deadline = DateTime.UtcNow + timeout;
-                var shot = screenshot == null;
+                var shot = screenshot == null && input == null;
                 while (!File.Exists(marker) && !proc.HasExited && DateTime.UtcNow < deadline)
                 {
                     if (!shot && OutputContains(outPath, "SHOT"))
@@ -85,8 +85,12 @@ internal static class FsUae
                         Thread.Sleep(1000); // let the emulator draw the frame
                         shot = true;
                         var display = psi.Environment.TryGetValue("DISPLAY", out var d) && d != null ? d : Environment.GetEnvironmentVariable("DISPLAY");
-                        if (!Screenshot.Capture(display, screenshot!)) Console.Error.WriteLine("esharp: could not capture the screen (is xwd installed?)");
-                        else Console.Error.WriteLine($"Saved screenshot {screenshot}");
+                        if (input != null && !Xtest.Run(display, input)) Console.Error.WriteLine("esharp: could not send input (needs an X display and libXtst)");
+                        if (screenshot != null)
+                        {
+                            if (!Screenshot.Capture(display, screenshot)) Console.Error.WriteLine("esharp: could not capture the screen (is xwd installed?)");
+                            else Console.Error.WriteLine($"Saved screenshot {screenshot}");
+                        }
                     }
                     Thread.Sleep(250);
                 }

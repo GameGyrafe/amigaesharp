@@ -38,6 +38,8 @@ Run options (build options also apply; run is m68k only):
   --model <name>    Amiga model for FS-UAE: A500 (default), A500+, A600, A1200
   --fsuae <path>    FS-UAE executable (or set ESHARP_FSUAE)
   --screenshot <png> Headless only: when the program prints SHOT, save the emulator screen to a PNG (needs xwd)
+  --input <script>  Headless only: after SHOT send mouse/keyboard input to the emulator (before the screenshot):
+                    ""click X,Y;key 9"" with display pixels and X11 key codes (needs libXtst)
 
 Targets:
 " + string.Join("\n", Targets.All.Select(t => $"  {t.Name,-9} {t.Description}")) + "\n";
@@ -257,6 +259,7 @@ public static class Program
         string model = "A500";
         string? fsuae = null;
         string? screenshot = null;
+        string? input = null;
         var buildArgs = new List<string>();
         for (var i = 0; i < args.Length; i++)
         {
@@ -268,6 +271,7 @@ public static class Program
                 case "--model" when i + 1 < args.Length: model = args[++i]; break;
                 case "--fsuae" when i + 1 < args.Length: fsuae = args[++i]; break;
                 case "--screenshot" when i + 1 < args.Length: screenshot = args[++i]; break;
+                case "--input" when i + 1 < args.Length: input = args[++i]; break;
                 default: buildArgs.Add(args[i]); break;
             }
         }
@@ -285,7 +289,7 @@ public static class Program
 
         var rc = Build(buildArgs.ToArray(), out var exe);
         if (rc != 0 || exe == null) return rc;
-        return FsUae.Run(exe, headless, TimeSpan.FromSeconds(timeout), kickstart, model, fsuae, screenshot);
+        return FsUae.Run(exe, headless, TimeSpan.FromSeconds(timeout), kickstart, model, fsuae, screenshot, input);
     }
 
     private static List<string> CollectSources(string path)

@@ -15,11 +15,14 @@ public static unsafe class Intuition
     public const uint WA_Left = 0x80000064, WA_Top = 0x80000065, WA_Width = 0x80000066, WA_Height = 0x80000067;
     public const uint WA_CustomScreen = 0x80000070, WA_Borderless = 0x80000088, WA_Backdrop = 0x80000085;
     public const uint WA_Activate = 0x80000089, WA_RMBTrap = 0x8000008a, WA_SimpleRefresh = 0x8000008c;
-    public const uint WA_NoCareRefresh = 0x80000087;
+    public const uint WA_NoCareRefresh = 0x80000087, WA_IDCMP = 0x8000006a, WA_ReportMouse = 0x80000086;
+    public const uint IDCMP_MOUSEBUTTONS = 0x8, IDCMP_MOUSEMOVE = 0x10, IDCMP_RAWKEY = 0x400;
     public const uint CustomScreen = 0xf;
 
     /// <summary>Offsets in struct Window and struct Screen (checked against the NDK headers).</summary>
-    public const int WindowRPort = 50, ScreenViewPort = 44;
+    public const int WindowRPort = 50, ScreenViewPort = 44, WindowUserPort = 86;
+    /// <summary>Offsets in struct IntuiMessage.</summary>
+    public const int MsgClass = 20, MsgCode = 24, MsgMouseX = 32, MsgMouseY = 34;
 }
 
 /// <summary>graphics.library bindings (v37).</summary>
@@ -31,6 +34,8 @@ public static unsafe class Graphics
     [AmigaLib("graphics", -318)] public static extern int ReadPixel(void* rastPort, int x, int y);
     [AmigaLib("graphics", -606)] public static extern int BltBitMapRastPort(void* srcBitMap, int xSrc, int ySrc,
         void* destRastPort, int xDest, int yDest, int xSize, int ySize, int minterm);
+    [AmigaLib("graphics", -636)] public static extern void BltMaskBitMapRastPort(void* srcBitMap, int xSrc, int ySrc,
+        void* destRastPort, int xDest, int yDest, int xSize, int ySize, uint minterm, void* bltMask);
     [AmigaLib("graphics", -270)] public static extern void WaitTOF();
 }
 #endif

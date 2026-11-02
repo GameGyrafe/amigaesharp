@@ -17,6 +17,14 @@ public static unsafe class Exec
     [AmigaLib("exec", -690)]
     public static extern void FreeVec(byte* memoryBlock);
 
+    /// <summary>exec.library GetMsg(), LVO -372: the next message at a port, or null.</summary>
+    [AmigaLib("exec", -372)]
+    public static extern void* GetMsg(void* port);
+
+    /// <summary>exec.library ReplyMsg(), LVO -378.</summary>
+    [AmigaLib("exec", -378)]
+    public static extern void ReplyMsg(void* message);
+
     /// <summary>exec.library AvailMem(), LVO -216.</summary>
     [AmigaLib("exec", -216)]
     public static extern uint AvailMem(uint requirements);

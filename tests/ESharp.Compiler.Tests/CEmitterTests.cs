@@ -184,6 +184,32 @@ Dos.PutStr(Pick(Max));
     }
 
     [Fact]
+    public void Null_passed_as_a_span_is_the_empty_span()
+    {
+        if (!HasGcc) return;
+        var c = CompileOk(Program(
+            "static int Len(System.ReadOnlySpan<byte> s) { return s.Length; }",
+            "if (Len(null) == 0) Dos.PutStr(\"empty\\n\");"));
+        var (code, output) = RunWithHostGcc(c);
+        Assert.Equal(0, code);
+        Assert.Equal("empty\n", output);
+    }
+
+    [Fact]
+    public void Cards_sample_compiles_to_masked_blits_and_input_polling()
+    {
+        var dir = Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "..", "samples", "cards");
+        var sources = new[] { "Cards.cs", "HigherLower.cs", "Program.cs", "Assets.g.cs" }
+            .Select(f => new SourceFile(f, File.ReadAllText(Path.Combine(dir, f)))).ToArray();
+        var r = EsCompiler.Compile(sources, Targets.M68k.ToOptions());
+        Assert.True(r.Success, string.Join("\n", r.Diagnostics));
+        Assert.Contains("BltMaskBitMapRastPort(", r.C!);
+        Assert.Contains("GetMsg(", r.C!);
+        Assert.Contains("ReplyMsg(", r.C!);
+        Assert.Equal(44800, r.Chip.Sum(c => c.Bytes));
+    }
+
+    [Fact]
     public void Property_assignment_used_as_a_value_reports_ES0099()
     {
         var r = Compile(Program(

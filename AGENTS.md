@@ -15,6 +15,8 @@ dotnet run --project src/ESharp.Cli -- build samples/hello --target m68k --docke
 dotnet run --project src/ESharp.Cli -- run samples/hello --docker <image> --headless        # m68k in FS-UAE
 dotnet run --project src/ESharp.Cli -- assets samples/screen                                # PNG -> Assets.g.cs
 dotnet run --project src/ESharp.Cli -- run samples/screen --docker <image> --headless --screenshot shot.png
+dotnet run --project src/ESharp.Cli -- run samples/cards --docker <image> --headless --input "click 400,300;rel -80,50;press;key 9"   # scripted mouse/keys (XTEST)
+dotnet run --project tools/CardArt -- samples/cards/cards.png                               # redraw the card sprite sheet
 docker build -t esharp-amiga-toolchain docker && docker/smoke-test.sh    # combined toolchain image
 ```
 
@@ -65,4 +67,4 @@ is Kickstart 2.04 on `--model A500+` and Kickstart 3.1 (40.069) on `--model A120
 
 ## Next up
 
-See "Next" in `docs/STATUS.md`. At the time of writing: phase 1 passes on the emulator with Kickstart 2.04 and 3.1 (hardware not yet run) and phases 2 (data types) and 3 (screen, blitter, asset pipeline, with a screenshot) pass on host and on both Kickstarts in FS-UAE; PPC runs and hardware are open.
+See "Next" in `docs/STATUS.md`. At the time of writing: phase 1 passes on the emulator with Kickstart 2.04 and 3.1 (hardware not yet run) and phases 2 (data types) and 3 (screen, blitter, asset pipeline, with a screenshot) pass, and the phase 4 card building blocks (masked blits, mouse/keyboard, a playable higher-or-lower) work on host and on both Kickstarts in FS-UAE; PPC runs and hardware are open.

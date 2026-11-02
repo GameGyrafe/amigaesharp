@@ -98,6 +98,23 @@ public class AssetTests
     }
 
     [Fact]
+    public void Mask_plane_marks_opaque_pixels_and_keeps_black_art_distinct_from_transparency()
+    {
+        // Pixels: transparent, opaque black, opaque blue, ... on a 20 pixel wide row (rows are padded to 32 bits).
+        var image = Image(20, 1, (x, _) => x % 3 == 0 ? (0, 0, 0, 0) : x % 3 == 1 ? (0, 0, 0, 255) : (0, 0, 255, 255));
+        var planar = Planar.Convert(image, 4);
+        Assert.Equal(4, planar.Mask.Length);
+        for (var x = 0; x < 20; x++)
+        {
+            var bit = (planar.Mask[x >> 3] & (0x80 >> (x & 7))) != 0;
+            Assert.Equal(x % 3 != 0, bit);
+        }
+        Assert.Equal(0, planar.Mask[2] & 0x0F);      // padding bits beyond the width stay clear
+        Assert.Equal(0, planar.Mask[3]);
+        Assert.Equal(planar.Indices[0], planar.Indices[1]); // black and transparent share index 0; only the mask tells them apart
+    }
+
+    [Fact]
     public void Colour_count_outside_2_to_32_is_rejected()
     {
         var image = Image(2, 2, (_, _) => (0, 0, 0, 255));
@@ -112,5 +129,15 @@ public class AssetTests
         var generated = AssetBuilder.Build(Path.Combine(dir, "assets.json"));
         Assert.Equal(File.ReadAllText(Path.Combine(dir, "Assets.g.cs")), generated.Source);
         Assert.Equal(2112, generated.Reports.Single().ChipBytes);
+    }
+
+    [Fact]
+    public void Committed_cards_Assets_g_cs_matches_what_the_pipeline_generates()
+    {
+        var dir = Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "..", "samples", "cards");
+        var generated = AssetBuilder.Build(Path.Combine(dir, "assets.json"));
+        Assert.Equal(File.ReadAllText(Path.Combine(dir, "Assets.g.cs")), generated.Source);
+        Assert.Contains("CardsMask", generated.Source);
+        Assert.Equal(44800, generated.Reports.Single().ChipBytes); // 3 planes + mask
     }
 }

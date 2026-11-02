@@ -873,12 +873,19 @@ internal sealed class CEmitter
 
     private string Expr(ExpressionSyntax e, bool top = false)
     {
-        var text = ExprCore(e, top);
         var info = Model(e).GetTypeInfo(e);
 
-        // Implicit user-defined conversion (operator implicit): call the conversion function.
+        // 'null' where a span is expected is the empty span (the compiler sees it as the array -> span operator).
+        if (e is LiteralExpressionSyntax lit && lit.IsKind(SyntaxKind.NullLiteralExpression) &&
+            info.ConvertedType is INamedTypeSymbol nullSpan && IsSpan(nullSpan))
+            return $"(({SpanType(nullSpan, e)}){{ NULL, 0 }})";
+
+        var text = ExprCore(e, top);
+
+        // Implicit user-defined conversion (operator implicit) written in E# source: call the conversion function.
         var conversion = Model(e).GetConversion(e);
-        if (conversion.IsUserDefined && conversion.MethodSymbol is { } userConv && e is not CastExpressionSyntax)
+        if (conversion.IsUserDefined && conversion.MethodSymbol is { } userConv && e is not CastExpressionSyntax &&
+            userConv.Locations.Any(l => l.IsInSource))
             return $"{FuncName(userConv)}({text})";
 
         // Implicit array -> Span and Span -> ReadOnlySpan conversions.

@@ -36,7 +36,7 @@ public static unsafe class Video
         }
         if (_screen == null) return false;
 
-        uint[] wtags = new uint[24];
+        uint[] wtags = new uint[26];
         wtags[0] = Intuition.WA_CustomScreen; wtags[1] = (uint)_screen;
         wtags[2] = Intuition.WA_Left; wtags[3] = 0;
         wtags[4] = Intuition.WA_Top; wtags[5] = 0;
@@ -47,7 +47,9 @@ public static unsafe class Video
         wtags[14] = Intuition.WA_Activate; wtags[15] = 1;
         wtags[16] = Intuition.WA_RMBTrap; wtags[17] = 1;
         wtags[18] = Intuition.WA_NoCareRefresh; wtags[19] = 1;
-        wtags[20] = Intuition.TagDone;
+        wtags[20] = Intuition.WA_IDCMP; wtags[21] = Intuition.IDCMP_MOUSEBUTTONS | Intuition.IDCMP_MOUSEMOVE | Intuition.IDCMP_RAWKEY;
+        wtags[22] = Intuition.WA_ReportMouse; wtags[23] = 1;
+        wtags[24] = Intuition.TagDone;
         fixed (uint* wp = wtags)
         {
             _window = Intuition.OpenWindowTagList(null, wp);
@@ -67,6 +69,9 @@ public static unsafe class Video
     }
 
     public static bool IsOpen() { return _screen != null; }
+
+    /// <summary>The backdrop window (struct Window *), used by <see cref="Input"/>.</summary>
+    public static void* Window { get { return _window; } }
 
     public static void Close()
     {
@@ -112,6 +117,30 @@ public static unsafe class Video
     /// </summary>
     public static void Blit(ReadOnlySpan<byte> planar, int width, int height, int depth, int x, int y)
     {
+        BlitRegion(planar, width, height, depth, 0, 0, width, height, x, y);
+    }
+
+    /// <summary>Copies the <paramref name="w"/> x <paramref name="h"/> rectangle at (<paramref name="sx"/>, <paramref name="sy"/>) of a planar image (a sprite sheet) to (<paramref name="x"/>, <paramref name="y"/>).</summary>
+    public static void BlitRegion(ReadOnlySpan<byte> planar, int width, int height, int depth,
+        int sx, int sy, int w, int h, int x, int y)
+    {
+        BltCommon(planar, null, width, height, depth, sx, sy, w, h, x, y);
+    }
+
+    /// <summary>
+    /// Like <see cref="BlitRegion"/> but only pixels whose bit is set in <paramref name="mask"/> (one plane in the
+    /// layout of the image planes, as <c>esharp assets</c> writes with <c>"mask": true</c>) are drawn. Chip RAM.
+    /// </summary>
+    public static void BlitMasked(ReadOnlySpan<byte> planar, ReadOnlySpan<byte> mask, int width, int height, int depth,
+        int sx, int sy, int w, int h, int x, int y)
+    {
+        BltCommon(planar, mask, width, height, depth, sx, sy, w, h, x, y);
+    }
+
+    private static void BltCommon(ReadOnlySpan<byte> planar, ReadOnlySpan<byte> mask, int width, int height, int depth,
+        int sx, int sy, int w, int h, int x, int y)
+    {
+        if (w <= 0 || h <= 0) return;
         int bytesPerRow = ((width + 15) / 16) * 2;
         uint[] bm = new uint[10];                         // struct BitMap: 40 bytes
         bm[0] = ((uint)bytesPerRow << 16) | (uint)height;  // BytesPerRow, Rows
@@ -124,7 +153,17 @@ public static unsafe class Video
                 bm[2 + p] = (uint)(data + p * bytesPerRow * height);
             fixed (uint* b = bm)
             {
-                Graphics.BltBitMapRastPort(b, 0, 0, _rastPort, x, y, width, height, 0xC0);
+                if (mask.Length == 0)
+                {
+                    Graphics.BltBitMapRastPort(b, sx, sy, _rastPort, x, y, w, h, 0xC0);
+                }
+                else
+                {
+                    fixed (byte* m = mask)
+                    {
+                        Graphics.BltMaskBitMapRastPort(b, sx, sy, _rastPort, x, y, w, h, 0xE0, m);
+                    }
+                }
             }
         }
     }
@@ -194,16 +233,39 @@ public static unsafe class Video
 
     public static void Blit(ReadOnlySpan<byte> planar, int width, int height, int depth, int x, int y)
     {
+        BlitRegion(planar, width, height, depth, 0, 0, width, height, x, y);
+    }
+
+    public static void BlitRegion(ReadOnlySpan<byte> planar, int width, int height, int depth,
+        int sx, int sy, int w, int h, int x, int y)
+    {
+        BltCommon(planar, ReadOnlySpan<byte>.Empty, width, height, depth, sx, sy, w, h, x, y);
+    }
+
+    public static void BlitMasked(ReadOnlySpan<byte> planar, ReadOnlySpan<byte> mask, int width, int height, int depth,
+        int sx, int sy, int w, int h, int x, int y)
+    {
+        BltCommon(planar, mask, width, height, depth, sx, sy, w, h, x, y);
+    }
+
+    private static void BltCommon(ReadOnlySpan<byte> planar, ReadOnlySpan<byte> mask, int width, int height, int depth,
+        int sx, int sy, int w, int h, int x, int y)
+    {
         int bytesPerRow = ((width + 15) / 16) * 2;
-        for (int row = 0; row < height; row++)
+        for (int row = 0; row < h; row++)
         {
-            for (int col = 0; col < width; col++)
+            for (int col = 0; col < w; col++)
             {
+                int srcX = sx + col;
+                int srcY = sy + row;
+                if (srcX < 0 || srcY < 0 || srcX >= width || srcY >= height) continue;
+                int bit = 0x80 >> (srcX & 7);
+                if (mask.Length != 0 && (mask[srcY * bytesPerRow + (srcX >> 3)] & bit) == 0) continue;
                 int value = 0;
                 for (int p = 0; p < depth; p++)
                 {
-                    int offset = p * bytesPerRow * height + row * bytesPerRow + (col >> 3);
-                    if ((planar[offset] & (0x80 >> (col & 7))) != 0) value |= 1 << p;
+                    int offset = p * bytesPerRow * height + srcY * bytesPerRow + (srcX >> 3);
+                    if ((planar[offset] & bit) != 0) value |= 1 << p;
                 }
                 int px = x + col;
                 int py = y + row;
