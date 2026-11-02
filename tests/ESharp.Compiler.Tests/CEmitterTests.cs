@@ -698,6 +698,19 @@ Check(list.Count == 0, ""destroy"");
     }
 
     [Fact]
+    public void Collections_sample_compiles_and_runs_natively_with_the_same_output_as_dotnet()
+    {
+        if (!HasGcc) return;
+        var path = Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "..", "samples", "collections", "Collections.cs");
+        var options = new CompileOptions { Defines = new[] { "AMIGA", "ESHARP_HOSTC" } };
+        var r = EsCompiler.Compile(new[] { new SourceFile(path, File.ReadAllText(path)) }, options);
+        Assert.True(r.Success, string.Join("\n", r.Diagnostics));
+        var (code, output) = RunWithHostGcc(r.C!);
+        Assert.Equal(0, code);
+        Assert.Equal(CollectionsExpected.Output, output);
+    }
+
+    [Fact]
     public void Property_assignment_used_as_a_value_reports_ES0099()
     {
         var r = Compile(Program(

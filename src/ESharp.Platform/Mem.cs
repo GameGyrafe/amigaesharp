@@ -44,7 +44,7 @@ public static unsafe class Mem
         public bool Chip;
     }
 
-    private static readonly Dictionary<ulong, Block> Live = new();
+    private static readonly System.Collections.Generic.Dictionary<ulong, Block> Live = new();
     private static uint _chipUsed;
     private static uint _fastUsed;
 

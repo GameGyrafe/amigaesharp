@@ -1767,6 +1767,14 @@ internal sealed class CEmitter
             return $"(free({target}), {target} = NULL)";
         }
 
+        if (m.ContainingType is { Name: "Cast" } && m.ContainingNamespace?.ToDisplayString() == "ESharp.Platform"
+            && m.Name is "StringToPtr" or "PtrToString" && inv.ArgumentList.Arguments.Count == 1)
+        {
+            // Strings are plain byte pointers in C: reinterpret.
+            var arg = Expr(inv.ArgumentList.Arguments[0].Expression, top: true);
+            return m.Name == "StringToPtr" ? $"((uint8_t *)({arg}))" : $"((const char *)({arg}))";
+        }
+
         if (m.MethodKind == MethodKind.DelegateInvoke)
         {
             // f(x) and f.Invoke(x) call through the function pointer.
@@ -2103,7 +2111,25 @@ internal sealed class CEmitter
         if (!IsStatementContext(whole)) return Unsupported(whole, "property assignment used as a value; make it a statement");
         var (recv, indexes) = AccessParts(target);
         if (reads && recv != null && (!IsPure(recv) || !indexes.All(IsPure)))
-            return Unsupported(recv, "compound assignment or ++/-- on a property of a complex expression; assign it to a local first");
+        {
+            // Evaluate the receiver and the index arguments once into temporaries, then call the getter and the setter.
+            if (p.IsStatic || p.GetMethod == null)
+                return Unsupported(recv, "compound assignment or ++/-- on a property of a complex expression; assign it to a local first");
+            var rcv = ReceiverOf(recv, whole, p.Name, "instance property access");
+            if (rcv == null) return "0";
+            var n = _patternTemp++;
+            var sb = new StringBuilder($"({{ __typeof__({rcv}) es_r{n} = {rcv}; ");
+            var names = new List<string> { $"es_r{n}" };
+            for (var j = 0; j < indexes.Count; j++)
+            {
+                var ix = Expr(indexes[j], top: true);
+                sb.Append($"__typeof__({ix}) es_i{n}_{j} = {ix}; ");
+                names.Add($"es_i{n}_{j}");
+            }
+            var list = string.Join(", ", names);
+            sb.Append($"{FuncName(p.SetMethod)}({list}, {newValue($"{FuncName(p.GetMethod)}({list})")}); (void)0; }})");
+            return sb.ToString();
+        }
         var current = reads ? PropertyRead(p, recv, target, indexes) : "";
         var value = newValue(current);
         if (p.IsStatic) return $"{FuncName(p.SetMethod)}({value})";

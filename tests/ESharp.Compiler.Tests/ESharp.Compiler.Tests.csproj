@@ -49,6 +49,13 @@
     <Compile Include="..\..\samples\rummy\Program.cs" Link="Samples\Rummy\Program.cs" />
     <Compile Include="..\..\samples\rummy\Assets.g.cs" Link="Samples\Rummy\Assets.g.cs" />
     <Compile Include="..\..\samples\sound\Sound.cs" Link="Samples\Sound.cs" />
+    <Compile Include="..\..\samples\collections\Collections.cs" Link="Samples\Collections.cs" />
+  </ItemGroup>
+
+
+  <ItemGroup>
+    <!-- The E# collections (Dictionary, HashSet) share their names with System.Collections.Generic: import it per file. -->
+    <Using Remove="System.Collections.Generic" />
   </ItemGroup>
 
 </Project>

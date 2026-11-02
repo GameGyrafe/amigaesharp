@@ -65,6 +65,16 @@ public class HostTargetTests
     }
 
     [Fact]
+    public void Collections_sample_runs_on_the_host_without_leaks()
+    {
+        using var mem = HostMem.Capture();
+        using var console = HostConsole.Capture();
+        CollectionsSample.Program.Main();
+        Assert.Equal(CollectionsExpected.Output, console.Output);
+        Assert.Equal(0, mem.LiveBlocks);
+    }
+
+    [Fact]
     public void Operators_sample_runs_on_the_host()
     {
         using var console = HostConsole.Capture();
@@ -146,6 +156,20 @@ internal static class Phase2Expected
         "constructor sets fields", "instance method calling another", "method mutates its receiver",
         "method on an array element", "constructor with early return", "constructor overloads",
         "method on a by-value parameter", "inline array in an instance method",
+    };
+}
+
+/// <summary>What samples/collections prints.</summary>
+internal static class CollectionsExpected
+{
+    public static string Output => string.Concat(Names.Select(n => "ok " + n + "\n"));
+
+    private static readonly string[] Names =
+    {
+        "empty dictionary", "adds grow the table", "lookups after growth", "Add refuses a duplicate", "indexer replaces",
+        "remove", "removed slots are reused", "enumeration visits every entry once", "clear", "destroy", "enum keys",
+        "struct keys", "hash set", "hash set remove and enumerate", "string map counts words", "string map lookup",
+        "string map remove", "string map keys", "string set", "all memory is given back",
     };
 }
 
