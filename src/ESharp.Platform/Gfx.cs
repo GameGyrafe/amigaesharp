@@ -1,0 +1,36 @@
+#if AMIGA
+namespace ESharp.Platform;
+
+/// <summary>intuition.library bindings (v37). Pointers are opaque: Screen and Window structures are read with fixed offsets in <see cref="Video"/>.</summary>
+public static unsafe class Intuition
+{
+    [AmigaLib("intuition", -612)] public static extern void* OpenScreenTagList(void* newScreen, void* tagList);
+    [AmigaLib("intuition", -606)] public static extern void* OpenWindowTagList(void* newWindow, void* tagList);
+    [AmigaLib("intuition", -66)] public static extern int CloseScreen(void* screen);
+    [AmigaLib("intuition", -72)] public static extern void CloseWindow(void* window);
+
+    public const uint TagDone = 0;
+    public const uint SA_Width = 0x80000023, SA_Height = 0x80000024, SA_Depth = 0x80000025;
+    public const uint SA_Quiet = 0x80000038, SA_ShowTitle = 0x80000036, SA_Type = 0x8000002d;
+    public const uint WA_Left = 0x80000064, WA_Top = 0x80000065, WA_Width = 0x80000066, WA_Height = 0x80000067;
+    public const uint WA_CustomScreen = 0x80000070, WA_Borderless = 0x80000088, WA_Backdrop = 0x80000085;
+    public const uint WA_Activate = 0x80000089, WA_RMBTrap = 0x8000008a, WA_SimpleRefresh = 0x8000008c;
+    public const uint WA_NoCareRefresh = 0x80000087;
+    public const uint CustomScreen = 0xf;
+
+    /// <summary>Offsets in struct Window and struct Screen (checked against the NDK headers).</summary>
+    public const int WindowRPort = 50, ScreenViewPort = 44;
+}
+
+/// <summary>graphics.library bindings (v37).</summary>
+public static unsafe class Graphics
+{
+    [AmigaLib("graphics", -288)] public static extern void SetRGB4(void* viewPort, int index, int r, int g, int b);
+    [AmigaLib("graphics", -342)] public static extern void SetAPen(void* rastPort, int pen);
+    [AmigaLib("graphics", -306)] public static extern int RectFill(void* rastPort, int xMin, int yMin, int xMax, int yMax);
+    [AmigaLib("graphics", -318)] public static extern int ReadPixel(void* rastPort, int x, int y);
+    [AmigaLib("graphics", -606)] public static extern int BltBitMapRastPort(void* srcBitMap, int xSrc, int ySrc,
+        void* destRastPort, int xDest, int yDest, int xSize, int ySize, int minterm);
+    [AmigaLib("graphics", -270)] public static extern void WaitTOF();
+}
+#endif

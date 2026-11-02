@@ -13,6 +13,8 @@ dotnet test                                     # unit tests, incl. generated C 
 dotnet run --project src/ESharp.Cli -- build samples/hello --emit-only
 dotnet run --project src/ESharp.Cli -- build samples/hello --target m68k --docker <image>   # os4, morphos too
 dotnet run --project src/ESharp.Cli -- run samples/hello --docker <image> --headless        # m68k in FS-UAE
+dotnet run --project src/ESharp.Cli -- assets samples/screen                                # PNG -> Assets.g.cs
+dotnet run --project src/ESharp.Cli -- run samples/screen --docker <image> --headless --screenshot shot.png
 docker build -t esharp-amiga-toolchain docker && docker/smoke-test.sh    # combined toolchain image
 ```
 
@@ -28,6 +30,7 @@ Requires the .NET 10 SDK (`global.json`). `src/ESharp.Analyzers` stays on `netst
 - `src/ESharp.Analyzers`: subset rules (`ES0001`-`ES0010`, `ES0100`). One analyzer, used by the IDE and by the compiler.
 - `src/ESharp.Compiler`: `EsCompiler.Compile` (parse, C# errors, analyzer, entry point check) then `CEmitter` (C output with `#line`). `Targets.cs` defines the CPU x OS target model.
 - `src/ESharp.Runtime` and `src/ESharp.Platform`: parsed together with user code. They are embedded in the compiler as source, built by dotnet with `HOST` defined, and parsed with `AMIGA` defined for Amiga targets. Target-specific code uses `#if`.
+- `src/ESharp.Assets`: PNG reader/writer, colour reduction, planar packing and the `assets.json` -> `Assets.g.cs` generator (used by `esharp assets`).
 - `src/ESharp.Target.Host`: managed fakes for tests. `src/ESharp.Cli`: `esharp new|build|run`.
 - Emitter gaps are reported as `ES0099`, never miscompiled. Prefer adding the feature over silencing the diagnostic.
 
@@ -62,4 +65,4 @@ is Kickstart 2.04 on `--model A500+` and Kickstart 3.1 (40.069) on `--model A120
 
 ## Next up
 
-See "Next" in `docs/STATUS.md`. At the time of writing: phase 1 passes on the emulator with Kickstart 2.04 and 3.1 (hardware not yet run) and phase 2 (arrays, spans, `Fix`) passes on host and on both Kickstarts in FS-UAE; PPC runs and hardware are open.
+See "Next" in `docs/STATUS.md`. At the time of writing: phase 1 passes on the emulator with Kickstart 2.04 and 3.1 (hardware not yet run) and phases 2 (data types) and 3 (screen, blitter, asset pipeline, with a screenshot) pass on host and on both Kickstarts in FS-UAE; PPC runs and hardware are open.

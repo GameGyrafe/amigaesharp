@@ -1,0 +1,7 @@
+{
+  "namespace": "ScreenSample",
+  "class": "Assets",
+  "images": [
+    { "name": "Card", "file": "card.png", "colors": 16 }
+  ]
+}

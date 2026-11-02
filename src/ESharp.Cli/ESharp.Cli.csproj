@@ -10,6 +10,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\ESharp.Compiler\ESharp.Compiler.csproj" />
+    <ProjectReference Include="..\ESharp.Assets\ESharp.Assets.csproj" />
   </ItemGroup>
 
 </Project>

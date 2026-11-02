@@ -27,6 +27,7 @@
   <ItemGroup>
     <ProjectReference Include="..\..\src\ESharp.Compiler\ESharp.Compiler.csproj" />
     <ProjectReference Include="..\..\src\ESharp.Target.Host\ESharp.Target.Host.csproj" />
+    <ProjectReference Include="..\..\src\ESharp.Assets\ESharp.Assets.csproj" />
   </ItemGroup>
 
   <!-- The hello sample is compiled by dotnet here as the HOST target, proving the same
@@ -38,6 +39,8 @@
     <Compile Include="..\..\samples\generics\Generics.cs" Link="Samples\Generics.cs" />
     <Compile Include="..\..\samples\properties\Properties.cs" Link="Samples\Properties.cs" />
     <Compile Include="..\..\samples\operators\Operators.cs" Link="Samples\Operators.cs" />
+    <Compile Include="..\..\samples\screen\Screen.cs" Link="Samples\Screen.cs" />
+    <Compile Include="..\..\samples\screen\Assets.g.cs" Link="Samples\Assets.g.cs" />
   </ItemGroup>
 
 </Project>

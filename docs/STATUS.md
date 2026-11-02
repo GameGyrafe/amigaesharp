@@ -21,7 +21,7 @@ Gate: runs in an emulator and on the host.
 | Run on real hardware | **Not done** |
 | Run the PowerPC builds (os4, morphos) | **Not done**: needs QEMU or hardware; `run` is m68k only |
 
-## Phase 2: data types (in progress)
+## Phase 2: data types (done on host and both Kickstarts; PPC not run)
 
 Gate: logic tests pass on host and Amiga. `samples/phase2` prints one `ok NAME` line per check and
 must print the same 32 lines everywhere.
@@ -62,15 +62,34 @@ Notes and limits:
 | `samples/memory`: 19 checks | Done: same output on dotnet (no leaks), host gcc, and m68k on Kickstart 2.04 (A500+) and 3.1 (A1200), including a check that chip blocks are below 2 MB |
 | AmigaOS 4 / MorphOS allocation calls, fast-RAM paths | **Not verified** |
 
+## Phase 3: screen (gate met on the emulator; real hardware not run)
+
+Gate: a PNG shows on an Amiga screen. `samples/screen` converts `card.png` with the asset pipeline,
+opens a screen, draws blitter rectangles, blits the card, reads every pixel back and compares it with
+the planar data (12 checks), then prints `SHOT` so `esharp run --headless --screenshot out.png` can save the emulator display
+(see [images/phase3-screen-a1200.png](images/phase3-screen-a1200.png), Kickstart 3.1 on an A1200).
+
+| Item | State |
+|---|---|
+| `Video` (`ESharp.Platform`): `Open(w, h, depth)`, `Close`, `SetColor`, `SetPalette`, `FillRect`, `GetPixel`, `Blit`, `WaitFrames` | Done on the Amiga: a quiet custom Intuition screen with a borderless backdrop window (system friendly, no hardware takeover), graphics.library `RectFill`/`BltBitMapRastPort`. 4 bits per channel (OCS) colours, palette-index pixels |
+| Host fake of `Video` | Done: software framebuffer (`Video.HostPixels`, `HostPalette`), same planar decoding, so logic and asset tests run under dotnet |
+| `intuition.library` / `graphics.library` bindings | Minimal set for the above; LVOs and tag values were read back from the NDK headers with the m68k compiler, not from memory. Struct offsets (Window->RPort 50, Screen->ViewPort 44) are hard-coded the same way |
+| Asset pipeline: `assets.json` + PNG -> `Assets.g.cs` (`esharp assets <dir>`) | Done: own PNG reader (no dependencies), rounds to 12-bit colour, exact mapping when it fits the colour budget (2..32) or median cut otherwise, planar chip data (`[ChipRam]`, rows padded to 16 pixels) and `NamePalette`/`NameWidth`/`NameHeight`/`NameDepth`. Transparent pixels become entry 0 (black). **No dithering**, no masks, no IFF ILBM or samples yet, and no MSBuild step: run `esharp assets` yourself and commit `Assets.g.cs` (a test fails if it is stale). The chip budget report already counts the planes |
+| `fixed` statement over arrays and spans in the emitter | Done |
+| Library code is only emitted when used | Done (`ReachableMethods`): all of the user's own code is still emitted and checked, but library methods and statics only when reachable. Without this a console program would pull in every library header |
+| `esharp run --headless --screenshot <png>` | Done: waits for the program to print `SHOT`, captures the Xvfb display with `xwd` and writes a PNG. `Dos.FlushOutput()` is needed because output redirected to a file is buffered until the program ends |
+| Host tests | Done: host run of the sample, PNG round trip, quantiser, planar packing, stale `Assets.g.cs` check, generated C contains the library calls and `__chip` data |
+| m68k: `samples/screen` in FS-UAE 3.2.35 | Done: 12/12 on Kickstart 2.04 (A500+) and 3.1 (A1200), also built with `--debug`; the screenshot shows the rectangles and the card. All other samples re-run on both ROMs after the library pruning change: unchanged |
+| Not verified | Parity of the generated C against host gcc for the screen sample (no graphics shim), PAL/NTSC and screen modes other than the default, closing the program while a window is open, AmigaOS 4 / MorphOS (`OpenScreenTagList` etc. unchanged there but unrun), real hardware |
+
 ## Next
 
 - Run hello on real hardware, the last open item in the phase 1 gate. The emulator side is done: AROS replacement, Kickstart 2.04 and Kickstart 3.1.
 - Running the PPC builds needs a PPC-capable emulator (QEMU `amigaone`/`sam460ex` for OS4, `pegasos2` for MorphOS) or real hardware.
-- `esharp test` (run host tests, optionally the Amiga build in the emulator) and `esharp assets`.
-- `esharp run` (launch FS-UAE/WinUAE with output mounted as a hard drive), `esharp test`.
+- `esharp test` (run host tests, optionally the Amiga build in the emulator).
 - Finish phase 2: run the samples on the PPC targets once there is a way to run them.
 - Memory management ([MEMORY.md](MEMORY.md)): step 1 (`Mem.AllocChip`/`AllocFast`/`Free`, `Arena`) is done; step 2 (`Pool<T>`) and most of step 3 (`--debug`: bounds checks, arena and pool poisoning) are done; the chip budget report (step 4) is done for constant sizes.
-- Phase 3: Intuition window, blitter rect, asset pipeline.
+- Phase 4 (card demo): sprites/masked blits for cards (`BltMaskBitMapRastPort`), input (mouse and keyboard through the window), timing, dithering and IFF/sample assets, an MSBuild step for `assets.json`.
 
 ## Known limits of the emitter
 

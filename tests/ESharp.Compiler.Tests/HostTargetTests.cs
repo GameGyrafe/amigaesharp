@@ -48,6 +48,18 @@ public class HostTargetTests
     }
 
     [Fact]
+    public void Screen_sample_runs_on_the_host_framebuffer()
+    {
+        using var console = HostConsole.Capture();
+        ScreenSample.Program.Main();
+        Assert.Equal(ScreenExpected.Output, console.Output);
+        // The card was drawn from the planar data: its centre pixel is not the background.
+        Assert.False(ESharp.Platform.Video.IsOpen());
+        Assert.Equal(320 * 200, ESharp.Platform.Video.HostPixels.Length);
+        Assert.Equal(11, ESharp.Platform.Video.HostPixels[2 * 320 + 2]);
+    }
+
+    [Fact]
     public void Memory_sample_runs_on_the_host_without_leaks()
     {
         using var mem = HostMem.Capture();
@@ -198,5 +210,26 @@ internal static class OperatorsExpected
         "indexer on an array element",
         "indexer in a generic struct",
         "generic indexer with an implicit conversion",
+    };
+}
+
+/// <summary>What samples/screen prints.</summary>
+internal static class ScreenExpected
+{
+    public static string Output => string.Concat(Names.Select(n => "ok " + n + "\n")) + "SHOT\nok screen closes\n";
+
+    private static readonly string[] Names =
+    {
+        "screen opens",
+        "background pixel",
+        "red rectangle",
+        "green rectangle on top of red",
+        "yellow rectangle",
+        "rectangle edges are exact",
+        "outside the screen",
+        "asset constants",
+        "blitted card matches the planar data pixel for pixel",
+        "card centre is not background",
+        "blit does not spill outside the card",
     };
 }

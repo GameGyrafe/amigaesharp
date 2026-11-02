@@ -11,7 +11,7 @@ namespace ESharp.Cli;
 /// </summary>
 internal static class FsUae
 {
-    public static int Run(string exe, bool headless, TimeSpan timeout, string? kickstart, string model = "A500", string? fsuaePath = null)
+    public static int Run(string exe, bool headless, TimeSpan timeout, string? kickstart, string model = "A500", string? fsuaePath = null, string? screenshot = null)
     {
         var name = Path.GetFileName(exe);
         var runDir = Path.Combine(Path.GetDirectoryName(Path.GetFullPath(exe))!, "run");
@@ -75,9 +75,22 @@ internal static class FsUae
                 proc.BeginErrorReadLine();
 
                 var marker = Path.Combine(dh0, "done");
+                var outPath = Path.Combine(dh0, "out.txt");
                 var deadline = DateTime.UtcNow + timeout;
+                var shot = screenshot == null;
                 while (!File.Exists(marker) && !proc.HasExited && DateTime.UtcNow < deadline)
+                {
+                    if (!shot && OutputContains(outPath, "SHOT"))
+                    {
+                        Thread.Sleep(1000); // let the emulator draw the frame
+                        shot = true;
+                        var display = psi.Environment.TryGetValue("DISPLAY", out var d) && d != null ? d : Environment.GetEnvironmentVariable("DISPLAY");
+                        if (!Screenshot.Capture(display, screenshot!)) Console.Error.WriteLine("esharp: could not capture the screen (is xwd installed?)");
+                        else Console.Error.WriteLine($"Saved screenshot {screenshot}");
+                    }
                     Thread.Sleep(250);
+                }
+                if (!shot) Console.Error.WriteLine("esharp: the program never printed SHOT, so no screenshot was taken");
 
                 var finished = File.Exists(marker);
                 if (!proc.HasExited) { proc.Kill(entireProcessTree: true); proc.WaitForExit(); }
@@ -93,6 +106,17 @@ internal static class FsUae
             if (xvfb is { HasExited: false }) xvfb.Kill();
             xvfb?.Dispose();
         }
+    }
+
+    private static bool OutputContains(string path, string text)
+    {
+        try
+        {
+            using var fs = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
+            using var reader = new StreamReader(fs);
+            return reader.ReadToEnd().Contains(text);
+        }
+        catch (IOException) { return false; }
     }
 
     private static Process? StartXvfb(ProcessStartInfo target)

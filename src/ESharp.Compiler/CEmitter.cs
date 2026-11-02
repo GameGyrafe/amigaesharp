@@ -75,21 +75,25 @@ internal sealed class CEmitter
         var enums = types.Where(t => t.TypeKind == TypeKind.Enum).ToList();
         var statics = types.Where(t => t.TypeKind == TypeKind.Class).ToList();
 
+        var reachable = ReachableMethods(types);
+        var usedStatics = new HashSet<ISymbol>(SymbolEqualityComparer.Default);
+        foreach (var u in _usedSymbols) usedStatics.Add(u);
         var body = new StringBuilder();
         foreach (var e in enums) EmitEnum(e);
         foreach (var s in structs) EmitStruct(s);
         var typeText = _out.ToString();
         _out.Clear();
 
-        var fields = statics.SelectMany(t => t.GetMembers().OfType<IFieldSymbol>()).Where(f => !f.IsConst && f.AssociatedSymbol == null).ToList();
+        var fields = statics.SelectMany(t => t.GetMembers().OfType<IFieldSymbol>()).Where(f => !f.IsConst && f.AssociatedSymbol == null && usedStatics.Contains(f)).ToList();
         foreach (var f in fields) EmitStaticField(f);
         var staticProps = types.SelectMany(t => t.GetMembers().OfType<IPropertySymbol>())
-            .Where(p => p.IsStatic && IsAutoProperty(p)).ToList();
+            .Where(p => p.IsStatic && IsAutoProperty(p) && usedStatics.Contains(p)).ToList();
         foreach (var p in staticProps) EmitStaticProperty(p);
         if (fields.Count + staticProps.Count > 0) Line("");
 
         var methods = types.SelectMany(t => t.GetMembers().OfType<IMethodSymbol>())
             .Where(m => !m.IsGenericMethod)
+            .Where(m => reachable.Contains(m))
             .Where(m => m.MethodKind is MethodKind.Ordinary or MethodKind.UserDefinedOperator or MethodKind.Conversion or MethodKind.Constructor
                         or MethodKind.PropertyGet or MethodKind.PropertySet
                         && !m.IsExtern && DeclaresBody(m))
@@ -207,6 +211,73 @@ internal sealed class CEmitter
         for (var c = t; c != null; c = c.ContainingType)
             if (c.IsGenericType) return true;
         return false;
+    }
+
+    /// <summary>
+    /// The methods to emit: all of the user's own code, plus the library methods it can reach (from
+    /// bodies and static field initializers). Library code that is never used (a whole screen API in
+    /// a console program) is not emitted, so it neither bloats the executable nor needs its headers.
+    /// </summary>
+    private readonly HashSet<ISymbol> _usedSymbols = new(SymbolEqualityComparer.Default);
+
+    private HashSet<IMethodSymbol> ReachableMethods(List<INamedTypeSymbol> types)
+    {
+        var reachable = new HashSet<IMethodSymbol>(SymbolEqualityComparer.Default);
+        var work = new Stack<SyntaxNode>();
+
+        void Add(IMethodSymbol? m)
+        {
+            if (m == null || !reachable.Add(m.OriginalDefinition)) return;
+            foreach (var r in m.OriginalDefinition.DeclaringSyntaxReferences) work.Push(r.GetSyntax());
+        }
+
+        foreach (var entry in FindEntryPoints(_compilation, _user)) Add(entry);
+        // Everything the user wrote is emitted (and checked), used or not; only library code is pruned.
+        foreach (var t in types.Where(t => t.DeclaringSyntaxReferences.Any(r => _user.Contains(r.SyntaxTree))))
+            foreach (var member in t.GetMembers())
+                switch (member)
+                {
+                    case IMethodSymbol m: Add(m); break;
+                    case IFieldSymbol or IPropertySymbol: _usedSymbols.Add(member); break;
+                }
+        var walkedFields = new HashSet<ISymbol>(SymbolEqualityComparer.Default);
+
+        while (true)
+        {
+            if (work.Count == 0)
+            {
+                // A static field is only emitted, and its initializer only scanned, once something uses it.
+                var more = false;
+                foreach (var f in _usedSymbols.ToList())
+                {
+                    if (!f.IsStatic || !walkedFields.Add(f)) continue;
+                    foreach (var r in f.DeclaringSyntaxReferences)
+                    {
+                        var decl = r.GetSyntax();
+                        if (decl is VariableDeclaratorSyntax { Initializer: { } init }) { work.Push(init); more = true; }
+                        else if (decl is PropertyDeclarationSyntax { Initializer: { } pinit }) { work.Push(pinit); more = true; }
+                    }
+                }
+                if (!more) break;
+            }
+            if (work.Count == 0) continue;
+            var node = work.Pop();
+            var model = Model(node);
+            foreach (var n in node.DescendantNodesAndSelf())
+            {
+                if (n is not ExpressionSyntax e) continue;
+                var info = model.GetSymbolInfo(e);
+                switch (info.Symbol)
+                {
+                    case IMethodSymbol m: Add(m); break;
+                    case IPropertySymbol p: Add(p.GetMethod); Add(p.SetMethod); _usedSymbols.Add(p); break;
+                    case IFieldSymbol f: _usedSymbols.Add(f); break;
+                }
+                var conversion = model.GetConversion(e);
+                if (conversion.IsUserDefined) Add(conversion.MethodSymbol);
+            }
+        }
+        return reachable;
     }
 
     private static bool IsAttributeType(INamedTypeSymbol t)
@@ -570,6 +641,10 @@ internal sealed class CEmitter
                 Statement(u.Block);
                 break;
 
+            case FixedStatementSyntax fx:
+                EmitFixed(fx);
+                break;
+
             case LocalDeclarationStatementSyntax l:
                 foreach (var v in l.Declaration.Variables)
                 {
@@ -653,6 +728,39 @@ internal sealed class CEmitter
             _indent--;
             Line("}");
         }
+    }
+
+    /// <summary>
+    /// <c>fixed (T* p = array_or_span) { ... }</c>: nothing moves in C, so this is just a scoped pointer
+    /// to the first element (array) or to the span's data.
+    /// </summary>
+    private void EmitFixed(FixedStatementSyntax fx)
+    {
+        Line("{");
+        _indent++;
+        foreach (var v in fx.Declaration.Variables)
+        {
+            if (v.Initializer == null) { Unsupported(v, "fixed without an initializer"); continue; }
+            var sym = (ILocalSymbol)Model(fx).GetDeclaredSymbol(v)!;
+            var init = v.Initializer.Value;
+            var initType = Model(fx).GetTypeInfo(init).Type;
+            string value;
+            if (IsSpan(initType))
+                value = RequireSimple(init, "fixed over a span") ? Expr(init) + ".ptr" : "0";
+            else if (initType is IArrayTypeSymbol)
+                value = Expr(init);
+            else if (initType is IPointerTypeSymbol)
+                value = Expr(init, top: true);
+            else
+            {
+                Unsupported(init, "fixed over this kind of expression");
+                value = "0";
+            }
+            Line($"{Decl(sym.Type, sym.Name, fx)} = {value};");
+        }
+        Statement(fx.Statement);
+        _indent--;
+        Line("}");
     }
 
     private void EmitIf(IfStatementSyntax i, bool isElseIf)

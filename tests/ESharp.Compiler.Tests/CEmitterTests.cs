@@ -39,7 +39,7 @@ public class CEmitterTests
     [Fact]
     public void Overloads_get_distinct_names()
     {
-        var c = CompileOk(Program("static int F(int a) { return a; } static int F(short a) { return a; }"));
+        var c = CompileOk(Program("static int F(int a) { return a; } static int F(short a) { return a; }", "F(1); F((short)2);"));
         Assert.Contains("P_F_int", c);
         Assert.Contains("P_F_short", c);
     }
@@ -164,6 +164,23 @@ Dos.PutStr(Pick(Max));
         var (code, output) = RunWithHostGcc(CompileOk(File.ReadAllText(path)));
         Assert.Equal(0, code);
         Assert.Equal(OperatorsExpected.Output, output);
+    }
+
+    [Fact]
+    public void Screen_sample_compiles_to_graphics_library_calls()
+    {
+        var dir = Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "..", "samples", "screen");
+        var sources = new[] { "Screen.cs", "Assets.g.cs" }
+            .Select(f => new SourceFile(f, File.ReadAllText(Path.Combine(dir, f)))).ToArray();
+        var r = EsCompiler.Compile(sources, Targets.M68k.ToOptions());
+        Assert.True(r.Success, string.Join("\n", r.Diagnostics));
+        var c = r.C!;
+        Assert.Contains("#include <proto/intuition.h>", c);
+        Assert.Contains("#include <proto/graphics.h>", c);
+        Assert.Contains("OpenScreenTagList(NULL,", c);
+        Assert.Contains("BltBitMapRastPort(", c);
+        Assert.Contains("__chip", c);          // the card bitplanes live in chip RAM
+        Assert.Equal(2112, r.Chip.Single().Bytes);
     }
 
     [Fact]

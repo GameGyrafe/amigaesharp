@@ -16,7 +16,8 @@ Usage:
   esharp new <name>                 Create a new hello-world project
   esharp build [path] [options]     Check the subset, emit C, and run the target C compiler
   esharp run [path] [options]       Build for m68k and run it in FS-UAE
-  esharp test | assets              Not implemented yet
+  esharp assets [dir|assets.json]   Convert PNGs to planar chip data: writes Assets.g.cs next to the manifest
+  esharp test                       Not implemented yet
 
 Build options:
   --target <name>   m68k (default), os4 or morphos
@@ -36,6 +37,7 @@ Run options (build options also apply; run is m68k only):
                     (or set ESHARP_KICKSTART)
   --model <name>    Amiga model for FS-UAE: A500 (default), A500+, A600, A1200
   --fsuae <path>    FS-UAE executable (or set ESHARP_FSUAE)
+  --screenshot <png> Headless only: when the program prints SHOT, save the emulator screen to a PNG (needs xwd)
 
 Targets:
 " + string.Join("\n", Targets.All.Select(t => $"  {t.Name,-9} {t.Description}")) + "\n";
@@ -53,7 +55,8 @@ Targets:
             "new" => New(args.Skip(1).ToArray()),
             "build" => Build(args.Skip(1).ToArray(), out _),
             "run" => Run(args.Skip(1).ToArray()),
-            "test" or "assets" => NotYet(args[0]),
+            "assets" => Assets(args.Skip(1).ToArray()),
+            "test" => NotYet(args[0]),
             _ => Fail($"unknown command '{args[0]}'"),
         };
     }
@@ -224,6 +227,28 @@ public static class Program
         return 0;
     }
 
+    private static int Assets(string[] args)
+    {
+        var path = args.Length > 0 ? args[0] : ".";
+        var manifest = Directory.Exists(path) ? Path.Combine(path, "assets.json") : path;
+        if (!File.Exists(manifest)) return Fail($"no assets.json at '{manifest}'");
+        try
+        {
+            var output = ESharp.Assets.AssetBuilder.Build(manifest);
+            var target = Path.Combine(Path.GetDirectoryName(Path.GetFullPath(manifest))!, "Assets.g.cs");
+            File.WriteAllText(target, output.Source);
+            Console.WriteLine($"Wrote {target}");
+            foreach (var r in output.Reports)
+                Console.WriteLine($"  {r.Name,-16} {r.Width}x{r.Height}, {r.Depth} bitplanes, {r.ChipBytes:N0} bytes of chip RAM");
+            Console.WriteLine($"  total            {output.Reports.Sum(r => r.ChipBytes):N0} bytes of chip RAM");
+            return 0;
+        }
+        catch (Exception e) when (e is IOException or InvalidDataException or NotSupportedException or System.Text.Json.JsonException or KeyNotFoundException)
+        {
+            return Fail(e.Message);
+        }
+    }
+
     private static int Run(string[] args)
     {
         bool headless = false;
@@ -231,6 +256,7 @@ public static class Program
         string? kickstart = Environment.GetEnvironmentVariable("ESHARP_KICKSTART");
         string model = "A500";
         string? fsuae = null;
+        string? screenshot = null;
         var buildArgs = new List<string>();
         for (var i = 0; i < args.Length; i++)
         {
@@ -241,6 +267,7 @@ public static class Program
                 case "--kickstart" when i + 1 < args.Length: kickstart = args[++i]; break;
                 case "--model" when i + 1 < args.Length: model = args[++i]; break;
                 case "--fsuae" when i + 1 < args.Length: fsuae = args[++i]; break;
+                case "--screenshot" when i + 1 < args.Length: screenshot = args[++i]; break;
                 default: buildArgs.Add(args[i]); break;
             }
         }
@@ -258,7 +285,7 @@ public static class Program
 
         var rc = Build(buildArgs.ToArray(), out var exe);
         if (rc != 0 || exe == null) return rc;
-        return FsUae.Run(exe, headless, TimeSpan.FromSeconds(timeout), kickstart, model, fsuae);
+        return FsUae.Run(exe, headless, TimeSpan.FromSeconds(timeout), kickstart, model, fsuae, screenshot);
     }
 
     private static List<string> CollectSources(string path)
