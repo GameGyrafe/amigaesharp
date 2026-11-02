@@ -330,6 +330,7 @@ internal static class LanguageExpected
         "heap objects linked by reference", "an object is shared, not copied", "Heap.Free clears the variable",
         "interface constraint with a struct and a class", "interface value calls the class", "the interface value shares the object",
         "null interface value", "Heap.Free on an interface value",
+        "interpolated string", "concatenation and escaped braces",
         "lambdas with two parameters", "method group and delegate variable",
     };
 }

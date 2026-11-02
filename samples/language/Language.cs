@@ -121,6 +121,14 @@ public static class Program
         return sum;
     }
 
+    /// <summary>String equality by characters (strings are plain byte strings on the Amiga).</summary>
+    static bool Same(string a, string b)
+    {
+        if (a.Length != b.Length) return false;
+        for (int i = 0; i < a.Length; i++) if (a[i] != b[i]) return false;
+        return true;
+    }
+
     static int Fact(int n)
     {
         int Go(int k) { return k <= 1 ? 1 : k * Go(k - 1); }
@@ -188,6 +196,12 @@ public static class Program
         Check(nothing == null && nothing is null && asInterface is not null, "null interface value");
         Heap.Free(ref asInterface);
         Check(asInterface == null, "Heap.Free on an interface value");
+
+        string who = "Ann";
+        int count = 42;
+        string text = $"Hi {who}: {count,5}|{count,-5}|{count:D5}|{255:X}|{-7}|{true}|{'x'}";
+        Check(Same(text, "Hi Ann:    42|42   |00042|FF|-7|True|x"), "interpolated string");
+        Check(Same("n=" + count + "!", "n=42!") && Same($"{{literal}} {count}", "{literal} 42"), "concatenation and escaped braces");
 
         int[] nums = new int[4];
         for (int i = 0; i < nums.Length; i++) nums[i] = i + 1;

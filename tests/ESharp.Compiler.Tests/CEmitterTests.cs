@@ -47,7 +47,7 @@ public class CEmitterTests
     [Fact]
     public void Unsupported_constructs_report_ES0099()
     {
-        var r = Compile(Program("static void F() { var s = \"a\" + \"b\"; string t = s + s; }"));
+        var r = Compile(Program("static void F() { int x = 1; ref int r = ref x; r = 2; }"));
         Assert.Contains("ES0099", ErrorIds(r));
     }
 
@@ -410,6 +410,38 @@ Check(a == null, ""freeing null again is harmless"");
         Assert.Equal(string.Concat(new[] { "linked objects and methods", "references compare and null", "assignment copies the reference, not the object",
             "static field holding an object", "properties, this and object initializer", "static members of a class", "array of references starts null",
             "interface constraint: struct and class, resolved statically", "Heap.Free clears the variable", "freeing null again is harmless" }.Select(n => "ok " + n + "\n")), output);
+    }
+
+    [Fact]
+    public void String_interpolation_and_concatenation_format_into_static_buffers()
+    {
+        if (!HasGcc) return;
+        const string members = @"
+static void Say(string s) { Dos.PutStr(s); Dos.PutStr(""\n""); }
+static string Name(int i) { return i == 0 ? ""zero"" : ""many""; }
+";
+        const string body = @"
+int n = 42;
+string name = ""Ann"";
+byte small = 7;
+uint big = 4000000000;
+Say($""Hi {name}, n={n,5}|{n,-5}|{n:D5}|{255:X}|{-7}|{true}|{'x'}"");
+Say($""{small} {big} {int.MinValue} {-5:D3} {0xBEEF:x} {Name(0)}-{Name(1)}"");
+Say(""a"" + n + ""b"" + name + '!');
+Say($""no holes"");
+Say($""{{braces}} {n}"");
+string first = $""one {1}"";
+string second = $""two {2}"";
+Say(first + ""/"" + second);
+";
+        var (code, output) = RunWithHostGcc(CompileOk(Program(members, body)));
+        Assert.Equal(0, code);
+        Assert.Equal("Hi Ann, n=   42|42   |00042|FF|-7|True|x\n" +
+                     "7 4000000000 -2147483648 -005 beef zero-many\n" +
+                     "a42bAnn!\n" +
+                     "no holes\n" +
+                     "{braces} 42\n" +
+                     "one 1/two 2\n", output);
     }
 
     [Fact]

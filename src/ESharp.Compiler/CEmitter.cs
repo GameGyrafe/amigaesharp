@@ -176,6 +176,59 @@ internal sealed class CEmitter
             result.AppendLine("#define ES_IDX(i, n) es_idx((i), (n), __FILE__, __LINE__)");
             result.AppendLine();
         }
+        if (_usesFmt)
+        {
+            foreach (var line in new[]
+            {
+                "static char es_fmt_buf[8][128];",
+                "static int es_fmt_index;",
+                "static char *es_fmt_begin(void) { char *b = es_fmt_buf[es_fmt_index]; es_fmt_index = (es_fmt_index + 1) & 7; return b; }",
+                "static int es_put_pad(char *b, int n, const char *s, int len, int width)",
+                "{",
+                "    int pad = (width < 0 ? -width : width) - len;",
+                "    if (width > 0) while (pad-- > 0 && n < 127) b[n++] = ' ';",
+                "    for (int i = 0; i < len && n < 127; i++) b[n++] = s[i];",
+                "    if (width < 0) while (pad-- > 0 && n < 127) b[n++] = ' ';",
+                "    return n;",
+                "}",
+                "static int es_put_str(char *b, int n, const char *s, int width)",
+                "{",
+                "    int len = 0;",
+                "    if (s == NULL) s = \"\";",
+                "    while (s[len]) len++;",
+                "    return es_put_pad(b, n, s, len, width);",
+                "}",
+                "static int es_put_chr(char *b, int n, int c, int width)",
+                "{",
+                "    char t = (char)c;",
+                "    return es_put_pad(b, n, &t, 1, width);",
+                "}",
+                "static int es_put_u(char *b, int n, uint32_t v, int width, int digits, int hex)",
+                "{",
+                "    char t[40];",
+                "    int len = 0;",
+                "    uint32_t base = hex ? 16u : 10u;",
+                "    do { uint32_t d = v % base; t[len++] = (char)(d < 10 ? '0' + d : (hex == 2 ? 'a' : 'A') + d - 10); v /= base; } while (v != 0 && len < 39);",
+                "    while (len < digits && len < 39) t[len++] = '0';",
+                "    char r[40];",
+                "    for (int i = 0; i < len; i++) r[i] = t[len - 1 - i];",
+                "    return es_put_pad(b, n, r, len, width);",
+                "}",
+                "static int es_put_i(char *b, int n, int32_t v, int width, int digits, int hex)",
+                "{",
+                "    if (v >= 0 || hex) return es_put_u(b, n, (uint32_t)v, width, digits, hex);",
+                "    char t[40];",
+                "    uint32_t m = 0u - (uint32_t)v;",
+                "    int len = 0;",
+                "    do { t[len++] = (char)('0' + m % 10u); m /= 10u; } while (m != 0 && len < 38);",
+                "    while (len < digits && len < 38) t[len++] = '0';",
+                "    char r[40];",
+                "    r[0] = '-';",
+                "    for (int i = 0; i < len; i++) r[i + 1] = t[len - 1 - i];",
+                "    return es_put_pad(b, n, r, len + 1, width);",
+                "}",
+            }) result.AppendLine(line);
+        }
         if (_usesAlloc)
         {
             result.AppendLine("#include <stdio.h>");
@@ -276,6 +329,7 @@ internal sealed class CEmitter
     private readonly List<IMethodSymbol> _staticConstructors = new();
     private bool _thisIsClass;
     private bool _usesAlloc;
+    private bool _usesFmt;
     private int _objectTemps;
     private readonly HashSet<ISymbol> _usedSymbols = new(SymbolEqualityComparer.Default);
 
@@ -1246,6 +1300,9 @@ internal sealed class CEmitter
             case IdentifierNameSyntax id:
                 return Name(id);
 
+            case InterpolatedStringExpressionSyntax interp:
+                return Interpolation(interp);
+
             case LambdaExpressionSyntax lam:
                 return Model(lam).GetSymbolInfo(lam).Symbol is IMethodSymbol lm ? FuncName(lm) : Unsupported(lam, "lambda");
 
@@ -1379,8 +1436,22 @@ internal sealed class CEmitter
         var type = Model(b).GetTypeInfo(b).Type;
         if (type?.SpecialType == SpecialType.System_String)
         {
-            Unsupported(b, "string concatenation");
-            return "0";
+            var folded = Model(b).GetConstantValue(b);
+            if (folded.HasValue && folded.Value is string constant) return CString(constant);
+            if (!b.IsKind(SyntaxKind.AddExpression)) return Unsupported(b, "string operator");
+            var leaves = new List<ExpressionSyntax>();
+            void Flatten(ExpressionSyntax x)
+            {
+                if (x is BinaryExpressionSyntax { RawKind: (int)SyntaxKind.AddExpression } inner && Model(inner).GetTypeInfo(inner).Type?.SpecialType == SpecialType.System_String
+                    && !Model(inner).GetConstantValue(inner).HasValue)
+                {
+                    Flatten(inner.Left);
+                    Flatten(inner.Right);
+                }
+                else leaves.Add(x);
+            }
+            Flatten(b);
+            return FormatParts(b, leaves.Select(l => (l, (ExpressionSyntax?)null, (string?)null)).ToList(), leaves.Select(l => ((string?)null, (string?)null)).ToList());
         }
 
         if (b.OperatorToken.Text is "==" or "!=" &&
@@ -1395,6 +1466,96 @@ internal sealed class CEmitter
 
         var s = $"{Expr(b.Left)} {b.OperatorToken.Text} {Expr(b.Right)}";
         return top ? s : $"({s})";
+    }
+
+    /// <summary>
+    /// <c>$"score {n,5:D3}"</c>: formats into one of a few static buffers and gives the text as a string. The text is valid until
+    /// eight more strings have been formatted, so use it right away (draw it, print it, copy it) and do not keep it.
+    /// Holes can be integers (alignment <c>,N</c> and formats <c>D</c><i>n</i> / <c>X</c><i>n</i>), chars, bools and strings.
+    /// </summary>
+    private string Interpolation(InterpolatedStringExpressionSyntax interp)
+    {
+        var folded = Model(interp).GetConstantValue(interp);
+        if (folded.HasValue && folded.Value is string constant) return CString(constant);
+        var parts = new List<(ExpressionSyntax? Hole, ExpressionSyntax? Align, string? Text)>();
+        var formats = new List<(string?, string?)>();
+        foreach (var c in interp.Contents)
+        {
+            switch (c)
+            {
+                case InterpolatedStringTextSyntax t:
+                    parts.Add((null, null, t.TextToken.ValueText.Replace("{{", "{").Replace("}}", "}")));
+                    formats.Add((null, null));
+                    break;
+                case InterpolationSyntax i:
+                    parts.Add((i.Expression, i.AlignmentClause?.Value, null));
+                    formats.Add((i.FormatClause?.FormatStringToken.ValueText, null));
+                    break;
+            }
+        }
+        return FormatParts(interp, parts, formats);
+    }
+
+    private string FormatParts(SyntaxNode at, List<(ExpressionSyntax? Hole, ExpressionSyntax? Align, string? Text)> parts, List<(string? Format, string? _)> formats)
+    {
+        _usesFmt = true;
+        var id = _objectTemps++;
+        var buf = $"ES_f{id}";
+        var len = $"ES_n{id}";
+        var sb = new StringBuilder($"({{ char *{buf} = es_fmt_begin(); int {len} = 0; ");
+        for (var i = 0; i < parts.Count; i++)
+        {
+            var (hole, align, text) = parts[i];
+            if (hole == null)
+            {
+                if (text!.Length > 0) sb.Append($"{len} = es_put_str({buf}, {len}, {CString(text)}, 0); ");
+                continue;
+            }
+            var width = "0";
+            if (align != null)
+            {
+                var w = Model(align).GetConstantValue(align);
+                if (!w.HasValue || w.Value is not int wi) { Unsupported(align, "alignment that is not a constant integer"); continue; }
+                width = wi.ToString(CultureInfo.InvariantCulture);
+            }
+            var format = formats[i].Item1;
+            int digits = 0, hex = 0;
+            if (!string.IsNullOrEmpty(format))
+            {
+                var f = format!;
+                if ((f[0] is 'D' or 'd' or 'X' or 'x') && (f.Length == 1 || int.TryParse(f.AsSpan(1), out digits)))
+                    hex = f[0] is 'X' or 'x' ? (f[0] == 'X' ? 1 : 2) : 0;
+                else Unsupported(hole, $"format '{format}' (only D<n> and X<n> for integers)");
+            }
+            var type = Model(hole).GetTypeInfo(hole).Type;
+            var value = Expr(hole, top: true);
+            switch (type?.SpecialType)
+            {
+                case SpecialType.System_String:
+                    sb.Append($"{len} = es_put_str({buf}, {len}, {value}, {width}); ");
+                    break;
+                case SpecialType.System_Char:
+                    sb.Append($"{len} = es_put_chr({buf}, {len}, (int){value}, {width}); ");
+                    break;
+                case SpecialType.System_Boolean:
+                    sb.Append($"{len} = es_put_str({buf}, {len}, ({value}) ? \"True\" : \"False\", {width}); ");
+                    break;
+                case SpecialType.System_SByte or SpecialType.System_Int16 or SpecialType.System_Int32:
+                    sb.Append($"{len} = es_put_i({buf}, {len}, (int32_t)({value}), {width}, {digits}, {hex}); ");
+                    break;
+                case SpecialType.System_Byte or SpecialType.System_UInt16 or SpecialType.System_UInt32:
+                    sb.Append($"{len} = es_put_u({buf}, {len}, (uint32_t)({value}), {width}, {digits}, {hex}); ");
+                    break;
+                default:
+                    if (type is INamedTypeSymbol { TypeKind: TypeKind.Enum })
+                        Unsupported(hole, "an enum in a string (write a switch that returns the name)");
+                    else
+                        Unsupported(hole, $"{type?.ToDisplayString()} in a string (strings can hold integers up to 32 bits, chars, bools and strings)");
+                    break;
+            }
+        }
+        sb.Append($"{buf}[{len}] = 0; {buf}; }})");
+        return sb.ToString();
     }
 
     private string DefaultValue(ExpressionSyntax e)

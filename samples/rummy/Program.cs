@@ -79,8 +79,7 @@ public static class Program
         if (Game.Stock.Count > 0) CardBack(StockX, MiddleY);
         else Video.FillRect(StockX, MiddleY, CardW, CardH, Shadow);
         if (Game.PileTop >= 0) DrawCard(Game.PileTop, PileX, MiddleY);
-        Font.Draw("STOCK", StockX, MiddleY + CardH + 4, Ink, 1);
-        Font.DrawInt(Game.Stock.Count, StockX, MiddleY + CardH + 14, Gold, 1);
+        Font.Draw($"STOCK {Game.Stock.Count}", StockX - 8, MiddleY + CardH + 4, Ink, 1);
         Font.Draw("PILE", PileX, MiddleY + CardH + 4, Ink, 1);
 
         if (Game.Phase == Phase.PlayerDiscard)
@@ -91,8 +90,7 @@ public static class Program
         }
 
         Font.Draw(Message(), 8, 118, Ink, 1);
-        Font.Draw("DEADWOOD", 8, 132, Ink, 1);
-        Font.DrawInt(Game.PlayerDeadwood, 8 + 54, 132, Gold, 1);
+        Font.Draw($"DEADWOOD {Game.PlayerDeadwood}", 8, 132, Gold, 1);
 
         // The player's hand, with a coloured bar under every card that belongs to a meld.
         byte[] groups = new byte[Rummy.MaxHand];
