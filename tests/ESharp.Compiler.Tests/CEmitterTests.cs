@@ -413,14 +413,74 @@ Check(a == null, ""freeing null again is harmless"");
     }
 
     [Fact]
-    public void Inheritance_virtual_members_and_interface_typed_variables_are_reported()
+    public void Interface_typed_values_dispatch_dynamically_to_classes()
+    {
+        if (!HasGcc) return;
+        const string members = @"
+interface IRules
+{
+    int Score(int card);
+    bool Allowed(int card, int limit);
+}
+class Flat : IRules
+{
+    public int Score(int card) { return card; }
+    public bool Allowed(int card, int limit) { return card <= limit; }
+}
+class Doubler : IRules
+{
+    public int Calls;
+    public int Score(int card) { Calls++; return card * 2; }
+    public bool Allowed(int card, int limit) { return true; }
+}
+class Table
+{
+    public IRules Rules;
+    public int Play(int card) { return Rules.Allowed(card, 5) ? Rules.Score(card) : -1; }
+}
+static IRules Pick(bool fancy) { if (fancy) return new Doubler(); return new Flat(); }
+static int Total(IRules r, int n) { int t = 0; for (int i = 1; i <= n; i++) t += r.Score(i); return t; }
+static IRules Chosen;
+static void Check(bool ok, string name) { Dos.PutStr(ok ? ""ok "" : ""FAIL ""); Dos.PutStr(name); Dos.PutStr(""\n""); }
+";
+        const string body = @"
+IRules a = Pick(false);
+IRules b = Pick(true);
+Check(Total(a, 3) == 6 && Total(b, 3) == 12, ""the same code runs different classes"");
+IRules same = a;
+Check(a != null && a != b && a == same, ""interface values compare by object"");
+IRules none = null;
+Check(none == null && none is null && !(a is null), ""null interface value"");
+Table t = new Table();
+t.Rules = b;
+Check(t.Play(3) == 6 && t.Play(9) == 18, ""interface field of a class"");
+t.Rules = a;
+Check(t.Play(3) == 3 && t.Play(9) == -1, ""switching the object behind a field"");
+Chosen = new Doubler();
+Check(Chosen.Score(4) == 8, ""interface in a static field"");
+IRules fresh = default;
+Check(fresh == null, ""default is null"");
+Heap.Free(ref a);
+Check(a == null, ""Heap.Free on an interface value"");
+";
+        var (code, output) = RunWithHostGcc(CompileOk(Program(members, body)));
+        Assert.Equal(0, code);
+        Assert.Equal(string.Concat(new[] { "the same code runs different classes", "interface values compare by object", "null interface value",
+            "interface field of a class", "switching the object behind a field", "interface in a static field", "default is null",
+            "Heap.Free on an interface value" }.Select(n => "ok " + n + "\n")), output);
+    }
+
+    [Fact]
+    public void Unsupported_class_and_interface_forms_are_reported()
     {
         var inherit = Compile(Program("class A { public int X; } class B : A { }"));
         Assert.Contains("ES0007", ErrorIds(inherit));
         var virt = Compile(Program("class A { public virtual int F() { return 1; } }"));
         Assert.Contains("ES0007", ErrorIds(virt));
-        var iface = Compile(Program("interface I { int F(); } struct S : I { public int F() { return 1; } } static int Use(I x) { return x.F(); }"));
-        Assert.Contains("ES0009", ErrorIds(iface));
+        var boxing = Compile(Program("interface I { int F(); } struct S : I { public int F() { return 1; } } static int Use(I x) { return x.F(); }", "S s = default; Use(s);"));
+        Assert.Contains("ES0099", ErrorIds(boxing));
+        var property = Compile(Program("interface I { int P { get; } }"));
+        Assert.Contains("ES0009", ErrorIds(property));
         var generic = Compile(Program("class Box<T> { public T V; }"));
         Assert.Contains("ES0008", ErrorIds(generic));
     }

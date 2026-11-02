@@ -47,8 +47,8 @@ public static class Descriptors
         "Expanding generic '{0}' did not finish: recursive instantiation?");
 
     public static readonly DiagnosticDescriptor Interfaces = Error(
-        "ES0009", "Interfaces are only supported as generic constraints",
-        "Interface '{0}' used as a type: E# interfaces are static-dispatch (use them as 'where T : {0}' on generic structs and methods); a variable, field or parameter of interface type would need dynamic dispatch");
+        "ES0009", "This kind of interface is not supported",
+        "Interface '{0}': {1}. Supported: interfaces of plain methods, implemented by classes (variables of the interface type) or by structs and classes (generic constraints)");
 
     public static readonly DiagnosticDescriptor SlowArithmetic = new(
         "ES0100", "Slow arithmetic on 68000",

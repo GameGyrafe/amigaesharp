@@ -64,6 +64,18 @@ internal sealed class CEmitter
     /// <summary>A non-static class: a heap object that variables hold by pointer.</summary>
     private static bool IsHeapClass(ITypeSymbol t) => t is INamedTypeSymbol { TypeKind: TypeKind.Class, IsStatic: false };
 
+    /// <summary>An interface declared in E# source: a value of this type is a fat pointer (object + table of functions).</summary>
+    private static bool IsInterfaceType(ITypeSymbol? t) =>
+        t is INamedTypeSymbol { TypeKind: TypeKind.Interface, IsGenericType: false } i && i.Locations.Any(l => l.IsInSource);
+
+    private static string SlotName(IMethodSymbol im)
+    {
+        var overloads = im.ContainingType.GetMembers(im.Name).OfType<IMethodSymbol>().Count();
+        return overloads > 1 ? im.Name + "_" + string.Join("_", im.Parameters.Select(p => Mangle(p.Type))) : im.Name;
+    }
+
+    private static string VtableName(INamedTypeSymbol iface, INamedTypeSymbol cls) => $"{TypeName(iface)}_vt_{TypeName(cls)}";
+
     /// <summary>A C pointer at run time: raw pointers and class references.</summary>
     private static bool IsRef(ITypeSymbol? t) => t is IPointerTypeSymbol || t != null && IsHeapClass(t);
 
@@ -92,9 +104,17 @@ internal sealed class CEmitter
         foreach (var u in _usedSymbols) usedStatics.Add(u);
         var body = new StringBuilder();
         foreach (var e in enums) EmitEnum(e);
+        var interfaces = CollectInterfaces();
+        foreach (var i in interfaces)
+        {
+            // An interface value is the object and the table of its functions; the table is defined once all types are known.
+            Line($"struct {TypeName(i)}_vtbl;");
+            Line($"typedef struct {{ void *obj; const struct {TypeName(i)}_vtbl *vt; }} {TypeName(i)};");
+        }
         foreach (var c in heapClasses) Line($"typedef struct {TypeName(c)} {TypeName(c)};");   // forward declarations: classes point to each other
         foreach (var s in structs) EmitStruct(s);
         foreach (var c in heapClasses) EmitClass(c);
+        foreach (var i in interfaces) EmitInterface(i);
         var typeText = _out.ToString();
         _out.Clear();
 
@@ -119,6 +139,9 @@ internal sealed class CEmitter
         _staticConstructors.AddRange(methods.Where(m => m.MethodKind == MethodKind.StaticConstructor));
         foreach (var m in methods) Line(Prototype(m) + ";");
         if (methods.Count > 0) Line("");
+        foreach (var c in heapClasses)
+            foreach (var i in interfaces.Where(i => c.AllInterfaces.Contains(i, SymbolEqualityComparer.Default)))
+                EmitVtable(i, c);
 
         foreach (var m in methods) EmitMethod(m);
 
@@ -432,6 +455,8 @@ internal sealed class CEmitter
                 return DelegateType(del, at);
             case INamedTypeSymbol cls when IsHeapClass(cls):
                 return TypeName(cls) + " *";
+            case INamedTypeSymbol iface when IsInterfaceType(iface):
+                return TypeName(iface);
             case INamedTypeSymbol { TypeKind: TypeKind.Enum or TypeKind.Struct } n:
                 return TypeName(n);
             case IArrayTypeSymbol:
@@ -617,6 +642,66 @@ internal sealed class CEmitter
             Line("char ES_empty;");   // C has no empty structs
         _indent--;
         Line($"}} {name};");
+        Line("");
+    }
+
+    private List<INamedTypeSymbol> CollectInterfaces()
+    {
+        var result = new List<INamedTypeSymbol>();
+        foreach (var tree in _compilation.SyntaxTrees)
+        {
+            if (!_user.Contains(tree)) continue;
+            foreach (var decl in tree.GetRoot().DescendantNodes().OfType<InterfaceDeclarationSyntax>())
+                if (Model(tree).GetDeclaredSymbol(decl) is INamedTypeSymbol sym && IsInterfaceType(sym)) result.Add(sym);
+        }
+        return result;
+    }
+
+    private string SlotParams(IMethodSymbol m, SyntaxNode at, bool named)
+    {
+        var parts = new List<string> { "void *self" };
+        for (var k = 0; k < m.Parameters.Length; k++)
+        {
+            if (m.Parameters[k].RefKind != RefKind.None) Unsupported(at, "ref/out parameter in an interface method");
+            parts.Add(named ? Decl(m.Parameters[k].Type, "a" + k, at) : CType(m.Parameters[k].Type, at));
+        }
+        return string.Join(", ", parts);
+    }
+
+    private void EmitInterface(INamedTypeSymbol i)
+    {
+        var decl = i.DeclaringSyntaxReferences.First().GetSyntax();
+        Line($"struct {TypeName(i)}_vtbl");
+        Line("{");
+        _indent++;
+        foreach (var m in i.GetMembers().OfType<IMethodSymbol>().Where(m => m.MethodKind == MethodKind.Ordinary))
+        {
+            if (m.IsGenericMethod) Unsupported(decl, "generic method in an interface");
+            Line(Decl(m.ReturnType, $"(*{SlotName(m)})({SlotParams(m, decl, false)})", decl) + ";");
+        }
+        _indent--;
+        Line("};");
+        Line("");
+    }
+
+    /// <summary>The function table that lets a class be used as an interface, with one small function per method that casts the object back.</summary>
+    private void EmitVtable(INamedTypeSymbol i, INamedTypeSymbol c)
+    {
+        var decl = c.DeclaringSyntaxReferences.First().GetSyntax();
+        var slots = new List<string>();
+        foreach (var im in i.GetMembers().OfType<IMethodSymbol>().Where(m => m.MethodKind == MethodKind.Ordinary))
+        {
+            if (c.FindImplementationForInterfaceMember(im) is not IMethodSymbol impl) { Unsupported(decl, $"'{c.Name}' does not implement '{im.Name}'"); continue; }
+            var thunk = $"{TypeName(c)}_{TypeName(i)}_{SlotName(im)}";
+            var args = new List<string> { $"({TypeName(c)} *)self" };
+            for (var k = 0; k < im.Parameters.Length; k++) args.Add("a" + k);
+            Line($"static __attribute__((unused)) {Decl(im.ReturnType, $"{thunk}({SlotParams(im, decl, true)})", decl)}");
+            Line("{");
+            Line($"    {(im.ReturnsVoid ? "" : "return ")}{FuncName(impl)}({string.Join(", ", args)});");
+            Line("}");
+            slots.Add($".{SlotName(im)} = {thunk}");
+        }
+        Line($"static __attribute__((unused)) const struct {TypeName(i)}_vtbl {VtableName(i, c)} = {{ {string.Join(", ", slots)} }};");
         Line("");
     }
 
@@ -1105,7 +1190,19 @@ internal sealed class CEmitter
             info.ConvertedType is INamedTypeSymbol nullSpan && IsSpan(nullSpan))
             return $"(({SpanType(nullSpan, e)}){{ NULL, 0 }})";
 
+        // null where an interface is expected is an empty interface value.
+        if (e is LiteralExpressionSyntax nl && nl.IsKind(SyntaxKind.NullLiteralExpression) && IsInterfaceType(info.ConvertedType))
+            return $"(({CType(info.ConvertedType!, e)}){{0}})";
+
         var text = ExprCore(e, top);
+
+        // A class converted to an interface it implements: pair the object with that class's function table.
+        if (IsInterfaceType(info.ConvertedType) && info.Type != null && !IsInterfaceType(info.Type))
+        {
+            if (info.Type is INamedTypeSymbol cls && IsHeapClass(cls))
+                return $"(({CType(info.ConvertedType!, e)}){{ (void *){text}, &{VtableName((INamedTypeSymbol)info.ConvertedType!, cls)} }})";
+            return Unsupported(e, "converting a struct to an interface (boxing); only classes can be used as interface values");
+        }
 
         // Implicit user-defined conversion (operator implicit) written in E# source: call the conversion function.
         var conversion = Model(e).GetConversion(e);
@@ -1286,6 +1383,16 @@ internal sealed class CEmitter
             return "0";
         }
 
+        if (b.OperatorToken.Text is "==" or "!=" &&
+            (IsInterfaceType(Model(b).GetTypeInfo(b.Left).Type) || IsInterfaceType(Model(b).GetTypeInfo(b.Right).Type)))
+        {
+            // Interface values are equal when they hold the same object; null is an empty value.
+            string Side(ExpressionSyntax x) => x is LiteralExpressionSyntax l && l.IsKind(SyntaxKind.NullLiteralExpression) ? "NULL"
+                : IsInterfaceType(Model(x).GetTypeInfo(x).Type) ? $"{Expr(x)}.obj" : Expr(x);
+            var cmp = $"{Side(b.Left)} {b.OperatorToken.Text} {Side(b.Right)}";
+            return top ? cmp : $"({cmp})";
+        }
+
         var s = $"{Expr(b.Left)} {b.OperatorToken.Text} {Expr(b.Right)}";
         return top ? s : $"({s})";
     }
@@ -1293,7 +1400,7 @@ internal sealed class CEmitter
     private string DefaultValue(ExpressionSyntax e)
     {
         var type = Model(e).GetTypeInfo(e).Type!;
-        return type.TypeKind == TypeKind.Struct && type.SpecialType == SpecialType.None
+        return type.TypeKind == TypeKind.Struct && type.SpecialType == SpecialType.None || IsInterfaceType(type)
             ? $"({CType(type, e)}){{0}}"
             : "0";
     }
@@ -1492,7 +1599,10 @@ internal sealed class CEmitter
             && inv.ArgumentList.Arguments.Count == 1)
         {
             _usesAlloc = true;
-            var target = Expr(inv.ArgumentList.Arguments[0].Expression, top: true);
+            var freed = inv.ArgumentList.Arguments[0].Expression;
+            var target = Expr(freed, top: true);
+            if (IsInterfaceType(Model(freed).GetTypeInfo(freed).Type))
+                return $"(free({target}.obj), {target} = ({CType(Model(freed).GetTypeInfo(freed).Type!, freed)}){{0}})";
             return $"(free({target}), {target} = NULL)";
         }
 
@@ -1505,6 +1615,14 @@ internal sealed class CEmitter
 
         if (IsSpan(m.ContainingType) && m.Name == "Slice" && inv.Expression is MemberAccessExpressionSyntax sliceAccess)
             return SpanSlice(inv, sliceAccess, m);
+
+        if (IsInterfaceType(m.ContainingType) && inv.Expression is MemberAccessExpressionSyntax ifaceAccess)
+        {
+            if (!RequireSimple(ifaceAccess.Expression, "call through an interface")) return "0";
+            var target = Expr(ifaceAccess.Expression);
+            var callArgs = inv.ArgumentList.Arguments.Select(a => Argument(a, m)).Prepend($"{target}.obj");
+            return $"{target}.vt->{SlotName(m)}({string.Join(", ", callArgs)})";
+        }
 
         string? receiver = null;
         if (!m.IsStatic && m.MethodKind != MethodKind.LocalFunction)
@@ -1618,6 +1736,8 @@ internal sealed class CEmitter
             case DiscardPatternSyntax:
                 return "1";
             case ConstantPatternSyntax c:
+                if (c.Expression is LiteralExpressionSyntax nullLit && nullLit.IsKind(SyntaxKind.NullLiteralExpression))
+                    return IsInterfaceType(type) ? $"({subject}.obj == NULL)" : $"({subject} == NULL)";
                 return $"({subject} == {Expr(c.Expression)})";
             case RelationalPatternSyntax r:
                 return $"({subject} {r.OperatorToken.Text} {Expr(r.Expression)})";

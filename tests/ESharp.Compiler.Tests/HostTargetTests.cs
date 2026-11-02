@@ -328,7 +328,8 @@ internal static class LanguageExpected
         "switch expression", "property patterns", "is patterns", "local function", "static constructor",
         "this initializer", "list add insert remove", "list as span", "lambda as a predicate", "list destroy",
         "heap objects linked by reference", "an object is shared, not copied", "Heap.Free clears the variable",
-        "interface constraint with a struct and a class",
+        "interface constraint with a struct and a class", "interface value calls the class", "the interface value shares the object",
+        "null interface value", "Heap.Free on an interface value",
         "lambdas with two parameters", "method group and delegate variable",
     };
 }

@@ -35,7 +35,7 @@ public sealed class SubsetAnalyzer : DiagnosticAnalyzer
             SyntaxKind.SimpleLambdaExpression, SyntaxKind.ParenthesizedLambdaExpression,
             SyntaxKind.AnonymousMethodExpression);
         context.RegisterSyntaxNodeAction(CheckClass, SyntaxKind.ClassDeclaration);
-        context.RegisterSyntaxNodeAction(CheckInterfaceUse, SyntaxKind.IdentifierName);
+        context.RegisterSyntaxNodeAction(CheckInterface, SyntaxKind.InterfaceDeclaration);
         context.RegisterSyntaxNodeAction(CheckGenericDeclaration,
             SyntaxKind.ClassDeclaration, SyntaxKind.StructDeclaration, SyntaxKind.MethodDeclaration);
         context.RegisterSyntaxNodeAction(CheckInvocation, SyntaxKind.InvocationExpression);
@@ -196,18 +196,21 @@ public sealed class SubsetAnalyzer : DiagnosticAnalyzer
     }
 
     /// <summary>
-    /// An interface may be declared and used as a generic constraint or in a base list (static dispatch: generic code is
-    /// monomorphised, so every call resolves to the concrete type). A variable, field, parameter or return of an interface
-    /// type would need dynamic dispatch and is reported.
+    /// Interfaces may declare plain methods. A variable of interface type holds a class object plus its function table
+    /// (dynamic dispatch); generic code constrained by an interface is monomorphised instead (static dispatch). Properties,
+    /// events, generic methods and default implementations in interfaces are not supported.
     /// </summary>
-    private static void CheckInterfaceUse(SyntaxNodeAnalysisContext c)
+    private static void CheckInterface(SyntaxNodeAnalysisContext c)
     {
-        if (c.Node.Parent is TypeConstraintSyntax or BaseTypeSyntax or QualifiedNameSyntax or UsingDirectiveSyntax or AttributeSyntax) return;
-        if (c.Node.Parent is MemberAccessExpressionSyntax { Name: var n } && n == c.Node) return;
-        var symbol = c.SemanticModel.GetSymbolInfo(c.Node, c.CancellationToken).Symbol as ITypeSymbol;
-        if (symbol is not { TypeKind: TypeKind.Interface }) return;
-        if (symbol.ContainingNamespace?.ToDisplayString().StartsWith("System") == true) return;
-        c.ReportDiagnostic(Diagnostic.Create(Descriptors.Interfaces, c.Node.GetLocation(), symbol.Name));
+        var decl = (InterfaceDeclarationSyntax)c.Node;
+        foreach (var member in decl.Members)
+        {
+            if (member is MethodDeclarationSyntax { TypeParameterList: null, Body: null, ExpressionBody: null }) continue;
+            c.ReportDiagnostic(Diagnostic.Create(Descriptors.Interfaces, member.GetLocation(), decl.Identifier.Text,
+                member is MethodDeclarationSyntax ? "generic methods and default implementations are not supported" : "only plain methods are supported"));
+        }
+        if (decl.TypeParameterList != null)
+            c.ReportDiagnostic(Diagnostic.Create(Descriptors.Interfaces, decl.Identifier.GetLocation(), decl.Identifier.Text, "generic interfaces are not supported"));
     }
 
     private static void CheckGenericDeclaration(SyntaxNodeAnalysisContext c)

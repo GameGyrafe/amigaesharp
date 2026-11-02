@@ -114,6 +114,13 @@ public static class Program
         return sum;
     }
 
+    static int Sum(IScorer scorer, int n)
+    {
+        int sum = 0;
+        for (int i = 1; i <= n; i++) sum += scorer.Score(i);
+        return sum;
+    }
+
     static int Fact(int n)
     {
         int Go(int k) { return k <= 1 ? 1 : k * Go(k - 1); }
@@ -173,6 +180,14 @@ public static class Program
         DoubleScorer doubled = default;
         BonusScorer bonus = new BonusScorer { Bonus = 100 };
         Check(Total(ref doubled, 3) == 12 && Total(ref bonus, 3) == 306, "interface constraint with a struct and a class");
+        IScorer asInterface = bonus;
+        Check(asInterface != null && asInterface.Score(2) == 102 && Sum(asInterface, 3) == 306, "interface value calls the class");
+        bonus.Bonus = 0;
+        Check(Sum(asInterface, 3) == 6, "the interface value shares the object");
+        IScorer nothing = null;
+        Check(nothing == null && nothing is null && asInterface is not null, "null interface value");
+        Heap.Free(ref asInterface);
+        Check(asInterface == null, "Heap.Free on an interface value");
 
         int[] nums = new int[4];
         for (int i = 0; i < nums.Length; i++) nums[i] = i + 1;
