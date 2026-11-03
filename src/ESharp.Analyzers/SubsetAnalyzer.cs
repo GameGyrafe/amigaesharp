@@ -138,8 +138,25 @@ public sealed class SubsetAnalyzer : DiagnosticAnalyzer
     private static void CheckTypeOf(SyntaxNodeAnalysisContext c) =>
         c.ReportDiagnostic(Diagnostic.Create(Descriptors.Reflection, c.Node.GetLocation(), "typeof"));
 
-    private static void CheckLinqQuery(SyntaxNodeAnalysisContext c) =>
-        c.ReportDiagnostic(Diagnostic.Create(Descriptors.Linq, c.Node.GetLocation(), "query expression"));
+    /// <summary>The LINQ operators E# turns into loops (over arrays and Enumerable.Range); the emitter checks how they are used.</summary>
+    internal static readonly System.Collections.Generic.HashSet<string> SupportedLinq = new System.Collections.Generic.HashSet<string>
+    {
+        "Where", "Select", "Take", "Skip", "Count", "Sum", "Min", "Max", "Any", "All", "First", "FirstOrDefault",
+        "Last", "LastOrDefault", "Contains", "Aggregate", "Range",
+    };
+
+    private static void CheckLinqQuery(SyntaxNodeAnalysisContext c)
+    {
+        // from x in a [where ..] [let ..] select ..: one source, no joins, ordering, grouping or continuation.
+        var q = (QueryExpressionSyntax)c.Node;
+        string? unsupported = null;
+        foreach (var clause in q.Body.Clauses)
+            if (!(clause is WhereClauseSyntax || clause is LetClauseSyntax)) unsupported = clause.Kind().ToString().Replace("Clause", "").ToLowerInvariant();
+        if (q.Body.SelectOrGroup is GroupClauseSyntax) unsupported = "group";
+        if (q.Body.Continuation != null) unsupported = "into";
+        if (unsupported != null)
+            c.ReportDiagnostic(Diagnostic.Create(Descriptors.Linq, c.Node.GetLocation(), "query clause '" + unsupported + "'"));
+    }
 
     private static void CheckAsync(SyntaxNodeAnalysisContext c) =>
         c.ReportDiagnostic(Diagnostic.Create(Descriptors.AsyncAwait, c.Node.GetLocation(), "await"));
@@ -229,13 +246,15 @@ public sealed class SubsetAnalyzer : DiagnosticAnalyzer
         var ns = method.ContainingNamespace?.ToDisplayString() ?? "";
         var type = method.ContainingType?.ToDisplayString() ?? "";
 
-        if (type == "System.Linq.Enumerable" || type == "System.Linq.Queryable")
+        var linqSubset = (type == "System.Linq.Enumerable" && SupportedLinq.Contains(method.Name)) ||
+                         (type == "System.MemoryExtensions" && method.Name == "Contains" && method.ReducedFrom != null && method.Parameters.Length == 1);
+        if (type == "System.Linq.Queryable" || (type == "System.Linq.Enumerable" && !linqSubset))
             c.ReportDiagnostic(Diagnostic.Create(Descriptors.Linq, c.Node.GetLocation(), method.Name));
         else if (ns.StartsWith("System.Reflection") || type == "System.Type" ||
                  (type == "System.Object" && method.Name == "GetType"))
             c.ReportDiagnostic(Diagnostic.Create(Descriptors.Reflection, c.Node.GetLocation(), method.Name));
 
-        if (method.IsGenericMethod && !method.OriginalDefinition.Locations.Any(l => l.IsInSource))
+        if (method.IsGenericMethod && !linqSubset && !method.OriginalDefinition.Locations.Any(l => l.IsInSource))
             c.ReportDiagnostic(Diagnostic.Create(Descriptors.Generics, c.Node.GetLocation(), method.Name));
     }
 

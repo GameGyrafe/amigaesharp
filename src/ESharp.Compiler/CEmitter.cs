@@ -14,7 +14,7 @@ namespace ESharp.Compiler;
 /// Lowers the E# subset to readable, stable C. Output is deterministic (declaration order),
 /// and every function and statement carries a #line directive back to the .cs file.
 /// </summary>
-internal sealed class CEmitter
+internal sealed partial class CEmitter
 {
     private readonly CSharpCompilation _compilation;
     private readonly HashSet<SyntaxTree> _user;
@@ -496,6 +496,7 @@ internal sealed class CEmitter
                 var info = model.GetSymbolInfo(e);
                 switch (info.Symbol)
                 {
+                    case IMethodSymbol { MethodKind: MethodKind.AnonymousFunction } when IsInlinedLinqLambda(e): break;   // pasted into the loop, no function needed
                     case IMethodSymbol m: Add(m); break;
                     case IPropertySymbol p: Add(p.GetMethod); Add(p.SetMethod); _usedSymbols.Add(p); break;
                     case IFieldSymbol f: _usedSymbols.Add(f); break;
@@ -651,19 +652,20 @@ internal sealed class CEmitter
     }
 
     /// <summary>
-    /// A delegate type (Func, Action, Predicate, a user's <c>delegate</c>) is a C function pointer. Only lambdas that
-    /// capture nothing and static methods can be converted to it, so there is no closure to carry around.
+    /// A delegate type (Func, Action, Predicate, a user's <c>delegate</c>) is a function pointer plus an environment pointer.
+    /// The function takes the environment first; static methods and lambdas that capture nothing have a null environment,
+    /// a lambda that captures locals points at a struct of pointers to them (see <see cref="Lambda"/>).
     /// </summary>
     private string DelegateType(INamedTypeSymbol del, SyntaxNode at)
     {
         var invoke = del.DelegateInvokeMethod!;
-        var ps = invoke.Parameters.Select(p => p.RefKind == RefKind.None ? CType(p.Type, at) : CType(p.Type, at) + " *").ToList();
-        var signature = $"{CType(invoke.ReturnType, at)} (*{{0}})({(ps.Count == 0 ? "void" : string.Join(", ", ps))})";
+        var ps = invoke.Parameters.Select(p => p.RefKind == RefKind.None ? CType(p.Type, at) : CType(p.Type, at) + " *").Prepend("void *").ToList();
+        var signature = $"typedef struct {{ {CType(invoke.ReturnType, at)} (*fn)({string.Join(", ", ps)}); void *env; }} @NAME@;\n";
         if (!_delegateNames.TryGetValue(signature, out var name))
         {
-            name = "ES_Fn_" + _delegateNames.Count;
+            name = "ES_Wfn_" + _delegateNames.Count;   // sorts after the span and tuple typedefs it may mention
             _delegateNames[signature] = name;
-            _spans[name] = $"typedef {string.Format(signature, name)};\n";
+            _spans[name] = signature.Replace("@NAME@", name);
         }
         return name;
     }
@@ -689,6 +691,18 @@ internal sealed class CEmitter
     private static bool IsSpan(ITypeSymbol? t) =>
         t is INamedTypeSymbol { Name: "Span" or "ReadOnlySpan", TypeArguments.Length: 1 } n &&
         n.ContainingNamespace?.ToDisplayString() == "System";
+
+    private static bool IsSimple(ExpressionSyntax e)
+    {
+        for (var x = e; ; )
+            switch (x)
+            {
+                case ParenthesizedExpressionSyntax p: x = p.Expression; continue;
+                case IdentifierNameSyntax: return true;
+                case MemberAccessExpressionSyntax ma: x = ma.Expression; continue;
+                default: return false;
+            }
+    }
 
     /// <summary>Only side-effect-free expressions may be written twice in the output.</summary>
     private bool RequireSimple(ExpressionSyntax e, string what)
@@ -977,6 +991,7 @@ internal sealed class CEmitter
     {
         var node = m.DeclaringSyntaxReferences.First().GetSyntax();
         var parts = new List<string>();
+        if (m.MethodKind == MethodKind.AnonymousFunction) parts.Add("void *_env");   // a lambda is called through a delegate, which passes its environment
         if (!m.IsStatic && m.MethodKind is not (MethodKind.Constructor or MethodKind.LocalFunction or MethodKind.AnonymousFunction))
             parts.Add($"{TypeName(m.ContainingType)} *{ThisName}");
         parts.AddRange(m.Parameters.Select(p => p.RefKind switch
@@ -1064,7 +1079,21 @@ internal sealed class CEmitter
         _thisIsClass = IsHeapClass(m.ContainingType) && !m.IsStatic;
         _thisType = m.ContainingType;
         _this = isCtor && !isClassCtor ? ThisKind.Value : m.IsStatic || m.MethodKind is MethodKind.LocalFunction or MethodKind.AnonymousFunction ? ThisKind.None : ThisKind.Pointer;
-        if (m.MethodKind == MethodKind.AnonymousFunction) CheckNoCapture(decl, "lambda");
+        _captures.Clear();
+        if (m.MethodKind == MethodKind.AnonymousFunction)
+        {
+            var caps = FindCaptures(decl);
+            if (caps.Locals.Count > 0 || caps.UsesThis)
+            {
+                Line($"struct {EnvName(m)} *_cap = (struct {EnvName(m)} *)_env;");
+                for (var ci = 0; ci < caps.Locals.Count; ci++) _captures[caps.Locals[ci]] = $"(*_cap->c{ci}_{caps.Locals[ci].Name})";
+                if (caps.UsesThis)
+                {
+                    Line($"{TypeName(m.ContainingType)} *{ThisName} = _cap->{ThisName};");
+                    _this = ThisKind.Pointer;
+                }
+            }
+        }
         if (isCtor && !isClassCtor) Line($"{CType(m.ContainingType, decl)} {ThisName} = {{0}};");
         if (isCtor && !isClassCtor && decl is ConstructorDeclarationSyntax { Initializer: { } init } &&
             Model(init).GetSymbolInfo(init).Symbol is IMethodSymbol { IsImplicitlyDeclared: false } chained)
@@ -1096,6 +1125,7 @@ internal sealed class CEmitter
         _this = ThisKind.None;
         _thisIsClass = false;
         _thisType = null;
+        _captures.Clear();
         _indent--;
         Line("}");
         Line("");
@@ -1399,6 +1429,7 @@ internal sealed class CEmitter
 
     private void EmitForEach(ForEachStatementSyntax fe)
     {
+        if (IsLinqSource(fe.Expression)) { EmitLinqForEach(fe); return; }
         var collType = Model(fe).GetTypeInfo(fe.Expression).Type;
         if (collType is not IArrayTypeSymbol && !IsSpan(collType))
         {
@@ -1469,8 +1500,8 @@ internal sealed class CEmitter
             info.ConvertedType is INamedTypeSymbol nullSpan && IsSpan(nullSpan))
             return $"(({SpanType(nullSpan, e)}){{ NULL, 0 }})";
 
-        // null where an interface is expected is an empty interface value.
-        if (e is LiteralExpressionSyntax nl && nl.IsKind(SyntaxKind.NullLiteralExpression) && IsInterfaceType(info.ConvertedType))
+        // null where an interface or delegate is expected is an empty value.
+        if (e is LiteralExpressionSyntax nl && nl.IsKind(SyntaxKind.NullLiteralExpression) && (IsInterfaceType(info.ConvertedType) || info.ConvertedType?.TypeKind == TypeKind.Delegate))
             return $"(({CType(info.ConvertedType!, e)}){{0}})";
 
         var text = ExprCore(e, top);
@@ -1534,7 +1565,10 @@ internal sealed class CEmitter
                 return Interpolation(interp);
 
             case LambdaExpressionSyntax lam:
-                return Model(lam).GetSymbolInfo(lam).Symbol is IMethodSymbol lm ? FuncName(lm) : Unsupported(lam, "lambda");
+                return Lambda(lam);
+
+            case QueryExpressionSyntax query:
+                return Unsupported(query, "a query whose result is kept: E# builds no sequences, so consume it right away with foreach or a call such as (query).Sum()");
 
             case MemberAccessExpressionSyntax ma:
                 return MemberAccess(ma);
@@ -1693,12 +1727,14 @@ internal sealed class CEmitter
             return FormatParts(b, leaves.Select(l => (l, (ExpressionSyntax?)null, (string?)null)).ToList(), leaves.Select(l => ((string?)null, (string?)null)).ToList());
         }
 
+        static bool IsDelegate(ITypeSymbol? t) => t?.TypeKind == TypeKind.Delegate;
         if (b.OperatorToken.Text is "==" or "!=" &&
-            (IsInterfaceType(Model(b).GetTypeInfo(b.Left).Type) || IsInterfaceType(Model(b).GetTypeInfo(b.Right).Type)))
+            (IsInterfaceType(Model(b).GetTypeInfo(b.Left).Type) || IsInterfaceType(Model(b).GetTypeInfo(b.Right).Type) ||
+             IsDelegate(Model(b).GetTypeInfo(b.Left).Type) || IsDelegate(Model(b).GetTypeInfo(b.Right).Type)))
         {
-            // Interface values are equal when they hold the same object; null is an empty value.
+            // Interface values are equal when they hold the same object, delegates when they hold the same function (and environment); null is an empty value.
             string Side(ExpressionSyntax x) => x is LiteralExpressionSyntax l && l.IsKind(SyntaxKind.NullLiteralExpression) ? "NULL"
-                : IsInterfaceType(Model(x).GetTypeInfo(x).Type) ? $"{Expr(x)}.obj" : Expr(x);
+                : IsInterfaceType(Model(x).GetTypeInfo(x).Type) ? $"{Expr(x)}.obj" : IsDelegate(Model(x).GetTypeInfo(x).Type) ? $"{Expr(x)}.fn" : Expr(x);
             var cmp = $"{Side(b.Left)} {b.OperatorToken.Text} {Side(b.Right)}";
             return top ? cmp : $"({cmp})";
         }
@@ -1800,7 +1836,7 @@ internal sealed class CEmitter
     private string DefaultValue(ExpressionSyntax e)
     {
         var type = Model(e).GetTypeInfo(e).Type!;
-        return type.TypeKind == TypeKind.Struct && type.SpecialType == SpecialType.None || IsInterfaceType(type)
+        return type.TypeKind == TypeKind.Struct && type.SpecialType == SpecialType.None || IsInterfaceType(type) || type.TypeKind == TypeKind.Delegate
             ? $"({CType(type, e)}){{0}}"
             : "0";
     }
@@ -1882,14 +1918,16 @@ internal sealed class CEmitter
         {
             case IParameterSymbol { RefKind: not RefKind.None } rp:
                 return $"(*{rp.Name})";
+            case IMethodSymbol { IsStatic: true, MethodKind: MethodKind.Ordinary or MethodKind.LocalFunction } group:
+                return MethodGroup(group, id);   // a method group converted to a delegate
+            case IRangeVariableSymbol:
+                return id.Identifier.Text;   // a name bound by a LINQ query, which is a local of the loop it becomes
             case ILocalSymbol or IParameterSymbol:
-                return id.Identifier.Text;
+                return _captures.TryGetValue(sym, out var captured) ? captured : id.Identifier.Text;
             case IFieldSymbol f:
                 return FieldRef(f, id);
             case IPropertySymbol p:
                 return PropertyRead(p, null, id);
-            case IMethodSymbol { IsStatic: true, MethodKind: MethodKind.Ordinary } mg:
-                return FuncName(mg);   // a method group converted to a delegate
             default:
                 Unsupported(id, $"identifier '{id.Identifier.Text}'");
                 return id.Identifier.Text;
@@ -1929,7 +1967,7 @@ internal sealed class CEmitter
                 return $"((int)__builtin_strlen({Expr(ma.Expression)}))";
         }
         if (sym is IMethodSymbol { IsStatic: true, MethodKind: MethodKind.Ordinary } group)
-            return FuncName(group);   // a method group converted to a delegate
+            return MethodGroup(group, ma);   // a method group converted to a delegate
         if (sym is IPropertySymbol prop)
             return PropertyRead(prop, ma.Expression, ma);
         if (sym is IFieldSymbol f)
@@ -2001,6 +2039,8 @@ internal sealed class CEmitter
             return "0";
         }
 
+        if (IsLinqCall(inv, out var linqMethod, out var linqReceiver)) return Linq(inv, linqMethod, linqReceiver);
+
         if (m.ContainingType is { Name: "Heap" } && m.Name.StartsWith("Free") && m.ContainingNamespace?.ToDisplayString() == "ESharp.Platform"
             && inv.ArgumentList.Arguments.Count == 1)
         {
@@ -2032,7 +2072,16 @@ internal sealed class CEmitter
         {
             // f(x) and f.Invoke(x) call through the function pointer.
             var callee = inv.Expression is MemberAccessExpressionSyntax { Name.Identifier.Text: "Invoke" } inva ? inva.Expression : inv.Expression;
-            return $"{Expr(callee)}({string.Join(", ", inv.ArgumentList.Arguments.Select(a => Argument(a, m)))})";
+            var d = Expr(callee);
+            if (!IsSimple(callee))
+            {
+                // Pick() (x): evaluate the delegate once, into a temporary of a statement expression.
+                var tmp = $"_d{++_temp}";
+                var targs = inv.ArgumentList.Arguments.Select(a => Argument(a, m)).Prepend($"{tmp}.env");
+                return $"({{ {CType(Model(callee).GetTypeInfo(callee).Type!, callee)} {tmp} = {d}; {tmp}.fn({string.Join(", ", targs)}); }})";
+            }
+            var dargs = inv.ArgumentList.Arguments.Select(a => Argument(a, m)).Prepend($"{d}.env");
+            return $"{d}.fn({string.Join(", ", dargs)})";
         }
 
         if (IsSpan(m.ContainingType) && m.Name == "Slice" && inv.Expression is MemberAccessExpressionSyntax sliceAccess)
@@ -2246,6 +2295,102 @@ internal sealed class CEmitter
         if (designation is SingleVariableDesignationSyntax single)
             return $"(({single.Identifier.Text} = {subject}), 1)";
         return "1";
+    }
+
+    // ------------------------------------------------------------------ lambdas and method groups
+
+    private readonly Dictionary<ISymbol, string> _captures = new(SymbolEqualityComparer.Default);
+    private readonly Dictionary<SyntaxNode, (List<ISymbol> Locals, bool UsesThis)> _captureCache = new();
+
+    private static string EnvName(IMethodSymbol lambda) => FuncName(lambda) + "_env";
+
+    /// <summary>The locals and parameters of the enclosing code that a lambda uses, and whether it uses 'this' (explicitly or through an instance member).</summary>
+    private (List<ISymbol> Locals, bool UsesThis) FindCaptures(SyntaxNode lam)
+    {
+        if (_captureCache.TryGetValue(lam, out var cached)) return cached;
+        var model = Model(lam);
+        var locals = new List<ISymbol>();
+        var usesThis = false;
+        foreach (var n in lam.DescendantNodes())
+        {
+            if (n is ThisExpressionSyntax or BaseExpressionSyntax) { usesThis = true; continue; }
+            if (n is not IdentifierNameSyntax id) continue;
+            // 'c.Suit': the name after a dot belongs to the thing before it; 'x:' in a call and 'X = 1' in an initializer name a parameter or member.
+            if (n.Parent is MemberAccessExpressionSyntax dot && dot.Name == n) continue;
+            if (n.Parent is NameColonSyntax) continue;
+            if (n.Parent is AssignmentExpressionSyntax { Parent: InitializerExpressionSyntax { Parent: ObjectCreationExpressionSyntax } } init && init.Left == n) continue;
+            switch (model.GetSymbolInfo(id).Symbol)
+            {
+                case ILocalSymbol or IParameterSymbol { IsThis: false }:
+                    var sym = model.GetSymbolInfo(id).Symbol!;
+                    if (!sym.DeclaringSyntaxReferences.Any(r => r.SyntaxTree == lam.SyntaxTree && lam.Span.Contains(r.Span)) &&
+                        !locals.Contains(sym, SymbolEqualityComparer.Default))
+                        locals.Add(sym);
+                    break;
+                case IFieldSymbol { IsStatic: false, IsConst: false } or IPropertySymbol { IsStatic: false } or IMethodSymbol { IsStatic: false, MethodKind: MethodKind.Ordinary }:
+                    usesThis = true;
+                    break;
+            }
+        }
+        return _captureCache[lam] = (locals, usesThis);
+    }
+
+    /// <summary>
+    /// A lambda is a delegate value: its function and an environment. With nothing captured the environment is null; otherwise it is a struct
+    /// of pointers to the captured locals (and 'this'), built on the stack of the method that creates the lambda. So a capturing lambda
+    /// is only valid while that method runs; it can be passed down to other methods, but not returned or stored.
+    /// </summary>
+    private string Lambda(LambdaExpressionSyntax lam)
+    {
+        if (Model(lam).GetSymbolInfo(lam).Symbol is not IMethodSymbol m) return Unsupported(lam, "lambda");
+        var del = Model(lam).GetTypeInfo(lam).ConvertedType;
+        if (del?.TypeKind != TypeKind.Delegate) return Unsupported(lam, "lambda that is not converted to a delegate type");
+        var dt = CType(del, lam);
+        var (locals, usesThis) = FindCaptures(lam);
+        if (locals.Count == 0 && !usesThis) return $"(({dt}){{ {FuncName(m)}, NULL }})";
+
+        SyntaxNode? p = lam.Parent;
+        while (p is ParenthesizedExpressionSyntax or CastExpressionSyntax or ConditionalExpressionSyntax) p = p.Parent;
+        var allowed = p is ArgumentSyntax || p is EqualsValueClauseSyntax { Parent: VariableDeclaratorSyntax { Parent: VariableDeclarationSyntax { Parent: LocalDeclarationStatementSyntax } } };
+        if (!allowed)
+            return Unsupported(lam, "lambda that captures a local or 'this' and is not an argument or a local variable's initializer; it only lives as long as the method that made it, so it cannot be returned or stored");
+
+        var fields = new List<string>();
+        var inits = new List<string>();
+        for (var i = 0; i < locals.Count; i++)
+        {
+            ITypeSymbol type = locals[i] is ILocalSymbol l ? l.Type : ((IParameterSymbol)locals[i]).Type;
+            if (type is IArrayTypeSymbol) return Unsupported(lam, $"lambda that captures the array '{locals[i].Name}'; pass it as a Span<T>");
+            fields.Add(Decl(type, $"*c{i}_{locals[i].Name}", lam) + ";");
+            inits.Add("&" + (_captures.TryGetValue(locals[i], out var outer) ? outer : locals[i].Name));
+        }
+        if (usesThis)
+        {
+            if (_this != ThisKind.Pointer) return Unsupported(lam, "lambda that uses 'this' here");
+            fields.Add($"{TypeName(m.ContainingType)} *{ThisName};");
+            inits.Add(ThisName);
+        }
+        var env = EnvName(m);
+        _spans[env] = $"struct {env} {{ {string.Join(" ", fields)} }};\n";
+        return $"(({dt}){{ {FuncName(m)}, &(struct {env}){{ {string.Join(", ", inits)} }} }})";
+    }
+
+    /// <summary>A static method used as a delegate: a small function that takes the (unused) environment first and calls the method.</summary>
+    private string MethodGroup(IMethodSymbol m, ExpressionSyntax at)
+    {
+        var del = Model(at).GetTypeInfo(at).ConvertedType as INamedTypeSymbol;
+        var invoke = del?.DelegateInvokeMethod;
+        if (del == null || invoke == null) return FuncName(m);   // not a delegate conversion
+        if (HasAttribute(m, "AmigaLibAttribute") || m.IsExtern) return Unsupported(at, "a library function as a delegate; wrap it in a lambda");
+        var wrapper = FuncName(m) + "__dg";
+        var key = "ES_zwrap_" + wrapper;
+        if (!_spans.ContainsKey(key))
+        {
+            var ps = invoke.Parameters.Select((p, i) => p.RefKind == RefKind.None ? Decl(p.Type, $"a{i}", at) : Decl(p.Type, $"*a{i}", at)).Prepend("void *_env");
+            var args = string.Join(", ", invoke.Parameters.Select((_, i) => $"a{i}"));
+            _spans[key] = $"{Prototype(m)};\nstatic {Decl(invoke.ReturnType, $"{wrapper}({string.Join(", ", ps)})", at)} {{ {(invoke.ReturnsVoid ? "" : "return ")}{FuncName(m)}({args}); }}\n";
+        }
+        return $"(({CType(del, at)}){{ {wrapper}, NULL }})";
     }
 
     /// <summary>Local functions become C functions of their own, so they may not use the locals, parameters or 'this' of the method around them.</summary>

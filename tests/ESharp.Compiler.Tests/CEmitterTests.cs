@@ -571,10 +571,23 @@ Check(zero() == 0, ""lambda without parameters"");
     }
 
     [Fact]
-    public void Lambda_that_captures_a_local_reports_ES0099()
+    public void Lambda_that_captures_a_local_cannot_be_returned_or_stored()
     {
-        var r = Compile(Program("static int Run(System.Func<int, int> f) { return f(1); }", "int k = 3; Dos.PutStr(Run(x => x + k) == 4 ? \"y\" : \"n\");"));
+        var r = Compile(Program("static System.Func<int, int> Make(int k) { return x => x + k; }", "Dos.PutStr(Make(3)(1) == 4 ? \"y\" : \"n\");"));
         Assert.Contains("ES0099", ErrorIds(r));
+        r = Compile(Program("static System.Func<int, int> Held;", "int k = 3; Held = x => x + k;"));
+        Assert.Contains("ES0099", ErrorIds(r));
+    }
+
+    [Theory]
+    [InlineData("int[] a = new int[3]; var q = System.Linq.Enumerable.Where(a, x => x > 1);")]            // written as a plain call
+    [InlineData("int[] a = new int[3]; var q = a.Where(x => x > 1); Dos.PutStr(q.Count() == 0 ? \"y\" : \"n\");")]   // a chain that is kept
+    [InlineData("int[] a = new int[3]; int n = a.Where(x => { int y = x; y++; return y > 1; }).Count();")]      // a statement lambda
+    [InlineData("System.ReadOnlySpan<int> a = new int[3]; int n = a.Sum();")]                             // not an array
+    public void Linq_forms_that_cannot_be_loops_report_an_error(string body)
+    {
+        var r = Compile("using System.Linq;\n" + Program("", body));
+        Assert.True(!r.Success, "should not compile");
     }
 
     [Fact]
@@ -721,6 +734,32 @@ Check(list.Count == 0, ""destroy"");
         var (code, output) = RunWithHostGcc(r.C!);
         Assert.Equal(0, code);
         Assert.Equal(InheritExpected.Output, output);
+    }
+
+    [Fact]
+    public void Lambdas_sample_compiles_and_runs_natively_with_the_same_output_as_dotnet()
+    {
+        if (!HasGcc) return;
+        var path = Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "..", "samples", "lambdas", "Lambdas.cs");
+        var options = new CompileOptions { Defines = new[] { "AMIGA", "ESHARP_HOSTC" } };
+        var r = EsCompiler.Compile(new[] { new SourceFile(path, File.ReadAllText(path)) }, options);
+        Assert.True(r.Success, string.Join("\n", r.Diagnostics));
+        var (code, output) = RunWithHostGcc(r.C!);
+        Assert.Equal(0, code);
+        Assert.Equal(LambdasExpected.Output, output);
+    }
+
+    [Fact]
+    public void Linq_sample_compiles_and_runs_natively_with_the_same_output_as_dotnet()
+    {
+        if (!HasGcc) return;
+        var path = Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "..", "samples", "linq", "Linq.cs");
+        var options = new CompileOptions { Defines = new[] { "AMIGA", "ESHARP_HOSTC" } };
+        var r = EsCompiler.Compile(new[] { new SourceFile(path, File.ReadAllText(path)) }, options);
+        Assert.True(r.Success, string.Join("\n", r.Diagnostics));
+        var (code, output) = RunWithHostGcc(r.C!);
+        Assert.Equal(0, code);
+        Assert.Equal(LinqExpected.Output, output);
     }
 
     [Fact]

@@ -20,6 +20,8 @@ dotnet run --project src/ESharp.Cli -- run samples/rummy --docker <image> --head
 dotnet run --project src/ESharp.Cli -- run samples/aga --docker <image> --headless --model A1200 --screenshot shot.png   # AGA 256 colours (A500+ runs the fallback checks)
 dotnet run --project src/ESharp.Cli -- run samples/rtg --docker <image> --headless --model A1200   # RTG: no card in the emulator, so this runs the fallback checks
 dotnet run --project src/ESharp.Cli -- run samples/inherit --docker <image> --headless --model A1200   # inheritance, virtual members, is/as
+dotnet run --project src/ESharp.Cli -- run samples/lambdas --docker <image> --headless --model A1200   # capturing lambdas and delegates
+dotnet run --project src/ESharp.Cli -- run samples/linq --docker <image> --headless --model A1200   # LINQ over arrays, turned into loops
 dotnet run --project tools/CardArt -- samples/cards/cards.png                               # redraw the card sprite sheet
 docker build -t esharp-amiga-toolchain docker && docker/smoke-test.sh    # combined toolchain image
 ```

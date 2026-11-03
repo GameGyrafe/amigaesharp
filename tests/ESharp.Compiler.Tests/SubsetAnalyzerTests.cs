@@ -6,6 +6,13 @@ namespace ESharp.Compiler.Tests;
 public class SubsetAnalyzerTests
 {
     [Fact]
+    public void Linq_subset_over_arrays_has_no_diagnostics()
+    {
+        var r = Compile("using System.Linq;\n" + Program("", "int[] a = new int[4]; int n = a.Where(x => x > 1).Select(x => x * 2).Sum() + a.Count() + (from v in a where v > 0 select v).Count(); n += (a.Contains(3) ? 1 : 0) + System.Linq.Enumerable.Range(0, 3).Max();"));
+        Assert.True(r.Success, string.Join("\n", r.Diagnostics));
+    }
+
+    [Fact]
     public void Valid_program_has_no_diagnostics()
     {
         var r = Compile(Program("public static int Add(int a, int b) { return a + b; }"));
@@ -16,8 +23,10 @@ public class SubsetAnalyzerTests
     [Theory]
     [InlineData("static void F() { throw new System.Exception(); }", "ES0001")]
     [InlineData("static void F() { try { } catch { } }", "ES0001")]
-    [InlineData("static int F(int[] a) { return System.Linq.Enumerable.Sum(a); }", "ES0002")]
-    [InlineData("static int F(int[] a) { var q = from x in a select x; return 0; }", "ES0002")]
+    [InlineData("static int F(int[] a) { return System.Linq.Enumerable.Sum(System.Linq.Enumerable.OrderBy(a, x => x)); }", "ES0002")]
+    [InlineData("static int F(int[] a) { var q = from x in a orderby x select x; return 0; }", "ES0002")]
+    [InlineData("static int F(int[] a) { var q = from x in a from y in a select x + y; return 0; }", "ES0002")]
+    [InlineData("static int F(int[] a) { var q = from x in a group x by x; return 0; }", "ES0002")]
     [InlineData("static void F() { float x = 1; }", "ES0003")]
     [InlineData("static double F() { return 1; }", "ES0003")]
     [InlineData("static void F() { var x = 1.5; }", "ES0003")]

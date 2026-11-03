@@ -16,7 +16,7 @@ public static class Descriptors
 
     public static readonly DiagnosticDescriptor Linq = Error(
         "ES0002", "LINQ is not supported",
-        "E# has no LINQ ('{0}'); use plain loops");
+        "E# turns only simple LINQ over arrays into loops (Where, Select, Take, Skip, Count, Sum, Min, Max, Any, All, First, Last, Contains, Aggregate, simple queries): '{0}' is not supported; use a plain loop");
 
     public static readonly DiagnosticDescriptor FloatingPoint = Error(
         "ES0003", "Floating point is off by default",

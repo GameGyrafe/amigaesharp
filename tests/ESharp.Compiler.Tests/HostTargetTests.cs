@@ -104,6 +104,22 @@ public class HostTargetTests
     }
 
     [Fact]
+    public void Lambdas_sample_runs_on_the_host()
+    {
+        using var console = HostConsole.Capture();
+        LambdasSample.Program.Main();
+        Assert.Equal(LambdasExpected.Output, console.Output);
+    }
+
+    [Fact]
+    public void Linq_sample_runs_on_the_host()
+    {
+        using var console = HostConsole.Capture();
+        LinqSample.Program.Main();
+        Assert.Equal(LinqExpected.Output, console.Output);
+    }
+
+    [Fact]
     public void Rtg_sample_opens_an_rtg_screen_on_the_host_and_falls_back_without_a_card()
     {
         using (var console = HostConsole.Capture())
@@ -480,5 +496,70 @@ internal static class LanguageExpected
         "null interface value", "Heap.Free on an interface value",
         "interpolated string", "concatenation and escaped braces",
         "lambdas with two parameters", "method group and delegate variable",
+    };
+}
+
+/// <summary>What samples/lambdas prints.</summary>
+internal static class LambdasExpected
+{
+    public static string Output => string.Concat(Names.Select(n => "ok " + n + "\n"));
+
+    private static readonly string[] Names =
+    {
+        "lambda captures a local",
+        "a lambda writes to a captured local",
+        "a captured local is shared, not copied",
+        "two captured locals",
+        "a user delegate type with a capture",
+        "a static method as a user delegate",
+        "capture as a span filter",
+        "same code, new captured value",
+        "a lambda passed through another method",
+        "a method group",
+        "a lambda inside a lambda captures through both",
+        "closures created inside a loop",
+        "null delegate",
+        "assigned delegate",
+        "a lambda that uses this",
+        "capture of a captured variable",
+    };
+}
+
+/// <summary>What samples/linq prints.</summary>
+internal static class LinqExpected
+{
+    public static string Output => string.Concat(Names.Select(n => "ok " + n + "\n"));
+
+    private static readonly string[] Names =
+    {
+        "Count",
+        "Sum",
+        "Min and Max",
+        "Any",
+        "All",
+        "First and Last",
+        "FirstOrDefault, no match",
+        "Contains",
+        "Where then Sum",
+        "method groups",
+        "Select then Where",
+        "three steps",
+        "Take and Skip",
+        "Where with an index",
+        "Select with an index",
+        "Aggregate",
+        "captures nothing: the lambda sees the locals",
+        "the lambda reads the current value",
+        "Enumerable.Range",
+        "Range with steps",
+        "foreach over a chain",
+        "foreach over Range with continue and Take",
+        "structs",
+        "struct projection",
+        "query: where and select",
+        "query: let",
+        "foreach over a query",
+        "query over structs",
+        "a chain inside a lambda",
     };
 }
