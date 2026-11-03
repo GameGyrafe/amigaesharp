@@ -11,7 +11,7 @@ public static unsafe class Intuition
 
     public const uint TagDone = 0;
     public const uint SA_Width = 0x80000023, SA_Height = 0x80000024, SA_Depth = 0x80000025;
-    public const uint SA_Quiet = 0x80000038, SA_ShowTitle = 0x80000036, SA_Type = 0x8000002d;
+    public const uint SA_DisplayID = 0x80000032, SA_Quiet = 0x80000038, SA_ShowTitle = 0x80000036, SA_Type = 0x8000002d;
     public const uint WA_Left = 0x80000064, WA_Top = 0x80000065, WA_Width = 0x80000066, WA_Height = 0x80000067;
     public const uint WA_CustomScreen = 0x80000070, WA_Borderless = 0x80000088, WA_Backdrop = 0x80000085;
     public const uint WA_Activate = 0x80000089, WA_RMBTrap = 0x8000008a, WA_SimpleRefresh = 0x8000008c;
@@ -45,5 +45,23 @@ public static unsafe class Graphics
     [AmigaLib("graphics", -636)] public static extern void BltMaskBitMapRastPort(void* srcBitMap, int xSrc, int ySrc,
         void* destRastPort, int xDest, int yDest, int xSize, int ySize, uint minterm, void* bltMask);
     [AmigaLib("graphics", -270)] public static extern void WaitTOF();
+    /// <summary>graphics.library GetVPModeID() (v36): the display mode ID of a view port.</summary>
+    [AmigaLib("graphics", -792)] public static extern uint GetVPModeID(void* viewPort);
+}
+
+/// <summary>
+/// cybergraphics.library bindings (v40): the retargetable graphics (RTG) API that Picasso96, CyberGraphX and the AmigaOS 4 and
+/// MorphOS graphics drivers all provide. The library is absent on a stock Amiga, so <see cref="Video"/> opens it first and only then calls these.
+/// </summary>
+public static unsafe class CyberGfx
+{
+    /// <summary>Emitter intrinsic: sets the library base that the calls below use (the result of OpenLibrary, or null afterwards).</summary>
+    public static extern void SetBase(void* library);
+
+    [AmigaLib("cybergraphics", -54)] public static extern uint IsCyberModeID(uint displayId);
+    [AmigaLib("cybergraphics", -60)] public static extern uint BestCModeIDTagList(void* tags);
+
+    public const uint CYBRBIDTG_Depth = 0x80050000, CYBRBIDTG_NominalWidth = 0x80050001, CYBRBIDTG_NominalHeight = 0x80050002;
+    public const uint InvalidId = 0xFFFFFFFFu;
 }
 #endif

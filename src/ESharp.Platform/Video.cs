@@ -42,13 +42,75 @@ public static unsafe class Video
         if (_screen != null) return false;
         // Kickstart 2.x opens a screen with more bitplanes than the chips have and then misbehaves: refuse it here.
         if (depth > 5 && !HasAga()) return false;
+        return OpenMode(width, height, depth, 0);
+    }
+
+    /// <summary>
+    /// True if a retargetable graphics (RTG) card driver is installed (Picasso96, CyberGraphX, or the AmigaOS 4 / MorphOS
+    /// graphics system) and it has an 8-bit mode of at least <paramref name="width"/> x <paramref name="height"/>.
+    /// </summary>
+    public static bool HasRtg(int width, int height)
+    {
+        return RtgMode(width, height) != CyberGfx.InvalidId;
+    }
+
+    private static uint RtgMode(int width, int height)
+    {
+        void* cyber = Exec.OpenLibrary("cybergraphics.library", 40);
+        if (cyber == null) return CyberGfx.InvalidId;
+        CyberGfx.SetBase(cyber);
+        uint[] tags = new uint[8];
+        tags[0] = CyberGfx.CYBRBIDTG_Depth; tags[1] = 8;
+        tags[2] = CyberGfx.CYBRBIDTG_NominalWidth; tags[3] = (uint)width;
+        tags[4] = CyberGfx.CYBRBIDTG_NominalHeight; tags[5] = (uint)height;
+        tags[6] = Intuition.TagDone;
+        uint id;
+        fixed (uint* p = tags)
+        {
+            id = CyberGfx.BestCModeIDTagList(p);
+        }
+        CyberGfx.SetBase(null);
+        Exec.CloseLibrary(cyber);
+        return id;
+    }
+
+    /// <summary>
+    /// Opens the screen on an RTG card instead of the native chipset. The screen is always 8 bits per pixel (256 palette entries), so
+    /// <paramref name="depth"/> is the number of colours the program uses (1..8) and the same planar assets work, although each blit is
+    /// converted by the driver, so it is slower than on the chipset. False if there is no RTG mode that large (see <see cref="HasRtg"/>).
+    /// </summary>
+    public static bool OpenRtg(int width, int height, int depth)
+    {
+        if (_screen != null) return false;
+        uint id = RtgMode(width, height);
+        if (id == CyberGfx.InvalidId) return false;
+        return OpenMode(width, height, 8, id);
+    }
+
+    /// <summary>True if the open screen is on an RTG card (not the native chipset).</summary>
+    public static bool IsRtg()
+    {
+        if (_screen == null) return false;
+        void* cyber = Exec.OpenLibrary("cybergraphics.library", 40);
+        if (cyber == null) return false;
+        CyberGfx.SetBase(cyber);
+        bool yes = CyberGfx.IsCyberModeID(Graphics.GetVPModeID(_viewPort)) != 0;
+        CyberGfx.SetBase(null);
+        Exec.CloseLibrary(cyber);
+        return yes;
+    }
+
+    private static bool OpenMode(int width, int height, int depth, uint displayId)
+    {
         uint[] tags = new uint[24];
         tags[0] = Intuition.SA_Width; tags[1] = (uint)width;
         tags[2] = Intuition.SA_Height; tags[3] = (uint)height;
         tags[4] = Intuition.SA_Depth; tags[5] = (uint)depth;
         tags[6] = Intuition.SA_Quiet; tags[7] = 1;
         tags[8] = Intuition.SA_Type; tags[9] = Intuition.CustomScreen;
-        tags[10] = Intuition.TagDone;
+        tags[10] = Intuition.SA_DisplayID; tags[11] = displayId;
+        tags[12] = Intuition.TagDone;
+        if (displayId == 0) tags[10] = Intuition.TagDone;     // native: let the system choose
         fixed (uint* p = tags)
         {
             _screen = Intuition.OpenScreenTagList(null, p);
@@ -251,9 +313,26 @@ public static unsafe class Video
         return true;
     }
 
+    /// <summary>Host: whether an RTG card is "installed" (<see cref="HasRtg"/>). Tests set it to false to check the fallback path.</summary>
+    public static bool HostRtg = true;
+
+    private static bool _rtgScreen;
+
+    public static bool HasRtg(int width, int height) { return HostRtg && width <= 1920 && height <= 1200; }
+
+    public static bool OpenRtg(int width, int height, int depth)
+    {
+        if (_open || depth < 1 || depth > 8 || !HasRtg(width, height)) return false;
+        if (!Open(width, height, 8)) return false;
+        _rtgScreen = true;
+        return true;
+    }
+
+    public static bool IsRtg() { return _open && _rtgScreen; }
+
     public static bool IsOpen() { return _open; }
 
-    public static void Close() { _open = false; }
+    public static void Close() { _open = false; _rtgScreen = false; }
 
     public static void SetColor(int index, int r, int g, int b)
     {

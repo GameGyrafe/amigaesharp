@@ -28,6 +28,7 @@ internal sealed class CEmitter
     private readonly SortedSet<string> _headers = new(StringComparer.Ordinal);
     private readonly SortedDictionary<string, string> _spans = new(StringComparer.Ordinal);
     private bool _usesLen;
+    private bool _usesCyber;
 
     /// <summary>How <c>this</c> is spelled inside the method being emitted.</summary>
     private enum ThisKind { None, Pointer, Value }
@@ -158,7 +159,11 @@ internal sealed class CEmitter
         result.AppendLine("#include <stdbool.h>");
         result.AppendLine("#include <stddef.h>");
         result.AppendLine("#include <stdint.h>");
+        // cybergraphics.library may be absent, and libnix refuses to start a program whose startup list names a missing library,
+        // so its base is a private variable that CyberGfx.SetBase fills in around each call (the proto header's own CyberGfxBase is never used).
+        if (_usesCyber) { result.AppendLine("#define CYBERGRAPHICS_BASE_NAME es_CyberBase"); result.AppendLine("extern struct Library *es_CyberBase;"); }
         foreach (var h in _headers) result.AppendLine($"#include <{h}>");
+        if (_usesCyber) result.AppendLine("struct Library *es_CyberBase;");
         result.AppendLine();
         if (_usesBounds)
         {
@@ -1773,6 +1778,14 @@ internal sealed class CEmitter
             // Strings are plain byte pointers in C: reinterpret.
             var arg = Expr(inv.ArgumentList.Arguments[0].Expression, top: true);
             return m.Name == "StringToPtr" ? $"((uint8_t *)({arg}))" : $"((const char *)({arg}))";
+        }
+
+        if (m.ContainingType is { Name: "CyberGfx" } && m.ContainingNamespace?.ToDisplayString() == "ESharp.Platform"
+            && m.Name == "SetBase" && inv.ArgumentList.Arguments.Count == 1)
+        {
+            _usesCyber = true;
+            _headers.Add("proto/cybergraphics.h");
+            return $"(es_CyberBase = (struct Library *)({Expr(inv.ArgumentList.Arguments[0].Expression, top: true)}))";
         }
 
         if (m.MethodKind == MethodKind.DelegateInvoke)

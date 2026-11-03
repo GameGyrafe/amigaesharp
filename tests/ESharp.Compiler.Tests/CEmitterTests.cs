@@ -723,6 +723,19 @@ Check(list.Count == 0, ""destroy"");
     }
 
     [Fact]
+    public void Rtg_sample_compiles_for_m68k_with_a_private_cybergraphics_base()
+    {
+        var path = Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "..", "samples", "rtg", "Rtg.cs");
+        var r = EsCompiler.Compile(new[] { new SourceFile("Rtg.cs", File.ReadAllText(path)) }, Targets.M68k.ToOptions());
+        Assert.True(r.Success, string.Join("\n", r.Diagnostics));
+        // A program must still start on a machine without cybergraphics.library: no use of the library-list base CyberGfxBase.
+        Assert.Contains("#define CYBERGRAPHICS_BASE_NAME es_CyberBase", r.C!);
+        Assert.Contains("struct Library *es_CyberBase;", r.C!);
+        Assert.Contains("IsCyberModeID(", r.C!);
+        Assert.Contains("BestCModeIDTagList(", r.C!);
+    }
+
+    [Fact]
     public void Property_assignment_used_as_a_value_reports_ES0099()
     {
         var r = Compile(Program(

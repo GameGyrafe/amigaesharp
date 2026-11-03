@@ -96,6 +96,26 @@ public class HostTargetTests
     }
 
     [Fact]
+    public void Rtg_sample_opens_an_rtg_screen_on_the_host_and_falls_back_without_a_card()
+    {
+        using (var console = HostConsole.Capture())
+        {
+            ESharp.Platform.Video.HostRtg = true;
+            RtgSample.Program.Main();
+            Assert.Equal("RTG present\nok an RTG screen opens\nok the screen is reported as RTG\nok pen 200 draws on the card\nok closed screen is not RTG\n"
+                + "ok the native screen opens\nok the native screen is not RTG\nok native drawing works\n", console.Output);
+        }
+        using (var console = HostConsole.Capture())
+        {
+            ESharp.Platform.Video.HostRtg = false;
+            try { RtgSample.Program.Main(); }
+            finally { ESharp.Platform.Video.HostRtg = true; }
+            Assert.Equal("no RTG\nok an RTG screen is refused without a card\nok no screen is not RTG\nok the native screen opens\n"
+                + "ok the native screen is not RTG\nok native drawing works\n", console.Output);
+        }
+    }
+
+    [Fact]
     public void Operators_sample_runs_on_the_host()
     {
         using var console = HostConsole.Capture();
