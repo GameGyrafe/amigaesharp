@@ -17,6 +17,7 @@ dotnet run --project src/ESharp.Cli -- assets samples/screen                    
 dotnet run --project src/ESharp.Cli -- run samples/screen --docker <image> --headless --screenshot shot.png
 dotnet run --project src/ESharp.Cli -- run samples/cards --docker <image> --headless --input "click 400,300;rel -80,50;press;key 9"   # scripted mouse/keys (XTEST)
 dotnet run --project src/ESharp.Cli -- run samples/rummy --docker <image> --headless --input "click 400,300;rel 16,-80;press;key 9"   # rummy: stock at (128,80)
+dotnet run --project src/ESharp.Cli -- run samples/aga --docker <image> --headless --model A1200 --screenshot shot.png   # AGA 256 colours (A500+ runs the fallback checks)
 dotnet run --project tools/CardArt -- samples/cards/cards.png                               # redraw the card sprite sheet
 docker build -t esharp-amiga-toolchain docker && docker/smoke-test.sh    # combined toolchain image
 ```

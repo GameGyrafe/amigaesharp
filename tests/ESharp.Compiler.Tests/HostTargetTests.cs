@@ -75,6 +75,27 @@ public class HostTargetTests
     }
 
     [Fact]
+    public void Aga_sample_runs_on_the_host_with_a_24_bit_palette()
+    {
+        using var console = HostConsole.Capture();
+        ESharp.Platform.Video.HostAga = true;
+        AgaSample.Program.Main();
+        Assert.Equal(AgaExpected.Output, console.Output);
+        Assert.Equal(0xF0F000u, ESharp.Platform.Video.HostPalette24[255]);   // restored to the image colour after the pen test
+        Assert.Equal(256, ESharp.Platform.Video.HostPalette24.Length);
+    }
+
+    [Fact]
+    public void Aga_sample_falls_back_on_a_machine_without_aga()
+    {
+        using var console = HostConsole.Capture();
+        ESharp.Platform.Video.HostAga = false;
+        try { AgaSample.Program.Main(); }
+        finally { ESharp.Platform.Video.HostAga = true; }
+        Assert.Equal("no AGA chipset\nok an 8-bitplane screen is refused without AGA\nok the 32-colour fallback opens\nok SetColor24 falls back to the 4-bit palette\n", console.Output);
+    }
+
+    [Fact]
     public void Operators_sample_runs_on_the_host()
     {
         using var console = HostConsole.Capture();
@@ -156,6 +177,18 @@ internal static class Phase2Expected
         "constructor sets fields", "instance method calling another", "method mutates its receiver",
         "method on an array element", "constructor with early return", "constructor overloads",
         "method on a by-value parameter", "inline array in an instance method",
+    };
+}
+
+/// <summary>What samples/aga prints on a machine with AGA.</summary>
+internal static class AgaExpected
+{
+    public static string Output => "AGA chipset\n" + string.Concat(Names.Select(n => "ok " + n + "\n")) + "SHOT\nok screen closes\n";
+
+    private static readonly string[] Names =
+    {
+        "an 8-bitplane screen opens", "the asset has 256 colours", "the blitted pixels have the 24-bit colours of the image",
+        "pen 255 draws", "the chart is drawn",
     };
 }
 

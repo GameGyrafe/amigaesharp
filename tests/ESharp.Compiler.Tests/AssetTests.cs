@@ -148,4 +148,46 @@ public class AssetTests
         var generated = AssetBuilder.Build(Path.Combine(dir, "assets.json"));
         Assert.Equal(File.ReadAllText(Path.Combine(dir, "Assets.g.cs")), generated.Source);
     }
+
+    [Fact]
+    public void Committed_aga_Assets_g_cs_matches_what_the_pipeline_generates()
+    {
+        var dir = Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "..", "samples", "aga");
+        var generated = AssetBuilder.Build(Path.Combine(dir, "assets.json"));
+        Assert.Equal(File.ReadAllText(Path.Combine(dir, "Assets.g.cs")), generated.Source);
+        Assert.Contains("uint[] TilePalette", generated.Source);
+    }
+
+    [Fact]
+    public void Aga_conversion_keeps_eight_bits_per_channel_and_up_to_256_colours()
+    {
+        // 200 distinct colours that differ only in the low 4 bits of a channel: OCS would merge them, AGA keeps them.
+        var image = Image(200, 1, (x, _) => (x, 255 - x, 17 * (x % 3), 255));
+        var planar = Planar.Convert(image, 256, aga: true);
+        Assert.Equal(8, planar.Depth);
+        Assert.Equal(256, planar.Palette24.Length);
+        Assert.Empty(planar.Palette);
+        Assert.Equal(200, planar.Indices.Distinct().Count());
+        for (var x = 0; x < 200; x++)
+            Assert.Equal((uint)((x << 16) | ((255 - x) << 8) | (17 * (x % 3))), planar.Palette24[planar.Indices[x]]);
+        Assert.Throws<ArgumentOutOfRangeException>(() => Planar.Convert(image, 257, aga: true));
+        Assert.Throws<ArgumentOutOfRangeException>(() => Planar.Convert(image, 64));
+    }
+
+    [Fact]
+    public void Aga_conversion_reduces_more_than_256_colours_with_median_cut()
+    {
+        var image = Image(32, 32, (x, y) => (x * 8, y * 8, (x + y) * 4, 255));
+        var planar = Planar.Convert(image, 256, aga: true);
+        Assert.Equal(8, planar.Depth);
+        Assert.True(planar.Indices.Distinct().Count() <= 256);
+        // Close to the source: every pixel lands within a few levels per channel.
+        for (var i = 0; i < planar.Indices.Length; i++)
+        {
+            var c = planar.Palette24[planar.Indices[i]];
+            var x = i % 32; var y = i / 32;
+            Assert.InRange((int)((c >> 16) & 255) - x * 8, -24, 24);
+            Assert.InRange((int)((c >> 8) & 255) - y * 8, -24, 24);
+        }
+    }
 }

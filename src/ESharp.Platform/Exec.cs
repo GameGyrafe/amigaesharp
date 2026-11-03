@@ -29,6 +29,14 @@ public static unsafe class Exec
     [AmigaLib("exec", -216)]
     public static extern uint AvailMem(uint requirements);
 
+    /// <summary>exec.library OpenLibrary(), LVO -552: the library base, or null if it is missing or older than <paramref name="version"/>.</summary>
+    [AmigaLib("exec", -552)]
+    public static extern void* OpenLibrary(string libName, uint version);
+
+    /// <summary>exec.library CloseLibrary(), LVO -414.</summary>
+    [AmigaLib("exec", -414)]
+    public static extern void CloseLibrary(void* library);
+
     /// <summary>exec.library CreateMsgPort(), LVO -666 (v36).</summary>
     [AmigaLib("exec", -666)]
     public static extern void* CreateMsgPort();

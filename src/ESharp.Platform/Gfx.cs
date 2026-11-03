@@ -29,6 +29,14 @@ public static unsafe class Intuition
 public static unsafe class Graphics
 {
     [AmigaLib("graphics", -288)] public static extern void SetRGB4(void* viewPort, int index, int r, int g, int b);
+    /// <summary>graphics.library SetRGB32() (v39, AGA machines): components are 32-bit left-justified (0xRR000000, or 0xRRRRRRRR to repeat a byte).</summary>
+    [AmigaLib("graphics", -852)] public static extern void SetRGB32(void* viewPort, uint index, uint r, uint g, uint b);
+    /// <summary>
+    /// graphics.library SetChipRev() (v39): turns on the best chip set the machine has and returns the bits now enabled
+    /// (GFXF_AA_ALICE 4, GFXF_AA_LISA 8, GFXF_HR_DENISE 2, GFXF_HR_AGNUS 1). The system boots with the AGA modes off until
+    /// something asks for them.
+    /// </summary>
+    [AmigaLib("graphics", -840)] public static extern uint SetChipRev(uint want);
     [AmigaLib("graphics", -342)] public static extern void SetAPen(void* rastPort, int pen);
     [AmigaLib("graphics", -306)] public static extern int RectFill(void* rastPort, int xMin, int yMin, int xMax, int yMax);
     [AmigaLib("graphics", -318)] public static extern int ReadPixel(void* rastPort, int x, int y);

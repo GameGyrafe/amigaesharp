@@ -19,10 +19,29 @@ public static unsafe class Video
     private static int _height;
     private static int _depth;
 
-    /// <summary>Opens a screen of <paramref name="width"/> x <paramref name="height"/> with <paramref name="depth"/> bitplanes (1..5 on OCS). False on failure.</summary>
+    /// <summary>
+    /// True on a machine with the AGA chipset (A1200, A4000: 8 bitplanes, 256 colours out of 16.7 million). Needs
+    /// Kickstart 3.0 or newer; older systems report false.
+    /// </summary>
+    public static bool HasAga()
+    {
+        void* gfx = Exec.OpenLibrary("graphics.library", 39);
+        if (gfx == null) return false;
+        Exec.CloseLibrary(gfx);
+        // The AGA modes are off after boot until a program asks for the best chip set; asking is harmless on other chips.
+        uint rev = Graphics.SetChipRev(0xFFFFFFFFu);
+        return (rev & 12) == 12;                      // GFXF_AA_ALICE | GFXF_AA_LISA
+    }
+
+    /// <summary>
+    /// Opens a screen of <paramref name="width"/> x <paramref name="height"/> with <paramref name="depth"/> bitplanes (1..5 on OCS/ECS,
+    /// up to 8 on AGA: check <see cref="HasAga"/> first or fall back when this returns false). False on failure.
+    /// </summary>
     public static bool Open(int width, int height, int depth)
     {
         if (_screen != null) return false;
+        // Kickstart 2.x opens a screen with more bitplanes than the chips have and then misbehaves: refuse it here.
+        if (depth > 5 && !HasAga()) return false;
         uint[] tags = new uint[24];
         tags[0] = Intuition.SA_Width; tags[1] = (uint)width;
         tags[2] = Intuition.SA_Height; tags[3] = (uint)height;
@@ -87,6 +106,25 @@ public static unsafe class Video
     public static void SetColor(int index, int r, int g, int b)
     {
         Graphics.SetRGB4(_viewPort, index, r, g, b);
+    }
+
+    /// <summary>
+    /// Sets palette entry <paramref name="index"/> from 8-bit components (0..255). With an AGA screen (more than 5 bitplanes) all 24
+    /// bits are used; on other screens the colour is rounded to 4 bits per channel.
+    /// </summary>
+    public static void SetColor24(int index, int r, int g, int b)
+    {
+        if (_depth > 5)
+            Graphics.SetRGB32(_viewPort, (uint)index, (uint)r * 0x01010101u, (uint)g * 0x01010101u, (uint)b * 0x01010101u);
+        else
+            Graphics.SetRGB4(_viewPort, index, r >> 4, g >> 4, b >> 4);
+    }
+
+    /// <summary>Loads palette entries from 0x00RRGGBB values (see <see cref="SetColor24"/>), starting at entry 0.</summary>
+    public static void SetPalette24(ReadOnlySpan<uint> rgb)
+    {
+        for (int i = 0; i < rgb.Length; i++)
+            SetColor24(i, (int)((rgb[i] >> 16) & 255), (int)((rgb[i] >> 8) & 255), (int)(rgb[i] & 255));
     }
 
     /// <summary>Loads palette entries from 0x0RGB words, starting at entry 0.</summary>
@@ -176,6 +214,16 @@ public static unsafe class Video
 #else
     private static byte[] _pixels = new byte[0];
     private static ushort[] _palette = new ushort[0];
+    private static uint[] _palette24 = new uint[0];
+    private static int _depthBits;
+
+    /// <summary>Host: whether <see cref="HasAga"/> says yes. Tests set it to false to check the fallback path.</summary>
+    public static bool HostAga = true;
+
+    public static bool HasAga() { return HostAga; }
+
+    /// <summary>Host palette as 0x00RRGGBB (what <see cref="SetColor24"/> stored; entries set with <see cref="SetColor"/> are expanded).</summary>
+    public static uint[] HostPalette24 => _palette24;
     private static int _width;
     private static int _height;
     private static bool _open;
@@ -193,7 +241,10 @@ public static unsafe class Video
     {
         if (_open || width <= 0 || height <= 0 || depth < 1 || depth > 8) return false;
         _pixels = new byte[width * height];
+        if (depth > 5 && !HostAga) return false;      // as on an OCS machine
         _palette = new ushort[1 << depth];
+        _palette24 = new uint[1 << depth];
+        _depthBits = depth;
         _width = width;
         _height = height;
         _open = true;
@@ -207,12 +258,35 @@ public static unsafe class Video
     public static void SetColor(int index, int r, int g, int b)
     {
         if (index >= 0 && index < _palette.Length)
+        {
             _palette[index] = (ushort)(((r & 15) << 8) | ((g & 15) << 4) | (b & 15));
+            _palette24[index] = (uint)((((r & 15) * 17) << 16) | (((g & 15) * 17) << 8) | ((b & 15) * 17));
+        }
+    }
+
+    public static void SetColor24(int index, int r, int g, int b)
+    {
+        if (index < 0 || index >= _palette.Length) return;
+        if (_depthBits > 5)
+        {
+            _palette24[index] = (uint)(((r & 255) << 16) | ((g & 255) << 8) | (b & 255));
+            _palette[index] = (ushort)((((r & 255) >> 4) << 8) | (((g & 255) >> 4) << 4) | ((b & 255) >> 4));
+        }
+        else
+        {
+            SetColor(index, r >> 4, g >> 4, b >> 4);
+        }
+    }
+
+    public static void SetPalette24(ReadOnlySpan<uint> rgb)
+    {
+        for (int i = 0; i < rgb.Length; i++)
+            SetColor24(i, (int)((rgb[i] >> 16) & 255), (int)((rgb[i] >> 8) & 255), (int)(rgb[i] & 255));
     }
 
     public static void SetPalette(ReadOnlySpan<ushort> rgb4)
     {
-        for (int i = 0; i < rgb4.Length && i < _palette.Length; i++) _palette[i] = (ushort)(rgb4[i] & 0xFFF);
+        for (int i = 0; i < rgb4.Length && i < _palette.Length; i++) SetColor(i, (rgb4[i] >> 8) & 15, (rgb4[i] >> 4) & 15, rgb4[i] & 15);
     }
 
     public static void FillRect(int x, int y, int width, int height, int color)

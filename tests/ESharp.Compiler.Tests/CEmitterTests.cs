@@ -711,6 +711,18 @@ Check(list.Count == 0, ""destroy"");
     }
 
     [Fact]
+    public void Aga_sample_compiles_for_m68k_with_a_24_bit_palette_call()
+    {
+        var dir = Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "..", "samples", "aga");
+        var sources = new[] { "Aga.cs", "Assets.g.cs" }
+            .Select(f => new SourceFile(f, File.ReadAllText(Path.Combine(dir, f)))).ToArray();
+        var r = EsCompiler.Compile(sources, Targets.M68k.ToOptions());
+        Assert.True(r.Success, string.Join("\n", r.Diagnostics));
+        Assert.Contains("SetRGB32(", r.C!);
+        Assert.Contains("OpenLibrary(", r.C!);
+    }
+
+    [Fact]
     public void Property_assignment_used_as_a_value_reports_ES0099()
     {
         var r = Compile(Program(
