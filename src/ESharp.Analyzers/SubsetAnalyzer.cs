@@ -162,9 +162,9 @@ public sealed class SubsetAnalyzer : DiagnosticAnalyzer
     }
 
     /// <summary>
-    /// Classes are heap objects (allocated by <c>new</c>, freed with <c>Heap.Free</c>) held by pointer. There is no
-    /// inheritance and no virtual dispatch: a class may implement interfaces (for generic constraints) but has no base
-    /// class, and no member may be abstract, virtual, override or sealed-override.
+    /// Classes are heap objects (allocated by <c>new</c>, freed with <c>Heap.Free</c>) held by pointer. A class may derive from
+    /// one other plain class declared in the program (single inheritance, with virtual, abstract and override members, and
+    /// <c>is</c>/<c>as</c> tests) and may implement interfaces. A base class from the library (anything but object) or a generic base is not supported.
     /// </summary>
     private static void CheckClass(SyntaxNodeAnalysisContext c)
     {
@@ -173,25 +173,21 @@ public sealed class SubsetAnalyzer : DiagnosticAnalyzer
             if (m.IsKind(SyntaxKind.StaticKeyword)) return;
         if (c.SemanticModel.GetDeclaredSymbol(decl, c.CancellationToken) is { BaseType: { SpecialType: not SpecialType.System_Object } baseType })
         {
-            c.ReportDiagnostic(Diagnostic.Create(Descriptors.HeapClass, decl.Identifier.GetLocation(), decl.Identifier.Text,
-                $"it inherits from '{baseType.Name}': classes cannot inherit yet"));
-            return;
+            if (baseType.IsGenericType || baseType.IsStatic || baseType.TypeKind != TypeKind.Class || !baseType.Locations.Any(l => l.IsInSource))
+            {
+                c.ReportDiagnostic(Diagnostic.Create(Descriptors.HeapClass, decl.Identifier.GetLocation(), decl.Identifier.Text,
+                    $"it inherits from '{baseType.Name}': only a plain, non-generic class declared in the program can be a base class"));
+                return;
+            }
         }
-        foreach (var m in decl.Modifiers)
-            if (m.IsKind(SyntaxKind.AbstractKeyword))
-                c.ReportDiagnostic(Diagnostic.Create(Descriptors.HeapClass, m.GetLocation(), decl.Identifier.Text, "abstract classes are not supported"));
         foreach (var member in decl.Members)
         {
-            var mods = member switch
-            {
-                BaseMethodDeclarationSyntax x => x.Modifiers,
-                BasePropertyDeclarationSyntax x => x.Modifiers,
-                _ => default,
-            };
-            foreach (var m in mods)
-                if (m.IsKind(SyntaxKind.VirtualKeyword) || m.IsKind(SyntaxKind.AbstractKeyword) || m.IsKind(SyntaxKind.OverrideKeyword))
-                    c.ReportDiagnostic(Diagnostic.Create(Descriptors.HeapClass, m.GetLocation(), decl.Identifier.Text,
-                        $"'{m.Text}' members need dynamic dispatch, which is not supported yet"));
+            if (member is not PropertyDeclarationSyntax prop) continue;
+            var dynamic = prop.Modifiers.Any(m => m.IsKind(SyntaxKind.VirtualKeyword) || m.IsKind(SyntaxKind.OverrideKeyword));
+            var bodiless = prop.ExpressionBody == null && prop.AccessorList != null && prop.AccessorList.Accessors.All(a => a.Body == null && a.ExpressionBody == null);
+            if (dynamic && bodiless)
+                c.ReportDiagnostic(Diagnostic.Create(Descriptors.HeapClass, prop.Identifier.GetLocation(), decl.Identifier.Text,
+                    "a virtual or override property needs accessors with bodies (an automatic property cannot be virtual)"));
         }
     }
 

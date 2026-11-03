@@ -96,6 +96,14 @@ public class HostTargetTests
     }
 
     [Fact]
+    public void Inherit_sample_runs_on_the_host()
+    {
+        using var console = HostConsole.Capture();
+        InheritSample.Program.Main();
+        Assert.Equal(InheritExpected.Output, console.Output);
+    }
+
+    [Fact]
     public void Rtg_sample_opens_an_rtg_screen_on_the_host_and_falls_back_without_a_card()
     {
         using (var console = HostConsole.Capture())
@@ -209,6 +217,40 @@ internal static class AgaExpected
     {
         "an 8-bitplane screen opens", "the asset has 256 colours", "the blitted pixels have the 24-bit colours of the image",
         "pen 255 draws", "the chart is drawn",
+    };
+}
+
+/// <summary>What samples/inherit prints.</summary>
+internal static class InheritExpected
+{
+    public static string Output => string.Concat(Names.Select(n => "ok " + n + "\n"));
+
+    private static readonly string[] Names =
+    {
+        "derived fields and inherited fields",
+        "base constructor runs first, then the derived body",
+        "this(...) chains to a constructor that calls base(...)",
+        "two levels of inheritance",
+        "constructors run base to derived",
+        "virtual call through the base type",
+        "another override",
+        "a base method calls virtual methods of the derived object",
+        "virtual property",
+        "virtual with an argument, inherited and overridden",
+        "base.Method() calls",
+        "is: tests along the chain",
+        "is on null",
+        "as",
+        "is with a declaration",
+        "is not",
+        "explicit downcast",
+        "interface on a derived class",
+        "interface implemented by a base class, used on a derived one",
+        "implicit derived constructor runs the base constructor",
+        "a base object still uses its own method",
+        "a class outside any hierarchy",
+        "a base reference shares the object",
+        "Heap.Free through a base variable",
     };
 }
 

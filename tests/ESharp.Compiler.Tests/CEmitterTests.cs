@@ -505,9 +505,9 @@ Check(a == null, ""Heap.Free on an interface value"");
     [Fact]
     public void Unsupported_class_and_interface_forms_are_reported()
     {
-        var inherit = Compile(Program("class A { public int X; } class B : A { }"));
+        var inherit = Compile(Program("class B : System.Random { }"));
         Assert.Contains("ES0007", ErrorIds(inherit));
-        var virt = Compile(Program("class A { public virtual int F() { return 1; } }"));
+        var virt = Compile(Program("class A { public virtual int F { get; set; } }"));
         Assert.Contains("ES0007", ErrorIds(virt));
         var boxing = Compile(Program("interface I { int F(); } struct S : I { public int F() { return 1; } } static int Use(I x) { return x.F(); }", "S s = default; Use(s);"));
         Assert.Contains("ES0099", ErrorIds(boxing));
@@ -708,6 +708,19 @@ Check(list.Count == 0, ""destroy"");
         var (code, output) = RunWithHostGcc(r.C!);
         Assert.Equal(0, code);
         Assert.Equal(CollectionsExpected.Output, output);
+    }
+
+    [Fact]
+    public void Inherit_sample_compiles_and_runs_natively_with_the_same_output_as_dotnet()
+    {
+        if (!HasGcc) return;
+        var path = Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "..", "samples", "inherit", "Inherit.cs");
+        var options = new CompileOptions { Defines = new[] { "AMIGA", "ESHARP_HOSTC" } };
+        var r = EsCompiler.Compile(new[] { new SourceFile(path, File.ReadAllText(path)) }, options);
+        Assert.True(r.Success, string.Join("\n", r.Diagnostics));
+        var (code, output) = RunWithHostGcc(r.C!);
+        Assert.Equal(0, code);
+        Assert.Equal(InheritExpected.Output, output);
     }
 
     [Fact]

@@ -52,6 +52,7 @@
     <Compile Include="..\..\samples\aga\Aga.cs" Link="Samples\Aga\Aga.cs" />
     <Compile Include="..\..\samples\aga\Assets.g.cs" Link="Samples\Aga\Assets.g.cs" />
     <Compile Include="..\..\samples\rtg\Rtg.cs" Link="Samples\Rtg\Rtg.cs" />
+    <Compile Include="..\..\samples\inherit\Inherit.cs" Link="Samples\Inherit\Inherit.cs" />
     <Compile Include="..\..\samples\collections\Collections.cs" Link="Samples\Collections.cs" />
   </ItemGroup>
 
