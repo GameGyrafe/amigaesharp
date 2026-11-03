@@ -598,6 +598,27 @@ Check(zero() == 0, ""lambda without parameters"");
     }
 
     [Fact]
+    public void Interpolated_strings_format_long_ulong_and_enums()
+    {
+        if (!HasGcc) return;
+        const string members = @"
+enum Mode { Idle, Run = 5, Stop }
+enum Big : long { A = 1, B = 5000000000 }
+static void Say(string s) { Dos.PutStr(s); Dos.PutStr(""\n""); }
+";
+        const string body = @"
+long a = -5000000000; ulong b = 18446744073709551615; long c = 0;
+Mode m = Mode.Run; Mode odd = (Mode)42; Big big = Big.B;
+Say($""{a} {b} {c} {a,22}|{a:D12}|{b:X}"");
+Say($""{m} {Mode.Stop} {odd} {big} {m,6}|{m:D}|{(Mode)0}"");
+";
+        var (code, output) = RunWithHostGcc(CompileOk(Program(members, body)));
+        Assert.Equal(0, code);
+        Assert.Equal("-5000000000 18446744073709551615 0            -5000000000|-005000000000|FFFFFFFFFFFFFFFF\n" +
+                     "Run Stop 42 B    Run|5|Idle\n", output);
+    }
+
+    [Fact]
     public void Static_constructors_and_this_initializers_work_natively()
     {
         if (!HasGcc) return;

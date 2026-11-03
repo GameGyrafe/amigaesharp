@@ -296,7 +296,7 @@ internal sealed partial class CEmitter
                 "static char es_fmt_buf[8][128];",
                 "static int es_fmt_index;",
                 "static char *es_fmt_begin(void) { char *b = es_fmt_buf[es_fmt_index]; es_fmt_index = (es_fmt_index + 1) & 7; return b; }",
-                "static int es_put_pad(char *b, int n, const char *s, int len, int width)",
+                "static __attribute__((unused)) int es_put_pad(char *b, int n, const char *s, int len, int width)",
                 "{",
                 "    int pad = (width < 0 ? -width : width) - len;",
                 "    if (width > 0) while (pad-- > 0 && n < 127) b[n++] = ' ';",
@@ -304,19 +304,19 @@ internal sealed partial class CEmitter
                 "    if (width < 0) while (pad-- > 0 && n < 127) b[n++] = ' ';",
                 "    return n;",
                 "}",
-                "static int es_put_str(char *b, int n, const char *s, int width)",
+                "static __attribute__((unused)) int es_put_str(char *b, int n, const char *s, int width)",
                 "{",
                 "    int len = 0;",
                 "    if (s == NULL) s = \"\";",
                 "    while (s[len]) len++;",
                 "    return es_put_pad(b, n, s, len, width);",
                 "}",
-                "static int es_put_chr(char *b, int n, int c, int width)",
+                "static __attribute__((unused)) int es_put_chr(char *b, int n, int c, int width)",
                 "{",
                 "    char t = (char)c;",
                 "    return es_put_pad(b, n, &t, 1, width);",
                 "}",
-                "static int es_put_u(char *b, int n, uint32_t v, int width, int digits, int hex)",
+                "static __attribute__((unused)) int es_put_u(char *b, int n, uint32_t v, int width, int digits, int hex)",
                 "{",
                 "    char t[40];",
                 "    int len = 0;",
@@ -327,7 +327,31 @@ internal sealed partial class CEmitter
                 "    for (int i = 0; i < len; i++) r[i] = t[len - 1 - i];",
                 "    return es_put_pad(b, n, r, len, width);",
                 "}",
-                "static int es_put_i(char *b, int n, int32_t v, int width, int digits, int hex)",
+                "static __attribute__((unused)) int es_put_u64(char *b, int n, uint64_t v, int width, int digits, int hex)",
+                "{",
+                "    char t[72];",
+                "    int len = 0;",
+                "    uint64_t base = hex ? 16u : 10u;",
+                "    do { uint32_t d = (uint32_t)(v % base); t[len++] = (char)(d < 10 ? '0' + d : (hex == 2 ? 'a' : 'A') + d - 10); v /= base; } while (v != 0 && len < 70);",
+                "    while (len < digits && len < 70) t[len++] = '0';",
+                "    char r[72];",
+                "    for (int i = 0; i < len; i++) r[i] = t[len - 1 - i];",
+                "    return es_put_pad(b, n, r, len, width);",
+                "}",
+                "static __attribute__((unused)) int es_put_i64(char *b, int n, int64_t v, int width, int digits, int hex)",
+                "{",
+                "    if (v >= 0 || hex) return es_put_u64(b, n, (uint64_t)v, width, digits, hex);",
+                "    char t[72];",
+                "    uint64_t m = 0u - (uint64_t)v;",
+                "    int len = 0;",
+                "    do { t[len++] = (char)('0' + (uint32_t)(m % 10u)); m /= 10u; } while (m != 0 && len < 70);",
+                "    while (len < digits && len < 70) t[len++] = '0';",
+                "    char r[72];",
+                "    r[0] = '-';",
+                "    for (int i = 0; i < len; i++) r[i + 1] = t[len - 1 - i];",
+                "    return es_put_pad(b, n, r, len + 1, width);",
+                "}",
+                "static __attribute__((unused)) int es_put_i(char *b, int n, int32_t v, int width, int digits, int hex)",
                 "{",
                 "    if (v >= 0 || hex) return es_put_u(b, n, (uint32_t)v, width, digits, hex);",
                 "    char t[40];",
@@ -1821,16 +1845,56 @@ internal sealed partial class CEmitter
                 case SpecialType.System_Byte or SpecialType.System_UInt16 or SpecialType.System_UInt32:
                     sb.Append($"{len} = es_put_u({buf}, {len}, (uint32_t)({value}), {width}, {digits}, {hex}); ");
                     break;
+                case SpecialType.System_Int64:
+                    sb.Append($"{len} = es_put_i64({buf}, {len}, (int64_t)({value}), {width}, {digits}, {hex}); ");
+                    break;
+                case SpecialType.System_UInt64:
+                    sb.Append($"{len} = es_put_u64({buf}, {len}, (uint64_t)({value}), {width}, {digits}, {hex}); ");
+                    break;
                 default:
-                    if (type is INamedTypeSymbol { TypeKind: TypeKind.Enum })
-                        Unsupported(hole, "an enum in a string (write a switch that returns the name)");
+                    if (type is INamedTypeSymbol { TypeKind: TypeKind.Enum } en)
+                    {
+                        // The member's name, or the number when the value is none of the members (as ToString does); 'D' and 'X' give the number.
+                        var under = en.EnumUnderlyingType!.SpecialType;
+                        var signed = under is SpecialType.System_SByte or SpecialType.System_Int16 or SpecialType.System_Int32 or SpecialType.System_Int64;
+                        var wide = under is SpecialType.System_Int64 or SpecialType.System_UInt64;
+                        var num = (wide, signed) switch
+                        {
+                            (true, true) => $"es_put_i64({buf}, {len}, (int64_t)ES_v{id}_{i}, {width}, {digits}, {hex})",
+                            (true, false) => $"es_put_u64({buf}, {len}, (uint64_t)ES_v{id}_{i}, {width}, {digits}, {hex})",
+                            (false, true) => $"es_put_i({buf}, {len}, (int32_t)ES_v{id}_{i}, {width}, {digits}, {hex})",
+                            _ => $"es_put_u({buf}, {len}, (uint32_t)ES_v{id}_{i}, {width}, {digits}, {hex})",
+                        };
+                        if (string.IsNullOrEmpty(format))
+                            sb.Append($"{{ {CType(en, hole)} ES_v{id}_{i} = {value}; const char *ES_s{id}_{i} = {EnumNameFunction(en)}(ES_v{id}_{i}); {len} = ES_s{id}_{i} ? es_put_str({buf}, {len}, ES_s{id}_{i}, {width}) : {num}; }} ");
+                        else
+                            sb.Append($"{{ {CType(en, hole)} ES_v{id}_{i} = {value}; {len} = {num}; }} ");
+                    }
                     else
-                        Unsupported(hole, $"{type?.ToDisplayString()} in a string (strings can hold integers up to 32 bits, chars, bools and strings)");
+                        Unsupported(hole, $"{type?.ToDisplayString()} in a string (strings can hold integers, chars, bools, enums and strings)");
                     break;
             }
         }
         sb.Append($"{buf}[{len}] = 0; {buf}; }})");
         return sb.ToString();
+    }
+
+    /// <summary>A function from an enum value to the name of its member (null for a value that is none of them).</summary>
+    private string EnumNameFunction(INamedTypeSymbol en)
+    {
+        var name = $"ES_name_{TypeName(en)}";
+        var key = "ES_zenum_" + name;
+        if (!_spans.ContainsKey(key))
+        {
+            var sb = new StringBuilder($"static __attribute__((unused)) const char *{name}({CType(en, en.DeclaringSyntaxReferences.First().GetSyntax())} v)\n{{\n    switch (v)\n    {{\n");
+            var seen = new HashSet<string>();
+            foreach (var m in en.GetMembers().OfType<IFieldSymbol>().Where(f => f.IsConst))
+                if (seen.Add(Convert.ToString(m.ConstantValue, CultureInfo.InvariantCulture)!))
+                    sb.Append($"        case {FieldName(m)}: return \"{m.Name}\";\n");
+            sb.Append("        default: return NULL;\n    }\n}\n");
+            _spans[key] = sb.ToString();
+        }
+        return name;
     }
 
     private string DefaultValue(ExpressionSyntax e)
