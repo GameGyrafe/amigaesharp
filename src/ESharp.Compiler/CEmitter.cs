@@ -29,6 +29,7 @@ internal sealed partial class CEmitter
     private readonly SortedDictionary<string, string> _spans = new(StringComparer.Ordinal);
     private bool _usesLen;
     private bool _usesCyber;
+    private bool _usesStrlen;
 
     /// <summary>How <c>this</c> is spelled inside the method being emitted.</summary>
     private enum ThisKind { None, Pointer, Value }
@@ -377,6 +378,16 @@ internal sealed partial class CEmitter
             result.AppendLine("    return p;");
             result.AppendLine("}");
             result.AppendLine("#define ES_NEW(T) ((T *)es_new(sizeof(T)))");
+        }
+        if (_usesStrlen)
+        {
+            // Our own, not libc's: a call to strlen is an undefined symbol that the AROS loader resolved wrongly, and it keeps the output libc-free.
+            result.AppendLine("static inline int32_t es_strlen(const char *s)");
+            result.AppendLine("{");
+            result.AppendLine("    const char *p = s;");
+            result.AppendLine("    while (*p != 0) p++;");
+            result.AppendLine("    return (int32_t)(p - s);");
+            result.AppendLine("}");
         }
         if (_natives.Contains("es_fixdiv"))
         {
@@ -2048,7 +2059,10 @@ internal sealed partial class CEmitter
                 return $"{Expr(ma.Expression)}.length";
             // A string is a NUL-terminated byte string in C: Length counts bytes (the same as characters for ASCII).
             if (recvType?.SpecialType == SpecialType.System_String)
-                return $"((int)__builtin_strlen({Expr(ma.Expression)}))";
+            {
+                _usesStrlen = true;
+                return $"es_strlen({Expr(ma.Expression)})";
+            }
         }
         if (sym is IMethodSymbol { IsStatic: true, MethodKind: MethodKind.Ordinary } group)
             return MethodGroup(group, ma);   // a method group converted to a delegate
