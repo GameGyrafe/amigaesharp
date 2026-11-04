@@ -584,6 +584,9 @@ Check(zero() == 0, ""lambda without parameters"");
     [InlineData("int[] a = new int[3]; var q = a.Where(x => x > 1); Dos.PutStr(q.Count() == 0 ? \"y\" : \"n\");")]   // a chain that is kept
     [InlineData("int[] a = new int[3]; int n = a.Where(x => { int y = x; y++; return y > 1; }).Count();")]      // a statement lambda
     [InlineData("System.ReadOnlySpan<int> a = new int[3]; int n = a.Sum();")]                             // not an array
+    [InlineData("int[] a = new int[3]; var s = a.OrderBy(x => x);")]                                      // a sorted sequence that is kept
+    [InlineData("string[] a = new string[3]; int n = a.OrderBy(x => x).Count();")]                        // a sort key that is not a number
+    [InlineData("int[] a = new int[3]; int n = (from x in a let d = x * 2 orderby x select d).Count();")] // a let that would not survive the sort
     public void Linq_forms_that_cannot_be_loops_report_an_error(string body)
     {
         var r = Compile("using System.Linq;\n" + Program("", body));

@@ -16,13 +16,13 @@ namespace ESharp.Compiler;
 /// </summary>
 internal sealed partial class CEmitter
 {
-    private enum StageKind { Where, WhereNot, Select, Take, Skip, QueryWhere, QueryLet, QuerySelect }
+    private enum StageKind { Where, WhereNot, Select, Take, Skip, QueryWhere, QueryLet, QuerySelect, OrderBy, QueryOrder }
 
     /// <summary>One step of a chain. <c>Fn</c> is the lambda (or the count of Take/Skip, or the query expression); <c>Out</c> is the element type after the step.</summary>
-    private sealed record LinqStage(StageKind Kind, ExpressionSyntax? Fn, ITypeSymbol Out, string? Name = null);
+    private sealed record LinqStage(StageKind Kind, ExpressionSyntax? Fn, ITypeSymbol Out, string? Name = null, List<(ExpressionSyntax Fn, bool Desc, ITypeSymbol Type)>? Keys = null);
 
     /// <summary>Where the elements come from: an array expression, or a range.</summary>
-    private sealed record LinqSource(ExpressionSyntax? Array, ExpressionSyntax? Start, ExpressionSyntax? Count, ITypeSymbol Elem, string? RangeVar);
+    private sealed record LinqSource(ExpressionSyntax? Array, ExpressionSyntax? Start, ExpressionSyntax? Count, ITypeSymbol Elem, string? RangeVar, string? Buf = null, string? BufCount = null, SyntaxNode? Anchor = null);
 
     private const string Unused = "__attribute__((unused)) ";
 
@@ -54,7 +54,7 @@ internal sealed partial class CEmitter
     {
         e = Unparen(e);
         return e is QueryExpressionSyntax || (e is InvocationExpressionSyntax inv && IsLinqCall(inv, out var m, out _) &&
-            m.Name is "Where" or "Select" or "Take" or "Skip" or "Range");
+            m.Name is "Where" or "Select" or "Take" or "Skip" or "Range" or "OrderBy" or "OrderByDescending" or "ThenBy" or "ThenByDescending");
     }
 
     /// <summary>Splits a chain into its source and steps, or reports why it cannot.</summary>
@@ -63,10 +63,15 @@ internal sealed partial class CEmitter
         stages = new List<LinqStage>();
         source = null!;
         var reversed = new List<LinqStage>();
+        var pendingThen = new List<(ExpressionSyntax Fn, bool Desc, ITypeSymbol Type)>();
         var cur = Unparen(e);
         while (true)
         {
-            if (cur is QueryExpressionSyntax q) return ParseQuery(q, out source, out stages, reversed);
+            if (cur is QueryExpressionSyntax q)
+            {
+                if (pendingThen.Count > 0) { Unsupported(q, "ThenBy without OrderBy before it"); return false; }
+                return ParseQuery(q, out source, out stages, reversed);
+            }
 
             if (cur is InvocationExpressionSyntax inv && IsLinqCall(inv, out var m, out var recv))
             {
@@ -78,14 +83,34 @@ internal sealed partial class CEmitter
                 }
                 if (recv == null) { Unsupported(inv, $"Enumerable.{m.Name}(...) written as a plain call; write it as a method call on the array"); return false; }
                 var outType = Model(inv).GetTypeInfo(inv).Type is INamedTypeSymbol { TypeArguments.Length: 1 } seq ? seq.TypeArguments[0] : null;
+                if (pendingThen.Count > 0 && m.Name is not ("OrderBy" or "OrderByDescending" or "ThenBy" or "ThenByDescending"))
+                {
+                    Unsupported(inv, "ThenBy without OrderBy right before it");
+                    return false;
+                }
                 switch (m.Name)
                 {
+                    case "OrderBy" or "OrderByDescending" or "ThenBy" or "ThenByDescending" when args.Count == 1 && outType != null:
+                    {
+                        var kt = KeyType(args[0].Expression);
+                        if (kt == null || !Orderable(kt)) { Unsupported(args[0], "a sort key that is not a number, char, bool or enum"); return false; }
+                        var key = (args[0].Expression, m.Name.EndsWith("Descending"), kt);
+                        if (m.Name.StartsWith("ThenBy")) pendingThen.Insert(0, key);
+                        else
+                        {
+                            var keys = new List<(ExpressionSyntax, bool, ITypeSymbol)> { key };
+                            keys.AddRange(pendingThen);
+                            pendingThen.Clear();
+                            reversed.Add(new LinqStage(StageKind.OrderBy, null, outType, null, keys));
+                        }
+                        break;
+                    }
                     case "Where" when args.Count == 1 && outType != null: reversed.Add(new LinqStage(StageKind.Where, args[0].Expression, outType)); break;
                     case "Select" when args.Count == 1 && outType != null: reversed.Add(new LinqStage(StageKind.Select, args[0].Expression, outType)); break;
                     case "Take" when args.Count == 1 && outType != null: reversed.Add(new LinqStage(StageKind.Take, args[0].Expression, outType)); break;
                     case "Skip" when args.Count == 1 && outType != null: reversed.Add(new LinqStage(StageKind.Skip, args[0].Expression, outType)); break;
                     default:
-                        Unsupported(inv, $"{m.Name} in the middle of a LINQ chain (only Where, Select, Take and Skip can be followed by more steps)");
+                        Unsupported(inv, $"{m.Name} in the middle of a LINQ chain (only Where, Select, Take, Skip and OrderBy can be followed by more steps)");
                         return false;
                 }
                 cur = Unparen(recv);
@@ -93,6 +118,7 @@ internal sealed partial class CEmitter
             }
 
             var type = Model(cur).GetTypeInfo(cur).Type;
+            if (pendingThen.Count > 0) { Unsupported(cur, "ThenBy without OrderBy right before it"); return false; }
             if (type is IArrayTypeSymbol arr)
             {
                 if (!IsSimple(cur)) { Unsupported(cur, "LINQ over a complex expression; assign the array to a local first"); return false; }
@@ -106,6 +132,14 @@ internal sealed partial class CEmitter
         stages = reversed;
         return true;
     }
+
+    private ITypeSymbol? KeyType(ExpressionSyntax fn) =>
+        Model(fn).GetTypeInfo(fn).ConvertedType is INamedTypeSymbol { DelegateInvokeMethod: { } dm } ? dm.ReturnType : null;
+
+    private static bool Orderable(ITypeSymbol t) => t.TypeKind == TypeKind.Enum || t.SpecialType is
+        SpecialType.System_Int32 or SpecialType.System_UInt32 or SpecialType.System_Int16 or SpecialType.System_UInt16 or
+        SpecialType.System_Byte or SpecialType.System_SByte or SpecialType.System_Int64 or SpecialType.System_UInt64 or
+        SpecialType.System_Char or SpecialType.System_Boolean or SpecialType.System_Single or SpecialType.System_Double;
 
     private bool ParseQuery(QueryExpressionSyntax q, out LinqSource source, out List<LinqStage> stages, List<LinqStage> outer)
     {
@@ -133,12 +167,28 @@ internal sealed partial class CEmitter
 
         var rvType = stages.Count > 0 ? stages[^1].Out : source.Elem;
         stages.Add(new LinqStage(StageKind.QueryLet, null, rvType, rv.Name));   // binds the range variable to the element
+        var sawLet = false;
         foreach (var clause in q.Body.Clauses)
         {
             switch (clause)
             {
+                case OrderByClauseSyntax ob:
+                {
+                    if (sawLet) { Unsupported(ob, "orderby after a let (the let variable would be gone after sorting); put the let after the orderby"); return false; }
+                    var keys = new List<(ExpressionSyntax, bool, ITypeSymbol)>();
+                    foreach (var o in ob.Orderings)
+                    {
+                        var kt = Model(o.Expression).GetTypeInfo(o.Expression).Type;
+                        if (kt == null || !Orderable(kt)) { Unsupported(o, "a sort key that is not a number, char, bool or enum"); return false; }
+                        keys.Add((o.Expression, o.AscendingOrDescendingKeyword.IsKind(SyntaxKind.DescendingKeyword), kt));
+                    }
+                    stages.Add(new LinqStage(StageKind.QueryOrder, null, rvType, null, keys));
+                    stages.Add(new LinqStage(StageKind.QueryLet, null, rvType, rv.Name));   // the range variable again, from the sorted element
+                    break;
+                }
                 case WhereClauseSyntax w: stages.Add(new LinqStage(StageKind.QueryWhere, w.Condition, rvType)); break;
                 case LetClauseSyntax l when model.GetDeclaredSymbol(l) is IRangeVariableSymbol lv:
+                    sawLet = true;
                     stages.Add(new LinqStage(StageKind.QueryLet, l.Expression, Model(l.Expression).GetTypeInfo(l.Expression).Type ?? rvType, lv.Name)); break;
                 default: Unsupported(clause, "this query clause"); return false;
             }
@@ -189,6 +239,9 @@ internal sealed partial class CEmitter
     /// </summary>
     private void EmitLoop(LinqSource source, List<LinqStage> stages, Action<string, ITypeSymbol> sink)
     {
+        var barrier = stages.FindIndex(x => x.Kind is StageKind.OrderBy or StageKind.QueryOrder);
+        if (barrier >= 0) { EmitSorted(source, stages, barrier, sink); return; }
+        var anchor = source.Anchor ?? source.Array ?? source.Start!;
         var id = ++_temp;
         var counters = new Dictionary<int, string>();
         for (var k = 0; k < stages.Count; k++)
@@ -216,6 +269,11 @@ internal sealed partial class CEmitter
             Line($"for (int32_t {i} = 0, {n} = ES_LEN({array}); {i} < {n}; {i}++)");
             first = $"{array}[{i}]";
         }
+        else if (source.Buf != null)
+        {
+            Line($"for (int32_t {i} = 0, {n} = {source.BufCount}; {i} < {n}; {i}++)");
+            first = $"{source.Buf}[{i}]";
+        }
         else
         {
             Line($"for (int32_t {i} = 0, {n} = {Expr(source.Count!, top: true)}; {i} < {n}; {i}++)");
@@ -228,7 +286,7 @@ internal sealed partial class CEmitter
 
         var cur = $"_e{id}_0";
         var curType = source.Elem;
-        Line($"{Unused}{Decl(curType, cur, source.Array ?? source.Start!)} = {first};");
+        Line($"{Unused}{Decl(curType, cur, anchor)} = {first};");
         for (var k = 0; k < stages.Count; k++)
         {
             var st = stages[k];
@@ -268,7 +326,7 @@ internal sealed partial class CEmitter
                     Line($"if ({counters[k]} > 0) {{ {counters[k]}--; continue; }}");
                     break;
                 case StageKind.QueryLet when st.Fn == null:   // the range variable
-                    Line($"{Unused}{Decl(st.Out, st.Name!, source.Array ?? source.Start!)} = {cur};");
+                    Line($"{Unused}{Decl(st.Out, st.Name!, anchor)} = {cur};");
                     break;
                 case StageKind.QueryLet:
                     Line($"{Unused}{Decl(st.Out, st.Name!, st.Fn)} = {Expr(st.Fn, top: true)};");
@@ -287,6 +345,84 @@ internal sealed partial class CEmitter
             }
         }
         sink(cur, curType);
+        _indent--;
+        Line("}");
+    }
+
+    /// <summary>
+    /// A sort is a barrier: the steps before it run as one loop that stores each element and its keys in stack arrays (as large as the source
+    /// could be), a stable insertion sort orders them, and the steps after it run as a second loop over the sorted copy.
+    /// </summary>
+    private void EmitSorted(LinqSource source, List<LinqStage> stages, int barrier, Action<string, ITypeSymbol> sink)
+    {
+        var st = stages[barrier];
+        var keys = st.Keys!;
+        var id = ++_temp;
+        string buf = $"_b{id}", cnt = $"_m{id}", z = $"_z{id}";
+        ITypeSymbol elem = source.Elem;
+        for (var k = 0; k < barrier; k++) if (stages[k].Kind is StageKind.Select or StageKind.QuerySelect) elem = stages[k].Out;
+        var anchor = keys[0].Fn;
+
+        string bound;
+        if (source.Buf != null) bound = source.BufCount!;
+        else if (source.Array != null) { _usesLen = true; bound = $"ES_LEN({ExprCore(source.Array, false)})"; }
+        else bound = Expr(source.Count!, top: true);
+
+        Line("{");
+        _indent++;
+        Line($"int32_t {z} = {bound};");
+        Line($"int32_t {cnt} = 0;");
+        Line($"{CType(elem, anchor)} {buf}[{z} > 0 ? {z} : 1];");
+        for (var j = 0; j < keys.Count; j++) Line($"{CType(keys[j].Type, anchor)} _k{id}_{j}[{z} > 0 ? {z} : 1];");
+
+        EmitLoop(source, stages.Take(barrier).ToList(), (cur, _) =>
+        {
+            Line("{");
+            _indent++;
+            for (var j = 0; j < keys.Count; j++)
+            {
+                Line("{");
+                _indent++;
+                var value = st.Kind == StageKind.OrderBy ? InlineFn(keys[j].Fn, cur) : Expr(keys[j].Fn, top: true);
+                Line($"_k{id}_{j}[{cnt}] = {value};");
+                _indent--;
+                Line("}");
+            }
+            Line($"{buf}[{cnt}] = {cur};");
+            Line($"{cnt}++;");
+            _indent--;
+            Line("}");
+        });
+
+        // Stable insertion sort: an element moves past its neighbour only when that one is strictly greater (or, descending, smaller).
+        string s = $"_s{id}", p = $"_p{id}";
+        var shift = "0";
+        for (var j = keys.Count - 1; j >= 0; j--)
+        {
+            string prev = $"_k{id}_{j}[{p} - 1]", curk = $"_t{id}_{j}";
+            shift = $"({prev} != {curk} ? ({prev} {(keys[j].Desc ? "<" : ">")} {curk}) : {shift})";
+        }
+        Line($"for (int32_t {s} = 1; {s} < {cnt}; {s}++)");
+        Line("{");
+        _indent++;
+        Line($"{CType(elem, anchor)} _te{id} = {buf}[{s}];");
+        for (var j = 0; j < keys.Count; j++) Line($"{CType(keys[j].Type, anchor)} _t{id}_{j} = _k{id}_{j}[{s}];");
+        Line($"int32_t {p} = {s};");
+        Line($"while ({p} > 0 && {shift})");
+        Line("{");
+        _indent++;
+        Line($"{buf}[{p}] = {buf}[{p} - 1];");
+        for (var j = 0; j < keys.Count; j++) Line($"_k{id}_{j}[{p}] = _k{id}_{j}[{p} - 1];");
+        Line($"{p}--;");
+        _indent--;
+        Line("}");
+        Line($"{buf}[{p}] = _te{id};");
+        for (var j = 0; j < keys.Count; j++) Line($"_k{id}_{j}[{p}] = _t{id}_{j};");
+        _indent--;
+        Line("}");
+
+        var sorted = new LinqSource(null, null, null, elem, null, buf, cnt, anchor);
+        EmitLoop(sorted, stages.Skip(barrier + 1).ToList(), sink);
         _indent--;
         Line("}");
     }
@@ -311,8 +447,8 @@ internal sealed partial class CEmitter
         var args = inv.ArgumentList.Arguments;
         var resultType = Model(inv).GetTypeInfo(inv).Type!;
 
-        if (m.Name is "Where" or "Select" or "Take" or "Skip" or "Range")
-            return Unsupported(inv, $"{m.Name} whose result is kept: E# builds no sequences, so consume it right away with foreach or a call such as Sum, Count, Any or First");
+        if (m.Name is "Where" or "Select" or "Take" or "Skip" or "Range" or "OrderBy" or "OrderByDescending" or "ThenBy" or "ThenByDescending")
+            return Unsupported(inv, $"{m.Name} whose result is kept: E# builds no sequences or arrays from them (arrays have a fixed size), so consume it right away with foreach or a call such as Sum, Count, Any or First");
         if (!ParseChain(recv, out var source, out var stages)) return "0";
 
         // An optional predicate or selector argument becomes one more step of the chain.

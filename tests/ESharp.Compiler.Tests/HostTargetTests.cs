@@ -561,5 +561,13 @@ internal static class LinqExpected
         "foreach over a query",
         "query over structs",
         "a chain inside a lambda",
+        "OrderBy",
+        "OrderByDescending",
+        "a sort then First, Skip and Take",
+        "OrderBy then ThenByDescending on structs",
+        "the sort is stable",
+        "OrderBy over Range with two keys",
+        "query: orderby",
+        "Where, OrderBy and Select",
     };
 }

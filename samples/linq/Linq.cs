@@ -75,5 +75,26 @@ public static class Program
 
         int outerBase = 100;
         Check(Enumerable.Range(1, 3).Select(i => a.Where(x => x > i * 3).Count() + outerBase).Sum() == 3 * 100 + 4 + 2, "a chain inside a lambda");
+
+        int num = 0;
+        foreach (int v in a.OrderBy(x => x)) num = num * 10 + v;
+        Check(num == 134589, "OrderBy");
+        num = 0;
+        foreach (int v in a.OrderByDescending(x => x)) num = num * 10 + v;
+        Check(num == 985431, "OrderByDescending");
+        Check(a.OrderBy(x => x).First() == 1 && a.OrderByDescending(x => x).First() == 9 && a.OrderBy(x => x).Skip(1).Take(2).Sum() == 7, "a sort then First, Skip and Take");
+        num = 0;
+        foreach (int r in hand.OrderBy(c => c.Suit).ThenByDescending(c => c.Rank).Select(c => c.Rank)) num = num * 10 + r;
+        Check(num == 4253, "OrderBy then ThenByDescending on structs");
+        num = 0;
+        foreach (int r in hand.OrderBy(c => c.Suit).Select(c => c.Rank)) num = num * 10 + r;
+        Check(num == 2435, "the sort is stable");
+        num = 0;
+        foreach (int v in Enumerable.Range(1, 5).OrderByDescending(x => x % 3).ThenBy(x => x)) num = num * 10 + v;
+        Check(num == 25143, "OrderBy over Range with two keys");
+        num = 0;
+        foreach (int v in from x in a where x > 3 orderby x select x) num = num * 10 + v;
+        Check(num == 4589 && (from x in a orderby x descending select x).First() == 9, "query: orderby");
+        Check(a.Where(x => x > 3).OrderBy(x => -x).Select(x => x * 2).First() == 18, "Where, OrderBy and Select");
     }
 }

@@ -142,7 +142,7 @@ public sealed class SubsetAnalyzer : DiagnosticAnalyzer
     internal static readonly System.Collections.Generic.HashSet<string> SupportedLinq = new System.Collections.Generic.HashSet<string>
     {
         "Where", "Select", "Take", "Skip", "Count", "Sum", "Min", "Max", "Any", "All", "First", "FirstOrDefault",
-        "Last", "LastOrDefault", "Contains", "Aggregate", "Range",
+        "Last", "LastOrDefault", "Contains", "Aggregate", "Range", "OrderBy", "OrderByDescending", "ThenBy", "ThenByDescending",
     };
 
     private static void CheckLinqQuery(SyntaxNodeAnalysisContext c)
@@ -151,7 +151,7 @@ public sealed class SubsetAnalyzer : DiagnosticAnalyzer
         var q = (QueryExpressionSyntax)c.Node;
         string? unsupported = null;
         foreach (var clause in q.Body.Clauses)
-            if (!(clause is WhereClauseSyntax || clause is LetClauseSyntax)) unsupported = clause.Kind().ToString().Replace("Clause", "").ToLowerInvariant();
+            if (!(clause is WhereClauseSyntax || clause is LetClauseSyntax || clause is OrderByClauseSyntax)) unsupported = clause.Kind().ToString().Replace("Clause", "").ToLowerInvariant();
         if (q.Body.SelectOrGroup is GroupClauseSyntax) unsupported = "group";
         if (q.Body.Continuation != null) unsupported = "into";
         if (unsupported != null)
