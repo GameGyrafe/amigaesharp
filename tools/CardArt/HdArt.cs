@@ -286,7 +286,7 @@ internal static class HdArt
         var pips = Pips(pc);
         foreach (var (x, y) in pips)
         {
-            var size = pc == 1 ? 14.0 : 5.0;
+            var size = pc == 1 ? 14.0 : pc >= 9 && suit == 3 ? 4.3 : 5.0;
             Suit(p, suit, x, y, size, y > 40.5);
         }
     }
