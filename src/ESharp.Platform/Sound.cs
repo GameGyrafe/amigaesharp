@@ -7,6 +7,8 @@ public unsafe struct Sample
 {
     public byte* Data;
     public int Length;
+    /// <summary>Samples per second the sound was recorded at (0 for the generated ones); <see cref="Sound.PeriodForRate"/> turns it into a period.</summary>
+    public int Rate;
 }
 
 /// <summary>
@@ -24,6 +26,17 @@ public static unsafe class Sound
     {
         if (hz <= 0 || sampleLength <= 0) return 65535;
         int p = 3546895 / (hz * sampleLength);
+        return p < 124 ? 124 : (p > 65535 ? 65535 : p);
+    }
+
+    /// <summary>The longest sample audio.device takes in one write (a longer file is cut off).</summary>
+    public const int MaxLength = 131070;
+
+    /// <summary>Period that plays a sample recorded at <paramref name="rate"/> samples per second at its natural pitch.</summary>
+    public static int PeriodForRate(int rate)
+    {
+        if (rate <= 0) return 65535;
+        int p = 3546895 / rate;
         return p < 124 ? 124 : (p > 65535 ? 65535 : p);
     }
 
@@ -58,6 +71,160 @@ public static unsafe class Sound
             x = x * 1103515245 + 12345;
             s.Data[i] = (byte)((x >> 16) & 255);
         }
+        return s;
+    }
+
+    private static uint Le32(ReadOnlySpan<byte> d, int o) => (uint)d[o] | ((uint)d[o + 1] << 8) | ((uint)d[o + 2] << 16) | ((uint)d[o + 3] << 24);
+
+    private static uint Be32(ReadOnlySpan<byte> d, int o) => ((uint)d[o] << 24) | ((uint)d[o + 1] << 16) | ((uint)d[o + 2] << 8) | (uint)d[o + 3];
+
+    private static int Be16(ReadOnlySpan<byte> d, int o) => (d[o] << 8) | d[o + 1];
+
+    private static bool Is(ReadOnlySpan<byte> d, int o, string tag) =>
+        o >= 0 && o + 4 <= d.Length && d[o] == tag[0] && d[o + 1] == tag[1] && d[o + 2] == tag[2] && d[o + 3] == tag[3];
+
+    /// <summary>
+    /// Turns a RIFF WAV file (PCM, 8 or 16 bit, mono or stereo) already in memory into an 8-bit mono sample in chip RAM; stereo is averaged.
+    /// <see cref="Sample.Rate"/> is the file's rate. An empty sample (<c>Data == null</c>) means the file is not such a WAV or memory ran out.
+    /// </summary>
+    public static Sample LoadWav(ReadOnlySpan<byte> d)
+    {
+        Sample none = default;
+        if (d.Length < 12 || !Is(d, 0, "RIFF") || !Is(d, 8, "WAVE")) return none;
+        int format = 0, channels = 0, bits = 0, rate = 0, dataPos = -1, dataLen = 0;
+        int p = 12;
+        while (p + 8 <= d.Length)
+        {
+            uint chunk = Le32(d, p + 4);
+            int body = p + 8;
+            int room = d.Length - body;
+            int len = chunk > (uint)room ? room : (int)chunk;
+            if (Is(d, p, "fmt ") && len >= 16)
+            {
+                format = d[body] | (d[body + 1] << 8);
+                channels = d[body + 2] | (d[body + 3] << 8);
+                rate = (int)Le32(d, body + 4);
+                bits = d[body + 14] | (d[body + 15] << 8);
+            }
+            else if (Is(d, p, "data"))
+            {
+                dataPos = body;
+                dataLen = len;
+                break;
+            }
+            p = body + len + (len & 1);
+        }
+        if (format != 1 || channels < 1 || channels > 2 || (bits != 8 && bits != 16) || dataPos < 0 || rate <= 0) return none;
+        int bytesPer = bits / 8;
+        int frames = dataLen / (channels * bytesPer);
+        if (frames < 1) return none;
+        if (frames > MaxLength) frames = MaxLength;
+        Sample s = Alloc(frames);
+        if (s.Data == null) return none;
+        s.Rate = rate;
+        for (int i = 0; i < s.Length && i < frames; i++)
+        {
+            int sum = 0;
+            for (int c = 0; c < channels; c++)
+            {
+                int o = dataPos + (i * channels + c) * bytesPer;
+                if (bits == 8) sum += d[o] - 128;
+                else
+                {
+                    int v = d[o] | (d[o + 1] << 8);
+                    if (v >= 32768) v -= 65536;
+                    sum += v >> 8;
+                }
+            }
+            s.Data[i] = (byte)((sum / channels) & 255);
+        }
+        return s;
+    }
+
+    /// <summary>
+    /// Turns an IFF 8SVX file already in memory (uncompressed or Fibonacci-delta) into a sample in chip RAM. Only the first (highest) octave is
+    /// kept and the loop points are ignored: the whole sample plays. <see cref="Sample.Rate"/> is the file's rate.
+    /// An empty sample (<c>Data == null</c>) means the file is not such an 8SVX or memory ran out.
+    /// </summary>
+    public static Sample Load8svx(ReadOnlySpan<byte> d)
+    {
+        Sample none = default;
+        if (d.Length < 12 || !Is(d, 0, "FORM") || !Is(d, 8, "8SVX")) return none;
+        int oneShot = 0, repeat = 0, rate = 0, octaves = 1, compression = 0, bodyPos = -1, bodyLen = 0;
+        int p = 12;
+        while (p + 8 <= d.Length)
+        {
+            uint chunk = Be32(d, p + 4);
+            int body = p + 8;
+            int room = d.Length - body;
+            int len = chunk > (uint)room ? room : (int)chunk;
+            if (Is(d, p, "VHDR") && len >= 16)
+            {
+                oneShot = (int)Be32(d, body);
+                repeat = (int)Be32(d, body + 4);
+                rate = Be16(d, body + 12);
+                octaves = d[body + 14];
+                compression = d[body + 15];
+            }
+            else if (Is(d, p, "BODY"))
+            {
+                bodyPos = body;
+                bodyLen = len;
+                break;
+            }
+            p = body + len + (len & 1);
+        }
+        if (bodyPos < 0 || compression > 1 || bodyLen < 1) return none;
+        if (rate <= 0) rate = 8363;
+        int first = oneShot + repeat;
+        int count;
+        if (compression == 0)
+        {
+            count = bodyLen;
+            if (octaves > 1 && first > 0 && first < count) count = first;
+        }
+        else
+        {
+            if (bodyLen < 3) return none;
+            count = (bodyLen - 2) * 2;
+            if (octaves > 1 && first > 0 && first < count) count = first;
+        }
+        if (count > MaxLength) count = MaxLength;
+        Sample s = Alloc(count);
+        if (s.Data == null) return none;
+        s.Rate = rate;
+        if (compression == 0)
+        {
+            for (int i = 0; i < s.Length && i < count; i++) s.Data[i] = d[bodyPos + i];
+        }
+        else
+        {
+            int[] fib = { -34, -21, -13, -8, -5, -3, -2, -1, 0, 1, 2, 3, 5, 8, 13, 21 };
+            int v = d[bodyPos + 1];
+            if (v >= 128) v -= 256;
+            for (int i = 0; i < s.Length && i < count; i++)
+            {
+                int packed = d[bodyPos + 2 + i / 2];
+                int nibble = (i & 1) == 0 ? (packed >> 4) & 15 : packed & 15;
+                v += fib[nibble];
+                s.Data[i] = (byte)(v & 255);
+            }
+        }
+        return s;
+    }
+
+    /// <summary>
+    /// Loads a sound file (WAV or IFF 8SVX, told apart by the file's first bytes) from <paramref name="path"/> into chip RAM.
+    /// An empty sample (<c>Data == null</c>) means the file is missing, is some other format or memory ran out. Free it with <see cref="Free"/>.
+    /// </summary>
+    public static Sample Load(string path)
+    {
+        Sample none = default;
+        byte* file = Files.ReadAll(path, out int size, false);
+        if (file == null) return none;
+        ReadOnlySpan<byte> bytes = new ReadOnlySpan<byte>(file, size);
+        Sample s = Is(bytes, 0, "RIFF") ? LoadWav(bytes) : Load8svx(bytes);
+        Mem.Free(file);
         return s;
     }
 

@@ -291,6 +291,8 @@ internal static class SoundExpected
 
     private static readonly string[] Names =
     {
+        "WAV 8 bit mono", "WAV 16 bit stereo", "8SVX", "8SVX Fibonacci delta", "other data is refused",
+        "files are written and loaded back", "an unknown or missing file gives an empty sample", "the file is deleted", "period for a sample rate",
         "period for a frequency", "samples are allocated", "sample contents", "audio.device opens and gives a channel",
         "a playing voice is busy", "the voice is free when the sample has finished", "a looping sample keeps playing",
         "two voices play together", "Stop silences every voice", "a voice can be reused after Stop",
