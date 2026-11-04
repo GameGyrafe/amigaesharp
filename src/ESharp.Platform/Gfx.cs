@@ -1,7 +1,7 @@
 #if AMIGA
 namespace ESharp.Platform;
 
-/// <summary>intuition.library bindings (v37). Pointers are opaque: Screen and Window structures are read with fixed offsets in <see cref="Video"/>.</summary>
+/// <summary>intuition.library bindings (v39 or older). Pointers are opaque: Screen and Window structures are read with fixed offsets in <see cref="Video"/>.</summary>
 public static unsafe class Intuition
 {
     [AmigaLib("intuition", -612)] public static extern void* OpenScreenTagList(void* newScreen, void* tagList);
@@ -25,7 +25,7 @@ public static unsafe class Intuition
     public const int MsgClass = 20, MsgCode = 24, MsgMouseX = 32, MsgMouseY = 34;
 }
 
-/// <summary>graphics.library bindings (v37).</summary>
+/// <summary>graphics.library bindings (v39 or older).</summary>
 public static unsafe class Graphics
 {
     [AmigaLib("graphics", -288)] public static extern void SetRGB4(void* viewPort, int index, int r, int g, int b);

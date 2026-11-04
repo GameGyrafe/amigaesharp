@@ -17,7 +17,7 @@ dotnet run --project src/ESharp.Cli -- assets samples/screen                    
 dotnet run --project src/ESharp.Cli -- run samples/screen --docker <image> --headless --screenshot shot.png
 dotnet run --project src/ESharp.Cli -- run samples/cards --docker <image> --headless --input "click 400,300;rel -80,50;press;key 9"   # scripted mouse/keys (XTEST)
 dotnet run --project src/ESharp.Cli -- run samples/rummy --docker <image> --headless --input "click 400,300;rel 16,-80;press;key 9"   # rummy: stock at (128,80)
-dotnet run --project src/ESharp.Cli -- run samples/aga --docker <image> --headless --model A1200 --screenshot shot.png   # AGA 256 colours (A500+ runs the fallback checks)
+dotnet run --project src/ESharp.Cli -- run samples/aga --docker <image> --headless --model A1200 --screenshot shot.png   # AGA 256 colours (a non-AGA machine would run the fallback checks)
 dotnet run --project src/ESharp.Cli -- run samples/rtg --docker <image> --headless --model A1200   # RTG: no card in the emulator, so this runs the fallback checks
 dotnet run --project src/ESharp.Cli -- run samples/inherit --docker <image> --headless --model A1200   # inheritance, virtual members, is/as
 dotnet run --project src/ESharp.Cli -- run samples/lambdas --docker <image> --headless --model A1200   # capturing lambdas and delegates

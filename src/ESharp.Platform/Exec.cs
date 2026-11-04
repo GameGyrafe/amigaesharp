@@ -1,7 +1,7 @@
 #if AMIGA
 namespace ESharp.Platform;
 
-/// <summary>exec.library memory calls (all Kickstart 2.0 / v36 or older, so fine for the v37 floor).</summary>
+/// <summary>exec.library memory calls (all Kickstart 2.0 / v36 or older, so fine for the v39 floor).</summary>
 public static unsafe class Exec
 {
     public const uint MemPublic = 1;

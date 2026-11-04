@@ -3,7 +3,8 @@
 ## Minimum system: Amiga 1200 (decision)
 
 The minimum system is now an **Amiga 1200: 68020, AGA, 2 MB chip RAM, Kickstart 3.1, hard disk install**. Classic builds use `-m68020` (target table, smoke test), the CLI defaults to `--model A1200`, and the docs and `AGENTS.md` say so. Planned beyond classic 68k: PowerPC (AmigaOS 4, MorphOS), RTG cards and AROS. Support for A500/A600, 68000 and Kickstart 1.x/2.x is dropped. Older "Kickstart 2.04 / A500+" results below are historical: they were true when run and are not part of the matrix any more.
-- **Not yet done:** code still has 68000-era fallbacks (non-AGA screens, 512 KB host chip budget, comments mentioning A500); AGA/RTG-only simplifications, using 68020 instructions deliberately, and AROS (a new target, untested) are follow-ups.
+- Cleanup done: the host fake's default chip budget is 2 MB (also in the host-gcc exec shim), and comments and `docs/MEMORY.md` no longer describe a stock A500. 136 unit tests pass.
+- **Kept on purpose:** `HasAga()` and `HasRtg()` with their fallbacks. A classic A1200 always has AGA, but PowerPC, RTG-only and AROS targets may not, so the checks stay as the portable way to ask. **Not yet done:** using 68020 instructions deliberately and AROS (a new target, untested).
 - Verified after the change: all 17 samples built with `-m68020` and run on Kickstart 3.1 (A1200) in FS-UAE: 300 `ok` lines, no `FAIL` (the script shows only the last 25 lines of each sample, so long ones are truncated), 136 unit tests pass. Not verified: PowerPC, real hardware, a 68000/Kickstart 2.04 run (no longer supported).
 
 ## Lambdas that capture, and LINQ over arrays (samples/lambdas, samples/linq)

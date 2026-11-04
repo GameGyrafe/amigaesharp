@@ -45,16 +45,16 @@ public unsafe struct Arena
 }
 ```
 
-Amiga binding (all v33 or older, so fine for the Kickstart 2.04 floor):
+Amiga binding (all v33 or older, so fine for the Kickstart 3.1 floor):
 
 | E# | exec call | flags |
 |---|---|---|
 | `AllocChip` | `AllocVec(size, ...)` | `MEMF_PUBLIC \| MEMF_CHIP \| MEMF_CLEAR` |
-| `AllocFast` | `AllocVec(size, ...)` | `MEMF_PUBLIC \| MEMF_CLEAR` (exec prefers fast and falls back to chip, so this works on an unexpanded A500) |
+| `AllocFast` | `AllocVec(size, ...)` | `MEMF_PUBLIC \| MEMF_CLEAR` (exec prefers fast and falls back to chip, so this works on an unexpanded A1200) |
 | `Free` | `FreeVec(block)` | the size is stored with the block |
 | `AvailChip` / `AvailFast` | `AvailMem(...)` | `MEMF_CHIP` / `MEMF_FAST` |
 
-`AllocFast` is named for intent, not a guarantee. A stock A500 has no fast RAM, so a `MEMF_FAST`-only
+`AllocFast` is named for intent, not a guarantee. A stock A1200 has no fast RAM, so a `MEMF_FAST`-only
 request would simply fail there.
 
 PowerPC: `AllocChip` and `AllocFast` are the same call. The AmigaOS 4 and MorphOS spellings are
@@ -82,7 +82,7 @@ exported before relying on it.
 - Host (xUnit, `samples/memory`): alignment, exhaustion returns null, `Reset` reuses space, double `Free` (the host fake throws; on a real Amiga it would corrupt the free list), chip budget enforced, leak check.
 - Generated C against a `proto/exec.h` shim (calloc/free), as the `dos.h` shim does today.
 - Amiga: the sample allocates a chip arena and checks the address is in chip RAM (below 2 MB on
-  A500+ and A1200), writes and reads a pattern, then frees and checks `AvailChip` returned to
+  A1200), writes and reads a pattern, then frees and checks `AvailChip` returned to
   its starting value. FS-UAE's default has no fast RAM, so fast-RAM paths need a config option
   (not done); until then `AllocFast` is only verified to fall back to chip.
 
@@ -133,12 +133,12 @@ be needed at all. This proposal does not decide that.
 2. **Failure:** null return only. No `OnFail` hook for now.
 3. **Alignment:** `Arena.Alloc` takes an explicit alignment (a power of two); no hidden default.
 4. **Pools:** typed `Pool<T>` after generics (done).
-5. **Budget:** the host fake defaults to 512 KB chip (a stock A500) and is configurable.
+5. **Budget:** the host fake defaults to 2 MB chip (a stock A1200) and is configurable.
 
 ## What step 1 actually does today
 
 - `Mem`, `Arena`, `Exec` live in `src/ESharp.Platform`; `HostMem` in `src/ESharp.Target.Host`.
-- The host fake defaults to 512 KB chip and **0 fast** (a stock A500, so `AllocFast` uses chip);
+- The host fake defaults to 2 MB chip and **0 fast** (a stock A1200, so `AllocFast` uses chip);
   `HostMem.Capture(chip, fast)` sets budgets and `LiveBlocks`/`ChipUsed` detect leaks.
 - `Mem.Free` on the host throws for an unknown or already-freed block. On a real Amiga that would
   corrupt memory, so the fake is stricter on purpose.

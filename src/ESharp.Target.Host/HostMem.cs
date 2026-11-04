@@ -11,7 +11,7 @@ public sealed class HostMem : IDisposable
 {
     private HostMem(uint chip, uint fast) => Mem.HostReset(chip, fast);
 
-    public static HostMem Capture(uint chipBudget = 512 * 1024, uint fastBudget = 0) => new(chipBudget, fastBudget);
+    public static HostMem Capture(uint chipBudget = 2048 * 1024, uint fastBudget = 0) => new(chipBudget, fastBudget);
 
     public int LiveBlocks => Mem.LiveBlocks;
     public uint ChipUsed => Mem.ChipUsed;

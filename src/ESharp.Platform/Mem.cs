@@ -20,7 +20,7 @@ public static unsafe class Mem
         Exec.AllocVec(size, Exec.MemPublic | Exec.MemChip | Exec.MemClear);
 
     /// <summary>
-    /// Zeroed RAM, preferring fast and falling back to chip, so it works on an unexpanded A500.
+    /// Zeroed RAM, preferring fast and falling back to chip, so it works on an unexpanded A1200.
     /// Null if exhausted.
     /// </summary>
     public static byte* AllocFast(uint size) =>
@@ -48,10 +48,10 @@ public static unsafe class Mem
     private static uint _chipUsed;
     private static uint _fastUsed;
 
-    /// <summary>Chip RAM the fake machine has. Default 512 KB, a stock A500.</summary>
-    public static uint ChipBudget = 512 * 1024;
+    /// <summary>Chip RAM the fake machine has. Default 2 MB, a stock A1200.</summary>
+    public static uint ChipBudget = 2048 * 1024;
 
-    /// <summary>Fast RAM the fake machine has. Default 0, a stock A500: AllocFast then uses chip.</summary>
+    /// <summary>Fast RAM the fake machine has. Default 0, a stock A1200: AllocFast then uses chip.</summary>
     public static uint FastBudget = 0;
 
     public static uint ChipUsed => _chipUsed;
@@ -59,7 +59,7 @@ public static unsafe class Mem
     public static int LiveBlocks => Live.Count;
 
     /// <summary>Frees every live block and sets the budgets. Used by tests.</summary>
-    public static void HostReset(uint chipBudget = 512 * 1024, uint fastBudget = 0)
+    public static void HostReset(uint chipBudget = 2048 * 1024, uint fastBudget = 0)
     {
         foreach (var address in Live.Keys) NativeMemory.AlignedFree((void*)address);
         Live.Clear();
