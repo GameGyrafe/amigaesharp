@@ -20,6 +20,7 @@ dotnet run --project src/ESharp.Cli -- run samples/rummy --docker <image> --head
 dotnet run --project src/ESharp.Cli -- run samples/aga --docker <image> --headless --model A1200 --screenshot shot.png   # AGA 256 colours (a non-AGA machine would run the fallback checks)
 dotnet run --project src/ESharp.Cli -- run samples/rtg --docker <image> --headless --model A1200   # RTG: no card in the emulator, so this runs the fallback checks
 dotnet run --project src/ESharp.Cli -- run samples/inherit --docker <image> --headless --model A1200   # inheritance, virtual members, is/as
+dotnet run --project src/ESharp.Cli -- build samples/linq --target aros --docker amigadev/crosstools@sha256:9c4e978301da6b6584d68d4014caa1fa9e2689529e79e71f7190d40d1cb62e50   # AROS x86-64: builds only, not run yet
 dotnet run --project src/ESharp.Cli -- run samples/lambdas --docker <image> --headless --model A1200   # capturing lambdas and delegates
 dotnet run --project src/ESharp.Cli -- run samples/linq --docker <image> --headless --model A1200   # LINQ over arrays, turned into loops
 dotnet run --project tools/CardArt -- samples/cards/cards.png                               # redraw the card sprite sheet

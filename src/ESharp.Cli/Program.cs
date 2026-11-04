@@ -20,7 +20,7 @@ Usage:
   esharp test                       Not implemented yet
 
 Build options:
-  --target <name>   m68k (default), os4 or morphos
+  --target <name>   m68k (default), os4, morphos or aros
   -o <dir>          Output directory (default: obj next to the sources)
   --emit-only       Stop after writing the C file
   --docker [image]  Run the C compiler inside the toolchain image (default: esharp-amiga-toolchain)

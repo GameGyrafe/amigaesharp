@@ -62,7 +62,12 @@ public static class Targets
         new[] { "AMIGA", "PPC", "MORPHOS" },
         "ppc-morphos-gcc", "-noixemul -O2 -fwrapv");
 
-    public static IReadOnlyList<TargetInfo> All { get; } = new[] { M68k, Os4, MorphOs };
+    public static readonly TargetInfo Aros = new(
+        "aros", "AROS on x86-64 (64-bit pointers)",
+        new[] { "AMIGA", "X86_64", "AROS" },
+        "x86_64-aros-gcc", "--sysroot=/opt/x86_64-aros -O2 -fwrapv");
+
+    public static IReadOnlyList<TargetInfo> All { get; } = new[] { M68k, Os4, MorphOs, Aros };
 
     public static TargetInfo? Find(string name) =>
         All.FirstOrDefault(t => string.Equals(t.Name, name, StringComparison.OrdinalIgnoreCase));
