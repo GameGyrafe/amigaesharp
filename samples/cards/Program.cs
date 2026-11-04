@@ -14,9 +14,31 @@ public static class Program
 {
     const int CardW = 32;
     const int CardH = 40;
-    const int Table = 8, ButtonColor = 9, PipOn = 10, PipOff = 11, Shadow = 12;
+    // Palette indices. The high-resolution sheet uses entries 0..55, so on AROS these move up to 56..60 (see OpenHd).
+    static int Table = 8, ButtonColor = 9, PipOn = 10, PipOff = 11, Shadow = 12;
     const int HigherX = 30, LowerX = 190, ButtonY = 130, ButtonW = 100, ButtonH = 30;
     const int CurrentX = 144, CurrentY = 70;
+
+    /// <summary>Screen scale: the layout is in 320 x 200 logical pixels; with Z = 2 (AROS) the screen is 640 x 400 and every pixel is drawn 2 x 2.</summary>
+    static int Z = 1;
+
+    /// <summary>True when the 64 x 80 sheet is in use (AROS with an RTG mode): the cards are drawn at that size, not scaled.</summary>
+    static bool Hd;
+
+    static void Fill(int x, int y, int w, int h, int color)
+    {
+        Video.FillRect(x * Z, y * Z, w * Z, h * Z, color);
+    }
+
+    static void SetColors()
+    {
+        Video.SetPalette(Sheet.CardsPalette);
+        Video.SetColor(Table, 0, 7, 2);
+        Video.SetColor(ButtonColor, 2, 10, 3);
+        Video.SetColor(PipOn, 15, 12, 0);
+        Video.SetColor(PipOff, 5, 5, 5);
+        Video.SetColor(Shadow, 0, 3, 1);
+    }
 
     static void Check(bool ok, string name)
     {
@@ -46,8 +68,16 @@ public static class Program
 
     static void Sprite(int column, int row, int x, int y)
     {
-        Video.BlitMasked(Sheet.CardsPlanes, Sheet.CardsMask, Sheet.CardsWidth, Sheet.CardsHeight, Sheet.CardsDepth,
-            column * CardW, row * CardH, CardW, CardH, x, y);
+#if AROS
+        if (Hd)
+        {
+            Video.BlitMasked(HdSheet.HdPlanes, HdSheet.HdMask, HdSheet.HdWidth, HdSheet.HdHeight, HdSheet.HdDepth,
+                column * 2 * CardW, row * 2 * CardH, 2 * CardW, 2 * CardH, x * 2, y * 2);
+            return;
+        }
+#endif
+        Video.BlitMaskedScaled(Sheet.CardsPlanes, Sheet.CardsMask, Sheet.CardsWidth, Sheet.CardsHeight, Sheet.CardsDepth,
+            column * CardW, row * CardH, CardW, CardH, x * Z, y * Z, Z);
     }
 
     static void DrawCard(int card, int x, int y)
@@ -57,15 +87,15 @@ public static class Program
 
     static void Button(int x, bool up)
     {
-        Video.FillRect(x + 3, ButtonY + 3, ButtonW, ButtonH, Shadow);
-        Video.FillRect(x, ButtonY, ButtonW, ButtonH, ButtonColor);
+        Fill(x + 3, ButtonY + 3, ButtonW, ButtonH, Shadow);
+        Fill(x, ButtonY, ButtonW, ButtonH, ButtonColor);
         // The arrow cells are 32 wide; the 13 pixel arrow sits in the middle of the cell.
         Sprite(up ? 1 : 2, 4, x + (ButtonW - CardW) / 2, ButtonY + (ButtonH - CardH) / 2);
     }
 
     static void Draw()
     {
-        Video.FillRect(0, 0, 320, 200, Table);
+        Fill(0, 0, 320, 200, Table);
         if (HigherLower.Next < HigherLower.DeckSize) Sprite(0, 4, 60, CurrentY); // the deck: a card back
         int shown = 0;
         for (int i = HigherLower.Next - 2; i >= 0 && shown < 8; i--)
@@ -84,8 +114,34 @@ public static class Program
             Sprite(HigherLower.State == Outcome.Won ? 3 : 4, 4, 232, CurrentY);
         }
         for (int i = 0; i < HigherLower.Best; i++)
-            Video.FillRect(8 + i * 5, 176, 4, 4, i < HigherLower.Streak ? PipOn : PipOff);
+            Fill(8 + i * 5, 176, 4, 4, i < HigherLower.Streak ? PipOn : PipOff);
     }
+
+#if AROS
+    /// <summary>
+    /// The checks ran at 320 x 200. To play, open a 640 x 400 screen: on an RTG mode with the 64 x 80 high resolution sheet (real detail,
+    /// not enlarged pixels), otherwise a native screen with the 32 x 40 sprites drawn 2 x 2.
+    /// </summary>
+    static void OpenLarge()
+    {
+        Video.Close();
+        Z = 2;
+        if (Video.HasRtg(640, 400) && Video.OpenRtg(640, 400, 6))
+        {
+            Hd = true;
+            Table = 56; ButtonColor = 57; PipOn = 58; PipOff = 59; Shadow = 60;
+            Video.SetPalette24(HdSheet.HdPalette);
+            Video.SetColor24(Table, 0, 119, 34);
+            Video.SetColor24(ButtonColor, 34, 170, 51);
+            Video.SetColor24(PipOn, 255, 204, 0);
+            Video.SetColor24(PipOff, 85, 85, 85);
+            Video.SetColor24(Shadow, 0, 51, 17);
+            return;
+        }
+        if (!Video.Open(640, 400, 4)) { Z = 1; Video.Open(320, 200, 4); }
+        SetColors();
+    }
+#endif
 
     static bool Inside(int x, int y, int left, int top, int w, int h)
     {
@@ -104,8 +160,8 @@ public static class Program
         if (Input.LeftPressed)
         {
             acted = true;
-            int x = Input.MouseX;
-            int y = Input.MouseY;
+            int x = Input.MouseX / Z;
+            int y = Input.MouseY / Z;
             if (HigherLower.State != Outcome.Playing)
             {
                 HigherLower.Deal((uint)(Input.MouseX * 31 + Input.MouseY * 17 + HigherLower.Next + 1));
@@ -196,12 +252,7 @@ public static class Program
         bool opened = Video.Open(320, 200, 4);
         Check(opened, "screen opens");
         if (!opened) return;
-        Video.SetPalette(Sheet.CardsPalette);
-        Video.SetColor(Table, 0, 7, 2);
-        Video.SetColor(ButtonColor, 2, 10, 3);
-        Video.SetColor(PipOn, 15, 12, 0);
-        Video.SetColor(PipOff, 5, 5, 5);
-        Video.SetColor(Shadow, 0, 3, 1);
+        SetColors();
 
         HigherLower.Deal(99);
         Draw();
@@ -261,6 +312,9 @@ public static class Program
                 HigherLower.Guess(Deck.Rank(HigherLower.Current) < 6);
             if (HigherLower.State == Outcome.Playing) break;
         }
+#if AROS
+        OpenLarge();
+#endif
         Draw();
         Dos.PutStr("SHOT\n");
         Dos.FlushOutput();

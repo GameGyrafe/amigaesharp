@@ -15,10 +15,47 @@ namespace RummyDemo;
 public static class Program
 {
     const int CardW = 32, CardH = 40;
-    const int Table = 8, ButtonColor = 9, Group1 = 10, Group2 = 11, Group3 = 12, Ink = 13, Shadow = 14, Gold = 15;
+    // Palette indices. The high-resolution sheet uses entries 0..55, so on AROS these move up to 56..63 (see OpenLarge).
+    static int Table = 8, ButtonColor = 9, Group1 = 10, Group2 = 11, Group3 = 12, Ink = 13, Shadow = 14, Gold = 15;
     const int BotY = 6, MiddleY = 60, HandY = 150, BarY = 192;
     const int StockX = 108, PileX = 160;
     const int KnockX = 232, KnockY = 62, KnockW = 72, KnockH = 24;
+
+    /// <summary>Screen scale: the layout is in 320 x 200 logical pixels; with Z = 2 (AROS) the screen is 640 x 400 and every pixel is drawn 2 x 2.</summary>
+    static int Z = 1;
+
+    /// <summary>True when the 64 x 80 sheet and the smoothed font are in use (AROS with an RTG mode): drawn at that size, not scaled.</summary>
+    static bool Hd;
+
+    static void Fill(int x, int y, int w, int h, int color)
+    {
+        Video.FillRect(x * Z, y * Z, w * Z, h * Z, color);
+    }
+
+    static void Text(string text, int x, int y, int color, int scale)
+    {
+#if AROS
+        if (Hd)
+        {
+            HdText(text, x, y, color, scale);
+            return;
+        }
+#endif
+        Font.Draw(text, x * Z, y * Z, color, scale * Z);
+    }
+
+    static void SetColors()
+    {
+        Video.SetPalette(Sheet.CardsPalette);
+        Video.SetColor(Table, 0, 7, 2);
+        Video.SetColor(ButtonColor, 2, 10, 3);
+        Video.SetColor(Group1, 15, 12, 0);
+        Video.SetColor(Group2, 4, 12, 15);
+        Video.SetColor(Group3, 15, 6, 12);
+        Video.SetColor(Ink, 15, 15, 15);
+        Video.SetColor(Shadow, 0, 3, 1);
+        Video.SetColor(Gold, 15, 14, 4);
+    }
 
     static void Check(bool ok, string name)
     {
@@ -31,8 +68,16 @@ public static class Program
 
     static void Sprite(int column, int row, int x, int y)
     {
-        Video.BlitMasked(Sheet.CardsPlanes, Sheet.CardsMask, Sheet.CardsWidth, Sheet.CardsHeight, Sheet.CardsDepth,
-            column * CardW, row * CardH, CardW, CardH, x, y);
+#if AROS
+        if (Hd)
+        {
+            Video.BlitMasked(HdSheet.HdPlanes, HdSheet.HdMask, HdSheet.HdWidth, HdSheet.HdHeight, HdSheet.HdDepth,
+                column * 2 * CardW, row * 2 * CardH, 2 * CardW, 2 * CardH, x * 2, y * 2);
+            return;
+        }
+#endif
+        Video.BlitMaskedScaled(Sheet.CardsPlanes, Sheet.CardsMask, Sheet.CardsWidth, Sheet.CardsHeight, Sheet.CardsDepth,
+            column * CardW, row * CardH, CardW, CardH, x * Z, y * Z, Z);
     }
 
     static void DrawCard(int card, int x, int y)
@@ -66,7 +111,7 @@ public static class Program
 
     static void Draw()
     {
-        Video.FillRect(0, 0, 320, 200, Table);
+        Fill(0, 0, 320, 200, Table);
 
         // The bot's hand: backs, or faces once the round is over.
         for (int i = 0; i < Game.Bot.Count; i++)
@@ -77,20 +122,20 @@ public static class Program
 
         // Stock and discard pile.
         if (Game.Stock.Count > 0) CardBack(StockX, MiddleY);
-        else Video.FillRect(StockX, MiddleY, CardW, CardH, Shadow);
+        else Fill(StockX, MiddleY, CardW, CardH, Shadow);
         if (Game.PileTop >= 0) DrawCard(Game.PileTop, PileX, MiddleY);
-        Font.Draw($"STOCK {Game.Stock.Count}", StockX - 8, MiddleY + CardH + 4, Ink, 1);
-        Font.Draw("PILE", PileX, MiddleY + CardH + 4, Ink, 1);
+        Text($"STOCK {Game.Stock.Count}", StockX - 8, MiddleY + CardH + 4, Ink, 1);
+        Text("PILE", PileX, MiddleY + CardH + 4, Ink, 1);
 
         if (Game.Phase == Phase.PlayerDiscard)
         {
-            Video.FillRect(KnockX + 3, KnockY + 3, KnockW, KnockH, Shadow);
-            Video.FillRect(KnockX, KnockY, KnockW, KnockH, ButtonColor);
-            Font.Draw("KNOCK", KnockX + (KnockW - Font.Width("KNOCK", 2)) / 2, KnockY + 5, Ink, 2);
+            Fill(KnockX + 3, KnockY + 3, KnockW, KnockH, Shadow);
+            Fill(KnockX, KnockY, KnockW, KnockH, ButtonColor);
+            Text("KNOCK", KnockX + (KnockW - Font.Width("KNOCK", 2)) / 2, KnockY + 5, Ink, 2);
         }
 
-        Font.Draw(Message(), 8, 118, Ink, 1);
-        Font.Draw($"DEADWOOD {Game.PlayerDeadwood}", 8, 132, Gold, 1);
+        Text(Message(), 8, 118, Ink, 1);
+        Text($"DEADWOOD {Game.PlayerDeadwood}", 8, 132, Gold, 1);
 
         // The player's hand, with a coloured bar under every card that belongs to a meld.
         byte[] groups = new byte[Rummy.MaxHand];
@@ -99,9 +144,62 @@ public static class Program
         for (int i = 0; i < Game.Player.Count; i++)
         {
             DrawCard(Game.Player[i], HandX(i), HandY);
-            Video.FillRect(HandX(i), BarY, CardW, 4, GroupColor(group[i]));
+            Fill(HandX(i), BarY, CardW, 4, GroupColor(group[i]));
         }
     }
+
+#if AROS
+    /// <summary>
+    /// The checks ran at 320 x 200. To play, open a 640 x 400 screen: on an RTG mode with the 64 x 80 high resolution sheet and font (real detail,
+    /// not enlarged pixels), otherwise a native screen with the 32 x 40 sprites and the 5 x 7 font drawn 2 x 2.
+    /// </summary>
+    static void OpenLarge()
+    {
+        Video.Close();
+        Z = 2;
+        if (Video.HasRtg(640, 400) && Video.OpenRtg(640, 400, 6))
+        {
+            Hd = true;
+            Table = 56; ButtonColor = 57; Group1 = 58; Group2 = 59; Group3 = 60; Ink = 61; Shadow = 62; Gold = 63;
+            Video.SetPalette24(HdSheet.HdPalette);
+            Video.SetColor24(Table, 0, 119, 34);
+            Video.SetColor24(ButtonColor, 34, 170, 51);
+            Video.SetColor24(Group1, 255, 204, 0);
+            Video.SetColor24(Group2, 68, 204, 255);
+            Video.SetColor24(Group3, 255, 102, 204);
+            Video.SetColor24(Ink, 255, 255, 255);
+            Video.SetColor24(Shadow, 0, 51, 17);
+            Video.SetColor24(Gold, 255, 238, 68);
+            return;
+        }
+        if (!Video.Open(640, 400, 4)) { Z = 1; Video.Open(320, 200, 4); }
+        SetColors();
+    }
+
+    /// <summary>
+    /// Text from the smoothed glyphs in the high resolution sheet (ASCII 32..95, lower case shown as capitals): 12 x 16 cells for the normal size
+    /// (ink or gold, baked on the table), 24 x 32 for the 2x size (ink, baked on a button). x, y are in logical pixels.
+    /// </summary>
+    static void HdText(string text, int x, int y, int color, int scale)
+    {
+        bool big = scale >= 2;
+        int cellW = big ? 24 : 12;
+        int cellH = big ? 32 : 16;
+        int pad = big ? 2 : 1;                        // the glyph sits this far inside its cell
+        int advance = 12 * scale;                     // 6 logical pixels per character, 2 screen pixels each
+        for (int i = 0; i < text.Length; i++)
+        {
+            int code = text[i];
+            if (code >= 97 && code <= 122) code -= 32;
+            if (code < 32 || code > 95) code = 63;
+            int index = code - 32;
+            int sx = big ? (index % 32) * cellW : index * cellW;
+            int sy = big ? 432 + (index / 32) * cellH : (color == Gold ? 416 : 400);
+            Video.BlitMasked(HdSheet.HdPlanes, HdSheet.HdMask, HdSheet.HdWidth, HdSheet.HdHeight, HdSheet.HdDepth,
+                sx, sy, cellW, cellH, x * 2 + i * advance - pad, y * 2 - pad);
+        }
+    }
+#endif
 
     static bool Inside(int x, int y, int left, int top, int w, int h)
     {
@@ -130,8 +228,8 @@ public static class Program
         if (Input.LeftPressed)
         {
             acted = true;
-            int x = Input.PressX;
-            int y = Input.PressY;
+            int x = Input.PressX / Z;
+            int y = Input.PressY / Z;
             switch (Game.Phase)
             {
                 case Phase.Over:
@@ -285,15 +383,7 @@ public static class Program
         bool opened = Video.Open(320, 200, 4);
         Check(opened, "screen opens");
         if (!opened) return;
-        Video.SetPalette(Sheet.CardsPalette);
-        Video.SetColor(Table, 0, 7, 2);
-        Video.SetColor(ButtonColor, 2, 10, 3);
-        Video.SetColor(Group1, 15, 12, 0);
-        Video.SetColor(Group2, 4, 12, 15);
-        Video.SetColor(Group3, 15, 6, 12);
-        Video.SetColor(Ink, 15, 15, 15);
-        Video.SetColor(Shadow, 0, 3, 1);
-        Video.SetColor(Gold, 15, 14, 4);
+        SetColors();
 
         Game.Deal(4242);
         Draw();
@@ -328,6 +418,9 @@ public static class Program
         // A mid-game position for the screenshot.
         Game.Deal(4242);
         Game.DrawStock();
+#if AROS
+        OpenLarge();
+#endif
         Draw();
         Dos.PutStr("SHOT\n");
         Dos.FlushOutput();

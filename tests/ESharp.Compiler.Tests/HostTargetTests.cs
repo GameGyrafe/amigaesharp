@@ -160,6 +160,32 @@ public class HostTargetTests
     }
 
     [Fact]
+    public void A_scaled_masked_blit_is_the_normal_blit_with_every_pixel_drawn_as_a_square()
+    {
+        // A 16 x 2 two-plane image: plane 0 = 0xF0F0 / 0x0FF0, plane 1 = 0xFF00 / 0xFF00; the mask hides the last pixel of row 0.
+        byte[] planar = { 0xF0, 0xF0, 0x0F, 0xF0, 0xFF, 0x00, 0xFF, 0x00 };
+        byte[] mask = { 0xFF, 0xFE, 0xFF, 0xFF };
+        Assert.True(ESharp.Platform.Video.Open(64, 16, 2));
+        try
+        {
+            ESharp.Platform.Video.FillRect(0, 0, 64, 16, 3);
+            ESharp.Platform.Video.BlitMaskedScaled(planar, mask, 16, 2, 2, 0, 0, 16, 2, 0, 0, 1);
+            var plain = (byte[])ESharp.Platform.Video.HostPixels.Clone();
+            ESharp.Platform.Video.FillRect(0, 0, 64, 16, 3);
+            ESharp.Platform.Video.BlitMaskedScaled(planar, mask, 16, 2, 2, 0, 0, 16, 2, 4, 3, 3);
+            var scaled = ESharp.Platform.Video.HostPixels;
+            int wrong = 0;
+            for (int y = 0; y < 2 * 3; y++)
+                for (int x = 0; x < 16 * 3; x++)
+                    if (scaled[(3 + y) * 64 + 4 + x] != plain[(y / 3) * 64 + x / 3]) wrong++;
+            Assert.Equal(0, wrong);
+            Assert.Equal(3, plain[15]);                 // the masked pixel shows the background
+            Assert.Equal(3, scaled[3 * 64 + 4 + 45]);   // ... and so does its 3 x 3 block
+        }
+        finally { ESharp.Platform.Video.Close(); }
+    }
+
+    [Fact]
     public void Cards_sample_runs_on_the_host_and_draws_masked_sprites()
     {
         using var console = HostConsole.Capture();

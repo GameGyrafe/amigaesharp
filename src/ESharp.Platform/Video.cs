@@ -439,4 +439,56 @@ public static unsafe class Video
 
     public static void WaitFrames(int frames) { }
 #endif
+
+    /// <summary>
+    /// <see cref="BlitMasked"/> with every pixel drawn as a <paramref name="scale"/> x <paramref name="scale"/> square, so the same pixel art can fill a larger
+    /// screen (it opens at 2x, 3x ... the size of a game's logical screen). Runs of one colour become single FillRect calls. Scale 1 is the normal blit
+    /// (the blitter, fast); larger scales are meant for machines with the fill rate to spare (AROS, RTG). An empty mask draws every pixel.
+    /// </summary>
+    public static void BlitMaskedScaled(ReadOnlySpan<byte> planar, ReadOnlySpan<byte> mask, int width, int height, int depth,
+        int sx, int sy, int w, int h, int x, int y, int scale)
+    {
+        if (scale <= 1)
+        {
+            BlitMasked(planar, mask, width, height, depth, sx, sy, w, h, x, y);
+            return;
+        }
+        int bytesPerRow = ((width + 15) / 16) * 2;
+        for (int row = 0; row < h; row++)
+        {
+            int srcRow = sy + row;
+            if (srcRow < 0 || srcRow >= height) continue;
+            int col = 0;
+            while (col < w)
+            {
+                int srcCol = sx + col;
+                if (!SheetOpaque(mask, bytesPerRow, width, srcCol, srcRow))
+                {
+                    col++;
+                    continue;
+                }
+                int value = SheetPixel(planar, bytesPerRow, height, depth, srcCol, srcRow);
+                int run = 1;
+                while (col + run < w
+                    && SheetOpaque(mask, bytesPerRow, width, srcCol + run, srcRow)
+                    && SheetPixel(planar, bytesPerRow, height, depth, srcCol + run, srcRow) == value) run++;
+                FillRect(x + col * scale, y + row * scale, run * scale, scale, value);
+                col += run;
+            }
+        }
+    }
+
+    private static bool SheetOpaque(ReadOnlySpan<byte> mask, int bytesPerRow, int width, int x, int y)
+    {
+        if (x < 0 || x >= width) return false;
+        return mask.Length == 0 || (mask[y * bytesPerRow + (x >> 3)] & (0x80 >> (x & 7))) != 0;
+    }
+
+    private static int SheetPixel(ReadOnlySpan<byte> planar, int bytesPerRow, int height, int depth, int x, int y)
+    {
+        int value = 0;
+        for (int p = 0; p < depth; p++)
+            if ((planar[p * bytesPerRow * height + y * bytesPerRow + (x >> 3)] & (0x80 >> (x & 7))) != 0) value |= 1 << p;
+        return value;
+    }
 }
