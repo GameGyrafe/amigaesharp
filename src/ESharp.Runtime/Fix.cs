@@ -37,30 +37,19 @@ public struct Fix
     public static Fix operator -(Fix a) => FromRaw(-a.Raw);
 
     /// <summary>
-    /// Fixed-point multiply built from four 16x16 partial products, so a 68000 uses only its native
-    /// <c>muls.w</c>/<c>mulu.w</c> and never a 32-bit multiply helper or 64-bit arithmetic. The
-    /// halves are multiplied as unsigned (the high product needs no correction because it is shifted
-    /// left by 16) and the cross terms are corrected for the sign of the high halves. Everything is
-    /// arithmetic modulo 2^32, so the result matches (a * b) >> 16 exactly.
+    /// Fixed-point multiply, <c>(a * b) >> 16</c> through a 64-bit product. On the 68020 that is one
+    /// <c>muls.l</c> with a 64-bit result (no helper call); the 68000-style four-partial-product version is gone with the 68000.
     /// </summary>
-    public static Fix operator *(Fix a, Fix b)
-    {
-        short ah = (short)(a.Raw >> 16);
-        short bh = (short)(b.Raw >> 16);
-        ushort al = (ushort)a.Raw;
-        ushort bl = (ushort)b.Raw;
-        uint high = (uint)((ushort)ah * (ushort)bh) << 16;
-        uint mid = (uint)((ushort)ah * bl) + (uint)(al * (ushort)bh);
-        uint fix = ((uint)(ah >> 15) & ((uint)bl << 16)) + ((uint)(bh >> 15) & ((uint)al << 16));
-        uint low = (uint)(al * bl) >> 16;
-        return FromRaw((int)(high + mid - fix + low));
-    }
+    public static Fix operator *(Fix a, Fix b) => FromRaw((int)(((long)a.Raw * b.Raw) >> 16));
 
     public static Fix operator *(Fix a, int b) => FromRaw(a.Raw * b);
     public static Fix operator *(int a, Fix b) => FromRaw(a * b.Raw);
 
-    /// <summary>Fixed-point divide. Uses a 64-bit intermediate, so it is slow on a 68000.</summary>
-    public static Fix operator /(Fix a, Fix b) => FromRaw((int)(((long)a.Raw << 16) / b.Raw));
+    /// <summary>
+    /// Fixed-point divide, <c>(a &lt;&lt; 16) / b</c>. On the 68020 it is one <c>divs.l</c> (64/32 divide) when the quotient fits in 32 bits, and
+    /// the software 64-bit divide only when it does not. Division by zero gives 0 on the Amiga (a 68k would otherwise trap) and throws on the host.
+    /// </summary>
+    public static Fix operator /(Fix a, Fix b) => FromRaw(Intrinsics.es_fixdiv(a.Raw, b.Raw));
 
     public static Fix operator /(Fix a, int b) => FromRaw(a.Raw / b);
 
@@ -70,4 +59,15 @@ public struct Fix
     public static bool operator >(Fix a, Fix b) => a.Raw > b.Raw;
     public static bool operator <=(Fix a, Fix b) => a.Raw <= b.Raw;
     public static bool operator >=(Fix a, Fix b) => a.Raw >= b.Raw;
+}
+
+/// <summary>Operations the C prelude of the generated file implements with the best instruction for the CPU.</summary>
+internal static class Intrinsics
+{
+#if AMIGA
+    [Native]
+    public static extern int es_fixdiv(int a, int b);
+#else
+    public static int es_fixdiv(int a, int b) => (int)(((long)a << 16) / b);
+#endif
 }

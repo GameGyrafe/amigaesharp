@@ -378,6 +378,24 @@ internal sealed partial class CEmitter
             result.AppendLine("}");
             result.AppendLine("#define ES_NEW(T) ((T *)es_new(sizeof(T)))");
         }
+        if (_natives.Contains("es_fixdiv"))
+        {
+            result.AppendLine("static inline int32_t es_fixdiv(int32_t a, int32_t b)");
+            result.AppendLine("{");
+            result.AppendLine("#if defined(__mc68020__) || defined(__mc68030__) || defined(__mc68040__) || defined(__mc68060__)");
+            result.AppendLine("    if (b == 0) return 0;");
+            result.AppendLine("    uint32_t ua = a < 0 ? 0u - (uint32_t)a : (uint32_t)a, ub = b < 0 ? 0u - (uint32_t)b : (uint32_t)b;");
+            result.AppendLine("    if (ua < (ub > 0x1FFFFu ? 0xFFFFFFFFu : ub << 15))   /* the quotient fits in 32 bits, so divs.l cannot overflow */");
+            result.AppendLine("    {");
+            result.AppendLine("        int32_t q = (int32_t)((uint32_t)a << 16), r = a >> 16;   /* the dividend a << 16 as r:q */");
+            result.AppendLine("        __asm__(\"divs.l %2,%1:%0\" : \"+d\"(q), \"+d\"(r) : \"d\"(b) : \"cc\");");
+            result.AppendLine("        return q;");
+            result.AppendLine("    }");
+            result.AppendLine("#endif");
+            result.AppendLine("    return (int32_t)(((int64_t)a << 16) / b);");
+            result.AppendLine("}");
+            result.AppendLine();
+        }
         if (_usesLen)
         {
             result.AppendLine("#define ES_LEN(a) ((int32_t)(sizeof(a) / sizeof((a)[0])))");
@@ -386,6 +404,8 @@ internal sealed partial class CEmitter
         result.Append(body);
         return result.ToString();
     }
+
+    private readonly HashSet<string> _natives = new();
 
     private bool IsDefined(string symbol) =>
         _compilation.SyntaxTrees.FirstOrDefault(_user.Contains)?.Options.PreprocessorSymbolNames.Contains(symbol) ?? false;
@@ -581,7 +601,7 @@ internal sealed partial class CEmitter
 
     private static string FuncName(IMethodSymbol m)
     {
-        if (HasAttribute(m, "AmigaLibAttribute")) return m.Name;
+        if (HasAttribute(m, "AmigaLibAttribute") || HasAttribute(m, "NativeAttribute")) return m.Name;
         if (m.MethodKind == MethodKind.LocalFunction && m.ContainingSymbol is IMethodSymbol outer)
             return FuncName(outer) + "_" + m.Name;
         if (m.MethodKind == MethodKind.AnonymousFunction)
@@ -2168,6 +2188,7 @@ internal sealed partial class CEmitter
             if (receiver == null) return "0";
         }
 
+        if (HasAttribute(m, "NativeAttribute")) _natives.Add(m.Name);
         var lib = GetAttribute(m, "AmigaLibAttribute");
         if (lib != null)
             _headers.Add(lib.ConstructorArguments[0].Value is "alib" ? "clib/alib_protos.h" : $"proto/{lib.ConstructorArguments[0].Value}.h");

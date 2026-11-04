@@ -622,6 +622,27 @@ Say($""{m} {Mode.Stop} {odd} {big} {m,6}|{m:D}|{(Mode)0}"");
     }
 
     [Fact]
+    public void Fix_multiply_and_divide_match_the_64_bit_definition_natively()
+    {
+        if (!HasGcc) return;
+        const string body = @"
+int[] v = { 65536, -65536, 98304, -98304, 1, -1, 32767, 12345678, -12345678, 2147483647, -2147483647 - 1, 40000, 7, 262144, -3 };
+int sum = 0;
+for (int i = 0; i < 15; i++)
+    for (int j = 0; j < 15; j++)
+    {
+        Fix a = Fix.FromRaw(v[i]); Fix b = Fix.FromRaw(v[j]);
+        sum = sum * 31 + (a * b).Raw;
+        if (b.Raw != 0) sum = sum * 31 + (a / b).Raw;
+    }
+Dos.PutInt(sum);
+";
+        var (code, output) = RunWithHostGcc(CompileOk(Program("", body)));
+        Assert.Equal(0, code);
+        Assert.Equal("37706025", output.Trim());   // computed independently (exact integer arithmetic), including quotients that overflow 32 bits
+    }
+
+    [Fact]
     public void Static_constructors_and_this_initializers_work_natively()
     {
         if (!HasGcc) return;

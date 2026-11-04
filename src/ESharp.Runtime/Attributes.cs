@@ -28,6 +28,15 @@ public sealed class ChipRamAttribute : Attribute
 {
 }
 
+/// <summary>
+/// An extern method that is a C function the emitter itself defines in the generated file's prelude (no library header, no body in E#).
+/// Used for operations a single machine instruction does well, such as the 68020 64/32 divide.
+/// </summary>
+[AttributeUsage(AttributeTargets.Method)]
+public sealed class NativeAttribute : Attribute
+{
+}
+
 /// <summary>Marks an interrupt handler.</summary>
 [AttributeUsage(AttributeTargets.Method)]
 public sealed class InterruptAttribute : Attribute
