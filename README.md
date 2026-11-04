@@ -1,7 +1,7 @@
 # E# (Amiga E#)
 
 Write Amiga software in a restricted, statically compiled subset of C#. E# translates your
-`.cs` files to C and builds them into native 68000 code with `amiga-gcc`. The same source also
+`.cs` files to C and builds them into native 68020+ code with `amiga-gcc`. The same source also
 builds under plain `dotnet`, so game logic can be unit tested and debugged on the PC before it
 ever touches an emulator.
 
@@ -84,7 +84,7 @@ docs/
 
 ## Requirements on the Amiga
 
-Classic Amiga builds need Kickstart/AmigaOS 2.04 or later (68000 or better). AmigaOS 4 and MorphOS builds target their current releases.
+**Minimum system: an Amiga 1200** (68020, AGA, 2 MB chip RAM, Kickstart/AmigaOS 3.1, installed on a hard disk). Older machines (A500, A600, Kickstart 1.x/2.x) are not supported. Planned targets beyond classic 68k: PowerPC on AmigaOS 4 and MorphOS, RTG graphics cards, and AROS.
 
 ## Licence
 

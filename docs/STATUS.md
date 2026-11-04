@@ -1,5 +1,11 @@
 # Status
 
+## Minimum system: Amiga 1200 (decision)
+
+The minimum system is now an **Amiga 1200: 68020, AGA, 2 MB chip RAM, Kickstart 3.1, hard disk install**. Classic builds use `-m68020` (target table, smoke test), the CLI defaults to `--model A1200`, and the docs and `AGENTS.md` say so. Planned beyond classic 68k: PowerPC (AmigaOS 4, MorphOS), RTG cards and AROS. Support for A500/A600, 68000 and Kickstart 1.x/2.x is dropped. Older "Kickstart 2.04 / A500+" results below are historical: they were true when run and are not part of the matrix any more.
+- **Not yet done:** code still has 68000-era fallbacks (non-AGA screens, 512 KB host chip budget, comments mentioning A500); AGA/RTG-only simplifications, using 68020 instructions deliberately, and AROS (a new target, untested) are follow-ups.
+- Verified after the change: all 17 samples built with `-m68020` and run on Kickstart 3.1 (A1200) in FS-UAE: 300 `ok` lines, no `FAIL` (the script shows only the last 25 lines of each sample, so long ones are truncated), 136 unit tests pass. Not verified: PowerPC, real hardware, a 68000/Kickstart 2.04 run (no longer supported).
+
 ## Lambdas that capture, and LINQ over arrays (samples/lambdas, samples/linq)
 
 **Delegates carry an environment.** A delegate (`Func<>`, `Action<>`, `Predicate<>`, a user `delegate` type) is now a C struct of a function pointer and an environment pointer. A static method or a lambda that captures nothing has a null environment. A lambda that uses a local, a parameter or `this` gets an environment struct of pointers to those variables, built on the stack of the method that made it, so it shares the variables with the method (a write inside the lambda is seen outside, and the other way round), as in C#. Lambdas inside lambdas capture through both levels. `d == null`, `d != null` and `null` work on delegates, and `Pick()(x)` (calling a returned delegate) works.

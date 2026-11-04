@@ -35,7 +35,7 @@ Run options (build options also apply; run is m68k only):
   --timeout <sec>   Headless time limit (default 120; AROS needs ~20 s to boot)
   --kickstart <rom> Use a real Kickstart ROM instead of FS-UAE's built-in AROS replacement
                     (or set ESHARP_KICKSTART)
-  --model <name>    Amiga model for FS-UAE: A500 (default), A500+, A600, A1200
+  --model <name>    Amiga model for FS-UAE: A1200 (default), A500, A500+, A600 (below the minimum spec)
   --fsuae <path>    FS-UAE executable (or set ESHARP_FSUAE)
   --screenshot <png> Headless only: when the program prints SHOT, save the emulator screen to a PNG (needs xwd)
   --input <script>  Headless only: after SHOT send mouse/keyboard input to the emulator (before the screenshot):
@@ -256,7 +256,7 @@ public static class Program
         bool headless = false;
         int timeout = 120;
         string? kickstart = Environment.GetEnvironmentVariable("ESHARP_KICKSTART");
-        string model = "A500";
+        string model = "A1200";
         string? fsuae = null;
         string? screenshot = null;
         string? input = null;

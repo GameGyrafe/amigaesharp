@@ -11,7 +11,7 @@ namespace ESharp.Cli;
 /// </summary>
 internal static class FsUae
 {
-    public static int Run(string exe, bool headless, TimeSpan timeout, string? kickstart, string model = "A500", string? fsuaePath = null, string? screenshot = null, string? input = null)
+    public static int Run(string exe, bool headless, TimeSpan timeout, string? kickstart, string model = "A1200", string? fsuaePath = null, string? screenshot = null, string? input = null)
     {
         var name = Path.GetFileName(exe);
         var runDir = Path.Combine(Path.GetDirectoryName(Path.GetFullPath(exe))!, "run");

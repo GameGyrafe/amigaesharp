@@ -48,9 +48,9 @@ public sealed class TargetInfo
 public static class Targets
 {
     public static readonly TargetInfo M68k = new(
-        "m68k", "AmigaOS 1.x-3.x on 68000 (amiga-gcc)",
+        "m68k", "AmigaOS 3.1+ on 68020+ (amiga-gcc)",
         new[] { "AMIGA", "M68K", "AMIGAOS3" },
-        "m68k-amigaos-gcc", "-noixemul -m68000 -O2 -fwrapv");
+        "m68k-amigaos-gcc", "-noixemul -m68020 -O2 -fwrapv");
 
     public static readonly TargetInfo Os4 = new(
         "os4", "AmigaOS 4 on PowerPC",

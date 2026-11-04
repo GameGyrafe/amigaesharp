@@ -51,8 +51,8 @@ public static class Descriptors
         "Interface '{0}': {1}. Supported: interfaces of plain methods, implemented by classes (variables of the interface type) or by structs and classes (generic constraints)");
 
     public static readonly DiagnosticDescriptor SlowArithmetic = new(
-        "ES0100", "Slow arithmetic on 68000",
-        "'{0}' is software 64-bit arithmetic on a 68000 and is slow",
+        "ES0100", "Slow arithmetic on 68020",
+        "'{0}' is software 64-bit arithmetic on a 68020 and is slow",
         Category, DiagnosticSeverity.Warning, isEnabledByDefault: true);
 
     public static readonly DiagnosticDescriptor ReferenceField = Error(

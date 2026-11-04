@@ -11,7 +11,7 @@ int main(void) { PutStr("ok\n"); return 0; }
 C
 magic() { od -A n -t x1 -N 4 "$1" | tr -d " "; }
 
-m68k-amigaos-gcc -noixemul -m68000 -O2 -Wall -o t.m68k t.c
+m68k-amigaos-gcc -noixemul -m68020 -O2 -Wall -o t.m68k t.c
 [ "$(magic t.m68k)" = "000003f3" ] || { echo "m68k: not a hunk executable"; exit 1; }
 echo "m68k    ok (AmigaOS hunk)"
 

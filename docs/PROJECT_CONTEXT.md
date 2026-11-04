@@ -12,10 +12,10 @@ Condensed from the design document and the original planning chat. Treat `docs/S
 - Phase 1 front end is a library driven by the CLI (a standalone tool). A source-generator front end stays an open question.
 
 ## Targets
-Modern "Amigas" are often PowerPC (AmigaOS 4, MorphOS), so PPC is a first-class target, not a "later" one: CPU and OS are separate axes, with `AMIGA` as the umbrella symbol plus `M68K`/`PPC` and `AMIGAOS3`/`AMIGAOS4`/`MORPHOS`. See `docs/STATUS.md` for the target table. The 68000 baseline stays the default and the performance-constrained one.
+Modern "Amigas" are often PowerPC (AmigaOS 4, MorphOS), so PPC is a first-class target, not a "later" one: CPU and OS are separate axes, with `AMIGA` as the umbrella symbol plus `M68K`/`PPC` and `AMIGAOS3`/`AMIGAOS4`/`MORPHOS`. See `docs/STATUS.md` for the target table. The classic 68k baseline is the **Amiga 1200 (68020)**; other targets planned: PowerPC (AmigaOS 4, MorphOS), RTG graphics cards and AROS.
 
 ## Minimum OS
-Classic Amiga builds require **Kickstart/AmigaOS 2.04 (v37) or later**; Kickstart 1.x is not supported. This matches AMOSNG's floor. Consequences: library stubs and the asset/platform code may assume v37 `exec`, `dos`, `graphics` and `intuition` (open libraries with version 37), and the emulator test matrix starts at 2.04 (A500+). The CPU baseline is unchanged (`-m68000`). Raising or lowering the floor is a decision for Dave.
+**Minimum system (Dave's decision): an Amiga 1200** - 68020, AGA chipset, 2 MB chip RAM, Kickstart/AmigaOS 3.1 (v40), installed on a hard disk. Consequences: classic builds use `-m68020`; platform code may assume v39+ libraries (graphics, intuition, cybergraphics detection), AGA modes, 32-bit multiply/divide in hardware, and a hard disk to load data files from; the emulator test matrix is Kickstart 3.1 on `--model A1200`. A500/A600, 68000 and Kickstart 1.x/2.x are not supported (the A500+/2.04 runs done earlier remain historical evidence, not a requirement). Not yet done for this decision: the AGA-only paths (`samples/aga` still falls back on a non-AGA machine), the chip budget default of the host fake (still 512 KB), the planar 8-bit default screens. Planned: PowerPC, RTG and AROS targets.
 
 ## Language subset
 Supported: static classes/methods, structs (no reference fields), enums, small integer types, fixed-point types, fixed-size arrays and span views, `unsafe` pointers.
@@ -28,7 +28,7 @@ Attributes: `[EntryPoint]`, `[AmigaLib("dos", offset)]`, `[ChipRam]`, `[Interrup
 Static classes `Video`, `Audio`, `Input`, `Storage`, `Timing` with identical signatures on every target and one implementation per target, chosen with `AMIGA` / `SDL` / `HOST` conditional symbols.
 
 ## Amiga specifics
-512KB chip RAM baseline; `[ChipRam]` / `Mem.AllocChip`. 68000 multiplies 16x16 and divides 32/16 natively, so use fixed-point and warn on 32-bit mul/div in hot loops. `[AmigaLib]` stubs ideally generated from the NDK FD files. Custom registers (`$DFF000`) via a typed unsafe wrapper. v1 is system-friendly (Intuition); `Hardware.TakeOver()` later. Default `-m68000`; 68020+ opt-in. Big-endian assets; SDL loaders byte-swap.
+2 MB chip RAM baseline (A1200); `[ChipRam]` / `Mem.AllocChip`. The 68020 multiplies and divides 32-bit natively; 64-bit stays software (ES0100). `[AmigaLib]` stubs ideally generated from the NDK FD files. Custom registers (`$DFF000`) via a typed unsafe wrapper. v1 is system-friendly (Intuition); `Hardware.TakeOver()` later. Default `-m68020`. Big-endian assets; SDL loaders byte-swap.
 
 ## Asset pipeline
 `assets.json` manifest -> quantise/dither (32 colours) -> planar bitplanes, IFF ILBM, 8-bit signed samples -> typed `Assets` class; report chip-RAM use per asset and fail the build over budget. MSBuild step and `esharp assets`.

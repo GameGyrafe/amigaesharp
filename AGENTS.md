@@ -1,6 +1,6 @@
 # AGENTS.md: working on E# (Amiga E#)
 
-E# compiles a restricted subset of C# to C and builds it into native Amiga code (68000, AmigaOS 4
+E# compiles a restricted subset of C# to C and builds it into native Amiga code (68020+, AmigaOS 4
 PowerPC, MorphOS PowerPC). Same `.cs` source also runs under plain dotnet as a test host. Read
 `README.md`, then `docs/PROJECT_CONTEXT.md` (design and roadmap) and `docs/STATUS.md` (what works
 today, what is verified, what is not). Keep `docs/STATUS.md` honest: say "not verified" for anything
@@ -44,8 +44,8 @@ Requires the .NET 10 SDK (`global.json`). `src/ESharp.Analyzers` stays on `netst
 
 ## Rules
 
-- Minimum OS for classic Amiga builds is Kickstart/AmigaOS 2.04 (v37); no Kickstart 1.x support. Open libraries with version 37 or higher.
-- Symbols: `AMIGA` is defined for every Amiga-family target; `M68K`/`PPC` and `AMIGAOS3`/`AMIGAOS4`/`MORPHOS` narrow it. Nothing in the front end or platform contracts may assume a single target. 68000 is the performance baseline.
+- Minimum system is an Amiga 1200: 68020, AGA, 2 MB chip RAM, Kickstart/AmigaOS 3.1 (v40), installed on a hard disk (Dave's decision). Open libraries with version 39 or higher; 68020 instructions and AGA may be assumed on classic builds; no support for A500/A600, 68000 or Kickstart 1.x/2.x. Planned: PowerPC (AmigaOS 4, MorphOS), RTG cards, AROS.
+- Symbols: `AMIGA` is defined for every Amiga-family target; `M68K`/`PPC` and `AMIGAOS3`/`AMIGAOS4`/`MORPHOS` narrow it. Nothing in the front end or platform contracts may assume a single target. The 68020 A1200 is the performance baseline (the 68000 no longer is).
 - Test the behaviour, not just the text: new emitter features need a test that compiles the generated C and runs it (see `CEmitterTests`).
 - Never commit Kickstart ROMs or other copyrighted Amiga files (`*.rom` is git-ignored). Never copy code from Amiga E (its compiler is GPL); design inspiration only. Avoid GPL/LGPL in anything linked into games.
 - Licence is MIT, copyright Gyrafe Software. The README must keep crediting Wouter van Oortmerssen's Amiga E.
@@ -69,7 +69,7 @@ directories only for throwaway experiments.
 Kickstart ROMs: Dave keeps them outside any repo, and this file deliberately does not give the
 path. Ask Dave for the location, or use `ESHARP_KICKSTART` if he has set it. Read ROMs in place,
 quote the path, never copy them into the repo, a branch, an artifact or a message. The test matrix
-is Kickstart 2.04 on `--model A500+` and Kickstart 3.1 (40.069) on `--model A1200`.
+is Kickstart 3.1 (40.069) on `--model A1200` (default). Kickstart 2.04 / A500+ is no longer part of the matrix.
 
 ## Next up
 
