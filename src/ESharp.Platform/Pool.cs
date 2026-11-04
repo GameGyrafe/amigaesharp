@@ -20,12 +20,13 @@ public unsafe struct Pool<T> where T : unmanaged
     public Pool(uint capacity, bool chip)
     {
         uint itemBytes = (uint)sizeof(T);
-        // Layout: free list (4-byte aligned) | items | flags.
-        uint total = capacity * 4 + capacity * itemBytes + capacity;
+        // Layout: free list (padded to 8 bytes so the items are aligned for pointers) | items | flags.
+        uint listBytes = (capacity * 4 + 7) & ~7u;
+        uint total = listBytes + capacity * itemBytes + capacity;
         _block = capacity == 0 ? null : (chip ? Mem.AllocChip(total) : Mem.AllocFast(total));
         _free = (uint*)_block;
-        _items = (T*)(_block + capacity * 4);
-        _used = _block + capacity * 4 + capacity * itemBytes;
+        _items = (T*)(_block + listBytes);
+        _used = _block + listBytes + capacity * itemBytes;
         _capacity = _block == null ? 0 : capacity;
         _freeCount = _capacity;
         for (uint i = 0; i < _capacity; i++) _free[i] = _capacity - 1 - i;

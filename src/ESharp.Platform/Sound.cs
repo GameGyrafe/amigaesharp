@@ -247,16 +247,23 @@ public static unsafe class Sound
     }
 
 #if AMIGA
-    private static uint[] _io = new uint[Voices];
+    private static nuint[] _io = new nuint[Voices];
     private static bool[] _pending = new bool[Voices];
     private static byte* _map;
     private static void* _port;
     private static int _open;
     private static int _next;
 
+#if X86_64
+    // 64-bit pointers (AROS x86-64): measured with offsetof() against the AROS headers.
+    private const int IoSize = 152;              // struct IOAudio
+    private const int OffType = 16, OffReplyPort = 32, OffLength = 40, OffCommand = 64, OffFlags = 66, OffError = 67;
+    private const int OffAllocKey = 72, OffData = 80, OffDataLength = 88, OffPeriod = 92, OffVolume = 94, OffCycles = 96;
+#else
     private const int IoSize = 68;               // struct IOAudio
-    private const int OffReplyPort = 14, OffLength = 18, OffDevice = 20, OffUnit = 24, OffCommand = 28, OffFlags = 30, OffError = 31;
+    private const int OffType = 8, OffReplyPort = 14, OffLength = 18, OffDevice = 20, OffUnit = 24, OffCommand = 28, OffFlags = 30, OffError = 31;
     private const int OffAllocKey = 32, OffData = 34, OffDataLength = 38, OffPeriod = 42, OffVolume = 44, OffCycles = 46;
+#endif
     private const int CmdWrite = 3, AdcmdAllocate = 32, AdcmdFree = 33, AdIoPerVol = 16, AdIoNoWait = 64;
 
     /// <summary>Opens audio.device and tries to allocate a channel for each voice. True if at least one voice is available.</summary>
@@ -272,7 +279,7 @@ public static unsafe class Sound
         {
             byte* io = Mem.AllocFast(IoSize);
             if (io == null) continue;
-            io[8] = 5;                                            // ln_Type = NT_MESSAGE
+            io[OffType] = 5;                                            // ln_Type = NT_MESSAGE
             *(void**)(io + OffReplyPort) = _port;
             *(ushort*)(io + OffLength) = IoSize;
             *(ushort*)(io + OffCommand) = AdcmdAllocate;
@@ -281,7 +288,7 @@ public static unsafe class Sound
             *(void**)(io + OffData) = _map;
             *(uint*)(io + OffDataLength) = 4;
             if (Exec.OpenDevice("audio.device", 0, io, 0) != 0) { Mem.Free(io); continue; }
-            _io[_open++] = (uint)io;
+            _io[_open++] = (nuint)io;
         }
         if (_open == 0) { Mem.Free(_map); _map = null; Exec.DeleteMsgPort(_port); _port = null; return false; }
         return true;

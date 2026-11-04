@@ -14,11 +14,11 @@ public static class Dos
 
     /// <summary>dos.library Output(), LVO -60: the standard output file handle.</summary>
     [AmigaLib("dos", -60)]
-    public static extern uint Output();
+    public static extern nuint Output();
 
     /// <summary>dos.library Flush(), LVO -360.</summary>
     [AmigaLib("dos", -360)]
-    public static extern int Flush(uint fileHandle);
+    public static extern int Flush(nuint fileHandle);
 
     /// <summary>Writes out buffered standard output now (output redirected to a file is otherwise written when the program ends).</summary>
     public static void FlushOutput() { Flush(Output()); }

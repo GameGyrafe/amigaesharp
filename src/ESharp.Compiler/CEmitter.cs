@@ -659,6 +659,8 @@ internal sealed partial class CEmitter
             case SpecialType.System_UInt32: return "uint32_t";
             case SpecialType.System_Int64: return "int64_t";
             case SpecialType.System_UInt64: return "uint64_t";
+            case SpecialType.System_IntPtr: return "intptr_t";     // nint and nuint: pointer-sized (an OS handle or tag value)
+            case SpecialType.System_UIntPtr: return "uintptr_t";
             case SpecialType.System_Char: return "uint16_t";
             case SpecialType.System_Single: return "float";
             case SpecialType.System_Double: return "double";
@@ -1876,10 +1878,10 @@ internal sealed partial class CEmitter
                 case SpecialType.System_Byte or SpecialType.System_UInt16 or SpecialType.System_UInt32:
                     sb.Append($"{len} = es_put_u({buf}, {len}, (uint32_t)({value}), {width}, {digits}, {hex}); ");
                     break;
-                case SpecialType.System_Int64:
+                case SpecialType.System_Int64 or SpecialType.System_IntPtr:
                     sb.Append($"{len} = es_put_i64({buf}, {len}, (int64_t)({value}), {width}, {digits}, {hex}); ");
                     break;
-                case SpecialType.System_UInt64:
+                case SpecialType.System_UInt64 or SpecialType.System_UIntPtr:
                     sb.Append($"{len} = es_put_u64({buf}, {len}, (uint64_t)({value}), {width}, {digits}, {hex}); ");
                     break;
                 default:

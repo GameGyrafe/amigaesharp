@@ -59,13 +59,13 @@ public static unsafe class Video
         void* cyber = Exec.OpenLibrary("cybergraphics.library", 40);
         if (cyber == null) return CyberGfx.InvalidId;
         CyberGfx.SetBase(cyber);
-        uint[] tags = new uint[8];
+        nuint[] tags = new nuint[8];      // tag lists are arrays of pointer-sized pairs
         tags[0] = CyberGfx.CYBRBIDTG_Depth; tags[1] = 8;
-        tags[2] = CyberGfx.CYBRBIDTG_NominalWidth; tags[3] = (uint)width;
-        tags[4] = CyberGfx.CYBRBIDTG_NominalHeight; tags[5] = (uint)height;
+        tags[2] = CyberGfx.CYBRBIDTG_NominalWidth; tags[3] = (nuint)width;
+        tags[4] = CyberGfx.CYBRBIDTG_NominalHeight; tags[5] = (nuint)height;
         tags[6] = Intuition.TagDone;
         uint id;
-        fixed (uint* p = tags)
+        fixed (nuint* p = tags)
         {
             id = CyberGfx.BestCModeIDTagList(p);
         }
@@ -102,27 +102,27 @@ public static unsafe class Video
 
     private static bool OpenMode(int width, int height, int depth, uint displayId)
     {
-        uint[] tags = new uint[24];
-        tags[0] = Intuition.SA_Width; tags[1] = (uint)width;
-        tags[2] = Intuition.SA_Height; tags[3] = (uint)height;
-        tags[4] = Intuition.SA_Depth; tags[5] = (uint)depth;
+        nuint[] tags = new nuint[24];
+        tags[0] = Intuition.SA_Width; tags[1] = (nuint)width;
+        tags[2] = Intuition.SA_Height; tags[3] = (nuint)height;
+        tags[4] = Intuition.SA_Depth; tags[5] = (nuint)depth;
         tags[6] = Intuition.SA_Quiet; tags[7] = 1;
         tags[8] = Intuition.SA_Type; tags[9] = Intuition.CustomScreen;
-        tags[10] = Intuition.SA_DisplayID; tags[11] = displayId;
+        tags[10] = Intuition.SA_DisplayID; tags[11] = (nuint)displayId;
         tags[12] = Intuition.TagDone;
         if (displayId == 0) tags[10] = Intuition.TagDone;     // native: let the system choose
-        fixed (uint* p = tags)
+        fixed (nuint* p = tags)
         {
             _screen = Intuition.OpenScreenTagList(null, p);
         }
         if (_screen == null) return false;
 
-        uint[] wtags = new uint[26];
-        wtags[0] = Intuition.WA_CustomScreen; wtags[1] = (uint)_screen;
+        nuint[] wtags = new nuint[26];
+        wtags[0] = Intuition.WA_CustomScreen; wtags[1] = (nuint)_screen;
         wtags[2] = Intuition.WA_Left; wtags[3] = 0;
         wtags[4] = Intuition.WA_Top; wtags[5] = 0;
-        wtags[6] = Intuition.WA_Width; wtags[7] = (uint)width;
-        wtags[8] = Intuition.WA_Height; wtags[9] = (uint)height;
+        wtags[6] = Intuition.WA_Width; wtags[7] = (nuint)width;
+        wtags[8] = Intuition.WA_Height; wtags[9] = (nuint)height;
         wtags[10] = Intuition.WA_Borderless; wtags[11] = 1;
         wtags[12] = Intuition.WA_Backdrop; wtags[13] = 1;
         wtags[14] = Intuition.WA_Activate; wtags[15] = 1;
@@ -131,7 +131,7 @@ public static unsafe class Video
         wtags[20] = Intuition.WA_IDCMP; wtags[21] = Intuition.IDCMP_MOUSEBUTTONS | Intuition.IDCMP_MOUSEMOVE | Intuition.IDCMP_RAWKEY;
         wtags[22] = Intuition.WA_ReportMouse; wtags[23] = 1;
         wtags[24] = Intuition.TagDone;
-        fixed (uint* wp = wtags)
+        fixed (nuint* wp = wtags)
         {
             _window = Intuition.OpenWindowTagList(null, wp);
         }
@@ -242,16 +242,26 @@ public static unsafe class Video
     {
         if (w <= 0 || h <= 0) return;
         int bytesPerRow = ((width + 15) / 16) * 2;
-        uint[] bm = new uint[10];                         // struct BitMap: 40 bytes
-        bm[0] = ((uint)bytesPerRow << 16) | (uint)height;  // BytesPerRow, Rows
-        // Planes the image does not have stay NULL: the blitter reads them as zeros, so every plane of the
-        // screen gets written (a shallower bitmap would leave the remaining planes untouched).
-        bm[1] = (uint)_depth << 16;                        // Flags, Depth, pad
+        nuint[] bm = new nuint[10];   // struct BitMap (40 bytes, or 72 with 64-bit pointers), pointer-aligned
+        fixed (nuint* bmw = bm)
+        {
+            byte* bb = (byte*)bmw;
+            *(ushort*)(bb + 0) = (ushort)bytesPerRow;      // BytesPerRow
+            *(ushort*)(bb + 2) = (ushort)height;           // Rows
+            // Planes the image does not have stay NULL: the blitter reads them as zeros, so every plane of the
+            // screen gets written (a shallower bitmap would leave the remaining planes untouched).
+            bb[4] = 0;                                     // Flags
+            bb[5] = (byte)_depth;                          // Depth
+        }
         fixed (byte* data = planar)
         {
-            for (int p = 0; p < depth; p++)
-                bm[2 + p] = (uint)(data + p * bytesPerRow * height);
-            fixed (uint* b = bm)
+            fixed (nuint* bmw = bm)
+            {
+                byte* bb = (byte*)bmw;
+                for (int p = 0; p < depth; p++)
+                    *(byte**)(bb + 8 + p * sizeof(byte*)) = data + p * bytesPerRow * height;
+            }
+            fixed (nuint* b = bm)
             {
                 if (mask.Length == 0)
                 {

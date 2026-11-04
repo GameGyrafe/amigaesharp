@@ -16,6 +16,7 @@ public static unsafe class Program
         Dos.PutStr(ok ? "ok " : "FAIL ");
         Dos.PutStr(name);
         Dos.PutStr("\n");
+        Dos.FlushOutput();      // so a program that hangs in the audio device still shows how far it got
     }
 
     static void Le16(Span<byte> b, int o, int v) { b[o] = (byte)v; b[o + 1] = (byte)(v >> 8); }

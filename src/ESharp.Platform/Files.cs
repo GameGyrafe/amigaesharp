@@ -9,11 +9,11 @@ namespace ESharp.Platform;
 /// <summary>dos.library file calls under their NDK names (the C functions of the same names are called).</summary>
 internal static unsafe class DosLib
 {
-    [AmigaLib("dos", -30)] public static extern uint Open(string name, int accessMode);
-    [AmigaLib("dos", -36)] public static extern int Close(uint file);
-    [AmigaLib("dos", -42)] public static extern int Read(uint file, byte* buffer, int length);
-    [AmigaLib("dos", -48)] public static extern int Write(uint file, byte* buffer, int length);
-    [AmigaLib("dos", -66)] public static extern int Seek(uint file, int position, int mode);
+    [AmigaLib("dos", -30)] public static extern nuint Open(string name, int accessMode);
+    [AmigaLib("dos", -36)] public static extern int Close(nuint file);
+    [AmigaLib("dos", -42)] public static extern int Read(nuint file, byte* buffer, int length);
+    [AmigaLib("dos", -48)] public static extern int Write(nuint file, byte* buffer, int length);
+    [AmigaLib("dos", -66)] public static extern int Seek(nuint file, int position, int mode);
     [AmigaLib("dos", -72)] public static extern int DeleteFile(string name);
 }
 #endif
@@ -32,7 +32,7 @@ public static unsafe class Files
     {
         size = 0;
 #if AMIGA
-        uint fh = DosLib.Open(path, 1005);                  // MODE_OLDFILE
+        nuint fh = DosLib.Open(path, 1005);                  // MODE_OLDFILE
         if (fh == 0) return null;
         DosLib.Seek(fh, 0, 1);                              // OFFSET_END
         int length = DosLib.Seek(fh, 0, -1);                // OFFSET_BEGINNING; returns where the end was
@@ -60,7 +60,7 @@ public static unsafe class Files
     public static bool WriteAll(string path, ReadOnlySpan<byte> data)
     {
 #if AMIGA
-        uint fh = DosLib.Open(path, 1006);                  // MODE_NEWFILE
+        nuint fh = DosLib.Open(path, 1006);                  // MODE_NEWFILE
         if (fh == 0) return false;
         int put = 0;
         if (data.Length > 0)

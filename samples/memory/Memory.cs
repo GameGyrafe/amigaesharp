@@ -45,7 +45,7 @@ public static class Program
         Check(pattern, "chip memory keeps what is written");
         uint during = Mem.AvailChip();
         Check(before - during >= 4096, "allocation reduces free chip RAM");
-#if AMIGA && !ESHARP_HOSTC
+#if AMIGA && !ESHARP_HOSTC && !AROS
         Check((uint)chip < 0x200000, "chip block is in the chip address range");
 #else
         Check(true, "chip block is in the chip address range");
