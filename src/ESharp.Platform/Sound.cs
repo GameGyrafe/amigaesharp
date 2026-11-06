@@ -285,8 +285,15 @@ public static unsafe class Sound
             *(ushort*)(io + OffCommand) = AdcmdAllocate;
             io[OffFlags] = AdIoNoWait;
             *(ushort*)(io + OffAllocKey) = 0;
-            *(void**)(io + OffData) = _map;
+#if AROS
+            // AROS's audio.device shares its channels between allocations: with "any one channel" a later voice takes an earlier
+            // one's channel and that voice's writes fail with ADIOERR_NOALLOCATION. Asking for one fixed channel per voice avoids that.
+            _map[0] = (byte)(1 << v);
+            *(uint*)(io + OffDataLength) = 1;
+#else
             *(uint*)(io + OffDataLength) = 4;
+#endif
+            *(void**)(io + OffData) = _map;
             if (Exec.OpenDevice("audio.device", 0, io, 0) != 0) { Mem.Free(io); continue; }
             _io[_open++] = (nuint)io;
         }
