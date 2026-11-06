@@ -18,11 +18,14 @@ Modern "Amigas" are often PowerPC (AmigaOS 4, MorphOS), so PPC is a first-class 
 **Minimum system (Dave's decision): an Amiga 1200** - 68020, AGA chipset, 2 MB chip RAM, Kickstart/AmigaOS 3.1 (v40), installed on a hard disk. Consequences: classic builds use `-m68020`; platform code may assume v39+ libraries (graphics, intuition, cybergraphics detection), AGA modes, 32-bit multiply/divide in hardware, and a hard disk to load data files from; the emulator test matrix is Kickstart 3.1 on `--model A1200`. A500/A600, 68000 and Kickstart 1.x/2.x are not supported (the A500+/2.04 runs done earlier remain historical evidence, not a requirement). Not yet done for this decision: the AGA-only paths (`samples/aga` still falls back on a non-AGA machine), the chip budget default of the host fake (still 512 KB), the planar 8-bit default screens. Planned: PowerPC, RTG and AROS targets.
 
 ## Language subset
-Supported: static classes/methods, structs (no reference fields), enums, small integer types, fixed-point types, fixed-size arrays and span views, `unsafe` pointers.
+This is a summary; `docs/STATUS.md` has the exact state, the limits and what is verified.
+
+Supported: static classes and methods, structs (with methods, constructors, properties, indexers), enums, small integer types, fixed-point types, fixed-size arrays and span views, `unsafe` pointers, `ref`/`out`/`in`, value tuples, patterns and switch expressions, local functions, static constructors, string interpolation and concatenation (formatted into a small ring of static buffers).
+Also supported, added after the first phases: monomorphised generics (structs, static methods, `Pool<T>`, `Vec<T>`, Dictionary/HashSet), heap classes (`new`, no garbage collector: `Heap.Free`), single inheritance with `virtual`/`abstract`/`override` and `is`/`as` against classes, interfaces (generic constraints and dynamic dispatch), delegates, lambdas (capturing ones live on the stack) and LINQ over arrays as fused loops.
 Slow/opt-in: long/ulong (software 64-bit), float/double (off by default, no FPU).
-Later: heap classes via pools, monomorphised generics, static-dispatch interfaces.
-Not supported: exceptions, LINQ, async, reflection, dynamic.
-Attributes: `[EntryPoint]`, `[AmigaLib("dos", offset)]`, `[ChipRam]`, `[Interrupt]`, `[InlineAsm("...")]`.
+Not supported: exceptions, async, reflection, dynamic, closures that outlive their method, `is`/`as` against interfaces, inheritance from generic or library classes, `ToArray`/`ToList`.
+Attributes: `[EntryPoint]`, `[AmigaLib("dos", offset)]`, `[ChipRam]`, `[Interrupt]`, `[InlineAsm("...")]` (the last two are not emitted yet and report ES0099).
+Anything the emitter cannot do is reported as `ES0099`, never miscompiled.
 
 ## Platform layer
 Static classes `Video`, `Audio`, `Input`, `Storage`, `Timing` with identical signatures on every target and one implementation per target, chosen with `AMIGA` / `SDL` / `HOST` conditional symbols.
