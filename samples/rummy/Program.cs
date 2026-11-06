@@ -66,6 +66,36 @@ public static class Program
 
     // ---------------------------------------------------------------- drawing
 
+#if AROS
+    static bool HdOpaque(int x, int y)
+    {
+        int bytesPerRow = (HdSheet.HdWidth + 15) / 16 * 2;
+        return (HdSheet.HdMask[y * bytesPerRow + (x >> 3)] & (0x80 >> (x & 7))) != 0;
+    }
+
+    static int HdIndex(int x, int y)
+    {
+        int bytesPerRow = (HdSheet.HdWidth + 15) / 16 * 2;
+        int value = 0;
+        for (int p = 0; p < HdSheet.HdDepth; p++)
+            if ((HdSheet.HdPlanes[p * bytesPerRow * HdSheet.HdHeight + y * bytesPerRow + (x >> 3)] & (0x80 >> (x & 7))) != 0) value |= 1 << p;
+        return value;
+    }
+
+    /// <summary>Counts pixels on the screen at (dx, dy) that differ from the sheet cell at (sx, sy), transparent pixels expected as the table.</summary>
+    static int HdMismatches(int sx, int sy, int w, int h, int dx, int dy)
+    {
+        int wrong = 0;
+        for (int y = 0; y < h; y++)
+            for (int x = 0; x < w; x++)
+            {
+                int expect = HdOpaque(sx + x, sy + y) ? HdIndex(sx + x, sy + y) : Table;
+                if (Video.GetPixel(dx + x, dy + y) != expect) wrong++;
+            }
+        return wrong;
+    }
+#endif
+
     static void Sprite(int column, int row, int x, int y)
     {
 #if AROS
@@ -420,6 +450,17 @@ public static class Program
         Game.DrawStock();
 #if AROS
         OpenLarge();
+        if (Hd)
+        {
+            // the smoothed font: a normal and a big glyph on a clean table, then the card back from the sheet
+            Fill(0, 0, 320, 200, Table);
+            HdText("A", 10, 10, Ink, 1);
+            Check(HdMismatches(33 * 12, 400, 12, 16, 10 * 2 - 1, 10 * 2 - 1) == 0, "high resolution glyph matches the sheet pixel for pixel");
+            HdText("A", 40, 10, Ink, 2);
+            Check(HdMismatches(33 % 32 * 24, 432 + 33 / 32 * 32, 24, 32, 40 * 2 - 2, 10 * 2 - 2) == 0, "high resolution big glyph matches the sheet pixel for pixel");
+            Sprite(0, 4, 100, 100);
+            Check(HdMismatches(0, 4 * 2 * CardH, 2 * CardW, 2 * CardH, 200, 200) == 0, "high resolution card back matches the sheet pixel for pixel");
+        }
 #endif
         Draw();
         Dos.PutStr("SHOT\n");
