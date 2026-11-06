@@ -1,5 +1,5 @@
 {
-  "namespace": "CardsDemo",
+  "namespace": "CardsShared",
   "class": "HdSheet",
   "if": "AROS",
   "images": [

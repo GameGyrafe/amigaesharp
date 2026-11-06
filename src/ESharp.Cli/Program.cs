@@ -296,6 +296,26 @@ public static class Program
     {
         if (File.Exists(path)) return new List<string> { path };
         if (!Directory.Exists(path)) return new List<string>();
+        var files = SourcesUnder(path);
+        // An optional esharp.include file lists more source directories (relative to the sample, one per line, # for comments)
+        // so that several samples can share generated code instead of each keeping a copy.
+        var include = Path.Combine(path, "esharp.include");
+        if (File.Exists(include))
+        {
+            foreach (var raw in File.ReadAllLines(include))
+            {
+                var line = raw.Trim();
+                if (line.Length == 0 || line[0] == '#') continue;
+                var dir = Path.GetFullPath(Path.Combine(path, line));
+                foreach (var f in SourcesUnder(dir))
+                    if (!files.Contains(f)) files.Add(f);
+            }
+        }
+        return files;
+    }
+
+    private static List<string> SourcesUnder(string path)
+    {
         var sep = Path.DirectorySeparatorChar;
         return Directory.EnumerateFiles(path, "*.cs", SearchOption.AllDirectories)
             .Where(f => !f.Contains($"{sep}obj{sep}") && !f.Contains($"{sep}bin{sep}"))

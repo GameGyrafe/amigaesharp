@@ -1,8 +1,0 @@
-{
-  "namespace": "RummyDemo",
-  "class": "HdSheet",
-  "if": "AROS",
-  "images": [
-    { "name": "Hd", "file": "../../cards/hd/cards_hd.png", "colors": 56, "mask": true, "aga": true }
-  ]
-}

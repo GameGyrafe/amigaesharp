@@ -1,6 +1,9 @@
 using System;
 using ESharp;
 using ESharp.Platform;
+#if AROS
+using CardsShared;
+#endif
 
 namespace RummyDemo;
 
