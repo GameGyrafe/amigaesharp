@@ -26,9 +26,13 @@ t=t.replace("FailAt 21\n","FailAt 21\n\nSYS:%s >SYS:%s.out\nEcho >SYS:done.txt d
 open(p,'w').write(t)
 P
 rm -f ./*.out done.txt boot.log
-# no sound card on a headless host makes audio.device hang in OpenDevice; a null ALSA device avoids it
-tmp=$(mktemp -d); echo 'pcm.!default { type null }
-ctl.!default { type null }' > "$tmp/asound.conf"; export ALSA_CONFIG_PATH="$tmp/asound.conf"
+# Sound: on a headless host the ALSA mode makes audio.device hang (its driver finds no usable card). AHI's "void" mode takes the
+# samples and paces them in real time without a card, so make that the only audio mode (the archive is a scratch copy).
+if [ -f Storage/AudioModes/VOID ] && [ ! -f Devs/AudioModes/VOID ]; then
+  mkdir -p Devs/AudioModes.orig && mv Devs/AudioModes/* Devs/AudioModes.orig/ 2>/dev/null
+  cp Storage/AudioModes/VOID Devs/AudioModes/VOID
+fi
+tmp=$(mktemp -d)
 D=$(( 200 + RANDOM % 500 ))
 Xvfb :$D -screen 0 1024x768x24 >/dev/null 2>&1 & XP=$!; sleep 2
 DISPLAY=:$D timeout 90 ./boot/linux/AROSBootstrap > boot.log 2>&1 & BP=$!
