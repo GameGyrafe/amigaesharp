@@ -1,0 +1,29 @@
+name: Bug report
+description: Something does not work, or the compiler produces wrong code
+labels: [bug]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: What did you expect and what did you get? Include the diagnostic (for example ES0099) or the program output.
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: Smallest code that shows it
+      description: A short C# snippet or a sample name and the command you ran.
+      render: csharp
+  - type: input
+    id: target
+    attributes:
+      label: Target and where you ran it
+      placeholder: "m68k on FS-UAE, Kickstart 3.1, --model A1200 / aros x86-64 hosted / host (.NET)"
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Commit or version
+      placeholder: "git commit hash"

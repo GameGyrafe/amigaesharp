@@ -1,0 +1,33 @@
+name: Hardware test report
+description: Results from running E# programs on a real or compatible Amiga
+labels: [hardware]
+body:
+  - type: input
+    id: machine
+    attributes:
+      label: Machine
+      placeholder: "A1200 (original) / THEA1200 / MiSTer / Vampire / emulator ..."
+    validations:
+      required: true
+  - type: input
+    id: system
+    attributes:
+      label: Kickstart and Workbench version
+      placeholder: "Kickstart 3.1 (40.068), Workbench 3.1"
+    validations:
+      required: true
+  - type: input
+    id: cpu
+    attributes:
+      label: CPU, chip RAM and fast RAM
+      placeholder: "68EC020 14 MHz, 2 MB chip, 4 MB fast"
+  - type: textarea
+    id: ran
+    attributes:
+      label: What you ran and what happened
+      description: Sample names, how you started them (Shell or double-click), whether they passed, anything that looked wrong. Paste the output or log.
+    validations:
+      required: true
+  - type: markdown
+    attributes:
+      value: Please do not attach Kickstart ROMs or other copyrighted files.

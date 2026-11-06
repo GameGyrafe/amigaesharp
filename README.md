@@ -35,7 +35,7 @@ design inspiration only.
 
 ## Status
 
-Phase 1 (hello world) is under way. See [docs/STATUS.md](docs/STATUS.md) for what works today and
+Phases 1 to 3 and most of phase 4 (a card demo) pass on the emulator; nothing has run on real hardware yet. See [docs/STATUS.md](docs/STATUS.md) for what works today and
 [docs/PROJECT_CONTEXT.md](docs/PROJECT_CONTEXT.md) for the design and roadmap.
 
 ## Building
@@ -85,6 +85,10 @@ docs/
 ## Requirements on the Amiga
 
 **Minimum system: an Amiga 1200** (68020, AGA, 2 MB chip RAM, Kickstart/AmigaOS 3.1, installed on a hard disk). Older machines (A500, A600, Kickstart 1.x/2.x) are not supported. Planned targets beyond classic 68k: PowerPC on AmigaOS 4 and MorphOS, RTG graphics cards, and AROS.
+
+## Contributing
+
+Contributions and hardware test reports are welcome: see [CONTRIBUTING.md](CONTRIBUTING.md) (it includes the ground rules: no code from the GPL Amiga E, no Kickstart ROMs) and the [code of conduct](CODE_OF_CONDUCT.md).
 
 ## Licence
 
