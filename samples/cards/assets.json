@@ -1,0 +1,7 @@
+{
+  "namespace": "CardsDemo",
+  "class": "Sheet",
+  "images": [
+    { "name": "Cards", "file": "cards.png", "colors": 14, "mask": true }
+  ]
+}

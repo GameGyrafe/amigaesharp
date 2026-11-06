@@ -1,0 +1,7 @@
+{
+  "namespace": "RummyDemo",
+  "class": "Sheet",
+  "images": [
+    { "name": "Cards", "file": "../cards/cards.png", "colors": 14, "mask": true }
+  ]
+}

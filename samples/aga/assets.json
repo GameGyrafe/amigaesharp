@@ -1,0 +1,7 @@
+{
+  "namespace": "AgaSample",
+  "class": "Assets",
+  "images": [
+    { "name": "Tile", "file": "tile.png", "colors": 256, "aga": true }
+  ]
+}

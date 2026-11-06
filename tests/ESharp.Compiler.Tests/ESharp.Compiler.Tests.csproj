@@ -1,0 +1,67 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+
+    <IsPackable>false</IsPackable>
+    <IsTestProject>true</IsTestProject>
+    <GenerateProgramFile>false</GenerateProgramFile>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <!-- Several samples are compiled in, each with its own [EntryPoint] Main. -->
+    <StartupObject>Hello.Program</StartupObject>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="coverlet.collector" Version="6.0.0" />
+    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.8.0" />
+    <PackageReference Include="xunit" Version="2.5.3" />
+    <PackageReference Include="xunit.runner.visualstudio" Version="2.5.3" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Using Include="Xunit" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\ESharp.Compiler\ESharp.Compiler.csproj" />
+    <ProjectReference Include="..\..\src\ESharp.Target.Host\ESharp.Target.Host.csproj" />
+    <ProjectReference Include="..\..\src\ESharp.Assets\ESharp.Assets.csproj" />
+  </ItemGroup>
+
+  <!-- The hello sample is compiled by dotnet here as the HOST target, proving the same
+       source runs on the test host without any C step. -->
+  <ItemGroup>
+    <Compile Include="..\..\samples\hello\Hello.cs" Link="Samples\Hello.cs" />
+    <Compile Include="..\..\samples\phase2\Phase2.cs" Link="Samples\Phase2.cs" />
+    <Compile Include="..\..\samples\memory\Memory.cs" Link="Samples\Memory.cs" />
+    <Compile Include="..\..\samples\generics\Generics.cs" Link="Samples\Generics.cs" />
+    <Compile Include="..\..\samples\properties\Properties.cs" Link="Samples\Properties.cs" />
+    <Compile Include="..\..\samples\operators\Operators.cs" Link="Samples\Operators.cs" />
+    <Compile Include="..\..\samples\language\Language.cs" Link="Samples\Language.cs" />
+    <Compile Include="..\..\samples\screen\Screen.cs" Link="Samples\Screen.cs" />
+    <Compile Include="..\..\samples\screen\Assets.g.cs" Link="Samples\Assets.g.cs" />
+    <Compile Include="..\..\samples\cards\HigherLower.cs" Link="Samples\Cards\HigherLower.cs" />
+    <Compile Include="..\..\samples\cards\Program.cs" Link="Samples\Cards\Program.cs" />
+    <Compile Include="..\..\samples\cards\Assets.g.cs" Link="Samples\Cards\Assets.g.cs" />
+    <Compile Include="..\..\samples\rummy\Game.cs" Link="Samples\Rummy\Game.cs" />
+    <Compile Include="..\..\samples\rummy\Program.cs" Link="Samples\Rummy\Program.cs" />
+    <Compile Include="..\..\samples\rummy\Assets.g.cs" Link="Samples\Rummy\Assets.g.cs" />
+    <Compile Include="..\..\samples\sound\Sound.cs" Link="Samples\Sound.cs" />
+    <Compile Include="..\..\samples\aga\Aga.cs" Link="Samples\Aga\Aga.cs" />
+    <Compile Include="..\..\samples\aga\Assets.g.cs" Link="Samples\Aga\Assets.g.cs" />
+    <Compile Include="..\..\samples\rtg\Rtg.cs" Link="Samples\Rtg\Rtg.cs" />
+    <Compile Include="..\..\samples\inherit\Inherit.cs" Link="Samples\Inherit\Inherit.cs" />
+    <Compile Include="..\..\samples\linq\Linq.cs" Link="Samples\Linq\Linq.cs" />
+    <Compile Include="..\..\samples\lambdas\Lambdas.cs" Link="Samples\Lambdas\Lambdas.cs" />
+    <Compile Include="..\..\samples\collections\Collections.cs" Link="Samples\Collections.cs" />
+  </ItemGroup>
+
+
+  <ItemGroup>
+    <!-- The E# collections (Dictionary, HashSet) share their names with System.Collections.Generic: import it per file. -->
+    <Using Remove="System.Collections.Generic" />
+  </ItemGroup>
+
+</Project>

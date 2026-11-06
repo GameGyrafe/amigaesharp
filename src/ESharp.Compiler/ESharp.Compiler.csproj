@@ -1,0 +1,21 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <RootNamespace>ESharp.Compiler</RootNamespace>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.CodeAnalysis.CSharp" Version="5.0.0" />
+    <ProjectReference Include="..\ESharp.Analyzers\ESharp.Analyzers.csproj" />
+  </ItemGroup>
+
+  <!-- The runtime attributes and platform contracts are compiled together with user code,
+       so they ship inside the compiler as embedded sources. -->
+  <ItemGroup>
+    <EmbeddedResource Include="..\ESharp.Runtime\*.cs" LogicalName="lib/Runtime/%(Filename)%(Extension)" />
+    <EmbeddedResource Include="..\ESharp.Platform\*.cs" LogicalName="lib/Platform/%(Filename)%(Extension)" />
+  </ItemGroup>
+
+</Project>

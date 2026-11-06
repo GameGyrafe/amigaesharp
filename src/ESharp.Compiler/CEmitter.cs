@@ -1,0 +1,2799 @@
+using System;
+using System.Collections.Generic;
+using System.Globalization;
+using System.Linq;
+using System.Text;
+using ESharp.Analyzers;
+using Microsoft.CodeAnalysis;
+using Microsoft.CodeAnalysis.CSharp;
+using Microsoft.CodeAnalysis.CSharp.Syntax;
+
+namespace ESharp.Compiler;
+
+/// <summary>
+/// Lowers the E# subset to readable, stable C. Output is deterministic (declaration order),
+/// and every function and statement carries a #line directive back to the .cs file.
+/// </summary>
+internal sealed partial class CEmitter
+{
+    private readonly CSharpCompilation _compilation;
+    private readonly HashSet<SyntaxTree> _user;
+    private readonly List<Diagnostic> _diagnostics;
+    private readonly Dictionary<SyntaxTree, SemanticModel> _models = new();
+
+    private readonly StringBuilder _out = new();
+    private int _indent;
+    private string? _lastLineFile;
+    private int _lastLine = -1;
+    private readonly SortedSet<string> _headers = new(StringComparer.Ordinal);
+    private readonly SortedDictionary<string, string> _spans = new(StringComparer.Ordinal);
+    private bool _usesLen;
+    private bool _usesCyber;
+    private bool _usesStrlen;
+
+    /// <summary>How <c>this</c> is spelled inside the method being emitted.</summary>
+    private enum ThisKind { None, Pointer, Value }
+    private ThisKind _this = ThisKind.None;
+    private const string ThisName = "_this";
+    private int _temp;
+
+    private readonly bool _bounds;
+    private bool _usesBounds;
+
+    public CEmitter(CSharpCompilation compilation, HashSet<SyntaxTree> user, List<Diagnostic> diagnostics, bool boundsChecks = false)
+    {
+        _bounds = boundsChecks;
+        _compilation = compilation;
+        _user = user;
+        _diagnostics = diagnostics;
+    }
+
+    // ------------------------------------------------------------------ entry point lookup
+
+    public static IEnumerable<IMethodSymbol> FindEntryPoints(CSharpCompilation compilation, HashSet<SyntaxTree> user)
+    {
+        foreach (var tree in compilation.SyntaxTrees.Where(user.Contains))
+        {
+            var model = compilation.GetSemanticModel(tree);
+            foreach (var m in tree.GetRoot().DescendantNodes().OfType<MethodDeclarationSyntax>())
+            {
+                if (model.GetDeclaredSymbol(m) is IMethodSymbol sym && HasAttribute(sym, "EntryPointAttribute"))
+                    yield return sym;
+            }
+        }
+    }
+
+    /// <summary>A non-static class: a heap object that variables hold by pointer.</summary>
+    private static bool IsHeapClass(ITypeSymbol t) => t is INamedTypeSymbol { TypeKind: TypeKind.Class, IsStatic: false };
+
+    /// <summary>An interface declared in E# source: a value of this type is a fat pointer (object + table of functions).</summary>
+    private static bool IsInterfaceType(ITypeSymbol? t) =>
+        t is INamedTypeSymbol { TypeKind: TypeKind.Interface, IsGenericType: false } i && i.Locations.Any(l => l.IsInSource);
+
+    private static string SlotName(IMethodSymbol im)
+    {
+        var overloads = im.ContainingType.GetMembers(im.Name).OfType<IMethodSymbol>().Count();
+        return overloads > 1 ? im.Name + "_" + string.Join("_", im.Parameters.Select(p => Mangle(p.Type))) : im.Name;
+    }
+
+    private static string VtableName(INamedTypeSymbol iface, INamedTypeSymbol cls) => $"{TypeName(iface)}_vt_{TypeName(cls)}";
+
+    // ---- class hierarchies
+    // A derived class holds its base class object as its first member ('es_base'), so a pointer to the derived object is also a pointer to
+    // the base object. The root of a hierarchy that has virtual members or subclasses starts with 'vt', a pointer to the class's table of
+    // virtual functions; each class has one const table (struct X_cvt, whose first member is the base class's table, so a derived table can be
+    // read as a base table) and a type id (the table's address) that is, as, and is-patterns walk down the base chain.
+
+    private readonly HashSet<INamedTypeSymbol> _polyRoots = new(SymbolEqualityComparer.Default);
+
+    private static INamedTypeSymbol? BaseClass(INamedTypeSymbol c) =>
+        c.BaseType is { SpecialType: not SpecialType.System_Object } b && IsHeapClass(b) ? b : null;
+
+    private static INamedTypeSymbol RootClass(INamedTypeSymbol c)
+    {
+        while (BaseClass(c) is { } b) c = b;
+        return c;
+    }
+
+    private static int Depth(INamedTypeSymbol c)
+    {
+        var n = 0;
+        while (BaseClass(c) is { } b) { c = b; n++; }
+        return n;
+    }
+
+    private static bool IsDynamic(IMethodSymbol m) => m.IsVirtual || m.IsAbstract || m.IsOverride;
+
+    /// <summary>Classes whose objects carry a virtual function table: every class of a hierarchy that has a subclass or a virtual member.</summary>
+    private bool IsPoly(ITypeSymbol? t) => t is INamedTypeSymbol c && IsHeapClass(c) && _polyRoots.Contains(RootClass(c));
+
+    /// <summary>Part of a hierarchy: needs pointer casts when it is used as its base class.</summary>
+    private bool IsHier(ITypeSymbol? t) => t is INamedTypeSymbol c && IsHeapClass(c) && (BaseClass(c) != null || _polyRoots.Contains(c));
+
+    private static bool IsBaseOrSame(INamedTypeSymbol derived, INamedTypeSymbol target)
+    {
+        for (INamedTypeSymbol? c = derived; c != null; c = BaseClass(c))
+            if (SymbolEqualityComparer.Default.Equals(c, target)) return true;
+        return false;
+    }
+
+    /// <summary>Member path from an object of class <paramref name="from"/> to a member declared in its base class <paramref name="declaring"/>: es_base.es_base.name.</summary>
+    private static string MemberPath(ITypeSymbol? from, INamedTypeSymbol? declaring, string name)
+    {
+        if (from is not INamedTypeSymbol c || declaring == null || !IsHeapClass(c) || !IsBaseOrSame(c, declaring)) return name;
+        var sb = new StringBuilder();
+        for (var t = c; t != null && !SymbolEqualityComparer.Default.Equals(t, declaring); t = BaseClass(t)) sb.Append("es_base.");
+        return sb + name;
+    }
+
+    private static string VtPath(INamedTypeSymbol c) => MemberPath(c, RootClass(c), "vt");
+
+    private static string CvtName(INamedTypeSymbol c) => TypeName(c) + "_cvt";
+
+    private static string TypeIdOf(INamedTypeSymbol c) => $"((const struct ES_Type *)&{TypeName(c)}_vt)";
+
+    private static IMethodSymbol RootDef(IMethodSymbol m)
+    {
+        while (m.OverriddenMethod != null) m = m.OverriddenMethod;
+        return m;
+    }
+
+    private static string VSlot(IMethodSymbol def) => $"v_{TypeName(def.ContainingType)}_{SlotName(def)}";
+
+    /// <summary>The virtual members a class introduces (not the ones it overrides), in declaration order, accessors of virtual properties included.</summary>
+    private static List<IMethodSymbol> OwnSlots(INamedTypeSymbol c) =>
+        c.GetMembers().OfType<IMethodSymbol>()
+            .Where(m => m.MethodKind is MethodKind.Ordinary or MethodKind.PropertyGet or MethodKind.PropertySet && !m.IsGenericMethod
+                        && (m.IsVirtual || m.IsAbstract) && !m.IsOverride).ToList();
+
+    private static IEnumerable<IMethodSymbol> AllSlots(INamedTypeSymbol c)
+    {
+        var chain = new List<INamedTypeSymbol>();
+        for (INamedTypeSymbol? t = c; t != null; t = BaseClass(t)) chain.Insert(0, t);
+        return chain.SelectMany(OwnSlots);
+    }
+
+    /// <summary>The method that runs when a virtual member is called on an object of class <paramref name="c"/>: the most derived override, or null if abstract.</summary>
+    private static IMethodSymbol? FinalImpl(INamedTypeSymbol c, IMethodSymbol def)
+    {
+        for (INamedTypeSymbol? t = c; t != null; t = BaseClass(t))
+        {
+            foreach (var m in t.GetMembers().OfType<IMethodSymbol>())
+                if (m.IsOverride && SymbolEqualityComparer.Default.Equals(RootDef(m), def)) return m;
+            if (SymbolEqualityComparer.Default.Equals(t, def.ContainingType)) break;
+        }
+        return def.IsAbstract ? null : def;
+    }
+
+    /// <summary>A C pointer at run time: raw pointers and class references.</summary>
+    private static bool IsRef(ITypeSymbol? t) => t is IPointerTypeSymbol || t != null && IsHeapClass(t);
+
+    private static AttributeData? GetAttribute(ISymbol s, string name) =>
+        s.GetAttributes().FirstOrDefault(a => a.AttributeClass?.Name == name);
+
+    private static bool HasAttribute(ISymbol s, string name) => GetAttribute(s, name) != null;
+
+    // ------------------------------------------------------------------ driver
+
+    public string Emit()
+    {
+        var types = CollectTypes();
+        // C has no namespaces: two types with the same name (in different namespaces) would collide in the generated C.
+        foreach (var group in types.GroupBy(TypeName).Where(g => g.Count() > 1))
+            foreach (var dup in group.Skip(1))
+                Unsupported(dup.DeclaringSyntaxReferences.First().GetSyntax(),
+                    $"type name '{group.Key}' is already used by another type ({group.First().ContainingNamespace}); type names must be unique across namespaces in E#");
+        var structs = SortStructs(types.OfType<INamedTypeSymbol>().Where(t => t.TypeKind == TypeKind.Struct));
+        var heapClasses = types.Where(IsHeapClass).Select(t => (INamedTypeSymbol)t).OrderBy(Depth).ToList();
+        foreach (var c in heapClasses)
+            if (BaseClass(c) != null || c.GetMembers().OfType<IMethodSymbol>().Any(IsDynamic)) _polyRoots.Add(RootClass(c));
+        var enums = types.Where(t => t.TypeKind == TypeKind.Enum).ToList();
+        var statics = types.Where(t => t.TypeKind == TypeKind.Class).ToList();
+
+        var reachable = ReachableMethods(types);
+        var usedStatics = new HashSet<ISymbol>(SymbolEqualityComparer.Default);
+        foreach (var u in _usedSymbols) usedStatics.Add(u);
+        var body = new StringBuilder();
+        foreach (var e in enums) EmitEnum(e);
+        var interfaces = CollectInterfaces();
+        foreach (var i in interfaces)
+        {
+            // An interface value is the object and the table of its functions; the table is defined once all types are known.
+            Line($"struct {TypeName(i)}_vtbl;");
+            Line($"typedef struct {{ void *obj; const struct {TypeName(i)}_vtbl *vt; }} {TypeName(i)};");
+        }
+        foreach (var c in heapClasses) Line($"typedef struct {TypeName(c)} {TypeName(c)};");   // forward declarations: classes point to each other
+        if (heapClasses.Any(IsPoly))
+        {
+            Line("struct ES_Type { const struct ES_Type *base; };");
+            // Type ids are table addresses: an object is an instance of a class when that class's id is on its chain of base classes.
+            Line("static __attribute__((unused)) bool es_is(const struct ES_Type *t, const struct ES_Type *want) { for (; t != NULL; t = t->base) if (t == want) return true; return false; }");
+            foreach (var c in heapClasses.Where(c => IsPoly(c) && BaseClass(c) == null)) Line($"struct {CvtName(c)};");
+        }
+        foreach (var s in structs) EmitStruct(s);
+        foreach (var c in heapClasses) EmitClass(c);
+        foreach (var c in heapClasses.Where(IsPoly)) EmitCvt(c);
+        foreach (var c in heapClasses.Where(IsPoly))
+        {
+            Line($"static __attribute__((unused)) const struct {CvtName(c)} {TypeName(c)}_vt;");
+            _usesAlloc = true;
+            Line($"static __attribute__((unused)) {TypeName(c)} *{TypeName(c)}_alloc(void) {{ {TypeName(c)} *o = ES_NEW({TypeName(c)}); o->{VtPath(c)} = (const struct {CvtName(RootClass(c))} *)&{TypeName(c)}_vt; return o; }}");
+        }
+        foreach (var i in interfaces) EmitInterface(i);
+        var typeText = _out.ToString();
+        _out.Clear();
+
+        var fields = statics.SelectMany(t => t.GetMembers().OfType<IFieldSymbol>()).Where(f => f.IsStatic && !f.IsConst && f.AssociatedSymbol == null && usedStatics.Contains(f)).ToList();
+        foreach (var f in fields) EmitStaticField(f);
+        var staticProps = types.SelectMany(t => t.GetMembers().OfType<IPropertySymbol>())
+            .Where(p => p.IsStatic && IsAutoProperty(p) && usedStatics.Contains(p)).ToList();
+        foreach (var p in staticProps) EmitStaticProperty(p);
+        if (fields.Count + staticProps.Count > 0) Line("");
+
+        var methods = types.SelectMany(t => t.GetMembers().OfType<IMethodSymbol>())
+            .Where(m => !m.IsGenericMethod)
+            .Where(m => reachable.Contains(m))
+            .Where(m => m.MethodKind is MethodKind.Ordinary or MethodKind.UserDefinedOperator or MethodKind.Conversion or MethodKind.Constructor
+                        or MethodKind.PropertyGet or MethodKind.PropertySet or MethodKind.StaticConstructor
+                        && !m.IsExtern && DeclaresBody(m))
+            .ToList();
+
+        methods.AddRange(reachable.Where(m => m.MethodKind == MethodKind.LocalFunction));
+        methods.AddRange(reachable.Where(m => m.MethodKind == MethodKind.AnonymousFunction)
+            .GroupBy(m => FuncName(m)).Select(g => g.First()));
+        _staticConstructors.AddRange(methods.Where(m => m.MethodKind == MethodKind.StaticConstructor));
+        foreach (var m in methods)
+        {
+            Line(Prototype(m) + ";");
+            if (m.MethodKind == MethodKind.Constructor && IsHeapClass(m.ContainingType)) Line(InitPrototype(m) + ";");
+        }
+        if (methods.Count > 0) Line("");
+        foreach (var c in heapClasses.Where(IsPoly)) EmitVtInstance(c, reachable);
+        foreach (var c in heapClasses)
+            foreach (var i in interfaces.Where(i => c.AllInterfaces.Contains(i, SymbolEqualityComparer.Default)))
+                EmitVtable(i, c);
+
+        foreach (var m in methods) EmitMethod(m);
+
+        EmitMain();
+
+        body.Append(typeText);
+        foreach (var span in _spans.Values) body.Append(span);
+        if (_spans.Count > 0) body.Append('\n');
+        body.Append(_out);
+        _out.Clear();
+
+        var result = new StringBuilder();
+        result.AppendLine("/* Generated by the E# compiler. Do not edit. */");
+        result.AppendLine("#include <stdbool.h>");
+        result.AppendLine("#include <stddef.h>");
+        result.AppendLine("#include <stdint.h>");
+        // cybergraphics.library may be absent, and libnix refuses to start a program whose startup list names a missing library,
+        // so its base is a private variable that CyberGfx.SetBase fills in around each call (the proto header's own CyberGfxBase is never used).
+        if (_usesCyber) { result.AppendLine("#define CYBERGRAPHICS_BASE_NAME es_CyberBase"); result.AppendLine("extern struct Library *es_CyberBase;"); }
+        foreach (var h in _headers) result.AppendLine($"#include <{h}>");
+        if (_usesCyber) result.AppendLine("struct Library *es_CyberBase;");
+        result.AppendLine();
+        if (_usesBounds)
+        {
+            result.AppendLine("#include <stdio.h>");
+            result.AppendLine("#include <stdlib.h>");
+            result.AppendLine("static inline int32_t es_idx(int32_t i, int32_t n, const char *file, int line)");
+            result.AppendLine("{");
+            result.AppendLine("    if ((uint32_t)i >= (uint32_t)n)");
+            result.AppendLine("    {");
+            result.AppendLine("        fprintf(stderr, \"%s(%d): index %ld out of range 0..%ld\\n\", file, line, (long)i, (long)n - 1);");
+            result.AppendLine("        exit(20);");
+            result.AppendLine("    }");
+            result.AppendLine("    return i;");
+            result.AppendLine("}");
+            result.AppendLine("#define ES_IDX(i, n) es_idx((i), (n), __FILE__, __LINE__)");
+            result.AppendLine();
+        }
+        if (_usesFmt)
+        {
+            foreach (var line in new[]
+            {
+                "static char es_fmt_buf[8][128];",
+                "static int es_fmt_index;",
+                "static char *es_fmt_begin(void) { char *b = es_fmt_buf[es_fmt_index]; es_fmt_index = (es_fmt_index + 1) & 7; return b; }",
+                "static __attribute__((unused)) int es_put_pad(char *b, int n, const char *s, int len, int width)",
+                "{",
+                "    int pad = (width < 0 ? -width : width) - len;",
+                "    if (width > 0) while (pad-- > 0 && n < 127) b[n++] = ' ';",
+                "    for (int i = 0; i < len && n < 127; i++) b[n++] = s[i];",
+                "    if (width < 0) while (pad-- > 0 && n < 127) b[n++] = ' ';",
+                "    return n;",
+                "}",
+                "static __attribute__((unused)) int es_put_str(char *b, int n, const char *s, int width)",
+                "{",
+                "    int len = 0;",
+                "    if (s == NULL) s = \"\";",
+                "    while (s[len]) len++;",
+                "    return es_put_pad(b, n, s, len, width);",
+                "}",
+                "static __attribute__((unused)) int es_put_chr(char *b, int n, int c, int width)",
+                "{",
+                "    char t = (char)c;",
+                "    return es_put_pad(b, n, &t, 1, width);",
+                "}",
+                "static __attribute__((unused)) int es_put_u(char *b, int n, uint32_t v, int width, int digits, int hex)",
+                "{",
+                "    char t[40];",
+                "    int len = 0;",
+                "    uint32_t base = hex ? 16u : 10u;",
+                "    do { uint32_t d = v % base; t[len++] = (char)(d < 10 ? '0' + d : (hex == 2 ? 'a' : 'A') + d - 10); v /= base; } while (v != 0 && len < 39);",
+                "    while (len < digits && len < 39) t[len++] = '0';",
+                "    char r[40];",
+                "    for (int i = 0; i < len; i++) r[i] = t[len - 1 - i];",
+                "    return es_put_pad(b, n, r, len, width);",
+                "}",
+                "static __attribute__((unused)) int es_put_u64(char *b, int n, uint64_t v, int width, int digits, int hex)",
+                "{",
+                "    char t[72];",
+                "    int len = 0;",
+                "    uint64_t base = hex ? 16u : 10u;",
+                "    do { uint32_t d = (uint32_t)(v % base); t[len++] = (char)(d < 10 ? '0' + d : (hex == 2 ? 'a' : 'A') + d - 10); v /= base; } while (v != 0 && len < 70);",
+                "    while (len < digits && len < 70) t[len++] = '0';",
+                "    char r[72];",
+                "    for (int i = 0; i < len; i++) r[i] = t[len - 1 - i];",
+                "    return es_put_pad(b, n, r, len, width);",
+                "}",
+                "static __attribute__((unused)) int es_put_i64(char *b, int n, int64_t v, int width, int digits, int hex)",
+                "{",
+                "    if (v >= 0 || hex) return es_put_u64(b, n, (uint64_t)v, width, digits, hex);",
+                "    char t[72];",
+                "    uint64_t m = 0u - (uint64_t)v;",
+                "    int len = 0;",
+                "    do { t[len++] = (char)('0' + (uint32_t)(m % 10u)); m /= 10u; } while (m != 0 && len < 70);",
+                "    while (len < digits && len < 70) t[len++] = '0';",
+                "    char r[72];",
+                "    r[0] = '-';",
+                "    for (int i = 0; i < len; i++) r[i + 1] = t[len - 1 - i];",
+                "    return es_put_pad(b, n, r, len + 1, width);",
+                "}",
+                "static __attribute__((unused)) int es_put_i(char *b, int n, int32_t v, int width, int digits, int hex)",
+                "{",
+                "    if (v >= 0 || hex) return es_put_u(b, n, (uint32_t)v, width, digits, hex);",
+                "    char t[40];",
+                "    uint32_t m = 0u - (uint32_t)v;",
+                "    int len = 0;",
+                "    do { t[len++] = (char)('0' + m % 10u); m /= 10u; } while (m != 0 && len < 38);",
+                "    while (len < digits && len < 38) t[len++] = '0';",
+                "    char r[40];",
+                "    r[0] = '-';",
+                "    for (int i = 0; i < len; i++) r[i + 1] = t[len - 1 - i];",
+                "    return es_put_pad(b, n, r, len + 1, width);",
+                "}",
+            }) result.AppendLine(line);
+        }
+        if (_usesAlloc)
+        {
+            result.AppendLine("#include <stdio.h>");
+            result.AppendLine("#include <stdlib.h>");
+            result.AppendLine("static void *es_new(size_t n)");
+            result.AppendLine("{");
+            result.AppendLine("    void *p = calloc(1, n);");
+            result.AppendLine("    if (p == NULL) { fputs(\"out of memory\\n\", stderr); exit(20); }");
+            result.AppendLine("    return p;");
+            result.AppendLine("}");
+            result.AppendLine("#define ES_NEW(T) ((T *)es_new(sizeof(T)))");
+        }
+        if (_usesStrlen)
+        {
+            // Our own, not libc's: a call to strlen is an undefined symbol that the AROS loader resolved wrongly, and it keeps the output libc-free.
+            result.AppendLine("static inline int32_t es_strlen(const char *s)");
+            result.AppendLine("{");
+            result.AppendLine("    const char *p = s;");
+            result.AppendLine("    while (*p != 0) p++;");
+            result.AppendLine("    return (int32_t)(p - s);");
+            result.AppendLine("}");
+        }
+        if (_natives.Contains("es_fixdiv"))
+        {
+            result.AppendLine("static inline int32_t es_fixdiv(int32_t a, int32_t b)");
+            result.AppendLine("{");
+            result.AppendLine("#if defined(__mc68020__) || defined(__mc68030__) || defined(__mc68040__) || defined(__mc68060__)");
+            result.AppendLine("    if (b == 0) return 0;");
+            result.AppendLine("    uint32_t ua = a < 0 ? 0u - (uint32_t)a : (uint32_t)a, ub = b < 0 ? 0u - (uint32_t)b : (uint32_t)b;");
+            result.AppendLine("    if (ua < (ub > 0x1FFFFu ? 0xFFFFFFFFu : ub << 15))   /* the quotient fits in 32 bits, so divs.l cannot overflow */");
+            result.AppendLine("    {");
+            result.AppendLine("        int32_t q = (int32_t)((uint32_t)a << 16), r = a >> 16;   /* the dividend a << 16 as r:q */");
+            result.AppendLine("        __asm__(\"divs.l %2,%1:%0\" : \"+d\"(q), \"+d\"(r) : \"d\"(b) : \"cc\");");
+            result.AppendLine("        return q;");
+            result.AppendLine("    }");
+            result.AppendLine("#endif");
+            result.AppendLine("    return (int32_t)(((int64_t)a << 16) / b);");
+            result.AppendLine("}");
+            result.AppendLine();
+        }
+        if (_usesLen)
+        {
+            result.AppendLine("#define ES_LEN(a) ((int32_t)(sizeof(a) / sizeof((a)[0])))");
+            result.AppendLine();
+        }
+        result.Append(body);
+        return result.ToString();
+    }
+
+    private readonly HashSet<string> _natives = new();
+
+    private bool IsDefined(string symbol) =>
+        _compilation.SyntaxTrees.FirstOrDefault(_user.Contains)?.Options.PreprocessorSymbolNames.Contains(symbol) ?? false;
+
+    private static bool DeclaresBody(IMethodSymbol m)
+    {
+        return m.DeclaringSyntaxReferences.Any(r => BodyOf(r.GetSyntax()) is (not null, _) or (_, not null));
+    }
+
+    /// <summary>The block or expression body of a method, operator, constructor or property accessor.</summary>
+    private static (BlockSyntax? Block, ArrowExpressionClauseSyntax? Arrow) BodyOf(SyntaxNode n) => n switch
+    {
+        BaseMethodDeclarationSyntax b => (b.Body, b.ExpressionBody),
+        LocalFunctionStatementSyntax lf => (lf.Body, lf.ExpressionBody),
+        LambdaExpressionSyntax lam => (lam.Block, null),
+        AccessorDeclarationSyntax a => (a.Body, a.ExpressionBody),
+        ArrowExpressionClauseSyntax x => (null, x),
+        PropertyDeclarationSyntax p => (null, p.ExpressionBody),
+        IndexerDeclarationSyntax i => (null, i.ExpressionBody),
+        _ => (null, null),
+    };
+
+    /// <summary>An auto-property ({ get; set; }): stored in a field of the same name.</summary>
+    private static bool IsAutoProperty(IPropertySymbol p) =>
+        !p.IsIndexer && !p.IsAbstract && !p.IsVirtual && !p.IsOverride && p.DeclaringSyntaxReferences.FirstOrDefault()?.GetSyntax() is PropertyDeclarationSyntax
+        {
+            ExpressionBody: null, AccessorList: { } list
+        } && list.Accessors.All(a => a.Body == null && a.ExpressionBody == null);
+
+    private SemanticModel Model(SyntaxTree tree)
+    {
+        if (!_models.TryGetValue(tree, out var m))
+            _models[tree] = m = _compilation.GetSemanticModel(tree);
+        return m;
+    }
+
+    private SemanticModel Model(SyntaxNode node) => Model(node.SyntaxTree);
+
+    private string Unsupported(SyntaxNode node, string what)
+    {
+        _diagnostics.Add(Diagnostic.Create(Descriptors.Unsupported, node.GetLocation(), what));
+        return "0";
+    }
+
+    // ------------------------------------------------------------------ type collection
+
+    private List<INamedTypeSymbol> CollectTypes()
+    {
+        var result = new List<INamedTypeSymbol>();
+        foreach (var tree in _compilation.SyntaxTrees)
+        {
+            var model = Model(tree);
+            foreach (var decl in tree.GetRoot().DescendantNodes().OfType<BaseTypeDeclarationSyntax>())
+            {
+                if (model.GetDeclaredSymbol(decl) is not INamedTypeSymbol sym) continue;
+                if (sym.TypeKind == TypeKind.Class && IsAttributeType(sym)) continue;
+                if (IsGenericDefinition(sym)) continue;
+                if (sym.TypeKind is TypeKind.Class or TypeKind.Struct or TypeKind.Enum)
+                    result.Add(sym);
+            }
+        }
+        return result;
+    }
+
+    /// <summary>Generic originals are only templates; the monomorphiser added concrete copies.</summary>
+    private static bool IsGenericDefinition(INamedTypeSymbol t)
+    {
+        for (var c = t; c != null; c = c.ContainingType)
+            if (c.IsGenericType) return true;
+        return false;
+    }
+
+    /// <summary>
+    /// The methods to emit: all of the user's own code, plus the library methods it can reach (from
+    /// bodies and static field initializers). Library code that is never used (a whole screen API in
+    /// a console program) is not emitted, so it neither bloats the executable nor needs its headers.
+    /// </summary>
+    private readonly List<IMethodSymbol> _staticConstructors = new();
+    private bool _thisIsClass;
+    private INamedTypeSymbol? _thisType;
+    private bool _usesAlloc;
+    private bool _usesFmt;
+    private int _objectTemps;
+    private readonly HashSet<ISymbol> _usedSymbols = new(SymbolEqualityComparer.Default);
+
+    private HashSet<IMethodSymbol> ReachableMethods(List<INamedTypeSymbol> types)
+    {
+        var reachable = new HashSet<IMethodSymbol>(SymbolEqualityComparer.Default);
+        var work = new Stack<SyntaxNode>();
+
+        void Add(IMethodSymbol? m)
+        {
+            if (m == null || !reachable.Add(m.OriginalDefinition)) return;
+            foreach (var r in m.OriginalDefinition.DeclaringSyntaxReferences) work.Push(r.GetSyntax());
+        }
+
+        foreach (var entry in FindEntryPoints(_compilation, _user)) Add(entry);
+        // Everything the user wrote is emitted (and checked), used or not; only library code is pruned.
+        foreach (var t in types.Where(t => t.DeclaringSyntaxReferences.Any(r => _user.Contains(r.SyntaxTree))))
+            foreach (var member in t.GetMembers())
+                switch (member)
+                {
+                    case IMethodSymbol m: Add(m); break;
+                    case IFieldSymbol or IPropertySymbol: _usedSymbols.Add(member); break;
+                }
+        var walkedFields = new HashSet<ISymbol>(SymbolEqualityComparer.Default);
+
+        while (true)
+        {
+            if (work.Count == 0)
+            {
+                // A static field is only emitted, and its initializer only scanned, once something uses it.
+                var more = false;
+                foreach (var f in _usedSymbols.ToList())
+                {
+                    if (!f.IsStatic || !walkedFields.Add(f)) continue;
+                    foreach (var r in f.DeclaringSyntaxReferences)
+                    {
+                        var decl = r.GetSyntax();
+                        if (decl is VariableDeclaratorSyntax { Initializer: { } init }) { work.Push(init); more = true; }
+                        else if (decl is PropertyDeclarationSyntax { Initializer: { } pinit }) { work.Push(pinit); more = true; }
+                    }
+                }
+                if (!more) break;
+            }
+            if (work.Count == 0) continue;
+            var node = work.Pop();
+            var model = Model(node);
+            foreach (var n in node.DescendantNodesAndSelf())
+            {
+                if (n is not ExpressionSyntax e) continue;
+                var info = model.GetSymbolInfo(e);
+                switch (info.Symbol)
+                {
+                    case IMethodSymbol { MethodKind: MethodKind.AnonymousFunction } when IsInlinedLinqLambda(e): break;   // pasted into the loop, no function needed
+                    case IMethodSymbol m: Add(m); break;
+                    case IPropertySymbol p: Add(p.GetMethod); Add(p.SetMethod); _usedSymbols.Add(p); break;
+                    case IFieldSymbol f: _usedSymbols.Add(f); break;
+                }
+                var conversion = model.GetConversion(e);
+                if (conversion.IsUserDefined) Add(conversion.MethodSymbol);
+            }
+        }
+        return reachable;
+    }
+
+    private static bool IsAttributeType(INamedTypeSymbol t)
+    {
+        for (var b = t.BaseType; b != null; b = b.BaseType)
+            if (b.ToDisplayString() == "System.Attribute") return true;
+        return false;
+    }
+
+    private static List<INamedTypeSymbol> SortStructs(IEnumerable<INamedTypeSymbol> structs)
+    {
+        var all = structs.ToList();
+        var done = new HashSet<INamedTypeSymbol>(SymbolEqualityComparer.Default);
+        var sorted = new List<INamedTypeSymbol>();
+
+        void Visit(INamedTypeSymbol s)
+        {
+            if (!done.Add(s)) return;
+            foreach (var f in s.GetMembers().OfType<IFieldSymbol>().Where(f => !f.IsStatic && !f.IsConst && f.AssociatedSymbol == null))
+                if (f.Type is INamedTypeSymbol { TypeKind: TypeKind.Struct } nested && all.Contains(nested, SymbolEqualityComparer.Default))
+                    Visit(nested);
+            foreach (var pr in s.GetMembers().OfType<IPropertySymbol>().Where(pr => !pr.IsStatic && IsAutoProperty(pr)))
+                if (pr.Type is INamedTypeSymbol { TypeKind: TypeKind.Struct } nested && all.Contains(nested, SymbolEqualityComparer.Default))
+                    Visit(nested);
+            sorted.Add(s);
+        }
+        // (auto-property types count as fields below)
+
+        foreach (var s in all) Visit(s);
+        return sorted;
+    }
+
+    // ------------------------------------------------------------------ naming
+
+    private static string TypeName(INamedTypeSymbol t)
+    {
+        var parts = new List<string>();
+        for (INamedTypeSymbol? c = t; c != null; c = c.ContainingType) parts.Insert(0, c.Name);
+        return string.Join("_", parts);
+    }
+
+    private static string Mangle(ITypeSymbol t) => t switch
+    {
+        INamedTypeSymbol n => n.SpecialType != SpecialType.None ? n.ToDisplayString() : TypeName(n),
+        IPointerTypeSymbol p => Mangle(p.PointedAtType) + "Ptr",
+        IArrayTypeSymbol a => Mangle(a.ElementType) + "Arr",
+        _ => "t",
+    };
+
+    private static string FuncName(IMethodSymbol m)
+    {
+        if (HasAttribute(m, "AmigaLibAttribute") || HasAttribute(m, "NativeAttribute")) return m.Name;
+        if (m.MethodKind == MethodKind.LocalFunction && m.ContainingSymbol is IMethodSymbol outer)
+            return FuncName(outer) + "_" + m.Name;
+        if (m.MethodKind == MethodKind.AnonymousFunction)
+        {
+            var at = m.DeclaringSyntaxReferences.First();
+            uint h = 17;
+            foreach (var ch in at.SyntaxTree.FilePath) h = h * 31 + ch;
+            return $"ES_lambda_{h:x}_{at.Span.Start}";
+        }
+        if (m.MethodKind == MethodKind.StaticConstructor) return $"{TypeName(m.ContainingType)}_cctor";
+        if (m.MethodKind == MethodKind.Constructor)
+        {
+            var ctors = m.ContainingType.InstanceConstructors.Where(c => !c.IsImplicitlyDeclared).Count();
+            var ctorName = $"{TypeName(m.ContainingType)}_new";
+            return ctors > 1 ? ctorName + "_" + string.Join("_", m.Parameters.Select(p => Mangle(p.Type))) : ctorName;
+        }
+        var name = $"{TypeName(m.ContainingType)}_{m.Name}";
+        var overloads = m.ContainingType.GetMembers(m.Name).OfType<IMethodSymbol>().Count();
+        if (overloads > 1)
+            name += "_" + string.Join("_", m.Parameters.Select(p => Mangle(p.Type)));
+        if (m.MethodKind == MethodKind.Conversion)
+            name += "_" + Mangle(m.ReturnType);
+        return name;
+    }
+
+    private static string FieldName(IFieldSymbol f) =>
+        f.IsStatic || f.ContainingType.TypeKind == TypeKind.Enum
+            ? $"{TypeName(f.ContainingType)}_{f.Name}"
+            : f.Name;
+
+    // ------------------------------------------------------------------ types
+
+    private string CType(ITypeSymbol t, SyntaxNode at)
+    {
+        switch (t.SpecialType)
+        {
+            case SpecialType.System_Void: return "void";
+            case SpecialType.System_Boolean: return "bool";
+            case SpecialType.System_Byte: return "uint8_t";
+            case SpecialType.System_SByte: return "int8_t";
+            case SpecialType.System_Int16: return "int16_t";
+            case SpecialType.System_UInt16: return "uint16_t";
+            case SpecialType.System_Int32: return "int32_t";
+            case SpecialType.System_UInt32: return "uint32_t";
+            case SpecialType.System_Int64: return "int64_t";
+            case SpecialType.System_UInt64: return "uint64_t";
+            case SpecialType.System_IntPtr: return "intptr_t";     // nint and nuint: pointer-sized (an OS handle or tag value)
+            case SpecialType.System_UIntPtr: return "uintptr_t";
+            case SpecialType.System_Char: return "uint16_t";
+            case SpecialType.System_Single: return "float";
+            case SpecialType.System_Double: return "double";
+            case SpecialType.System_String: return "const char *";
+        }
+
+        switch (t)
+        {
+            case IPointerTypeSymbol p:
+                var inner = CType(p.PointedAtType, at);
+                return inner.EndsWith("*") ? inner + "*" : inner + " *";
+            case INamedTypeSymbol { Name: "Span" or "ReadOnlySpan", TypeArguments.Length: 1 } sp when
+                sp.ContainingNamespace?.ToDisplayString() == "System":
+                return SpanType(sp, at);
+            case INamedTypeSymbol { IsTupleType: true } tuple:
+                return TupleType(tuple, at);
+            case INamedTypeSymbol { TypeKind: TypeKind.Delegate } del:
+                return DelegateType(del, at);
+            case INamedTypeSymbol cls when IsHeapClass(cls):
+                return TypeName(cls) + " *";
+            case INamedTypeSymbol iface when IsInterfaceType(iface):
+                return TypeName(iface);
+            case INamedTypeSymbol { TypeKind: TypeKind.Enum or TypeKind.Struct } n:
+                return TypeName(n);
+            case IArrayTypeSymbol:
+                Unsupported(at, "array type here: arrays are fixed-size locals or static fields; pass them as Span<T>");
+                return "int32_t";
+        }
+
+        Unsupported(at, $"type {t.ToDisplayString()}");
+        return "int32_t";
+    }
+
+    /// <summary>C struct for Span&lt;T&gt; / ReadOnlySpan&lt;T&gt;: a pointer and an element count.</summary>
+    private string SpanType(INamedTypeSymbol span, SyntaxNode at)
+    {
+        var elem = span.TypeArguments[0];
+        var readOnly = span.Name == "ReadOnlySpan";
+        var name = (readOnly ? "ES_ROSpan_" : "ES_Span_") + Mangle(elem);
+        if (!_spans.ContainsKey(name))
+        {
+            var ptr = CType(elem, at);
+            _spans[name] = $"typedef struct {{ {(readOnly ? "const " : "")}{ptr} *ptr; int32_t length; }} {name};\n";
+        }
+        return name;
+    }
+
+    /// <summary>
+    /// A delegate type (Func, Action, Predicate, a user's <c>delegate</c>) is a function pointer plus an environment pointer.
+    /// The function takes the environment first; static methods and lambdas that capture nothing have a null environment,
+    /// a lambda that captures locals points at a struct of pointers to them (see <see cref="Lambda"/>).
+    /// </summary>
+    private string DelegateType(INamedTypeSymbol del, SyntaxNode at)
+    {
+        var invoke = del.DelegateInvokeMethod!;
+        var ps = invoke.Parameters.Select(p => p.RefKind == RefKind.None ? CType(p.Type, at) : CType(p.Type, at) + " *").Prepend("void *").ToList();
+        var signature = $"typedef struct {{ {CType(invoke.ReturnType, at)} (*fn)({string.Join(", ", ps)}); void *env; }} @NAME@;\n";
+        if (!_delegateNames.TryGetValue(signature, out var name))
+        {
+            name = "ES_Wfn_" + _delegateNames.Count;   // sorts after the span and tuple typedefs it may mention
+            _delegateNames[signature] = name;
+            _spans[name] = signature.Replace("@NAME@", name);
+        }
+        return name;
+    }
+
+    private readonly Dictionary<string, string> _delegateNames = new();
+
+    /// <summary>C struct for a value tuple: fields Item1, Item2, ...</summary>
+    private string TupleType(INamedTypeSymbol tuple, SyntaxNode at)
+    {
+        var elements = tuple.TupleElements;
+        var name = "ES_Tuple_" + string.Join("_", elements.Select(e => Mangle(e.Type).Replace('.', '_')));
+        if (!_spans.ContainsKey(name))
+        {
+            _spans[name] = ""; // reserve first: an element type may refer back
+            var fields = string.Join(" ", elements.Select((e, i) => $"{CType(e.Type, at)} Item{i + 1};"));
+            _spans[name] = $"typedef struct {{ {fields} }} {name};\n";
+        }
+        return name;
+    }
+
+    private static string FieldCName(IFieldSymbol f) => f.ContainingType.IsTupleType ? (f.CorrespondingTupleField ?? f).Name : f.Name;
+
+    private static bool IsSpan(ITypeSymbol? t) =>
+        t is INamedTypeSymbol { Name: "Span" or "ReadOnlySpan", TypeArguments.Length: 1 } n &&
+        n.ContainingNamespace?.ToDisplayString() == "System";
+
+    private static bool IsSimple(ExpressionSyntax e)
+    {
+        for (var x = e; ; )
+            switch (x)
+            {
+                case ParenthesizedExpressionSyntax p: x = p.Expression; continue;
+                case IdentifierNameSyntax: return true;
+                case MemberAccessExpressionSyntax ma: x = ma.Expression; continue;
+                default: return false;
+            }
+    }
+
+    /// <summary>Only side-effect-free expressions may be written twice in the output.</summary>
+    private bool RequireSimple(ExpressionSyntax e, string what)
+    {
+        for (var x = e; ; )
+        {
+            switch (x)
+            {
+                case ParenthesizedExpressionSyntax p: x = p.Expression; continue;
+                case IdentifierNameSyntax: return true;
+                case MemberAccessExpressionSyntax ma: x = ma.Expression; continue;
+                default:
+                    Unsupported(e, $"{what} on a complex expression; assign it to a local first");
+                    return false;
+            }
+        }
+    }
+
+    /// <summary>
+    /// A C array declaration for a fixed-size E# array: <c>T name[N] = {...}</c>. Arrays live in
+    /// the frame or in static storage; there is no heap array.
+    /// </summary>
+    private string ArrayDeclarator(IArrayTypeSymbol t, string name, ExpressionSyntax? init, SyntaxNode at)
+    {
+        if (t.Rank != 1)
+        {
+            Unsupported(at, "multi-dimensional array");
+            return "int32_t " + name + "[1]";
+        }
+
+        InitializerExpressionSyntax? items = null;
+        ExpressionSyntax? sizeExpr = null;
+        switch (init)
+        {
+            case ArrayCreationExpressionSyntax ac:
+                items = ac.Initializer;
+                sizeExpr = ac.Type.RankSpecifiers[0].Sizes[0] is OmittedArraySizeExpressionSyntax ? null : ac.Type.RankSpecifiers[0].Sizes[0];
+                break;
+            case ImplicitArrayCreationExpressionSyntax iac:
+                items = iac.Initializer;
+                break;
+            case InitializerExpressionSyntax ie:
+                items = ie;
+                break;
+            default:
+                Unsupported(init ?? at, "array without a creation expression (use 'new T[N]' or an initializer list)");
+                break;
+        }
+
+        long length = items?.Expressions.Count ?? 0;
+        if (sizeExpr != null)
+        {
+            var c = Model(sizeExpr).GetConstantValue(sizeExpr);
+            if (c.HasValue && c.Value is int n && n > 0) length = n;
+            else Unsupported(sizeExpr, "array length that is not a positive constant");
+        }
+        else if (items == null) Unsupported(init ?? at, "array length");
+
+        var elem = CType(t.ElementType, at);
+        var text = (elem.EndsWith("*") ? elem : elem + " ") + $"{name}[{length}]";
+        if (items == null) return text + " = {0}";
+        var elements = items.Expressions.Select(e => Expr(e, top: true)).ToList();
+        if (elements.Count == 0) elements.Add("0");
+        return text + " = { " + string.Join(", ", elements) + " }";
+    }
+
+    private string Decl(ITypeSymbol t, string name, SyntaxNode at)
+    {
+        var type = CType(t, at);
+        return type.EndsWith("*") ? type + name : type + " " + name;
+    }
+
+    // ------------------------------------------------------------------ declarations
+
+    private void EmitEnum(INamedTypeSymbol e)
+    {
+        var decl = e.DeclaringSyntaxReferences.First().GetSyntax();
+        var under = CType(e.EnumUnderlyingType!, decl);
+        Line($"typedef {under} {TypeName(e)};");
+        Line("enum");
+        Line("{");
+        _indent++;
+        foreach (var m in e.GetMembers().OfType<IFieldSymbol>().Where(f => f.IsConst))
+            Line($"{FieldName(m)} = {Convert.ToString(m.ConstantValue, CultureInfo.InvariantCulture)},");
+        _indent--;
+        Line("};");
+        Line("");
+    }
+
+    private void EmitStruct(INamedTypeSymbol s)
+    {
+        var decl = (StructDeclarationSyntax)s.DeclaringSyntaxReferences.First().GetSyntax();
+        foreach (var member in decl.Members)
+        {
+            var isStatic = member.ChildTokens().Any(t => t.IsKind(SyntaxKind.StaticKeyword));
+            var supported = member is FieldDeclarationSyntax or EnumDeclarationSyntax or StructDeclarationSyntax
+                or MethodDeclarationSyntax or OperatorDeclarationSyntax or ConversionOperatorDeclarationSyntax
+                or PropertyDeclarationSyntax or IndexerDeclarationSyntax
+                || member is ConstructorDeclarationSyntax { Initializer: null or { RawKind: (int)SyntaxKind.ThisConstructorInitializer } };
+            if (!supported)
+                Unsupported(member, member is ConstructorDeclarationSyntax ? "constructor initializer other than this(...)" : $"{member.Kind()} in struct");
+        }
+
+        var name = TypeName(s);
+        Line($"typedef struct {name}");
+        Line("{");
+        _indent++;
+        foreach (var f in s.GetMembers().OfType<IFieldSymbol>().Where(f => !f.IsStatic && !f.IsConst && f.AssociatedSymbol == null))
+            Line(f.IsFixedSizeBuffer
+                ? Decl(((IPointerTypeSymbol)f.Type).PointedAtType, f.Name, decl) + $"[{f.FixedSize}];"
+                : Decl(f.Type, f.Name, decl) + ";");
+        foreach (var p in s.GetMembers().OfType<IPropertySymbol>().Where(p => !p.IsStatic && IsAutoProperty(p)))
+        {
+            if (p.DeclaringSyntaxReferences.First().GetSyntax() is PropertyDeclarationSyntax { Initializer: not null } pd)
+                Unsupported(pd, "initializer on an instance property");
+            Line(Decl(p.Type, p.Name, decl) + ";");
+        }
+        if (!s.GetMembers().Any(m => m is IFieldSymbol { IsStatic: false, IsConst: false, AssociatedSymbol: null } || m is IPropertySymbol { IsStatic: false } pp && IsAutoProperty(pp)))
+            Line("char ES_empty;");   // C has no empty structs
+        _indent--;
+        Line($"}} {name};");
+        Line("");
+    }
+
+    private List<INamedTypeSymbol> CollectInterfaces()
+    {
+        var result = new List<INamedTypeSymbol>();
+        foreach (var tree in _compilation.SyntaxTrees)
+        {
+            if (!_user.Contains(tree)) continue;
+            foreach (var decl in tree.GetRoot().DescendantNodes().OfType<InterfaceDeclarationSyntax>())
+                if (Model(tree).GetDeclaredSymbol(decl) is INamedTypeSymbol sym && IsInterfaceType(sym)) result.Add(sym);
+        }
+        return result;
+    }
+
+    private string SlotParams(IMethodSymbol m, SyntaxNode at, bool named)
+    {
+        var parts = new List<string> { "void *self" };
+        for (var k = 0; k < m.Parameters.Length; k++)
+        {
+            if (m.Parameters[k].RefKind != RefKind.None) Unsupported(at, "ref/out parameter in an interface method");
+            parts.Add(named ? Decl(m.Parameters[k].Type, "a" + k, at) : CType(m.Parameters[k].Type, at));
+        }
+        return string.Join(", ", parts);
+    }
+
+    /// <summary>The table of virtual functions of a class: the base class's table, then one slot for each virtual member the class introduces.</summary>
+    private void EmitCvt(INamedTypeSymbol c)
+    {
+        var decl = c.DeclaringSyntaxReferences.First().GetSyntax();
+        Line($"struct {CvtName(c)}");
+        Line("{");
+        _indent++;
+        if (BaseClass(c) is { } b) Line($"struct {CvtName(b)} es_base;");
+        else Line("struct ES_Type ti;");
+        foreach (var m in OwnSlots(c))
+            Line(Decl(m.ReturnType, $"(*{VSlot(m)})({SlotParams(m, decl, false)})", decl) + ";");
+        _indent--;
+        Line("};");
+        Line("");
+    }
+
+    /// <summary>The one table of a class (with a small function per slot that casts the object back) and its type id link to the base class.</summary>
+    private void EmitVtInstance(INamedTypeSymbol c, HashSet<IMethodSymbol> reachable)
+    {
+        var decl = c.DeclaringSyntaxReferences.First().GetSyntax();
+        var inits = new List<string>();
+        var depth = Depth(c);
+        var tiPath = string.Concat(Enumerable.Repeat("es_base.", depth)) + "ti";
+        inits.Add($".{tiPath}.base = {(BaseClass(c) is { } bc ? TypeIdOf(bc) : "NULL")}");
+        foreach (var def in AllSlots(c))
+        {
+            var impl = FinalImpl(c, def);
+            if (impl == null || !reachable.Contains(impl.OriginalDefinition)) continue;
+            var thunk = $"{TypeName(c)}__{VSlot(def)}";
+            var args = new List<string> { $"({TypeName(impl.ContainingType)} *)self" };
+            for (var k = 0; k < def.Parameters.Length; k++) args.Add("a" + k);
+            Line($"static __attribute__((unused)) {Decl(def.ReturnType, $"{thunk}({SlotParams(def, decl, true)})", decl)}");
+            Line("{");
+            Line($"    {(def.ReturnsVoid ? "" : "return ")}{FuncName(impl)}({string.Join(", ", args)});");
+            Line("}");
+            var slotPath = string.Concat(Enumerable.Repeat("es_base.", depth - Depth(def.ContainingType))) + VSlot(def);
+            inits.Add($".{slotPath} = {thunk}");
+        }
+        Line($"static __attribute__((unused)) const struct {CvtName(c)} {TypeName(c)}_vt = {{ {string.Join(", ", inits)} }};");
+        Line("");
+    }
+
+    private void EmitInterface(INamedTypeSymbol i)
+    {
+        var decl = i.DeclaringSyntaxReferences.First().GetSyntax();
+        Line($"struct {TypeName(i)}_vtbl");
+        Line("{");
+        _indent++;
+        foreach (var m in i.GetMembers().OfType<IMethodSymbol>().Where(m => m.MethodKind == MethodKind.Ordinary))
+        {
+            if (m.IsGenericMethod) Unsupported(decl, "generic method in an interface");
+            Line(Decl(m.ReturnType, $"(*{SlotName(m)})({SlotParams(m, decl, false)})", decl) + ";");
+        }
+        _indent--;
+        Line("};");
+        Line("");
+    }
+
+    /// <summary>The function table that lets a class be used as an interface, with one small function per method that casts the object back.</summary>
+    private void EmitVtable(INamedTypeSymbol i, INamedTypeSymbol c)
+    {
+        var decl = c.DeclaringSyntaxReferences.First().GetSyntax();
+        var slots = new List<string>();
+        foreach (var im in i.GetMembers().OfType<IMethodSymbol>().Where(m => m.MethodKind == MethodKind.Ordinary))
+        {
+            if (c.FindImplementationForInterfaceMember(im) is not IMethodSymbol impl) { Unsupported(decl, $"'{c.Name}' does not implement '{im.Name}'"); continue; }
+            var thunk = $"{TypeName(c)}_{TypeName(i)}_{SlotName(im)}";
+            var args = new List<string>();
+            for (var k = 0; k < im.Parameters.Length; k++) args.Add("a" + k);
+            Line($"static __attribute__((unused)) {Decl(im.ReturnType, $"{thunk}({SlotParams(im, decl, true)})", decl)}");
+            Line("{");
+            Line($"    {(im.ReturnsVoid ? "" : "return ")}{InstanceCall(impl, $"({TypeName(c)} *)self", args)};");
+            Line("}");
+            slots.Add($".{SlotName(im)} = {thunk}");
+        }
+        Line($"static __attribute__((unused)) const struct {TypeName(i)}_vtbl {VtableName(i, c)} = {{ {string.Join(", ", slots)} }};");
+        Line("");
+    }
+
+    private void EmitClass(INamedTypeSymbol c)
+    {
+        var decl = (ClassDeclarationSyntax)c.DeclaringSyntaxReferences.First().GetSyntax();
+        foreach (var member in decl.Members)
+        {
+            var supported = member is FieldDeclarationSyntax or EnumDeclarationSyntax or StructDeclarationSyntax
+                or MethodDeclarationSyntax or OperatorDeclarationSyntax or ConversionOperatorDeclarationSyntax
+                or PropertyDeclarationSyntax or IndexerDeclarationSyntax or ConstructorDeclarationSyntax;
+            if (!supported) Unsupported(member, $"{member.Kind()} in a class");
+            if (member is FieldDeclarationSyntax f && !f.Modifiers.Any(m => m.IsKind(SyntaxKind.StaticKeyword) || m.IsKind(SyntaxKind.ConstKeyword)))
+                foreach (var v in f.Declaration.Variables.Where(v => v.Initializer != null))
+                    Unsupported(v.Initializer!, "initializer on an instance field of a class (assign it in the constructor)");
+        }
+
+        var name = TypeName(c);
+        Line($"struct {name}");
+        Line("{");
+        _indent++;
+        var baseClass = BaseClass(c);
+        if (baseClass != null) Line($"{TypeName(baseClass)} es_base;");
+        else if (IsPoly(c)) Line($"const struct {CvtName(c)} *vt;");
+        foreach (var field in c.GetMembers().OfType<IFieldSymbol>().Where(f => !f.IsStatic && !f.IsConst && f.AssociatedSymbol == null))
+            Line(Decl(field.Type, field.Name, decl) + ";");
+        foreach (var p in c.GetMembers().OfType<IPropertySymbol>().Where(p => !p.IsStatic && IsAutoProperty(p)))
+        {
+            if (p.DeclaringSyntaxReferences.First().GetSyntax() is PropertyDeclarationSyntax { Initializer: not null } pd)
+                Unsupported(pd, "initializer on an instance property");
+            Line(Decl(p.Type, p.Name, decl) + ";");
+        }
+        if (baseClass == null && !IsPoly(c) && !c.GetMembers().Any(m => m is IFieldSymbol { IsStatic: false, IsConst: false, AssociatedSymbol: null } || m is IPropertySymbol { IsStatic: false } pp && IsAutoProperty(pp)))
+            Line("char ES_empty;");   // C has no empty structs
+        _indent--;
+        Line("};");
+        Line("");
+    }
+
+    private void EmitStaticField(IFieldSymbol f)
+    {
+        var decl = f.DeclaringSyntaxReferences.First().GetSyntax();
+        var init = (decl as VariableDeclaratorSyntax)?.Initializer?.Value;
+        var text = f.Type is IArrayTypeSymbol arr
+            ? ArrayDeclarator(arr, FieldName(f), init, decl)
+            : Decl(f.Type, FieldName(f), decl);
+        // Chip RAM is a 68k-only concept in the C dialect: PowerPC systems allocate chip memory
+        // at run time instead, so the attribute is a no-op there.
+        if (HasAttribute(f, "ChipRamAttribute") && IsDefined("M68K"))
+            text = "__chip " + text;
+        Line(f.Type is IArrayTypeSymbol || init == null ? $"static {text};" : $"static {text} = {Expr(init, top: true)};");
+    }
+
+    private void EmitStaticProperty(IPropertySymbol p)
+    {
+        var decl = (PropertyDeclarationSyntax)p.DeclaringSyntaxReferences.First().GetSyntax();
+        var name = $"{TypeName(p.ContainingType)}_{p.Name}";
+        var text = Decl(p.Type, name, decl);
+        Line(decl.Initializer == null ? $"static {text};" : $"static {text} = {Expr(decl.Initializer.Value, top: true)};");
+    }
+
+    private string Prototype(IMethodSymbol m)
+    {
+        var node = m.DeclaringSyntaxReferences.First().GetSyntax();
+        var parts = new List<string>();
+        if (m.MethodKind == MethodKind.AnonymousFunction) parts.Add("void *_env");   // a lambda is called through a delegate, which passes its environment
+        if (!m.IsStatic && m.MethodKind is not (MethodKind.Constructor or MethodKind.LocalFunction or MethodKind.AnonymousFunction))
+            parts.Add($"{TypeName(m.ContainingType)} *{ThisName}");
+        parts.AddRange(m.Parameters.Select(p => p.RefKind switch
+        {
+            RefKind.None => Decl(p.Type, p.Name, node),
+            RefKind.Ref or RefKind.Out => Decl(p.Type, "*" + p.Name, node),
+            RefKind.In or RefKind.RefReadOnlyParameter => Decl(p.Type, "*" + p.Name, node),
+            _ => Unsupported(node, "this kind of ref parameter"),
+        }));
+        var ps = parts.Count == 0 ? "void" : string.Join(", ", parts);
+        // A constructor is a function that builds and returns the struct.
+        var ret = m.MethodKind == MethodKind.Constructor ? m.ContainingType : m.ReturnType;
+        return Decl(ret, FuncName(m) + "(" + ps + ")", node);
+    }
+
+    /// <summary>A class constructor is two functions: NAME allocates and calls NAME_init, which runs the body on an existing object (so a derived constructor can run it for its base part).</summary>
+    private string InitPrototype(IMethodSymbol m)
+    {
+        var node = m.DeclaringSyntaxReferences.First().GetSyntax();
+        var parts = new List<string> { $"{TypeName(m.ContainingType)} *{ThisName}" };
+        parts.AddRange(m.Parameters.Select(p => p.RefKind == RefKind.None ? Decl(p.Type, p.Name, node) : Decl(p.Type, "*" + p.Name, node)));
+        return $"void {FuncName(m)}_init({string.Join(", ", parts)})";
+    }
+
+    /// <summary>The call that runs the nearest explicit parameterless constructor above <paramref name="c"/>, or null if there is none.</summary>
+    private static string? ImplicitBaseInit(INamedTypeSymbol c, string self)
+    {
+        for (var b = BaseClass(c); b != null; b = BaseClass(b))
+        {
+            var explicitCtors = b.InstanceConstructors.Where(k => !k.IsImplicitlyDeclared).ToList();
+            if (explicitCtors.Count == 0) continue;
+            var none = explicitCtors.FirstOrDefault(k => k.Parameters.Length == 0);
+            return none == null ? null : $"{FuncName(none)}_init(({TypeName(b)} *){self});";
+        }
+        return null;
+    }
+
+    /// <summary>The C call of an instance method: virtual members go through the object's function table.</summary>
+    private string InstanceCall(IMethodSymbol m, string receiver, IEnumerable<string> args, bool nonVirtual = false)
+    {
+        var list = args.ToList();
+        if (IsHeapClass(m.ContainingType) && IsHier(m.ContainingType))
+        {
+            if (!nonVirtual && IsDynamic(m) && IsPoly(m.ContainingType))
+            {
+                var def = RootDef(m);
+                var t = $"ES_v{_objectTemps++}";
+                var cls = TypeName(def.ContainingType);
+                list.Insert(0, t);
+                return $"({{ {cls} *{t} = ({cls} *)({receiver}); ((const struct {CvtName(def.ContainingType)} *){t}->{VtPath(def.ContainingType)})->{VSlot(def)}({string.Join(", ", list)}); }})";
+            }
+            receiver = $"(({TypeName(m.ContainingType)} *)({receiver}))";
+        }
+        list.Insert(0, receiver);
+        return $"{FuncName(m)}({string.Join(", ", list)})";
+    }
+
+    private void EmitMethod(IMethodSymbol m)
+    {
+        var decl = m.DeclaringSyntaxReferences.First().GetSyntax();
+        var (block, arrow) = BodyOf(decl);
+        if (HasAttribute(m, "InlineAsmAttribute") || HasAttribute(m, "InterruptAttribute"))
+            Unsupported(decl, "[InlineAsm]/[Interrupt] methods");
+
+        LineDirective(decl is MethodDeclarationSyntax md ? md.Identifier.GetLocation() : decl.GetLocation());
+        var isCtor = m.MethodKind == MethodKind.Constructor;
+        var isClassCtor = isCtor && IsHeapClass(m.ContainingType);
+        if (isClassCtor)
+        {
+            // NAME(params): allocate (setting the class's function table), then run NAME_init on the new object.
+            Line(Prototype(m));
+            Line("{");
+            var created = IsPoly(m.ContainingType) ? $"{TypeName(m.ContainingType)}_alloc()" : $"ES_NEW({TypeName(m.ContainingType)})";
+            _usesAlloc = true;
+            Line($"    {TypeName(m.ContainingType)} *{ThisName} = {created};");
+            Line($"    {FuncName(m)}_init({string.Join(", ", m.Parameters.Select(p => p.Name).Prepend(ThisName))});");
+            Line($"    return {ThisName};");
+            Line("}");
+            Line("");
+            Line(InitPrototype(m));
+        }
+        else Line(Prototype(m));
+        Line("{");
+        _indent++;
+        _thisIsClass = IsHeapClass(m.ContainingType) && !m.IsStatic;
+        _thisType = m.ContainingType;
+        _this = isCtor && !isClassCtor ? ThisKind.Value : m.IsStatic || m.MethodKind is MethodKind.LocalFunction or MethodKind.AnonymousFunction ? ThisKind.None : ThisKind.Pointer;
+        _captures.Clear();
+        if (m.MethodKind == MethodKind.AnonymousFunction)
+        {
+            var caps = FindCaptures(decl);
+            if (caps.Locals.Count > 0 || caps.UsesThis)
+            {
+                Line($"struct {EnvName(m)} *_cap = (struct {EnvName(m)} *)_env;");
+                for (var ci = 0; ci < caps.Locals.Count; ci++) _captures[caps.Locals[ci]] = $"(*_cap->c{ci}_{caps.Locals[ci].Name})";
+                if (caps.UsesThis)
+                {
+                    Line($"{TypeName(m.ContainingType)} *{ThisName} = _cap->{ThisName};");
+                    _this = ThisKind.Pointer;
+                }
+            }
+        }
+        if (isCtor && !isClassCtor) Line($"{CType(m.ContainingType, decl)} {ThisName} = {{0}};");
+        if (isCtor && !isClassCtor && decl is ConstructorDeclarationSyntax { Initializer: { } init } &&
+            Model(init).GetSymbolInfo(init).Symbol is IMethodSymbol { IsImplicitlyDeclared: false } chained)
+            Line($"{ThisName} = {FuncName(chained)}({string.Join(", ", init.ArgumentList.Arguments.Select(a => Argument(a, chained)))});");
+        if (isClassCtor)
+        {
+            // this(...) and base(...) run the other constructor's body on this object; without an initializer the nearest explicit base() runs.
+            var initializer = (decl as ConstructorDeclarationSyntax)?.Initializer;
+            if (initializer != null && Model(initializer).GetSymbolInfo(initializer).Symbol is IMethodSymbol { IsImplicitlyDeclared: false } other)
+            {
+                var chainedArgs = initializer.ArgumentList.Arguments.Select(a => Argument(a, other)).Prepend($"({TypeName(other.ContainingType)} *){ThisName}");
+                Line($"{FuncName(other)}_init({string.Join(", ", chainedArgs)});");
+            }
+            else if (initializer == null && ImplicitBaseInit(m.ContainingType, ThisName) is { } implicitBase) Line(implicitBase);
+        }
+        if (block != null)
+        {
+            foreach (var st in block.Statements) Statement(st);
+        }
+        else if (arrow != null || decl is LambdaExpressionSyntax)
+        {
+            var body = arrow?.Expression ?? ((LambdaExpressionSyntax)decl).ExpressionBody!;
+            LineDirective(body.GetLocation());
+            foreach (var h in HoistedDeclarations(new SyntaxNode[] { body })) Line(h);
+            var e = Expr(body, top: true);
+            Line(m.ReturnsVoid ? e + ";" : "return " + e + ";");
+        }
+        if (isCtor && !isClassCtor) Line($"return {ThisName};");
+        _this = ThisKind.None;
+        _thisIsClass = false;
+        _thisType = null;
+        _captures.Clear();
+        _indent--;
+        Line("}");
+        Line("");
+        _lastLineFile = null;
+    }
+
+    private void EmitMain()
+    {
+        var entry = FindEntryPoints(_compilation, _user).FirstOrDefault();
+        if (entry == null) return;
+        if (entry.Parameters.Length != 0)
+            Unsupported(entry.DeclaringSyntaxReferences.First().GetSyntax(), "entry point parameters");
+
+        Line("int main(void)");
+        Line("{");
+        _indent++;
+        // Static constructors run once at start-up, in the order the types appear (C# runs them lazily).
+        foreach (var cctor in _staticConstructors) Line(FuncName(cctor) + "();");
+        if (entry.ReturnsVoid)
+        {
+            Line(FuncName(entry) + "();");
+            Line("return 0;");
+        }
+        else
+        {
+            Line("return (int)" + FuncName(entry) + "();");
+        }
+        _indent--;
+        Line("}");
+    }
+
+    // ------------------------------------------------------------------ statements
+
+    /// <summary>
+    /// Variables declared inside an expression (<c>out var x</c>, <c>out int _</c>, <c>out _</c>) are declared in C
+    /// just before the statement. Statements that scope them to themselves (if, while, ...) get a block of their own.
+    /// </summary>
+    private void Statement(StatementSyntax st)
+    {
+        var hoisted = HoistedDeclarations(st);
+        if (hoisted.Count == 0)
+        {
+            StatementCore(st);
+            return;
+        }
+        // C# lets a variable declared in an 'if' condition ('if (!TryX(out var v)) return; Use(v);') live on in the
+        // enclosing block, so an 'if' written directly in a block is not wrapped; loops and switches scope theirs.
+        var scoped = st is IfStatementSyntax && st.Parent is not (BlockSyntax or SwitchSectionSyntax) or WhileStatementSyntax or DoStatementSyntax
+            or ForStatementSyntax or ForEachStatementSyntax or SwitchStatementSyntax;
+        LineDirective(st.GetLocation());
+        if (scoped) { Line("{"); _indent++; }
+        foreach (var h in hoisted) Line(h);
+        StatementCore(st);
+        if (scoped) { _indent--; Line("}"); }
+    }
+
+    private List<string> HoistedDeclarations(StatementSyntax st) => HoistedDeclarations(HoistRoots(st));
+
+    private static List<SyntaxNode> HoistRoots(StatementSyntax st)
+    {
+        var roots = new List<SyntaxNode>();
+        switch (st)
+        {
+            case ExpressionStatementSyntax e: roots.Add(e.Expression); break;
+            case LocalDeclarationStatementSyntax l: roots.AddRange(l.Declaration.Variables.Where(v => v.Initializer != null).Select(v => (SyntaxNode)v.Initializer!.Value)); break;
+            case ReturnStatementSyntax { Expression: { } r }: roots.Add(r); break;
+            case IfStatementSyntax i:
+                for (StatementSyntax? cur = i; cur is IfStatementSyntax ci; cur = ci.Else?.Statement) roots.Add(ci.Condition);
+                break;
+            case WhileStatementSyntax w: roots.Add(w.Condition); break;
+            case DoStatementSyntax d: roots.Add(d.Condition); break;
+            case ForStatementSyntax f:
+                if (f.Declaration != null) roots.AddRange(f.Declaration.Variables.Where(v => v.Initializer != null).Select(v => (SyntaxNode)v.Initializer!.Value));
+                roots.AddRange(f.Initializers);
+                if (f.Condition != null) roots.Add(f.Condition);
+                roots.AddRange(f.Incrementors);
+                break;
+            case ForEachStatementSyntax fe: roots.Add(fe.Expression); break;
+            case SwitchStatementSyntax sw: roots.Add(sw.Expression); break;
+        }
+        return roots;
+    }
+
+    private List<string> HoistedDeclarations(IEnumerable<SyntaxNode> roots)
+    {
+        var lines = new List<string>();
+        foreach (var node in roots.SelectMany(r => r.DescendantNodesAndSelf()))
+        {
+            if (node is DeclarationExpressionSyntax { Designation: ParenthesizedVariableDesignationSyntax }) continue;
+            if (node is DeclarationExpressionSyntax decl)
+            {
+                if (decl.Designation is SingleVariableDesignationSyntax single &&
+                    Model(decl).GetDeclaredSymbol(single) is ILocalSymbol local)
+                    lines.Add(Decl(local.Type, local.Name, decl) + ";");
+                else if (Model(decl).GetTypeInfo(decl).Type is { } t)
+                    lines.Add(Decl(t, DiscardName(decl), decl) + ";");
+            }
+            else if (node is SingleVariableDesignationSyntax pd && pd.Parent is not DeclarationExpressionSyntax &&
+                     !pd.Ancestors().OfType<SwitchExpressionArmSyntax>().Any() &&
+                     Model(pd).GetDeclaredSymbol(pd) is ILocalSymbol pl)
+            {
+                lines.Add(Decl(pl.Type, pl.Name, pd) + ";");
+            }
+            else if (node is IdentifierNameSyntax { Identifier.Text: "_", Parent: ArgumentSyntax { Parent: ArgumentListSyntax { Parent: InvocationExpressionSyntax } } } id &&
+                     Model(id).GetSymbolInfo(id).Symbol is IDiscardSymbol discard)
+            {
+                lines.Add(Decl(discard.Type, DiscardName(id), id) + ";");
+            }
+        }
+        return lines;
+    }
+
+    private void StatementCore(StatementSyntax st)
+    {
+        LineDirective(st.GetLocation());
+        switch (st)
+        {
+            case BlockSyntax b:
+                Line("{");
+                _indent++;
+                foreach (var s in b.Statements) Statement(s);
+                _indent--;
+                Line("}");
+                break;
+
+            case UnsafeStatementSyntax u:
+                Statement(u.Block);
+                break;
+
+            case FixedStatementSyntax fx:
+                EmitFixed(fx);
+                break;
+
+            case LocalDeclarationStatementSyntax l:
+                foreach (var v in l.Declaration.Variables)
+                {
+                    var sym = (ILocalSymbol)Model(l).GetDeclaredSymbol(v)!;
+                    if (sym.Type is IArrayTypeSymbol localArray)
+                    {
+                        Line(ArrayDeclarator(localArray, sym.Name, v.Initializer?.Value, l) + ";");
+                        continue;
+                    }
+                    var text = Decl(sym.Type, sym.Name, l);
+                    if (l.IsConst) text = "const " + text;
+                    Line(v.Initializer != null
+                        ? $"{text} = {Expr(v.Initializer.Value, top: true)};"
+                        : text + ";");
+                }
+                break;
+
+            case ExpressionStatementSyntax e:
+                Line(Expr(e.Expression, top: true) + ";");
+                break;
+
+            case ReturnStatementSyntax r:
+                Line(r.Expression == null
+                    ? (_this == ThisKind.Value ? $"return {ThisName};" : "return;")
+                    : $"return {Expr(r.Expression, top: true)};");
+                break;
+
+            case IfStatementSyntax i:
+                EmitIf(i, isElseIf: false);
+                break;
+
+            case WhileStatementSyntax w:
+                Line($"while ({Expr(w.Condition, top: true)})");
+                Body(w.Statement);
+                break;
+
+            case DoStatementSyntax d:
+                Line("do");
+                Body(d.Statement);
+                Line($"while ({Expr(d.Condition, top: true)});");
+                break;
+
+            case ForStatementSyntax f:
+                EmitFor(f);
+                break;
+
+            case ForEachStatementSyntax fe:
+                EmitForEach(fe);
+                break;
+
+            case BreakStatementSyntax:
+                Line("break;");
+                break;
+
+            case ContinueStatementSyntax:
+                Line("continue;");
+                break;
+
+            case SwitchStatementSyntax sw:
+                EmitSwitch(sw);
+                break;
+
+            case EmptyStatementSyntax:
+                Line(";");
+                break;
+
+            case LocalFunctionStatementSyntax lf:
+                CheckNoCapture(lf, "local function");
+                break; // emitted as a function of its own
+
+
+            default:
+                Unsupported(st, st.Kind().ToString());
+                break;
+        }
+    }
+
+    private void Body(StatementSyntax st)
+    {
+        if (st is BlockSyntax) Statement(st);
+        else
+        {
+            Line("{");
+            _indent++;
+            Statement(st);
+            _indent--;
+            Line("}");
+        }
+    }
+
+    /// <summary>
+    /// <c>fixed (T* p = array_or_span) { ... }</c>: nothing moves in C, so this is just a scoped pointer
+    /// to the first element (array) or to the span's data.
+    /// </summary>
+    private void EmitFixed(FixedStatementSyntax fx)
+    {
+        Line("{");
+        _indent++;
+        foreach (var v in fx.Declaration.Variables)
+        {
+            if (v.Initializer == null) { Unsupported(v, "fixed without an initializer"); continue; }
+            var sym = (ILocalSymbol)Model(fx).GetDeclaredSymbol(v)!;
+            var init = v.Initializer.Value;
+            var initType = Model(fx).GetTypeInfo(init).Type;
+            string value;
+            if (IsSpan(initType))
+                value = RequireSimple(init, "fixed over a span") ? Expr(init) + ".ptr" : "0";
+            else if (initType is IArrayTypeSymbol)
+                value = Expr(init);
+            else if (initType is IPointerTypeSymbol)
+                value = Expr(init, top: true);
+            else
+            {
+                Unsupported(init, "fixed over this kind of expression");
+                value = "0";
+            }
+            Line($"{Decl(sym.Type, sym.Name, fx)} = {value};");
+        }
+        Statement(fx.Statement);
+        _indent--;
+        Line("}");
+    }
+
+    private void EmitIf(IfStatementSyntax i, bool isElseIf)
+    {
+        Line($"{(isElseIf ? "else " : "")}if ({Expr(i.Condition, top: true)})");
+        Body(i.Statement);
+        if (i.Else == null) return;
+        if (i.Else.Statement is IfStatementSyntax nested)
+        {
+            LineDirective(nested.GetLocation());
+            EmitIf(nested, isElseIf: true);
+        }
+        else
+        {
+            Line("else");
+            Body(i.Else.Statement);
+        }
+    }
+
+    private void EmitFor(ForStatementSyntax f)
+    {
+        string init = "";
+        if (f.Declaration != null)
+        {
+            var parts = new List<string>();
+            ITypeSymbol? type = null;
+            foreach (var v in f.Declaration.Variables)
+            {
+                var sym = (ILocalSymbol)Model(f).GetDeclaredSymbol(v)!;
+                type = sym.Type;
+                parts.Add(v.Initializer != null
+                    ? $"{sym.Name} = {Expr(v.Initializer.Value, top: true)}"
+                    : sym.Name);
+            }
+            init = CType(type!, f).TrimEnd() + " " + string.Join(", ", parts);
+        }
+        else
+        {
+            init = string.Join(", ", f.Initializers.Select(e => Expr(e, top: true)));
+        }
+
+        var cond = f.Condition == null ? "" : Expr(f.Condition, top: true);
+        var incr = string.Join(", ", f.Incrementors.Select(e => Expr(e, top: true)));
+        Line($"for ({init}; {cond}; {incr})");
+        Body(f.Statement);
+    }
+
+    private void EmitForEach(ForEachStatementSyntax fe)
+    {
+        if (IsLinqSource(fe.Expression)) { EmitLinqForEach(fe); return; }
+        var collType = Model(fe).GetTypeInfo(fe.Expression).Type;
+        if (collType is not IArrayTypeSymbol && !IsSpan(collType))
+        {
+            Unsupported(fe, "foreach over anything but an array or span");
+            return;
+        }
+        if (!RequireSimple(fe.Expression, "foreach")) return;
+
+        var local = (ILocalSymbol)Model(fe).GetDeclaredSymbol(fe)!;
+        var coll = Expr(fe.Expression);
+        var i = $"_i{++_temp}";
+        string len, elem;
+        if (collType is IArrayTypeSymbol)
+        {
+            _usesLen = true;
+            len = $"ES_LEN({coll})";
+            elem = $"{coll}[{i}]";
+        }
+        else
+        {
+            len = coll + ".length";
+            elem = $"{coll}.ptr[{i}]";
+        }
+
+        Line($"for (int32_t {i} = 0; {i} < {len}; {i}++)");
+        Line("{");
+        _indent++;
+        Line(Decl(local.Type, local.Name, fe) + $" = {elem};");
+        Statement(fe.Statement);
+        _indent--;
+        Line("}");
+    }
+
+    private void EmitSwitch(SwitchStatementSyntax sw)
+    {
+        Line($"switch ({Expr(sw.Expression, top: true)})");
+        Line("{");
+        _indent++;
+        foreach (var section in sw.Sections)
+        {
+            foreach (var label in section.Labels)
+            {
+                switch (label)
+                {
+                    case CaseSwitchLabelSyntax c: Line($"case {Expr(c.Value, top: true)}:"); break;
+                    case DefaultSwitchLabelSyntax: Line("default:"); break;
+                    default: Unsupported(label, "pattern case label"); break;
+                }
+            }
+            Line("{");
+            _indent++;
+            foreach (var s in section.Statements) Statement(s);
+            _indent--;
+            Line("}");
+        }
+        _indent--;
+        Line("}");
+    }
+
+    // ------------------------------------------------------------------ expressions
+
+    private string Expr(ExpressionSyntax e, bool top = false)
+    {
+        var info = Model(e).GetTypeInfo(e);
+
+        // 'null' where a span is expected is the empty span (the compiler sees it as the array -> span operator).
+        if (e is LiteralExpressionSyntax lit && lit.IsKind(SyntaxKind.NullLiteralExpression) &&
+            info.ConvertedType is INamedTypeSymbol nullSpan && IsSpan(nullSpan))
+            return $"(({SpanType(nullSpan, e)}){{ NULL, 0 }})";
+
+        // null where an interface or delegate is expected is an empty value.
+        if (e is LiteralExpressionSyntax nl && nl.IsKind(SyntaxKind.NullLiteralExpression) && (IsInterfaceType(info.ConvertedType) || info.ConvertedType?.TypeKind == TypeKind.Delegate))
+            return $"(({CType(info.ConvertedType!, e)}){{0}})";
+
+        var text = ExprCore(e, top);
+
+        // A class converted to an interface it implements: pair the object with that class's function table.
+        if (IsInterfaceType(info.ConvertedType) && info.Type != null && !IsInterfaceType(info.Type))
+        {
+            if (info.Type is INamedTypeSymbol cls && IsHeapClass(cls))
+                return $"(({CType(info.ConvertedType!, e)}){{ (void *){text}, &{VtableName((INamedTypeSymbol)info.ConvertedType!, cls)} }})";
+            return Unsupported(e, "converting a struct to an interface (boxing); only classes can be used as interface values");
+        }
+
+        // A derived class used where its base class is expected: the base part is the first member, so the pointer is the same, only its type changes.
+        if (info.Type is INamedTypeSymbol upFrom && info.ConvertedType is INamedTypeSymbol upTo && IsHeapClass(upFrom) && IsHeapClass(upTo)
+            && !SymbolEqualityComparer.Default.Equals(upFrom, upTo) && IsBaseOrSame(upFrom, upTo))
+            return $"(({TypeName(upTo)} *)({text}))";
+
+        // Implicit user-defined conversion (operator implicit) written in E# source: call the conversion function.
+        var conversion = Model(e).GetConversion(e);
+        if (conversion.IsUserDefined && conversion.MethodSymbol is { } userConv && e is not CastExpressionSyntax &&
+            userConv.Locations.Any(l => l.IsInSource))
+            return $"{FuncName(userConv)}({text})";
+
+        // Implicit array -> Span and Span -> ReadOnlySpan conversions.
+        if (info.ConvertedType is INamedTypeSymbol target && IsSpan(target))
+        {
+            if (info.Type is IArrayTypeSymbol && RequireSimple(e, "array to span conversion"))
+            {
+                _usesLen = true;
+                return $"(({SpanType(target, e)}){{ {text}, ES_LEN({text}) }})";
+            }
+            if (IsSpan(info.Type) && info.Type!.Name != target.Name)
+            {
+                var to = SpanType(target, e);
+                var from = SpanType((INamedTypeSymbol)info.Type, e);
+                var helper = "ES_ToReadOnly_" + Mangle(target.TypeArguments[0]);
+                _spans[helper] = $"static inline {to} {helper}({from} s) {{ return ({to}){{ s.ptr, s.length }}; }}\n";
+                return $"{helper}({text})";
+            }
+        }
+        return text;
+    }
+
+    private string ExprCore(ExpressionSyntax e, bool top)
+    {
+        switch (e)
+        {
+            case ParenthesizedExpressionSyntax p:
+                return Expr(p.Expression, top);
+
+            case LiteralExpressionSyntax { RawKind: (int)SyntaxKind.DefaultLiteralExpression }:
+                return DefaultValue(e);
+
+            case LiteralExpressionSyntax lit:
+                return Literal(lit);
+
+            case IdentifierNameSyntax id:
+                return Name(id);
+
+            case InterpolatedStringExpressionSyntax interp:
+                return Interpolation(interp);
+
+            case LambdaExpressionSyntax lam:
+                return Lambda(lam);
+
+            case QueryExpressionSyntax query:
+                return Unsupported(query, "a query whose result is kept: E# builds no sequences, so consume it right away with foreach or a call such as (query).Sum()");
+
+            case MemberAccessExpressionSyntax ma:
+                return MemberAccess(ma);
+
+            case ElementAccessExpressionSyntax ea:
+                return ElementAccess(ea);
+
+            case SizeOfExpressionSyntax so:
+            {
+                var constant = Model(so).GetConstantValue(so);
+                if (constant.HasValue) return ConstantLiteral(constant.Value!, Model(so).GetTypeInfo(so).Type!);
+                var sized = Model(so).GetTypeInfo(so.Type).Type!;
+                return $"((int32_t)sizeof({CType(sized, so)}))";
+            }
+
+            case BaseExpressionSyntax when _thisIsClass && _this == ThisKind.Pointer:
+                return $"(({TypeName(BaseClass(_thisType!)!)} *){ThisName})";
+            case ThisExpressionSyntax:
+                if (_thisIsClass && _this == ThisKind.Pointer) return ThisName;   // a class 'this' is the pointer itself
+                return _this switch
+                {
+                    ThisKind.Pointer => $"(*{ThisName})",
+                    ThisKind.Value => ThisName,
+                    _ => Unsupported(e, "'this' outside a struct method"),
+                };
+
+            case InvocationExpressionSyntax inv:
+                return Invocation(inv);
+
+            case BinaryExpressionSyntax b:
+                return Binary(b, top);
+
+            case PrefixUnaryExpressionSyntax u:
+                return Prefix(u);
+
+            case PostfixUnaryExpressionSyntax pu:
+                if (WrittenProperty(pu.Operand) is { } pp)
+                    return PropertyStep(pp, pu.Operand, pu, pu.IsKind(SyntaxKind.PostIncrementExpression));
+                return Expr(pu.Operand) + pu.OperatorToken.Text;
+
+            case AssignmentExpressionSyntax a:
+            {
+                if (a.IsKind(SyntaxKind.SimpleAssignmentExpression) && (a.Left is TupleExpressionSyntax || a.Left is DeclarationExpressionSyntax { Designation: ParenthesizedVariableDesignationSyntax }))
+                    return Deconstruction(a);
+                if (WrittenProperty(a.Left) is { } wp) return PropertyAssignment(wp, a);
+                if (a.Kind() != SyntaxKind.SimpleAssignmentExpression &&
+                    Model(a).GetSymbolInfo(a).Symbol is IMethodSymbol { MethodKind: MethodKind.UserDefinedOperator } op)
+                {
+                    if (!RequireSimple(a.Left, "compound assignment with an operator")) return "0";
+                    var l = Expr(a.Left);
+                    var call = $"{l} = {FuncName(op)}({l}, {Expr(a.Right, top: true)})";
+                    return top ? call : $"({call})";
+                }
+                var s = $"{Expr(a.Left)} {a.OperatorToken.Text} {Expr(a.Right)}";
+                return top ? s : $"({s})";
+            }
+
+            case TupleExpressionSyntax te:
+            {
+                var tt = Model(te).GetTypeInfo(te).ConvertedType as INamedTypeSymbol;
+                if (tt is not { IsTupleType: true }) tt = Model(te).GetTypeInfo(te).Type as INamedTypeSymbol;
+                if (tt is not { IsTupleType: true }) return Unsupported(te, "tuple without a type");
+                return $"(({TupleType(tt, te)}){{ {string.Join(", ", te.Arguments.Select(a => Expr(a.Expression, top: true)))} }})";
+            }
+
+            case IsPatternExpressionSyntax ip:
+                return IsPattern(ip);
+
+            case SwitchExpressionSyntax swe:
+                return SwitchExpression(swe);
+
+            case ConditionalExpressionSyntax c:
+            {
+                var s = $"{Expr(c.Condition)} ? {Expr(c.WhenTrue)} : {Expr(c.WhenFalse)}";
+                return top ? s : $"({s})";
+            }
+
+            case CastExpressionSyntax cast:
+            {
+                if (Model(cast).GetSymbolInfo(cast).Symbol is IMethodSymbol { MethodKind: MethodKind.Conversion } conv)
+                    return $"{FuncName(conv)}({Expr(cast.Expression, top: true)})";
+                var t = Model(cast).GetTypeInfo(cast.Type).Type!;
+                return $"(({CType(t, cast)}){Expr(cast.Expression)})";
+            }
+
+            case DefaultExpressionSyntax:
+                return DefaultValue(e);
+
+            case ObjectCreationExpressionSyntax oc:
+                return ObjectCreation(oc);
+
+            case ImplicitObjectCreationExpressionSyntax io:
+                Unsupported(io, "target-typed new");
+                return "0";
+
+            default:
+                Unsupported(e, e.Kind().ToString());
+                return "0";
+        }
+    }
+
+    private string Prefix(PrefixUnaryExpressionSyntax u)
+    {
+        var op = u.OperatorToken.Text;
+        if ((u.IsKind(SyntaxKind.PreIncrementExpression) || u.IsKind(SyntaxKind.PreDecrementExpression)) &&
+            WrittenProperty(u.Operand) is { } pp)
+            return PropertyStep(pp, u.Operand, u, u.IsKind(SyntaxKind.PreIncrementExpression));
+        if (Model(u).GetSymbolInfo(u).Symbol is IMethodSymbol { MethodKind: MethodKind.UserDefinedOperator } user)
+        {
+            if (u.IsKind(SyntaxKind.PreIncrementExpression) || u.IsKind(SyntaxKind.PreDecrementExpression))
+            {
+                Unsupported(u, "++/-- on an operator type");
+                return "0";
+            }
+            return $"{FuncName(user)}({Expr(u.Operand, top: true)})";
+        }
+        return $"{op}{Expr(u.Operand)}";
+    }
+
+    private string Binary(BinaryExpressionSyntax b, bool top)
+    {
+        if (b.IsKind(SyntaxKind.IsExpression) || b.IsKind(SyntaxKind.AsExpression))
+        {
+            var from = Model(b).GetTypeInfo(b.Left).Type as INamedTypeSymbol;
+            var target = Model(b).GetTypeInfo(b.Right).Type as INamedTypeSymbol;
+            if (from == null || target == null || !IsHeapClass(from) || !IsHeapClass(target))
+                return Unsupported(b, b.Kind() + " (only between classes)");
+            var tmp = "es_t" + _patternTemp++;
+            var isTest = ClassIs(tmp, from, target, b);
+            return b.IsKind(SyntaxKind.IsExpression)
+                ? $"({{ {TypeName(from)} *{tmp} = {Expr(b.Left, top: true)}; {isTest}; }})"
+                : $"({{ {TypeName(from)} *{tmp} = {Expr(b.Left, top: true)}; ({isTest}) ? ({TypeName(target)} *){tmp} : ({TypeName(target)} *)NULL; }})";
+        }
+
+        if (Model(b).GetSymbolInfo(b).Symbol is IMethodSymbol { MethodKind: MethodKind.UserDefinedOperator } user)
+            return $"{FuncName(user)}({Expr(b.Left, top: true)}, {Expr(b.Right, top: true)})";
+
+        var type = Model(b).GetTypeInfo(b).Type;
+        if (type?.SpecialType == SpecialType.System_String)
+        {
+            var folded = Model(b).GetConstantValue(b);
+            if (folded.HasValue && folded.Value is string constant) return CString(constant);
+            if (!b.IsKind(SyntaxKind.AddExpression)) return Unsupported(b, "string operator");
+            var leaves = new List<ExpressionSyntax>();
+            void Flatten(ExpressionSyntax x)
+            {
+                if (x is BinaryExpressionSyntax { RawKind: (int)SyntaxKind.AddExpression } inner && Model(inner).GetTypeInfo(inner).Type?.SpecialType == SpecialType.System_String
+                    && !Model(inner).GetConstantValue(inner).HasValue)
+                {
+                    Flatten(inner.Left);
+                    Flatten(inner.Right);
+                }
+                else leaves.Add(x);
+            }
+            Flatten(b);
+            return FormatParts(b, leaves.Select(l => (l, (ExpressionSyntax?)null, (string?)null)).ToList(), leaves.Select(l => ((string?)null, (string?)null)).ToList());
+        }
+
+        static bool IsDelegate(ITypeSymbol? t) => t?.TypeKind == TypeKind.Delegate;
+        if (b.OperatorToken.Text is "==" or "!=" &&
+            (IsInterfaceType(Model(b).GetTypeInfo(b.Left).Type) || IsInterfaceType(Model(b).GetTypeInfo(b.Right).Type) ||
+             IsDelegate(Model(b).GetTypeInfo(b.Left).Type) || IsDelegate(Model(b).GetTypeInfo(b.Right).Type)))
+        {
+            // Interface values are equal when they hold the same object, delegates when they hold the same function (and environment); null is an empty value.
+            string Side(ExpressionSyntax x) => x is LiteralExpressionSyntax l && l.IsKind(SyntaxKind.NullLiteralExpression) ? "NULL"
+                : IsInterfaceType(Model(x).GetTypeInfo(x).Type) ? $"{Expr(x)}.obj" : IsDelegate(Model(x).GetTypeInfo(x).Type) ? $"{Expr(x)}.fn" : Expr(x);
+            var cmp = $"{Side(b.Left)} {b.OperatorToken.Text} {Side(b.Right)}";
+            return top ? cmp : $"({cmp})";
+        }
+
+        var s = $"{Expr(b.Left)} {b.OperatorToken.Text} {Expr(b.Right)}";
+        return top ? s : $"({s})";
+    }
+
+    /// <summary>
+    /// <c>$"score {n,5:D3}"</c>: formats into one of a few static buffers and gives the text as a string. The text is valid until
+    /// eight more strings have been formatted, so use it right away (draw it, print it, copy it) and do not keep it.
+    /// Holes can be integers (alignment <c>,N</c> and formats <c>D</c><i>n</i> / <c>X</c><i>n</i>), chars, bools and strings.
+    /// </summary>
+    private string Interpolation(InterpolatedStringExpressionSyntax interp)
+    {
+        var folded = Model(interp).GetConstantValue(interp);
+        if (folded.HasValue && folded.Value is string constant) return CString(constant);
+        var parts = new List<(ExpressionSyntax? Hole, ExpressionSyntax? Align, string? Text)>();
+        var formats = new List<(string?, string?)>();
+        foreach (var c in interp.Contents)
+        {
+            switch (c)
+            {
+                case InterpolatedStringTextSyntax t:
+                    parts.Add((null, null, t.TextToken.ValueText.Replace("{{", "{").Replace("}}", "}")));
+                    formats.Add((null, null));
+                    break;
+                case InterpolationSyntax i:
+                    parts.Add((i.Expression, i.AlignmentClause?.Value, null));
+                    formats.Add((i.FormatClause?.FormatStringToken.ValueText, null));
+                    break;
+            }
+        }
+        return FormatParts(interp, parts, formats);
+    }
+
+    private string FormatParts(SyntaxNode at, List<(ExpressionSyntax? Hole, ExpressionSyntax? Align, string? Text)> parts, List<(string? Format, string? _)> formats)
+    {
+        _usesFmt = true;
+        var id = _objectTemps++;
+        var buf = $"ES_f{id}";
+        var len = $"ES_n{id}";
+        var sb = new StringBuilder($"({{ char *{buf} = es_fmt_begin(); int {len} = 0; ");
+        for (var i = 0; i < parts.Count; i++)
+        {
+            var (hole, align, text) = parts[i];
+            if (hole == null)
+            {
+                if (text!.Length > 0) sb.Append($"{len} = es_put_str({buf}, {len}, {CString(text)}, 0); ");
+                continue;
+            }
+            var width = "0";
+            if (align != null)
+            {
+                var w = Model(align).GetConstantValue(align);
+                if (!w.HasValue || w.Value is not int wi) { Unsupported(align, "alignment that is not a constant integer"); continue; }
+                width = wi.ToString(CultureInfo.InvariantCulture);
+            }
+            var format = formats[i].Item1;
+            int digits = 0, hex = 0;
+            if (!string.IsNullOrEmpty(format))
+            {
+                var f = format!;
+                if ((f[0] is 'D' or 'd' or 'X' or 'x') && (f.Length == 1 || int.TryParse(f.AsSpan(1), out digits)))
+                    hex = f[0] is 'X' or 'x' ? (f[0] == 'X' ? 1 : 2) : 0;
+                else Unsupported(hole, $"format '{format}' (only D<n> and X<n> for integers)");
+            }
+            var type = Model(hole).GetTypeInfo(hole).Type;
+            var value = Expr(hole, top: true);
+            switch (type?.SpecialType)
+            {
+                case SpecialType.System_String:
+                    sb.Append($"{len} = es_put_str({buf}, {len}, {value}, {width}); ");
+                    break;
+                case SpecialType.System_Char:
+                    sb.Append($"{len} = es_put_chr({buf}, {len}, (int){value}, {width}); ");
+                    break;
+                case SpecialType.System_Boolean:
+                    sb.Append($"{len} = es_put_str({buf}, {len}, ({value}) ? \"True\" : \"False\", {width}); ");
+                    break;
+                case SpecialType.System_SByte or SpecialType.System_Int16 or SpecialType.System_Int32:
+                    sb.Append($"{len} = es_put_i({buf}, {len}, (int32_t)({value}), {width}, {digits}, {hex}); ");
+                    break;
+                case SpecialType.System_Byte or SpecialType.System_UInt16 or SpecialType.System_UInt32:
+                    sb.Append($"{len} = es_put_u({buf}, {len}, (uint32_t)({value}), {width}, {digits}, {hex}); ");
+                    break;
+                case SpecialType.System_Int64 or SpecialType.System_IntPtr:
+                    sb.Append($"{len} = es_put_i64({buf}, {len}, (int64_t)({value}), {width}, {digits}, {hex}); ");
+                    break;
+                case SpecialType.System_UInt64 or SpecialType.System_UIntPtr:
+                    sb.Append($"{len} = es_put_u64({buf}, {len}, (uint64_t)({value}), {width}, {digits}, {hex}); ");
+                    break;
+                default:
+                    if (type is INamedTypeSymbol { TypeKind: TypeKind.Enum } en)
+                    {
+                        // The member's name, or the number when the value is none of the members (as ToString does); 'D' and 'X' give the number.
+                        var under = en.EnumUnderlyingType!.SpecialType;
+                        var signed = under is SpecialType.System_SByte or SpecialType.System_Int16 or SpecialType.System_Int32 or SpecialType.System_Int64;
+                        var wide = under is SpecialType.System_Int64 or SpecialType.System_UInt64;
+                        var num = (wide, signed) switch
+                        {
+                            (true, true) => $"es_put_i64({buf}, {len}, (int64_t)ES_v{id}_{i}, {width}, {digits}, {hex})",
+                            (true, false) => $"es_put_u64({buf}, {len}, (uint64_t)ES_v{id}_{i}, {width}, {digits}, {hex})",
+                            (false, true) => $"es_put_i({buf}, {len}, (int32_t)ES_v{id}_{i}, {width}, {digits}, {hex})",
+                            _ => $"es_put_u({buf}, {len}, (uint32_t)ES_v{id}_{i}, {width}, {digits}, {hex})",
+                        };
+                        if (string.IsNullOrEmpty(format))
+                            sb.Append($"{{ {CType(en, hole)} ES_v{id}_{i} = {value}; const char *ES_s{id}_{i} = {EnumNameFunction(en)}(ES_v{id}_{i}); {len} = ES_s{id}_{i} ? es_put_str({buf}, {len}, ES_s{id}_{i}, {width}) : {num}; }} ");
+                        else
+                            sb.Append($"{{ {CType(en, hole)} ES_v{id}_{i} = {value}; {len} = {num}; }} ");
+                    }
+                    else
+                        Unsupported(hole, $"{type?.ToDisplayString()} in a string (strings can hold integers, chars, bools, enums and strings)");
+                    break;
+            }
+        }
+        sb.Append($"{buf}[{len}] = 0; {buf}; }})");
+        return sb.ToString();
+    }
+
+    /// <summary>A function from an enum value to the name of its member (null for a value that is none of them).</summary>
+    private string EnumNameFunction(INamedTypeSymbol en)
+    {
+        var name = $"ES_name_{TypeName(en)}";
+        var key = "ES_zenum_" + name;
+        if (!_spans.ContainsKey(key))
+        {
+            var sb = new StringBuilder($"static __attribute__((unused)) const char *{name}({CType(en, en.DeclaringSyntaxReferences.First().GetSyntax())} v)\n{{\n    switch (v)\n    {{\n");
+            var seen = new HashSet<string>();
+            foreach (var m in en.GetMembers().OfType<IFieldSymbol>().Where(f => f.IsConst))
+                if (seen.Add(Convert.ToString(m.ConstantValue, CultureInfo.InvariantCulture)!))
+                    sb.Append($"        case {FieldName(m)}: return \"{m.Name}\";\n");
+            sb.Append("        default: return NULL;\n    }\n}\n");
+            _spans[key] = sb.ToString();
+        }
+        return name;
+    }
+
+    private string DefaultValue(ExpressionSyntax e)
+    {
+        var type = Model(e).GetTypeInfo(e).Type!;
+        return type.TypeKind == TypeKind.Struct && type.SpecialType == SpecialType.None || IsInterfaceType(type) || type.TypeKind == TypeKind.Delegate
+            ? $"({CType(type, e)}){{0}}"
+            : "0";
+    }
+
+    private string ObjectCreation(ObjectCreationExpressionSyntax oc)
+    {
+        var type = Model(oc).GetTypeInfo(oc).Type!;
+        if (IsSpan(type))
+        {
+            // new Span<T>(T* pointer, int length): a view over memory from an arena or the OS.
+            var spanArgs = oc.ArgumentList?.Arguments ?? default;
+            if (spanArgs.Count != 2 || Model(oc).GetTypeInfo(spanArgs[0].Expression).Type is not IPointerTypeSymbol)
+                return Unsupported(oc, "Span constructor other than (pointer, length)");
+            var spanType = (INamedTypeSymbol)type;
+            var elemPtr = CType(spanType.TypeArguments[0], oc) + " *";
+            return $"(({SpanType(spanType, oc)}){{ ({elemPtr}){Expr(spanArgs[0].Expression)}, {Expr(spanArgs[1].Expression, top: true)} }})";
+        }
+        if (IsHeapClass(type))
+        {
+            _usesAlloc = true;
+            string create;
+            if (Model(oc).GetSymbolInfo(oc).Symbol is IMethodSymbol { IsImplicitlyDeclared: false } cctor)
+            {
+                if (cctor.Parameters.Any(p => p.RefKind != RefKind.None)) return Unsupported(oc, "ref/out constructor argument");
+                create = $"{FuncName(cctor)}({string.Join(", ", (oc.ArgumentList?.Arguments ?? default).Select(a => Expr(a.Expression, top: true)))})";
+            }
+            else if ((oc.ArgumentList?.Arguments.Count ?? 0) > 0) return Unsupported(oc, "constructor call");
+            else
+            {
+                var cls = (INamedTypeSymbol)type;
+                var alloc = IsPoly(cls) ? $"{TypeName(cls)}_alloc()" : $"ES_NEW({TypeName(cls)})";
+                var baseInit = ImplicitBaseInit(cls, "ES_n");
+                create = baseInit == null ? alloc : $"({{ {TypeName(cls)} *ES_n = {alloc}; {baseInit} ES_n; }})";
+            }
+            if (oc.Initializer == null) return create;
+            var temp = $"ES_o{_objectTemps++}";
+            var sets = new StringBuilder();
+            foreach (var item in oc.Initializer.Expressions)
+            {
+                if (item is AssignmentExpressionSyntax { Left: IdentifierNameSyntax field } a && IsInitializable(Model(a).GetSymbolInfo(field).Symbol))
+                    sets.Append($"{temp}->{MemberPath(type, Model(a).GetSymbolInfo(field).Symbol!.ContainingType, field.Identifier.Text)} = {Expr(a.Right, top: true)}; ");
+                else
+                    Unsupported(item, "object initializer element");
+            }
+            return $"({{ {TypeName((INamedTypeSymbol)type)} *{temp} = {create}; {sets}{temp}; }})";
+        }
+        if (type.TypeKind == TypeKind.Struct && Model(oc).GetSymbolInfo(oc).Symbol is IMethodSymbol { IsImplicitlyDeclared: false } ctor)
+        {
+            if (oc.Initializer != null) return Unsupported(oc, "constructor call combined with an object initializer");
+            if (ctor.Parameters.Any(p => p.RefKind != RefKind.None)) return Unsupported(oc, "ref/out constructor argument");
+            var ctorArgs = string.Join(", ", (oc.ArgumentList?.Arguments ?? default).Select(a => Expr(a.Expression, top: true)));
+            return $"{FuncName(ctor)}({ctorArgs})";
+        }
+        if (type.TypeKind != TypeKind.Struct || (oc.ArgumentList?.Arguments.Count ?? 0) > 0)
+        {
+            Unsupported(oc, "constructor call");
+            return "0";
+        }
+
+        var cname = CType(type, oc);
+        if (oc.Initializer == null) return $"({cname}){{0}}";
+
+        var inits = new List<string>();
+        foreach (var item in oc.Initializer.Expressions)
+        {
+            if (item is AssignmentExpressionSyntax { Left: IdentifierNameSyntax field } a &&
+                IsInitializable(Model(a).GetSymbolInfo(field).Symbol))
+                inits.Add($".{field.Identifier.Text} = {Expr(a.Right, top: true)}");
+            else
+                Unsupported(item, "object initializer element");
+        }
+        return $"({cname}){{ {string.Join(", ", inits)} }}";
+    }
+
+    private string Name(IdentifierNameSyntax id)
+    {
+        var sym = Model(id).GetSymbolInfo(id).Symbol;
+        switch (sym)
+        {
+            case IParameterSymbol { RefKind: not RefKind.None } rp:
+                return $"(*{rp.Name})";
+            case IMethodSymbol { IsStatic: true, MethodKind: MethodKind.Ordinary or MethodKind.LocalFunction } group:
+                return MethodGroup(group, id);   // a method group converted to a delegate
+            case IRangeVariableSymbol:
+                return id.Identifier.Text;   // a name bound by a LINQ query, which is a local of the loop it becomes
+            case ILocalSymbol or IParameterSymbol:
+                return _captures.TryGetValue(sym, out var captured) ? captured : id.Identifier.Text;
+            case IFieldSymbol f:
+                return FieldRef(f, id);
+            case IPropertySymbol p:
+                return PropertyRead(p, null, id);
+            default:
+                Unsupported(id, $"identifier '{id.Identifier.Text}'");
+                return id.Identifier.Text;
+        }
+    }
+
+    private string FieldRef(IFieldSymbol f, SyntaxNode at)
+    {
+        if (f.ContainingType.TypeKind == TypeKind.Enum) return FieldName(f);
+        if (f.IsConst && f.ConstantValue != null)
+            return ConstantLiteral(f.ConstantValue, f.Type);
+        if (f.IsStatic) return FieldName(f);
+        switch (_this)
+        {
+            case ThisKind.Pointer: return $"{ThisName}->{MemberPath(_thisType, f.ContainingType, f.Name)}";
+            case ThisKind.Value: return $"{ThisName}.{f.Name}";
+        }
+        Unsupported(at, "instance field access outside a struct method");
+        return f.Name;
+    }
+
+    private string MemberAccess(MemberAccessExpressionSyntax ma)
+    {
+        var sym = Model(ma).GetSymbolInfo(ma).Symbol;
+        if (sym is IPropertySymbol { Name: "Length" })
+        {
+            var recvType = Model(ma).GetTypeInfo(ma.Expression).Type;
+            if (recvType is IArrayTypeSymbol && RequireSimple(ma.Expression, "Length"))
+            {
+                _usesLen = true;
+                return $"ES_LEN({Expr(ma.Expression)})";
+            }
+            if (IsSpan(recvType))
+                return $"{Expr(ma.Expression)}.length";
+            // A string is a NUL-terminated byte string in C: Length counts bytes (the same as characters for ASCII).
+            if (recvType?.SpecialType == SpecialType.System_String)
+            {
+                _usesStrlen = true;
+                return $"es_strlen({Expr(ma.Expression)})";
+            }
+        }
+        if (sym is IMethodSymbol { IsStatic: true, MethodKind: MethodKind.Ordinary } group)
+            return MethodGroup(group, ma);   // a method group converted to a delegate
+        if (sym is IPropertySymbol prop)
+            return PropertyRead(prop, ma.Expression, ma);
+        if (sym is IFieldSymbol f)
+        {
+            if (f.IsStatic || f.IsConst || f.ContainingType.TypeKind == TypeKind.Enum)
+                return FieldRef(f, ma);
+            var exprType = Model(ma).GetTypeInfo(ma.Expression).Type;
+            var op = IsRef(exprType) ? "->" : ".";
+            return $"{Expr(ma.Expression)}{op}{(op == "->" ? MemberPath(exprType, f.ContainingType, FieldCName(f)) : FieldCName(f))}";
+        }
+        Unsupported(ma, $"member access '{ma}'");
+        return "0";
+    }
+
+    private string ElementAccess(ElementAccessExpressionSyntax ea)
+    {
+        var recvType = Model(ea).GetTypeInfo(ea.Expression).Type;
+        var args = ea.ArgumentList.Arguments;
+        if (Model(ea).GetSymbolInfo(ea).Symbol is IPropertySymbol { IsIndexer: true } indexer && recvType is INamedTypeSymbol { TypeKind: TypeKind.Struct } && !IsSpan(recvType))
+        {
+            var parts = AccessParts(ea);
+            return PropertyRead(indexer, parts.recv, ea, parts.indexes);
+        }
+        if (args.Count != 1 || Model(ea).GetTypeInfo(args[0].Expression).Type?.Name is "Index" or "Range")
+        {
+            Unsupported(ea, "indexer other than a single integer index");
+            return "0";
+        }
+        var index = Expr(args[0].Expression, top: true);
+        var recv = Expr(ea.Expression);
+        if (recvType?.SpecialType == SpecialType.System_String)
+            return $"((uint8_t){recv}[{index}])";
+        if (IsSpan(recvType))
+        {
+            if (_bounds && RequireSimple(ea.Expression, "bounds-checked index"))
+            {
+                _usesBounds = true;
+                return $"{recv}.ptr[ES_IDX({index}, {recv}.length)]";
+            }
+            return $"{recv}.ptr[{index}]";
+        }
+        if (recvType is IArrayTypeSymbol && _bounds && RequireSimple(ea.Expression, "bounds-checked index"))
+        {
+            _usesBounds = true;
+            _usesLen = true;
+            return $"{recv}[ES_IDX({index}, ES_LEN({recv}))]";
+        }
+        if (recvType is IArrayTypeSymbol or IPointerTypeSymbol) return $"{recv}[{index}]";
+        Unsupported(ea, "indexer");
+        return "0";
+    }
+
+    private string SpanSlice(InvocationExpressionSyntax inv, MemberAccessExpressionSyntax recvAccess, IMethodSymbol m)
+    {
+        var args = inv.ArgumentList.Arguments;
+        if (args.Count is < 1 or > 2 || !RequireSimple(recvAccess.Expression, "Slice")) return "0";
+        var recv = Expr(recvAccess.Expression);
+        var type = SpanType((INamedTypeSymbol)m.ContainingType, inv);
+        var start = Expr(args[0].Expression);
+        var length = args.Count == 2 ? Expr(args[1].Expression, top: true) : $"{recv}.length - {start}";
+        return $"(({type}){{ {recv}.ptr + {start}, {length} }})";
+    }
+
+    private string Invocation(InvocationExpressionSyntax inv)
+    {
+        if (Model(inv).GetSymbolInfo(inv).Symbol is not IMethodSymbol m)
+        {
+            Unsupported(inv, "call");
+            return "0";
+        }
+
+        if (IsLinqCall(inv, out var linqMethod, out var linqReceiver)) return Linq(inv, linqMethod, linqReceiver);
+
+        if (m.ContainingType is { Name: "Heap" } && m.Name.StartsWith("Free") && m.ContainingNamespace?.ToDisplayString() == "ESharp.Platform"
+            && inv.ArgumentList.Arguments.Count == 1)
+        {
+            _usesAlloc = true;
+            var freed = inv.ArgumentList.Arguments[0].Expression;
+            var target = Expr(freed, top: true);
+            if (IsInterfaceType(Model(freed).GetTypeInfo(freed).Type))
+                return $"(free({target}.obj), {target} = ({CType(Model(freed).GetTypeInfo(freed).Type!, freed)}){{0}})";
+            return $"(free({target}), {target} = NULL)";
+        }
+
+        if (m.ContainingType is { Name: "Cast" } && m.ContainingNamespace?.ToDisplayString() == "ESharp.Platform"
+            && m.Name is "StringToPtr" or "PtrToString" && inv.ArgumentList.Arguments.Count == 1)
+        {
+            // Strings are plain byte pointers in C: reinterpret.
+            var arg = Expr(inv.ArgumentList.Arguments[0].Expression, top: true);
+            return m.Name == "StringToPtr" ? $"((uint8_t *)({arg}))" : $"((const char *)({arg}))";
+        }
+
+        if (m.ContainingType is { Name: "CyberGfx" } && m.ContainingNamespace?.ToDisplayString() == "ESharp.Platform"
+            && m.Name == "SetBase" && inv.ArgumentList.Arguments.Count == 1)
+        {
+            _usesCyber = true;
+            _headers.Add("proto/cybergraphics.h");
+            return $"(es_CyberBase = (struct Library *)({Expr(inv.ArgumentList.Arguments[0].Expression, top: true)}))";
+        }
+
+        if (m.MethodKind == MethodKind.DelegateInvoke)
+        {
+            // f(x) and f.Invoke(x) call through the function pointer.
+            var callee = inv.Expression is MemberAccessExpressionSyntax { Name.Identifier.Text: "Invoke" } inva ? inva.Expression : inv.Expression;
+            var d = Expr(callee);
+            if (!IsSimple(callee))
+            {
+                // Pick() (x): evaluate the delegate once, into a temporary of a statement expression.
+                var tmp = $"_d{++_temp}";
+                var targs = inv.ArgumentList.Arguments.Select(a => Argument(a, m)).Prepend($"{tmp}.env");
+                return $"({{ {CType(Model(callee).GetTypeInfo(callee).Type!, callee)} {tmp} = {d}; {tmp}.fn({string.Join(", ", targs)}); }})";
+            }
+            var dargs = inv.ArgumentList.Arguments.Select(a => Argument(a, m)).Prepend($"{d}.env");
+            return $"{d}.fn({string.Join(", ", dargs)})";
+        }
+
+        if (IsSpan(m.ContainingType) && m.Name == "Slice" && inv.Expression is MemberAccessExpressionSyntax sliceAccess)
+            return SpanSlice(inv, sliceAccess, m);
+
+        if (IsInterfaceType(m.ContainingType) && inv.Expression is MemberAccessExpressionSyntax ifaceAccess)
+        {
+            if (!RequireSimple(ifaceAccess.Expression, "call through an interface")) return "0";
+            var target = Expr(ifaceAccess.Expression);
+            var callArgs = inv.ArgumentList.Arguments.Select(a => Argument(a, m)).Prepend($"{target}.obj");
+            return $"{target}.vt->{SlotName(m)}({string.Join(", ", callArgs)})";
+        }
+
+        string? receiver = null;
+        if (!m.IsStatic && m.MethodKind != MethodKind.LocalFunction)
+        {
+            if (m.ContainingType.TypeKind is not (TypeKind.Struct or TypeKind.Class) || m.MethodKind != MethodKind.Ordinary)
+                return Unsupported(inv, "instance method call");
+            receiver = ReceiverAddress(inv, m);
+            if (receiver == null) return "0";
+        }
+
+        if (HasAttribute(m, "NativeAttribute")) _natives.Add(m.Name);
+        var lib = GetAttribute(m, "AmigaLibAttribute");
+        if (lib != null)
+            _headers.Add(lib.ConstructorArguments[0].Value is "alib" ? "clib/alib_protos.h" : $"proto/{lib.ConstructorArguments[0].Value}.h");
+
+        var argList = inv.ArgumentList.Arguments.Select(a => Argument(a, m));
+        if (receiver != null)
+            return InstanceCall(m, receiver, argList, (inv.Expression as MemberAccessExpressionSyntax)?.Expression is BaseExpressionSyntax);
+        return $"{FuncName(m)}({string.Join(", ", argList)})";
+    }
+
+    /// <summary><c>(a, b) = t;</c> and <c>var (x, y) = t;</c>: the right side is evaluated once, then each part is assigned.</summary>
+    private string Deconstruction(AssignmentExpressionSyntax a)
+    {
+        var rightInfo = Model(a).GetTypeInfo(a.Right);
+        var rightType = (a.Right is TupleExpressionSyntax ? rightInfo.ConvertedType : rightInfo.Type) as INamedTypeSymbol;
+        if (rightType is not { IsTupleType: true }) return Unsupported(a, "deconstruction of anything but a tuple");
+        var targets = new List<string?>();
+        void Collect(SyntaxNode left)
+        {
+            switch (left)
+            {
+                case TupleExpressionSyntax t:
+                    foreach (var arg in t.Arguments) Collect(arg.Expression);
+                    break;
+                case DeclarationExpressionSyntax { Designation: ParenthesizedVariableDesignationSyntax pd }:
+                    foreach (var v in pd.Variables) Collect(v);
+                    break;
+                case DeclarationExpressionSyntax { Designation: SingleVariableDesignationSyntax sd }:
+                    targets.Add(sd.Identifier.Text);
+                    break;
+                case SingleVariableDesignationSyntax sv:
+                    targets.Add(sv.Identifier.Text);
+                    break;
+                case DiscardDesignationSyntax or DeclarationExpressionSyntax { Designation: DiscardDesignationSyntax }:
+                    targets.Add(null);
+                    break;
+                case IdentifierNameSyntax { Identifier.Text: "_" } id when Model(id).GetSymbolInfo(id).Symbol is IDiscardSymbol:
+                    targets.Add(null);
+                    break;
+                case ParenthesizedVariableDesignationSyntax nested:
+                    foreach (var v in nested.Variables) Collect(v);
+                    break;
+                case ExpressionSyntax other:
+                    targets.Add(Expr(other));
+                    break;
+            }
+        }
+        Collect(a.Left);
+        if (targets.Count != rightType.TupleElements.Length) return Unsupported(a, "nested deconstruction");
+        var tmp = "es_t" + _patternTemp++;
+        var sb = new StringBuilder($"({{ {Decl(rightType, tmp, a)} = {Expr(a.Right, top: true)}; ");
+        for (var i = 0; i < targets.Count; i++)
+            if (targets[i] != null) sb.Append($"{targets[i]} = {tmp}.Item{i + 1}; ");
+        sb.Append("(void)0; })");
+        return sb.ToString();
+    }
+
+    // ------------------------------------------------------------------ patterns
+
+    private int _patternTemp;
+
+    private string IsPattern(IsPatternExpressionSyntax ip)
+    {
+        var type = Model(ip).GetTypeInfo(ip.Expression).Type;
+        if (type == null) return Unsupported(ip, "pattern on an expression without a type");
+        if (IsPure(ip.Expression))
+            return $"({PatternTest(ip.Pattern, Expr(ip.Expression), type)})";
+        var tmp = "es_p" + _patternTemp++;
+        return $"({{ {Decl(type, tmp, ip)} = {Expr(ip.Expression, top: true)}; {PatternTest(ip.Pattern, tmp, type)}; }})";
+    }
+
+    private string SwitchExpression(SwitchExpressionSyntax sw)
+    {
+        var type = Model(sw).GetTypeInfo(sw.GoverningExpression).Type;
+        var result = Model(sw).GetTypeInfo(sw).ConvertedType ?? Model(sw).GetTypeInfo(sw).Type;
+        if (type == null || result == null) return Unsupported(sw, "switch expression without a type");
+        var id = _patternTemp++;
+        string subject = "es_sw" + id, value = "es_sv" + id;
+        var sb = new StringBuilder();
+        sb.Append($"({{ {Decl(type, subject, sw)} = {Expr(sw.GoverningExpression, top: true)}; {Decl(result, value, sw)}; ");
+        var first = true;
+        foreach (var d in sw.Arms.SelectMany(a => a.Pattern.DescendantNodesAndSelf()).OfType<SingleVariableDesignationSyntax>())
+            if (Model(d).GetDeclaredSymbol(d) is ILocalSymbol dl) sb.Append(Decl(dl.Type, dl.Name, d) + "; ");
+        foreach (var arm in sw.Arms)
+        {
+            var test = PatternTest(arm.Pattern, subject, type);
+            if (arm.WhenClause != null) test = $"({test}) && ({Expr(arm.WhenClause.Condition, top: true)})";
+            sb.Append($"{(first ? "" : "else ")}if ({test}) {value} = {Expr(arm.Expression, top: true)}; ");
+            first = false;
+        }
+        sb.Append($"else __builtin_trap(); {value}; }})");
+        return sb.ToString();
+    }
+
+    /// <summary>A C condition that is true when <paramref name="subject"/> (of <paramref name="type"/>) matches the pattern.</summary>
+    private string PatternTest(PatternSyntax pattern, string subject, ITypeSymbol type)
+    {
+        switch (pattern)
+        {
+            case ParenthesizedPatternSyntax p:
+                return PatternTest(p.Pattern, subject, type);
+            case DiscardPatternSyntax:
+                return "1";
+            case ConstantPatternSyntax { Expression: var typeName } tp when Model(tp).GetSymbolInfo(typeName).Symbol is INamedTypeSymbol tpType:
+                // 'not Rect' and similar: the parser reads a type name there as a constant.
+                if (SymbolEqualityComparer.Default.Equals(tpType, type)) return "1";
+                if (type is INamedTypeSymbol tpFrom && IsHeapClass(tpType) && IsHeapClass(tpFrom)) return $"({ClassIs(subject, tpFrom, tpType, tp)})";
+                return Unsupported(tp, "type test");
+            case ConstantPatternSyntax c:
+                if (c.Expression is LiteralExpressionSyntax nullLit && nullLit.IsKind(SyntaxKind.NullLiteralExpression))
+                    return IsInterfaceType(type) ? $"({subject}.obj == NULL)" : $"({subject} == NULL)";
+                return $"({subject} == {Expr(c.Expression)})";
+            case RelationalPatternSyntax r:
+                return $"({subject} {r.OperatorToken.Text} {Expr(r.Expression)})";
+            case BinaryPatternSyntax b:
+                return $"({PatternTest(b.Left, subject, type)} {(b.IsKind(SyntaxKind.AndPattern) ? "&&" : "||")} {PatternTest(b.Right, subject, type)})";
+            case UnaryPatternSyntax u when u.IsKind(SyntaxKind.NotPattern):
+                return $"(!{PatternTest(u.Pattern, subject, type)})";
+            case VarPatternSyntax v:
+                return Bind(v.Designation, subject, v);
+            case DeclarationPatternSyntax d:
+            {
+                if (Model(d).GetTypeInfo(d.Type).Type is INamedTypeSymbol dt && type is INamedTypeSymbol df && IsHeapClass(dt) && IsHeapClass(df)
+                    && !SymbolEqualityComparer.Default.Equals(dt, df))
+                    return $"({ClassIs(subject, df, dt, d)} && {Bind(d.Designation, $"(({TypeName(dt)} *){subject})", d)})";
+                return Bind(d.Designation, subject, d);
+            }
+            case TypePatternSyntax t:
+            {
+                var tt = Model(t).GetTypeInfo(t.Type).Type;
+                if (tt != null && SymbolEqualityComparer.Default.Equals(tt, type)) return "1";
+                if (tt is INamedTypeSymbol tc && type is INamedTypeSymbol tf && IsHeapClass(tc) && IsHeapClass(tf)) return $"({ClassIs(subject, tf, tc, t)})";
+                return Unsupported(t, "type test");
+            }
+            case RecursivePatternSyntax rec:
+            {
+                if (rec.PositionalPatternClause != null) return Unsupported(rec, "positional pattern");
+                var parts = new List<string>();
+                if (rec.Type != null && !(Model(rec).GetTypeInfo(rec.Type).Type is { } rt && SymbolEqualityComparer.Default.Equals(rt, type)))
+                {
+                    if (Model(rec).GetTypeInfo(rec.Type).Type is INamedTypeSymbol rc && type is INamedTypeSymbol rf && IsHeapClass(rc) && IsHeapClass(rf))
+                    {
+                        // A class test followed by tests on the object seen as the derived class.
+                        var seen = $"(({TypeName(rc)} *){subject})";
+                        var narrowed = new List<string> { ClassIs(subject, rf, rc, rec) };
+                        if (rec.PropertyPatternClause != null)
+                            foreach (var sub in rec.PropertyPatternClause.Subpatterns)
+                            {
+                                if (sub.NameColon == null || Model(sub).GetSymbolInfo(sub.NameColon.Name).Symbol is not IFieldSymbol sf)
+                                    return Unsupported(sub, "property pattern on anything but a field");
+                                narrowed.Add(PatternTest(sub.Pattern, $"{seen}->{MemberPath(rc, sf.ContainingType, sf.Name)}", sf.Type));
+                            }
+                        if (rec.Designation != null) narrowed.Add(Bind(rec.Designation, seen, rec));
+                        return "(" + string.Join(" && ", narrowed) + ")";
+                    }
+                    return Unsupported(rec, "type test");
+                }
+                if (rec.PropertyPatternClause != null)
+                {
+                    foreach (var sub in rec.PropertyPatternClause.Subpatterns)
+                    {
+                        if (sub.NameColon == null || Model(sub).GetSymbolInfo(sub.NameColon.Name).Symbol is not IFieldSymbol field)
+                            return Unsupported(sub, "property pattern on anything but a field");
+                        var access = type.TypeKind == TypeKind.Pointer || IsHeapClass(type) ? $"{subject}->{MemberPath(type, field.ContainingType, field.Name)}" : $"({subject}).{field.Name}";
+                        parts.Add(PatternTest(sub.Pattern, access, field.Type));
+                    }
+                }
+                if (rec.Designation != null) parts.Add(Bind(rec.Designation, subject, rec));
+                return parts.Count == 0 ? "1" : "(" + string.Join(" && ", parts) + ")";
+            }
+        }
+        return Unsupported(pattern, pattern.Kind().ToString());
+    }
+
+    /// <summary>
+    /// A C condition: <paramref name="subject"/> (a simple C expression holding a class reference of static type <paramref name="from"/>) is not null
+    /// and is an object of class <paramref name="target"/> or a class derived from it.
+    /// </summary>
+    private string ClassIs(string subject, INamedTypeSymbol from, INamedTypeSymbol target, SyntaxNode at)
+    {
+        if (IsBaseOrSame(from, target)) return $"{subject} != NULL";                      // an upcast always succeeds for a non-null object
+        if (!IsBaseOrSame(target, from)) return "0";                                      // unrelated classes: never
+        if (!IsPoly(target)) return Unsupported(at, "type test on a class without virtual members or subclasses");
+        return $"({subject} != NULL && es_is((const struct ES_Type *){subject}->{VtPath(from)}, {TypeIdOf(target)}))";
+    }
+
+    private string Bind(VariableDesignationSyntax? designation, string subject, SyntaxNode at)
+    {
+        if (designation is SingleVariableDesignationSyntax single)
+            return $"(({single.Identifier.Text} = {subject}), 1)";
+        return "1";
+    }
+
+    // ------------------------------------------------------------------ lambdas and method groups
+
+    private readonly Dictionary<ISymbol, string> _captures = new(SymbolEqualityComparer.Default);
+    private readonly Dictionary<SyntaxNode, (List<ISymbol> Locals, bool UsesThis)> _captureCache = new();
+
+    private static string EnvName(IMethodSymbol lambda) => FuncName(lambda) + "_env";
+
+    /// <summary>The locals and parameters of the enclosing code that a lambda uses, and whether it uses 'this' (explicitly or through an instance member).</summary>
+    private (List<ISymbol> Locals, bool UsesThis) FindCaptures(SyntaxNode lam)
+    {
+        if (_captureCache.TryGetValue(lam, out var cached)) return cached;
+        var model = Model(lam);
+        var locals = new List<ISymbol>();
+        var usesThis = false;
+        foreach (var n in lam.DescendantNodes())
+        {
+            if (n is ThisExpressionSyntax or BaseExpressionSyntax) { usesThis = true; continue; }
+            if (n is not IdentifierNameSyntax id) continue;
+            // 'c.Suit': the name after a dot belongs to the thing before it; 'x:' in a call and 'X = 1' in an initializer name a parameter or member.
+            if (n.Parent is MemberAccessExpressionSyntax dot && dot.Name == n) continue;
+            if (n.Parent is NameColonSyntax) continue;
+            if (n.Parent is AssignmentExpressionSyntax { Parent: InitializerExpressionSyntax { Parent: ObjectCreationExpressionSyntax } } init && init.Left == n) continue;
+            switch (model.GetSymbolInfo(id).Symbol)
+            {
+                case ILocalSymbol or IParameterSymbol { IsThis: false }:
+                    var sym = model.GetSymbolInfo(id).Symbol!;
+                    if (!sym.DeclaringSyntaxReferences.Any(r => r.SyntaxTree == lam.SyntaxTree && lam.Span.Contains(r.Span)) &&
+                        !locals.Contains(sym, SymbolEqualityComparer.Default))
+                        locals.Add(sym);
+                    break;
+                case IFieldSymbol { IsStatic: false, IsConst: false } or IPropertySymbol { IsStatic: false } or IMethodSymbol { IsStatic: false, MethodKind: MethodKind.Ordinary }:
+                    usesThis = true;
+                    break;
+            }
+        }
+        return _captureCache[lam] = (locals, usesThis);
+    }
+
+    /// <summary>
+    /// A lambda is a delegate value: its function and an environment. With nothing captured the environment is null; otherwise it is a struct
+    /// of pointers to the captured locals (and 'this'), built on the stack of the method that creates the lambda. So a capturing lambda
+    /// is only valid while that method runs; it can be passed down to other methods, but not returned or stored.
+    /// </summary>
+    private string Lambda(LambdaExpressionSyntax lam)
+    {
+        if (Model(lam).GetSymbolInfo(lam).Symbol is not IMethodSymbol m) return Unsupported(lam, "lambda");
+        var del = Model(lam).GetTypeInfo(lam).ConvertedType;
+        if (del?.TypeKind != TypeKind.Delegate) return Unsupported(lam, "lambda that is not converted to a delegate type");
+        var dt = CType(del, lam);
+        var (locals, usesThis) = FindCaptures(lam);
+        if (locals.Count == 0 && !usesThis) return $"(({dt}){{ {FuncName(m)}, NULL }})";
+
+        SyntaxNode? p = lam.Parent;
+        while (p is ParenthesizedExpressionSyntax or CastExpressionSyntax or ConditionalExpressionSyntax) p = p.Parent;
+        var allowed = p is ArgumentSyntax || p is EqualsValueClauseSyntax { Parent: VariableDeclaratorSyntax { Parent: VariableDeclarationSyntax { Parent: LocalDeclarationStatementSyntax } } };
+        if (!allowed)
+            return Unsupported(lam, "lambda that captures a local or 'this' and is not an argument or a local variable's initializer; it only lives as long as the method that made it, so it cannot be returned or stored");
+
+        var fields = new List<string>();
+        var inits = new List<string>();
+        for (var i = 0; i < locals.Count; i++)
+        {
+            ITypeSymbol type = locals[i] is ILocalSymbol l ? l.Type : ((IParameterSymbol)locals[i]).Type;
+            if (type is IArrayTypeSymbol) return Unsupported(lam, $"lambda that captures the array '{locals[i].Name}'; pass it as a Span<T>");
+            fields.Add(Decl(type, $"*c{i}_{locals[i].Name}", lam) + ";");
+            inits.Add("&" + (_captures.TryGetValue(locals[i], out var outer) ? outer : locals[i].Name));
+        }
+        if (usesThis)
+        {
+            if (_this != ThisKind.Pointer) return Unsupported(lam, "lambda that uses 'this' here");
+            fields.Add($"{TypeName(m.ContainingType)} *{ThisName};");
+            inits.Add(ThisName);
+        }
+        var env = EnvName(m);
+        _spans[env] = $"struct {env} {{ {string.Join(" ", fields)} }};\n";
+        return $"(({dt}){{ {FuncName(m)}, &(struct {env}){{ {string.Join(", ", inits)} }} }})";
+    }
+
+    /// <summary>A static method used as a delegate: a small function that takes the (unused) environment first and calls the method.</summary>
+    private string MethodGroup(IMethodSymbol m, ExpressionSyntax at)
+    {
+        var del = Model(at).GetTypeInfo(at).ConvertedType as INamedTypeSymbol;
+        var invoke = del?.DelegateInvokeMethod;
+        if (del == null || invoke == null) return FuncName(m);   // not a delegate conversion
+        if (HasAttribute(m, "AmigaLibAttribute") || m.IsExtern) return Unsupported(at, "a library function as a delegate; wrap it in a lambda");
+        var wrapper = FuncName(m) + "__dg";
+        var key = "ES_zwrap_" + wrapper;
+        if (!_spans.ContainsKey(key))
+        {
+            var ps = invoke.Parameters.Select((p, i) => p.RefKind == RefKind.None ? Decl(p.Type, $"a{i}", at) : Decl(p.Type, $"*a{i}", at)).Prepend("void *_env");
+            var args = string.Join(", ", invoke.Parameters.Select((_, i) => $"a{i}"));
+            _spans[key] = $"{Prototype(m)};\nstatic {Decl(invoke.ReturnType, $"{wrapper}({string.Join(", ", ps)})", at)} {{ {(invoke.ReturnsVoid ? "" : "return ")}{FuncName(m)}({args}); }}\n";
+        }
+        return $"(({CType(del, at)}){{ {wrapper}, NULL }})";
+    }
+
+    /// <summary>Local functions become C functions of their own, so they may not use the locals, parameters or 'this' of the method around them.</summary>
+    private void CheckNoCapture(SyntaxNode lf, string what)
+    {
+        var model = Model(lf);
+        foreach (var n in lf.DescendantNodes())
+        {
+            ISymbol? sym = n switch
+            {
+                IdentifierNameSyntax id => model.GetSymbolInfo(id).Symbol,
+                ThisExpressionSyntax => model.GetEnclosingSymbol(n.SpanStart),
+                _ => null,
+            };
+            if (n is ThisExpressionSyntax) { Unsupported(n, $"{what} that uses 'this'"); continue; }
+            // 'c.Suit': the name after a dot belongs to the thing before it, not to an implicit 'this'.
+            if (n.Parent is MemberAccessExpressionSyntax dot && dot.Name == n) continue;
+            var captured = sym switch
+            {
+                ILocalSymbol or IParameterSymbol => !sym.DeclaringSyntaxReferences.Any(r => r.SyntaxTree == lf.SyntaxTree && lf.Span.Contains(r.Span)),
+                IFieldSymbol { IsStatic: false, IsConst: false } or IPropertySymbol { IsStatic: false } => true,
+                IMethodSymbol { IsStatic: false, MethodKind: MethodKind.Ordinary } => true,
+                _ => false,
+            };
+            if (captured) Unsupported(n, $"{what} that captures '{n}'; pass it as a parameter or make it a static method");
+        }
+    }
+
+    /// <summary>One call argument; ref/out/in parameters take the address of the argument.</summary>
+    private string Argument(ArgumentSyntax a, IMethodSymbol m)
+    {
+        IParameterSymbol? param = null;
+        if (a.NameColon != null)
+            param = m.Parameters.FirstOrDefault(p => p.Name == a.NameColon.Name.Identifier.Text);
+        else if (a.Parent is ArgumentListSyntax list)
+        {
+            var index = list.Arguments.IndexOf(a);
+            param = index < m.Parameters.Length ? m.Parameters[index] : m.Parameters.LastOrDefault(p => p.IsParams);
+        }
+        if (param == null || param.RefKind == RefKind.None) return Expr(a.Expression, top: true);
+
+        var e = a.Expression;
+        while (e is ParenthesizedExpressionSyntax pe) e = pe.Expression;
+        switch (e)
+        {
+            case DeclarationExpressionSyntax decl when decl.Designation is SingleVariableDesignationSyntax single:
+                return "&" + single.Identifier.Text;
+            case DeclarationExpressionSyntax:
+            case IdentifierNameSyntax { Identifier.Text: "_" } when Model(e).GetSymbolInfo(e).Symbol is IDiscardSymbol:
+                return "&" + DiscardName(e);
+        }
+        if (Model(e).GetTypeInfo(e).Type is { } && IsAddressable(e))
+            return "&" + Expr(e);
+        if (param.RefKind is RefKind.In or RefKind.RefReadOnlyParameter)
+            return $"&(({CType(param.Type, a)}[1]){{ {Expr(e, top: true)} }})[0]"; // a temporary, as C# allows for 'in'
+        return Unsupported(a, "ref/out argument that is not a variable, field or array element");
+    }
+
+    private bool IsAddressable(ExpressionSyntax e)
+    {
+        switch (e)
+        {
+            case IdentifierNameSyntax or MemberAccessExpressionSyntax or ElementAccessExpressionSyntax:
+                var sym = Model(e).GetSymbolInfo(e).Symbol;
+                if (sym is IPropertySymbol prop) return IsAutoProperty(prop);
+                if (sym is IFieldSymbol { IsConst: true }) return false;
+                return sym is ILocalSymbol or IParameterSymbol or IFieldSymbol || (sym == null);
+            case PrefixUnaryExpressionSyntax { RawKind: (int)SyntaxKind.PointerIndirectionExpression }:
+                return true;
+        }
+        return false;
+    }
+
+    private static string DiscardName(SyntaxNode e) => "es_discard_" + e.SpanStart;
+
+    /// <summary>The C pointer passed as the hidden first argument of a struct instance method.</summary>
+    private string? ReceiverAddress(InvocationExpressionSyntax inv, IMethodSymbol m) =>
+        ReceiverOf((inv.Expression as MemberAccessExpressionSyntax)?.Expression, inv, m.Name, "instance method call");
+
+    /// <summary>The address of the object an instance member is used on; <paramref name="recv"/> null means the current 'this'.</summary>
+    private string? ReceiverOf(ExpressionSyntax? recv, SyntaxNode at, string name, string what)
+    {
+        if (recv == null)
+        {
+            // Unqualified use: the receiver is the current 'this'.
+            return _this switch
+            {
+                ThisKind.Pointer => ThisName,
+                ThisKind.Value => "&" + ThisName,
+                _ => Unsupported(at, what + " outside a struct method"),
+            };
+        }
+
+        if (recv is ThisExpressionSyntax or BaseExpressionSyntax) return _this == ThisKind.Pointer ? ThisName : "&" + ThisName;
+        if (IsRef(Model(at).GetTypeInfo(recv).Type)) return Expr(recv);   // a pointer or a class reference is already the address
+
+        var core = recv;
+        while (core is ParenthesizedExpressionSyntax pe) core = pe.Expression;
+        if (core is IdentifierNameSyntax or MemberAccessExpressionSyntax or ElementAccessExpressionSyntax &&
+            Model(at).GetSymbolInfo(core).Symbol is not IMethodSymbol && !(Model(at).GetSymbolInfo(core).Symbol is IPropertySymbol cp && !IsAutoProperty(cp)))
+            return "&" + Expr(core);
+
+        return Unsupported(recv, $"use of '{name}' on a temporary value; assign it to a local first");
+    }
+
+    // ------------------------------------------------------------------ properties
+
+    private static bool IsInitializable(ISymbol? s) =>
+        s is IFieldSymbol || s is IPropertySymbol p && IsAutoProperty(p);
+
+    private string PropertyRead(IPropertySymbol p, ExpressionSyntax? recv, SyntaxNode at,
+        IReadOnlyList<ExpressionSyntax>? indexes = null)
+    {
+        if (IsAutoProperty(p))
+        {
+            if (p.IsStatic) return $"{TypeName(p.ContainingType)}_{p.Name}";
+            if (recv == null || recv is ThisExpressionSyntax)
+            {
+                switch (_this)
+                {
+                    case ThisKind.Pointer: return $"{ThisName}->{MemberPath(_thisType, p.ContainingType, p.Name)}";
+                    case ThisKind.Value: return $"{ThisName}.{p.Name}";
+                }
+                return Unsupported(at, "instance property access outside a struct method");
+            }
+            var recvType = Model(at).GetTypeInfo(recv).Type;
+            var op = IsRef(recvType) ? "->" : ".";
+            return $"{Expr(recv)}{op}{(op == "->" ? MemberPath(recvType, p.ContainingType, p.Name) : p.Name)}";
+        }
+        if (p.GetMethod == null) return Unsupported(at, $"property '{p.Name}' without a getter");
+        if (p.IsStatic) return $"{FuncName(p.GetMethod)}()";
+        var receiver = ReceiverOf(recv, at, p.Name, "instance property access");
+        if (receiver == null) return "0";
+        var readArgs = new List<string>();
+        if (indexes != null) readArgs.AddRange(indexes.Select(i => Expr(i, top: true)));
+        return InstanceCall(p.GetMethod, receiver, readArgs, recv is BaseExpressionSyntax);
+    }
+
+    /// <summary>The receiver and index arguments of a property or indexer access.</summary>
+    private static (ExpressionSyntax? recv, IReadOnlyList<ExpressionSyntax> indexes) AccessParts(ExpressionSyntax target) => target switch
+    {
+        MemberAccessExpressionSyntax ma => (ma.Expression, System.Array.Empty<ExpressionSyntax>()),
+        ElementAccessExpressionSyntax ea => (ea.Expression, ea.ArgumentList.Arguments.Select(a => a.Expression).ToList()),
+        _ => (null, System.Array.Empty<ExpressionSyntax>()),
+    };
+
+    /// <summary>The non-auto property an assignment or ++/-- writes to, or null for fields, locals and auto-properties.</summary>
+    private IPropertySymbol? WrittenProperty(ExpressionSyntax target)
+    {
+        var sym = Model(target).GetSymbolInfo(target).Symbol;
+        // Span<T> and array indexers are plain C indexing, not accessor calls.
+        return sym is IPropertySymbol p && !IsAutoProperty(p) && !(p.IsIndexer && IsSpan(p.ContainingType)) ? p : null;
+    }
+
+    private static bool IsStatementContext(SyntaxNode n) => n.Parent is ExpressionStatementSyntax or ForStatementSyntax;
+
+    /// <summary>Property write as a call of the setter. Only allowed as a statement (the value of the expression is not kept).</summary>
+    private string PropertyWrite(IPropertySymbol p, ExpressionSyntax target, SyntaxNode whole, Func<string, string> newValue,
+        bool reads = true)
+    {
+        if (p.SetMethod == null) return Unsupported(whole, $"assignment to property '{p.Name}' without a setter");
+        if (!IsStatementContext(whole)) return Unsupported(whole, "property assignment used as a value; make it a statement");
+        var (recv, indexes) = AccessParts(target);
+        if (reads && recv != null && (!IsPure(recv) || !indexes.All(IsPure)))
+        {
+            // Evaluate the receiver and the index arguments once into temporaries, then call the getter and the setter.
+            if (p.IsStatic || p.GetMethod == null)
+                return Unsupported(recv, "compound assignment or ++/-- on a property of a complex expression; assign it to a local first");
+            var rcv = ReceiverOf(recv, whole, p.Name, "instance property access");
+            if (rcv == null) return "0";
+            var n = _patternTemp++;
+            var sb = new StringBuilder($"({{ __typeof__({rcv}) es_r{n} = {rcv}; ");
+            var names = new List<string> { $"es_r{n}" };
+            for (var j = 0; j < indexes.Count; j++)
+            {
+                var ix = Expr(indexes[j], top: true);
+                sb.Append($"__typeof__({ix}) es_i{n}_{j} = {ix}; ");
+                names.Add($"es_i{n}_{j}");
+            }
+            var list = string.Join(", ", names);
+            var rest = names.Skip(1).ToList();
+            var current0 = InstanceCall(p.GetMethod, names[0], rest, recv is BaseExpressionSyntax);
+            sb.Append($"{InstanceCall(p.SetMethod, names[0], rest.Append(newValue(current0)), recv is BaseExpressionSyntax)}; (void)0; }})");
+            return sb.ToString();
+        }
+        var current = reads ? PropertyRead(p, recv, target, indexes) : "";
+        var value = newValue(current);
+        if (p.IsStatic) return $"{FuncName(p.SetMethod)}({value})";
+        var receiver = ReceiverOf(recv, whole, p.Name, "instance property access");
+        if (receiver == null) return "0";
+        var writeArgs = new List<string>();
+        writeArgs.AddRange(indexes.Select(i => Expr(i, top: true)));
+        writeArgs.Add(value);
+        return InstanceCall(p.SetMethod, receiver, writeArgs, recv is BaseExpressionSyntax);
+    }
+
+    /// <summary>Names, literals, member accesses and element accesses of those: safe to evaluate twice.</summary>
+    private static bool IsPure(ExpressionSyntax e) => e switch
+    {
+        ParenthesizedExpressionSyntax p => IsPure(p.Expression),
+        IdentifierNameSyntax or ThisExpressionSyntax or LiteralExpressionSyntax => true,
+        MemberAccessExpressionSyntax ma => IsPure(ma.Expression),
+        ElementAccessExpressionSyntax ea => IsPure(ea.Expression) && ea.ArgumentList.Arguments.All(a => IsPure(a.Expression)),
+        _ => false,
+    };
+
+    private string PropertyAssignment(IPropertySymbol p, AssignmentExpressionSyntax a)
+    {
+        if (a.IsKind(SyntaxKind.SimpleAssignmentExpression))
+            return PropertyWrite(p, a.Left, a, _ => Expr(a.Right, top: true), reads: false);
+        var token = a.OperatorToken.Text;
+        var op = token.Substring(0, token.Length - 1);
+        if (op == "?" ) return Unsupported(a, "??=");
+        var user = Model(a).GetSymbolInfo(a).Symbol as IMethodSymbol;
+        return PropertyWrite(p, a.Left, a, cur => user is { MethodKind: MethodKind.UserDefinedOperator }
+            ? $"{FuncName(user)}({cur}, {Expr(a.Right, top: true)})"
+            : $"({cur} {op} {Expr(a.Right)})");
+    }
+
+    private string PropertyStep(IPropertySymbol p, ExpressionSyntax operand, SyntaxNode whole, bool increment)
+    {
+        if (p.Type.SpecialType == SpecialType.None || p.Type.SpecialType == SpecialType.System_Boolean)
+            return Unsupported(whole, "++/-- on a property of this type");
+        return PropertyWrite(p, operand, whole, cur => $"({cur} {(increment ? "+" : "-")} 1)");
+    }
+
+    private string Literal(LiteralExpressionSyntax lit)
+    {
+        var constant = Model(lit).GetConstantValue(lit);
+        if (lit.IsKind(SyntaxKind.NullLiteralExpression)) return "NULL";
+        if (!constant.HasValue)
+        {
+            Unsupported(lit, "literal");
+            return "0";
+        }
+        var type = Model(lit).GetTypeInfo(lit).ConvertedType ?? Model(lit).GetTypeInfo(lit).Type!;
+        return ConstantLiteral(constant.Value!, type);
+    }
+
+    private string ConstantLiteral(object value, ITypeSymbol type)
+    {
+        switch (value)
+        {
+            case bool b: return b ? "true" : "false";
+            case string s: return CString(s);
+            case char c: return ((int)c).ToString(CultureInfo.InvariantCulture);
+            case int i when i == int.MinValue: return "(-2147483647 - 1)";
+            case int i: return i.ToString(CultureInfo.InvariantCulture);
+            case uint u: return u.ToString(CultureInfo.InvariantCulture) + "u";
+            case long l when l == long.MinValue: return "(-9223372036854775807LL - 1)";
+            case long l: return l.ToString(CultureInfo.InvariantCulture) + "LL";
+            case ulong ul: return ul.ToString(CultureInfo.InvariantCulture) + "ULL";
+            case byte or sbyte or short or ushort:
+                return Convert.ToString(value, CultureInfo.InvariantCulture)!;
+            case float f: return f.ToString("R", CultureInfo.InvariantCulture) + "f";
+            case double d: return d.ToString("R", CultureInfo.InvariantCulture);
+            default: return Convert.ToString(value, CultureInfo.InvariantCulture) ?? "0";
+        }
+    }
+
+    /// <summary>C string literal. Characters above 0x7F are written as Latin-1 octal bytes, as the Amiga expects.</summary>
+    private static string CString(string s)
+    {
+        var sb = new StringBuilder("\"");
+        foreach (var ch in s)
+        {
+            switch (ch)
+            {
+                case '\\': sb.Append("\\\\"); break;
+                case '"': sb.Append("\\\""); break;
+                case '\n': sb.Append("\\n"); break;
+                case '\r': sb.Append("\\r"); break;
+                case '\t': sb.Append("\\t"); break;
+                case '\0': sb.Append("\\000"); break;
+                case '?': sb.Append("\\?"); break;
+                default:
+                    if (ch >= 0x20 && ch < 0x7F) sb.Append(ch);
+                    else sb.Append('\\').Append(Convert.ToString(ch & 0xFF, 8).PadLeft(3, '0'));
+                    break;
+            }
+        }
+        return sb.Append('"').ToString();
+    }
+
+    // ------------------------------------------------------------------ output helpers
+
+    private void Line(string text)
+    {
+        if (text.Length == 0) { _out.Append('\n'); return; }
+        _out.Append(' ', _indent * 4).Append(text).Append('\n');
+    }
+
+    private void LineDirective(Location location)
+    {
+        var tree = location.SourceTree;
+        if (tree == null || !_user.Contains(tree)) return;
+        var span = location.GetMappedLineSpan();
+        var line = span.StartLinePosition.Line + 1;
+        var file = span.Path;
+        if (file == _lastLineFile && line == _lastLine) return;
+        _lastLineFile = file;
+        _lastLine = line;
+        _out.Append("#line ").Append(line).Append(" \"").Append(file.Replace("\\", "/")).Append("\"\n");
+    }
+}

@@ -1,0 +1,8 @@
+{
+  "namespace": "CardsDemo",
+  "class": "HdSheet",
+  "if": "AROS",
+  "images": [
+    { "name": "Hd", "file": "cards_hd.png", "colors": 56, "mask": true, "aga": true }
+  ]
+}
