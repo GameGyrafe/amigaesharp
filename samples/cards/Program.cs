@@ -66,6 +66,23 @@ public static class Program
         return (Sheet.CardsMask[y * bytesPerRow + (x >> 3)] & (0x80 >> (x & 7))) != 0;
     }
 
+#if AROS
+    static bool HdOpaque(int x, int y)
+    {
+        int bytesPerRow = (HdSheet.HdWidth + 15) / 16 * 2;
+        return (HdSheet.HdMask[y * bytesPerRow + (x >> 3)] & (0x80 >> (x & 7))) != 0;
+    }
+
+    static int HdIndex(int x, int y)
+    {
+        int bytesPerRow = (HdSheet.HdWidth + 15) / 16 * 2;
+        int value = 0;
+        for (int p = 0; p < HdSheet.HdDepth; p++)
+            if ((HdSheet.HdPlanes[p * bytesPerRow * HdSheet.HdHeight + y * bytesPerRow + (x >> 3)] & (0x80 >> (x & 7))) != 0) value |= 1 << p;
+        return value;
+    }
+#endif
+
     static void Sprite(int column, int row, int x, int y)
     {
 #if AROS
@@ -314,6 +331,19 @@ public static class Program
         }
 #if AROS
         OpenLarge();
+        Draw();
+        if (Hd)
+        {
+            int hx = Deck.Rank(HigherLower.Current) * 2 * CardW, hy = Deck.Suit(HigherLower.Current) * 2 * CardH;
+            int hwrong = 0;
+            for (int y = 0; y < 2 * CardH; y++)
+                for (int x = 0; x < 2 * CardW; x++)
+                {
+                    int expect = HdOpaque(hx + x, hy + y) ? HdIndex(hx + x, hy + y) : Table;
+                    if (Video.GetPixel(CurrentX * 2 + x, CurrentY * 2 + y) != expect) hwrong++;
+                }
+            Check(hwrong == 0, "high resolution card matches the sheet pixel for pixel");
+        }
 #endif
         Draw();
         Dos.PutStr("SHOT\n");
