@@ -2,7 +2,7 @@
 #if AROS
 using ESharp;
 
-namespace CardsDemo;
+namespace CardsShared;
 
 public static class HdSheet
 {

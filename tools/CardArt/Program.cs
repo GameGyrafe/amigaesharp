@@ -1,6 +1,6 @@
 using ESharp.Assets;
 
-// --hd <out.png> <Font.cs>: the 64x80 high resolution sheet (see HdArt.cs).
+// --hd <out.png> <Font.cs>: the 64x80 high resolution sheet (see HdArt.cs); the sheet lives in samples/shared/cards-hd/ and is turned into code with `esharp assets samples/shared/cards-hd`.
 if (args.Length == 3 && args[0] == "--hd") { HdArt.Run(args[1], args[2]); return; }
 
 // Draws the sprite sheet used by samples/cards (original artwork, MIT like the rest of the repository).
