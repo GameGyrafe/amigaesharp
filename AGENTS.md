@@ -25,6 +25,7 @@ AROS_HOSTED=<extracted hosted AROS dir> tools/aros-hosted/aros-hosted.sh cards -
 dotnet run --project src/ESharp.Cli -- run samples/lambdas --docker <image> --headless --model A1200   # capturing lambdas and delegates
 dotnet run --project src/ESharp.Cli -- run samples/linq --docker <image> --headless --model A1200   # LINQ over arrays, turned into loops
 dotnet run --project tools/CardArt -- samples/cards/cards.png                               # redraw the card sprite sheet
+tools/hwpack/build.sh <m68k image>                       # build the real-hardware test pack into obj/hwtest (run with Execute RunAll on the Amiga)
 docker build -t esharp-amiga-toolchain docker && docker/smoke-test.sh    # combined toolchain image
 ```
 
