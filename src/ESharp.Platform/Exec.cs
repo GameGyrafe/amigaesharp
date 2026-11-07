@@ -10,11 +10,11 @@ public static unsafe class Exec
     public const uint MemClear = 0x10000;
 
     /// <summary>exec.library AllocVec(), LVO -684. Returns null when memory is exhausted.</summary>
-    [AmigaLib("exec", -684)]
+    [AmigaLib("exec", -684), Since(36)]
     public static extern byte* AllocVec(uint byteSize, uint requirements);
 
     /// <summary>exec.library FreeVec(), LVO -690.</summary>
-    [AmigaLib("exec", -690)]
+    [AmigaLib("exec", -690), Since(36)]
     public static extern void FreeVec(byte* memoryBlock);
 
     /// <summary>exec.library GetMsg(), LVO -372: the next message at a port, or null.</summary>
@@ -38,11 +38,11 @@ public static unsafe class Exec
     public static extern void CloseLibrary(void* library);
 
     /// <summary>exec.library CreateMsgPort(), LVO -666 (v36).</summary>
-    [AmigaLib("exec", -666)]
+    [AmigaLib("exec", -666), Since(36)]
     public static extern void* CreateMsgPort();
 
     /// <summary>exec.library DeleteMsgPort(), LVO -672.</summary>
-    [AmigaLib("exec", -672)]
+    [AmigaLib("exec", -672), Since(36)]
     public static extern void DeleteMsgPort(void* port);
 
     /// <summary>exec.library OpenDevice(), LVO -444: 0 on success.</summary>
