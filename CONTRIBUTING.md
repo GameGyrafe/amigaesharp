@@ -9,7 +9,7 @@ Work is planned on the [project board](https://github.com/orgs/GameGyrafe/projec
 These matter more than style:
 
 - **Never copy code from Amiga E.** Its compiler source is GPL. E# takes design inspiration only. Do not paste, port or closely paraphrase code from Amiga E, PortablE, E-VO or other GPL/LGPL projects, and avoid GPL/LGPL in anything that gets linked into games.
-- **No copyrighted Amiga files.** Kickstart ROMs, Workbench disks and similar files must never be committed, attached to issues or shared in the repo (`*.rom` is git-ignored). Bring your own Kickstart; read it in place.
+- **No copyrighted Amiga files.** Kickstart ROMs, Workbench disks and similar files must never be committed, attached to issues or shared in the repo (`*.rom` is git-ignored). Bring your own Kickstart; read it in place. The same goes for the Amiga NDK (headers, autodocs, `.fd` files): download it yourself from its official source and point tools at your copy. Do not commit it or text copied from it (see issue #18).
 - **No third-party game content.** Code, art, sound and rules text from other games must not be added. Samples use original art and standard rules written from scratch.
 - **Emitter gaps are errors, not guesses.** If the compiler cannot translate something it reports `ES0099`. Never emit something that might be wrong. Prefer adding the feature over silencing the diagnostic.
 - **Test the behaviour.** A new emitter feature needs a test that compiles the generated C and runs it (see `tests/ESharp.Compiler.Tests/CEmitterTests.cs`), not only a check of the C text.
@@ -38,7 +38,7 @@ By contributing you agree that your contribution is licensed under the project's
 
 ## Testing on real hardware
 
-Real Amiga hardware is rare, and reports from people who have it are valuable. Use the "Hardware test report" issue template: say which machine, Kickstart/Workbench version, CPU and RAM, and what you ran. Mark emulated or FPGA machines as such.
+Real Amiga hardware is rare, and reports from people who have it are valuable. Build the test pack (`tools/hwpack/build.sh`, instructions in `tools/hwpack/README.txt`) and use the "Hardware test report" issue template: say which machine, Kickstart/Workbench version, CPU and RAM, and what you ran. Mark emulated or FPGA machines as such.
 
 ## Reporting problems
 
