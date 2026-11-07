@@ -9,7 +9,7 @@ public static class Dos
 {
 #if AMIGA
     /// <summary>dos.library PutStr(), LVO -948.</summary>
-    [AmigaLib("dos", -948)]
+    [AmigaLib("dos", -948), Since(36)]
     public static extern int PutStr(string str);
 
     /// <summary>dos.library Output(), LVO -60: the standard output file handle.</summary>
@@ -17,7 +17,7 @@ public static class Dos
     public static extern nuint Output();
 
     /// <summary>dos.library Flush(), LVO -360.</summary>
-    [AmigaLib("dos", -360)]
+    [AmigaLib("dos", -360), Since(36)]
     public static extern int Flush(nuint fileHandle);
 
     /// <summary>Writes out buffered standard output now (output redirected to a file is otherwise written when the program ends).</summary>
