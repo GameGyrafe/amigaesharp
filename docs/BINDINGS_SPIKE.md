@@ -70,6 +70,17 @@ Hand-written: 10 `dos`, 10 `graphics`, 4 `intuition`, 14 `exec` functions, plus 
 4. Committing generated output only if the licence of its source allows it; otherwise generate on the
    user's machine from their own SDK copy.
 
+## Update: tools/BindGen
+
+`tools/BindGen` is the first piece: `check <sdk include dir> src/ESharp.Platform` compares every `[AmigaLib]`
+declaration (vector and argument count) with the SDK's prototypes, `facts` lists a library's functions with
+vector and first version, and `gen` writes a candidate C# binding to stdout or a file for review (coarse type
+map; unknown typedefs are marked). The SDK is always the user's own copy; nothing from it is committed. Verified:
+on the AROS 9.1 SDK `check` reports 38 declarations, 0 problems, and with `SetChipRev` put back at -840 it
+reports exactly that one (so it would have caught the bug). `gen` output for `dos` was read, not compiled.
+Not done: `Since(n)` as a real attribute with a compile error, struct layouts, tags, `exec`/`graphics`
+generation beyond candidates, a unit test (needs an SDK path, so it would skip by default).
+
 ## Not verified
 
 Everything on the Amiga side beyond the `SetChipRev` runs in the emulator (A1200, Kickstart 3.1) above; the
