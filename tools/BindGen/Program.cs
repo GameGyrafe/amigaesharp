@@ -129,7 +129,7 @@ internal static class Cli
         sb.AppendLine($"public static unsafe class {char.ToUpperInvariant(lib[0])}{lib.Substring(1)}Candidate");
         sb.AppendLine("{");
         foreach (var f in funcs.OrderBy(f => f.Lvo))
-            sb.AppendLine($"    [AmigaLib(\"{lib}\", {-6 * f.Lvo})] // since v{f.Since}\n    public static extern {Map(f.Ret)} {f.Name}({string.Join(", ", f.Args.Select(a => Map(a.Type) + " " + a.Name))});");
+            sb.AppendLine($"    [AmigaLib(\"{lib}\", {-6 * f.Lvo}){(f.Since > 0 ? $", Since({f.Since})" : "")}]\n    public static extern {Map(f.Ret)} {f.Name}({string.Join(", ", f.Args.Select(a => Map(a.Type) + " " + a.Name))});");
         sb.AppendLine("}");
         return sb.ToString();
     }

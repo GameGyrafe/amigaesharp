@@ -22,6 +22,19 @@ public sealed class AmigaLibAttribute : Attribute
     public int Offset { get; }
 }
 
+/// <summary>
+/// The library version in which an extern library function first appeared (the "since" version from the
+/// system's own interface data). A call to it is a compile error (ES0101) on a target whose libraries are
+/// older: m68k builds target Kickstart 3.1, library version 40.
+/// </summary>
+[AttributeUsage(AttributeTargets.Method)]
+public sealed class SinceAttribute : Attribute
+{
+    public SinceAttribute(int libraryVersion) { LibraryVersion = libraryVersion; }
+
+    public int LibraryVersion { get; }
+}
+
 /// <summary>Places data where the custom chips can reach it (chip RAM).</summary>
 [AttributeUsage(AttributeTargets.Field)]
 public sealed class ChipRamAttribute : Attribute

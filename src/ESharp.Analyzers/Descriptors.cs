@@ -55,6 +55,10 @@ public static class Descriptors
         "'{0}' is software 64-bit arithmetic on a 68020 and is slow",
         Category, DiagnosticSeverity.Warning, isEnabledByDefault: true);
 
+    public static readonly DiagnosticDescriptor LibraryTooOld = Error(
+        "ES0101", "Library function is newer than the target's libraries",
+        "'{0}' needs library version {1} but this target has version {2}");
+
     public static readonly DiagnosticDescriptor ReferenceField = Error(
         "ES0010", "Structs cannot hold references",
         "Field '{0}' of struct '{1}' is a reference type; E# structs have value semantics only");
@@ -82,5 +86,5 @@ public static class Descriptors
     public static System.Collections.Immutable.ImmutableArray<DiagnosticDescriptor> SubsetRules =>
         System.Collections.Immutable.ImmutableArray.Create(
             Exceptions, Linq, FloatingPoint, AsyncAwait, Dynamic, Reflection,
-            HeapClass, Generics, Interfaces, SlowArithmetic, ReferenceField, FixedArrays);
+            HeapClass, Generics, Interfaces, SlowArithmetic, LibraryTooOld, ReferenceField, FixedArrays);
 }
