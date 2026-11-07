@@ -254,8 +254,35 @@ public sealed class SubsetAnalyzer : DiagnosticAnalyzer
                  (type == "System.Object" && method.Name == "GetType"))
             c.ReportDiagnostic(Diagnostic.Create(Descriptors.Reflection, c.Node.GetLocation(), method.Name));
 
+        CheckSince(c, method);
+
         if (method.IsGenericMethod && !linqSubset && !method.OriginalDefinition.Locations.Any(l => l.IsInSource))
             c.ReportDiagnostic(Diagnostic.Create(Descriptors.Generics, c.Node.GetLocation(), method.Name));
+    }
+
+    /// <summary>
+    /// Library version of the target's system libraries, from the conditional symbols the source is parsed with:
+    /// classic AmigaOS 3.x is Kickstart 3.1 (v40); AROS is checked against the highest version in its 9.1
+    /// headers (51). Other targets are not checked (the version is not known or not verified).
+    /// </summary>
+    private static int? TargetLibraryVersion(SyntaxTree tree)
+    {
+        var symbols = tree.Options.PreprocessorSymbolNames;
+        if (symbols.Contains("AROS")) return 51;
+        if (symbols.Contains("M68K") && symbols.Contains("AMIGAOS3")) return 40;
+        return null;
+    }
+
+    private static void CheckSince(SyntaxNodeAnalysisContext c, IMethodSymbol method)
+    {
+        foreach (var a in method.OriginalDefinition.GetAttributes())
+        {
+            if (a.AttributeClass is not { Name: "SinceAttribute", ContainingNamespace: { Name: "ESharp" } } ||
+                a.ConstructorArguments.Length != 1 || a.ConstructorArguments[0].Value is not int since)
+                continue;
+            if (TargetLibraryVersion(c.Node.SyntaxTree) is int have && since > have)
+                c.ReportDiagnostic(Diagnostic.Create(Descriptors.LibraryTooOld, c.Node.GetLocation(), method.Name, since, have));
+        }
     }
 
     private static void CheckTypeSyntax(SyntaxNodeAnalysisContext c)

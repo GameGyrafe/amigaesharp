@@ -81,6 +81,32 @@ public class SubsetAnalyzerTests
         Assert.Contains(r.Diagnostics, d => d.Id == "ES0100");
     }
 
+    private const string NewApi = "[AmigaLib(\"dos\", -900), Since(50)] static extern int NewCall(int x); [AmigaLib(\"dos\", -30), Since(36)] static extern int OldCall(int x);";
+
+    [Fact]
+    public void Call_newer_than_the_target_libraries_is_an_error_on_m68k()
+    {
+        var m68k = Targets.M68k.ToOptions();
+        var r = Compile(Program(NewApi, "NewCall(1);"), m68k);
+        Assert.Contains("ES0101", ErrorIds(r));
+        Assert.Contains(r.Diagnostics, d => d.Id == "ES0101" && d.GetMessage().Contains("version 50") && d.GetMessage().Contains("version 40"));
+    }
+
+    [Fact]
+    public void Call_within_the_target_libraries_and_unused_declarations_are_fine()
+    {
+        var m68k = Targets.M68k.ToOptions();
+        var r = Compile(Program(NewApi, "OldCall(1);"), m68k);   // NewCall is declared but never called
+        Assert.DoesNotContain("ES0101", ErrorIds(r));
+    }
+
+    [Fact]
+    public void Aros_target_accepts_the_newer_call()
+    {
+        var r = Compile(Program(NewApi, "NewCall(1);"), Targets.Aros.ToOptions());
+        Assert.DoesNotContain("ES0101", ErrorIds(r));
+    }
+
     [Fact]
     public void Missing_entry_point_is_an_error()
     {

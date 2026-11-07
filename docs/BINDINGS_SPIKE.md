@@ -78,7 +78,7 @@ vector and first version, and `gen` writes a candidate C# binding to stdout or a
 map; unknown typedefs are marked). The SDK is always the user's own copy; nothing from it is committed. Verified:
 on the AROS 9.1 SDK `check` reports 38 declarations, 0 problems, and with `SetChipRev` put back at -840 it
 reports exactly that one (so it would have caught the bug). `gen` output for `dos` was read, not compiled.
-Not done: `Since(n)` as a real attribute with a compile error, struct layouts, tags, `exec`/`graphics`
+`[Since(n)]` is now a real attribute (`ESharp.SinceAttribute`) and `gen` writes it; the analyzer rule **ES0101** is an error when a call needs a library version newer than the target's: m68k (Kickstart 3.1) is version 40, AROS is checked against 51 (the highest in the AROS 9.1 headers), and the PowerPC targets are not checked because their library versions are not verified. Verified by three unit tests (error on m68k with both versions in the message, no error for a call within the version or a declaration never called, no error on AROS; 141 tests pass). None of our hand-written declarations carries `Since` yet. Not done: struct layouts, tags, `exec`/`graphics`
 generation beyond candidates, a unit test (needs an SDK path, so it would skip by default).
 
 ## Not verified
