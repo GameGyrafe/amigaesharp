@@ -132,6 +132,36 @@ public class HostTargetTests
     }
 
     [Fact]
+    public void Keys_sample_runs_on_the_host()
+    {
+        using var console = HostConsole.Capture();
+        KeysSample.Program.Main();
+        Assert.Equal("ok keymap.library opens\nkey 0x20 types 97, with shift 65\nok a letter key types a letter, upper case with shift\n"
+            + "ok Caps Lock types upper case\nok space, return, escape and backspace\nok cursor up types no single character\n"
+            + "ok a key release types nothing\nok Find goes back from the letter to its key\nok Find gives the upper case letter with shift\n"
+            + "keymap: qwerty\nSHOT\nno key pressed\n", console.Output);
+    }
+
+    [Fact]
+    public void A_pressed_key_gives_its_character_and_modifiers_until_the_next_poll()
+    {
+        ESharp.Platform.Input.HostKey(0x20, ESharp.Platform.Keys.LeftShift);
+        ESharp.Platform.Input.Poll();
+        Assert.Equal(0x20, ESharp.Platform.Input.LastKey);
+        Assert.Equal('A', ESharp.Platform.Input.LastChar);
+        Assert.Equal(ESharp.Platform.Keys.LeftShift, ESharp.Platform.Input.LastQualifier);
+        ESharp.Platform.Input.HostKey(0x01);
+        ESharp.Platform.Input.Poll();
+        Assert.Equal('1', ESharp.Platform.Input.LastChar);
+        Assert.Equal(0, ESharp.Platform.Input.LastQualifier);
+        ESharp.Platform.Input.Poll();
+        Assert.Equal(0, ESharp.Platform.Input.LastChar);
+        Assert.Equal((0x10, 0), ESharp.Platform.Keys.Find('q'));
+        Assert.Equal((0x01, ESharp.Platform.Keys.LeftShift), ESharp.Platform.Keys.Find('!'));
+        Assert.Equal(17, ESharp.Platform.Keys.Char(0x10, ESharp.Platform.Keys.Control));   // Ctrl-Q
+    }
+
+    [Fact]
     public void Joystick_reads_directions_and_buttons_only_from_sticks_and_pads()
     {
         ESharp.Platform.Joystick.Open();

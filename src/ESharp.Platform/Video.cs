@@ -157,6 +157,7 @@ public static unsafe class Video
     {
         if (_window != null) Intuition.CloseWindow(_window);
         if (_screen != null) Intuition.CloseScreen(_screen);
+        Keys.Close();
         _window = null;
         _screen = null;
         _rastPort = null;

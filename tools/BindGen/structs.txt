@@ -8,6 +8,7 @@ include graphics/gfx.h
 include devices/audio.h
 include devices/timer.h
 include libraries/lowlevel.h
+include devices/inputevent.h
 
 # Intuition (src/ESharp.Platform/Gfx.cs)
 WindowRPort = Window.RPort
@@ -17,6 +18,8 @@ MsgClass = IntuiMessage.Class
 MsgCode = IntuiMessage.Code
 MsgMouseX = IntuiMessage.MouseX
 MsgMouseY = IntuiMessage.MouseY
+MsgQualifier = IntuiMessage.Qualifier
+MsgIAddress = IntuiMessage.IAddress
 BitMapSize = sizeof BitMap
 
 # audio.device (src/ESharp.Platform/Sound.cs)
@@ -64,3 +67,20 @@ SjaType = value SJA_Type
 SjaTypeAuto = value SJA_TYPE_AUTOSENSE
 SjaTypeGameCtlr = value SJA_TYPE_GAMECTLR
 SjaTypeJoystk = value SJA_TYPE_JOYSTK
+
+# keymap.library: raw keys to characters (src/ESharp.Platform/Keys.cs)
+InputEventSize = sizeof InputEvent
+IeClass = InputEvent.ie_Class
+IeCode = InputEvent.ie_Code
+IeQualifier = InputEvent.ie_Qualifier
+IeEventAddress = InputEvent.ie_position.ie_addr
+IeClassRawKey = value IECLASS_RAWKEY
+QualLShift = value IEQUALIFIER_LSHIFT
+QualRShift = value IEQUALIFIER_RSHIFT
+QualCapsLock = value IEQUALIFIER_CAPSLOCK
+QualControl = value IEQUALIFIER_CONTROL
+QualLAlt = value IEQUALIFIER_LALT
+QualRAlt = value IEQUALIFIER_RALT
+QualLCommand = value IEQUALIFIER_LCOMMAND
+QualRCommand = value IEQUALIFIER_RCOMMAND
+QualRepeat = value IEQUALIFIER_REPEAT

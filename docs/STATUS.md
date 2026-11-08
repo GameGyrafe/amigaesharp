@@ -28,6 +28,22 @@ Not verified:
 - A real CD32 pad, and real hardware in general.
 - AmigaOS 4 and MorphOS.
 
+## Keyboard text: keymap.library (samples/keys)
+
+`Keys.Char(rawKey, qualifier)` turns an Amiga raw key code into the character it types with the user's keymap (keymap.library `MapRawKey`), so text follows the keyboard the user has rather than a US layout. Characters are ISO-8859-1 codes; 0 means the key types no single character (cursor and function keys send escape sequences, modifier keys, key releases, a dead key waiting for the next key). `Keys.Find(ch)` goes the other way (`MapANSI`): the raw key and qualifier that type a character. The qualifier bits (`Keys.Shift`, `CapsLock`, `Control`, `Alt`, `LeftAmiga`, `RightAmiga`, `Repeat`) are measured from the headers. `Input` now also gives `LastChar` and `LastQualifier` for the last key pressed in the `Video` window. They are mapped while the IDCMP message is still held, with its previous-keys data, so dead keys can combine. keymap.library is opened on first use through its own `[LibraryBase]`, and closed by `Video.Close` or `Keys.Close`. On the host a fixed US layout is used, and `Input.HostKey(code, qualifier)` feeds a key with modifiers. `esharp run --input` takes `key 50+38` to hold keys (here Shift) while the last one is pressed.
+
+Verified:
+- 150 unit tests pass. They include the sample on the host, `LastChar`, `LastQualifier` and `Find` on the host, and the m68k C output (`KeymapBase` renamed, `MapRawKey` and `MapANSI` called).
+- A1200, Kickstart 3.1 (40.069) in FS-UAE: all 8 checks pass on the ROM's default (US) keymap: letter, shift, Caps Lock, space, return, escape, backspace, cursor up, key release, and `Find` both ways. A scripted A (`--input "click 400,300;key 38"`) gives raw key 32 and character 97. Shift+A (`key 50+38`) gives qualifier 0x8001 and character 65. Both run through the real IDCMP path.
+- Hosted AROS (nightly 20261106): the 8 checks pass, with no traps.
+- Regression on the A1200: cards still 15 ok with scripted play (Escape quits). The hardware pack builds with keys in it (20 programs).
+
+Not verified:
+- Other keymaps and dead keys. Only the default US keymap was run: no `SetMap` to a German or French keymap, and no dead-key combination.
+- Scripted keys on hosted AROS. The XTEST key reached nothing there (the mouse clicks do work for cards); the reason was not looked into.
+- Real hardware, AmigaOS 4 and MorphOS.
+- The full hardware pack was not re-run.
+
 ## Hardware test pack (tools/hwpack, samples/hwinfo)
 
 `tools/hwpack/build.sh <m68k image>` builds every sample for the A1200 plus `samples/hwinfo` into one drawer (`obj/hwtest`: the programs, `RunAll`, `README.txt`, an empty `results/`) that can be copied to a real Amiga and run with `Execute RunAll`. `hwinfo` prints the Kickstart and library versions, CPU and FPU flags (read from ExecBase), vertical blank frequency, free chip and fast RAM and whether AGA is present. `RunAll` writes one file per program into `results/` and a `SUMMARY.txt` (hwinfo, then any line containing `FAIL `); `README.txt` tells the tester what to look at by eye and what to report (machine, accelerator, display path, timing). Verified: the pack built from commit 87cc3bb plus this change ran end to end in FS-UAE (A1200, Kickstart 3.1 40.069, the Workbench 3.1 disk mounted read-only as DF0: only to supply `C:`): 17 programs, 330 `ok` lines, no `FAIL`, about 75 seconds, `SUMMARY.txt` clean; `hwinfo` reports 40.10 exec, 68020, no FPU, PAL, 1.97 MB chip free, no fast RAM, AGA yes. Not verified: any real hardware (this is the pack for it, issue #7), the pack on a machine with a different CPU or no `Search`/`Echo` in C:, what the screens and sound look and sound like on a real display and card (the README asks the tester), `Protect RunAll +s` being needed after a copy from a PC (written from knowledge of AmigaDOS, not tested).

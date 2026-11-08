@@ -14,6 +14,8 @@ public static class Layout
     public const int MsgCode = 52;
     public const int MsgMouseX = 64;
     public const int MsgMouseY = 66;
+    public const int MsgQualifier = 54;
+    public const int MsgIAddress = 56;
     public const int BitMapSize = 72;
     public const int IoSize = 152;
     public const int OffType = 16;
@@ -55,6 +57,21 @@ public static class Layout
     public const uint SjaTypeAuto = 0u;
     public const uint SjaTypeGameCtlr = 1u;
     public const uint SjaTypeJoystk = 3u;
+    public const int InputEventSize = 32;
+    public const int IeClass = 8;
+    public const int IeCode = 10;
+    public const int IeQualifier = 12;
+    public const int IeEventAddress = 16;
+    public const uint IeClassRawKey = 1u;
+    public const uint QualLShift = 1u;
+    public const uint QualRShift = 2u;
+    public const uint QualCapsLock = 4u;
+    public const uint QualControl = 8u;
+    public const uint QualLAlt = 16u;
+    public const uint QualRAlt = 32u;
+    public const uint QualLCommand = 64u;
+    public const uint QualRCommand = 128u;
+    public const uint QualRepeat = 512u;
 #else
     public const int WindowRPort = 50;
     public const int WindowUserPort = 86;
@@ -63,6 +80,8 @@ public static class Layout
     public const int MsgCode = 24;
     public const int MsgMouseX = 32;
     public const int MsgMouseY = 34;
+    public const int MsgQualifier = 26;
+    public const int MsgIAddress = 28;
     public const int BitMapSize = 40;
     public const int IoSize = 68;
     public const int OffType = 8;
@@ -104,6 +123,21 @@ public static class Layout
     public const uint SjaTypeAuto = 0u;
     public const uint SjaTypeGameCtlr = 1u;
     public const uint SjaTypeJoystk = 3u;
+    public const int InputEventSize = 22;
+    public const int IeClass = 4;
+    public const int IeCode = 6;
+    public const int IeQualifier = 8;
+    public const int IeEventAddress = 10;
+    public const uint IeClassRawKey = 1u;
+    public const uint QualLShift = 1u;
+    public const uint QualRShift = 2u;
+    public const uint QualCapsLock = 4u;
+    public const uint QualControl = 8u;
+    public const uint QualLAlt = 16u;
+    public const uint QualRAlt = 32u;
+    public const uint QualLCommand = 64u;
+    public const uint QualRCommand = 128u;
+    public const uint QualRepeat = 512u;
 #endif
 }
 #endif

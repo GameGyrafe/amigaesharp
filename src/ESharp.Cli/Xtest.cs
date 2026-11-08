@@ -9,7 +9,7 @@ namespace ESharp.Cli;
 /// <summary>
 /// Sends scripted mouse and keyboard input to an X display through the XTEST extension (libX11 + libXtst),
 /// so headless emulator runs can exercise the program's input handling.
-/// Script: steps separated by ';': <c>click X,Y</c> (move to display pixels, then click), <c>rel DX,DY</c> (relative motion), <c>press</c> (click here), <c>key N</c> (X11 keycode, Esc is 9).
+/// Script: steps separated by ';': <c>click X,Y</c> (move to display pixels, then click), <c>rel DX,DY</c> (relative motion), <c>press</c> (click here), <c>key N</c> (X11 keycode, Esc is 9; <c>key 50+38</c> holds the first keys while the last is pressed: Shift+A).
 /// </summary>
 internal static class Xtest
 {
@@ -63,9 +63,10 @@ internal static class Xtest
                 }
                 else if (parts[0] == "key" && parts.Length == 2)
                 {
-                    var code = uint.Parse(parts[1], CultureInfo.InvariantCulture);
-                    XTestFakeKeyEvent(display, code, 1, 0); XFlush(display); Thread.Sleep(120);
-                    XTestFakeKeyEvent(display, code, 0, 0); XFlush(display); Thread.Sleep(500);
+                    // "key 38", or "key 50+38" to hold 50 (left Shift) while 38 is pressed.
+                    var codes = Array.ConvertAll(parts[1].Split('+'), c => uint.Parse(c, CultureInfo.InvariantCulture));
+                    foreach (var code in codes) { XTestFakeKeyEvent(display, code, 1, 0); XFlush(display); Thread.Sleep(120); }
+                    for (var i = codes.Length - 1; i >= 0; i--) { XTestFakeKeyEvent(display, codes[i], 0, 0); XFlush(display); Thread.Sleep(i == 0 ? 500 : 120); }
                 }
                 else
                 {

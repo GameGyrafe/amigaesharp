@@ -39,7 +39,7 @@ Run options (build options also apply; run is m68k only):
   --fsuae <path>    FS-UAE executable (or set ESHARP_FSUAE)
   --screenshot <png> Headless only: when the program prints SHOT, save the emulator screen to a PNG (needs xwd)
   --input <script>  Headless only: after SHOT send mouse/keyboard input to the emulator (before the screenshot):
-                    ""click X,Y;key 9"" with display pixels and X11 key codes (needs libXtst)
+                    ""click X,Y;key 9;key 50+38"" with display pixels and X11 key codes, + holds keys (needs libXtst)
 
 Targets:
 " + string.Join("\n", Targets.All.Select(t => $"  {t.Name,-9} {t.Description}")) + "\n";

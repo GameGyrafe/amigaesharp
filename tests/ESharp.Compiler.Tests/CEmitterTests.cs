@@ -850,6 +850,19 @@ Check(list.Count == 0, ""destroy"");
     }
 
     [Fact]
+    public void Keys_sample_compiles_for_m68k_with_a_private_keymap_base()
+    {
+        var path = Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "..", "samples", "keys", "Keys.cs");
+        var r = EsCompiler.Compile(new[] { new SourceFile("Keys.cs", File.ReadAllText(path)) }, Targets.M68k.ToOptions());
+        Assert.True(r.Success, string.Join("\n", r.Diagnostics));
+        Assert.Contains("#define KeymapBase es_KeymapBase", r.C!);
+        Assert.Contains("struct Library *es_KeymapBase;", r.C!);
+        Assert.Contains("#include <proto/keymap.h>", r.C!);
+        Assert.Contains("MapRawKey(", r.C!);
+        Assert.Contains("MapANSI(", r.C!);
+    }
+
+    [Fact]
     public void A_library_base_class_calls_through_its_own_base_variable_that_SetBase_fills()
     {
         if (!HasGcc) return;
