@@ -28,7 +28,7 @@ internal sealed partial class CEmitter
     private readonly SortedSet<string> _headers = new(StringComparer.Ordinal);
     private readonly SortedDictionary<string, string> _spans = new(StringComparer.Ordinal);
     private bool _usesLen;
-    private bool _usesCyber;
+    private readonly SortedDictionary<string, string> _bases = new(StringComparer.Ordinal);   // base name -> C type, for [LibraryBase] classes
     private bool _usesStrlen;
 
     /// <summary>How <c>this</c> is spelled inside the method being emitted.</summary>
@@ -173,6 +173,16 @@ internal sealed partial class CEmitter
 
     private static bool HasAttribute(ISymbol s, string name) => GetAttribute(s, name) != null;
 
+    /// <summary>Records the library base of a [LibraryBase] class (and its proto header); returns the C variable, or null.</summary>
+    private string? UseBase(INamedTypeSymbol? type)
+    {
+        if (type == null || GetAttribute(type, "LibraryBaseAttribute") is not { } a) return null;
+        string lib = (string)a.ConstructorArguments[0].Value!, name = (string)a.ConstructorArguments[1].Value!, ctype = (string)a.ConstructorArguments[2].Value!;
+        _bases[name] = ctype;
+        _headers.Add($"proto/{lib}.h");
+        return "es_" + name;
+    }
+
     // ------------------------------------------------------------------ driver
 
     public string Emit()
@@ -268,11 +278,12 @@ internal sealed partial class CEmitter
         result.AppendLine("#include <stdbool.h>");
         result.AppendLine("#include <stddef.h>");
         result.AppendLine("#include <stdint.h>");
-        // cybergraphics.library may be absent, and libnix refuses to start a program whose startup list names a missing library,
-        // so its base is a private variable that CyberGfx.SetBase fills in around each call (the proto header's own CyberGfxBase is never used).
-        if (_usesCyber) { result.AppendLine("#define CYBERGRAPHICS_BASE_NAME es_CyberBase"); result.AppendLine("extern struct Library *es_CyberBase;"); }
+        // [LibraryBase] libraries may be absent (libnix refuses to start a program whose startup list names a missing
+        // library) or are devices, so their base is renamed to a variable of ours that SetBase fills in; nothing refers to
+        // the usual name, so neither libnix nor AROS's autoinit tries to open it.
+        foreach (var (name, type) in _bases) { result.AppendLine($"#define {name} es_{name}"); result.AppendLine($"extern {type} *es_{name};"); }
         foreach (var h in _headers) result.AppendLine($"#include <{h}>");
-        if (_usesCyber) result.AppendLine("struct Library *es_CyberBase;");
+        foreach (var (name, type) in _bases) result.AppendLine($"{type} *es_{name};");
         result.AppendLine();
         if (_usesBounds)
         {
@@ -2160,13 +2171,8 @@ internal sealed partial class CEmitter
             return m.Name == "StringToPtr" ? $"((uint8_t *)({arg}))" : $"((const char *)({arg}))";
         }
 
-        if (m.ContainingType is { Name: "CyberGfx" } && m.ContainingNamespace?.ToDisplayString() == "ESharp.Platform"
-            && m.Name == "SetBase" && inv.ArgumentList.Arguments.Count == 1)
-        {
-            _usesCyber = true;
-            _headers.Add("proto/cybergraphics.h");
-            return $"(es_CyberBase = (struct Library *)({Expr(inv.ArgumentList.Arguments[0].Expression, top: true)}))";
-        }
+        if (m.Name == "SetBase" && m.IsExtern && inv.ArgumentList.Arguments.Count == 1 && UseBase(m.ContainingType) is { } baseVar)
+            return $"({baseVar} = (__typeof__({baseVar}))({Expr(inv.ArgumentList.Arguments[0].Expression, top: true)}))";
 
         if (m.MethodKind == MethodKind.DelegateInvoke)
         {
@@ -2206,6 +2212,7 @@ internal sealed partial class CEmitter
 
         if (HasAttribute(m, "NativeAttribute")) _natives.Add(m.Name);
         var lib = GetAttribute(m, "AmigaLibAttribute");
+        if (lib != null) UseBase(m.ContainingType);
         if (lib != null)
             _headers.Add(lib.ConstructorArguments[0].Value is "alib" ? "clib/alib_protos.h" : $"proto/{lib.ConstructorArguments[0].Value}.h");
 

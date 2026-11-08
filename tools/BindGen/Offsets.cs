@@ -32,6 +32,7 @@ internal static class Offsets
 
         var includes = new List<string>();
         var items = new List<(string Name, string Expr)>();
+        var values = new HashSet<string>();   // "value MACRO" lines: a constant, printed as an unsigned 32-bit number
         foreach (var raw in File.ReadAllLines(spec))
         {
             var line = raw.Trim();
@@ -41,6 +42,7 @@ internal static class Offsets
             string name = parts[0].Trim(), rhs = parts[1].Trim();
             string expr;
             if (rhs.StartsWith("sizeof ")) expr = $"sizeof(struct {rhs.Substring(7).Trim()})";
+            else if (rhs.StartsWith("value ")) { expr = rhs.Substring(6).Trim(); values.Add(name); }
             else
             {
                 int dot = rhs.IndexOf('.');
@@ -77,9 +79,10 @@ internal static class Offsets
             int missing = 0;
             foreach (var (name, _) in items)
             {
-                var m = Regex.Match(asm, @"_?esharp_off_" + Regex.Escape(name) + @":\s*\n\s*\.(?:long|int|4byte)\s+(\d+)");
+                var m = Regex.Match(asm, @"_?esharp_off_" + Regex.Escape(name) + @":\s*\n\s*\.(?:long|int|4byte)\s+(-?\d+)");
                 if (!m.Success) { Console.WriteLine($"{name} = ?"); missing++; continue; }
-                Console.WriteLine($"{name} = {long.Parse(m.Groups[1].Value) - 1}");
+                long v = ((long.Parse(m.Groups[1].Value) - 1) % 0x100000000L + 0x100000000L) % 0x100000000L;
+                Console.WriteLine(values.Contains(name) ? $"{name} = {v}u" : $"{name} = {v}");
             }
             return missing == 0 ? 0 : 1;
         }

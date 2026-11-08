@@ -10,6 +10,24 @@ The minimum system is now an **Amiga 1200: 68020, AGA, 2 MB chip RAM, Kickstart 
 - **Kept on purpose:** `HasAga()` and `HasRtg()` with their fallbacks. A classic A1200 always has AGA, but PowerPC, RTG-only and AROS targets may not, so the checks stay as the portable way to ask. **Not yet done:** using 68020 instructions deliberately and AROS (a new target, untested).
 - Verified after the change: all 17 samples built with `-m68020` and run on Kickstart 3.1 (A1200) in FS-UAE: 300 `ok` lines, no `FAIL` (the script shows only the last 25 lines of each sample, so long ones are truncated), 136 unit tests pass. Not verified: PowerPC, real hardware, a 68000/Kickstart 2.04 run (no longer supported).
 
+## Joystick and clock: lowlevel.library and timer.device (samples/controls)
+
+`Joystick` (lowlevel.library v40) reads a joystick or CD32 pad: `Read(port)` returns direction and button bits (`Up`, `Fire`, `Fire2`, the CD32 colour and transport buttons), `Direction(port)` gives x and y as -1, 0 or 1, `Kind(port)` says what is plugged in, and `Force(port, gamepad)` sets the port type. A mouse port reads 0, because a mouse's low bits are counters. `Clock` (timer.device) reads the E clock: `Ticks`, `Frequency`, `Microseconds(from, to)` and `Milliseconds(from, to)`. On the host both are fakes: `Joystick.HostSet`, and `Clock.HostAdvance` (`Dos.Delay` advances it too).
+
+lowlevel.library is on the Workbench disk, not in ROM. A program that uses it must therefore start without it, so `[LibraryBase]` is new: a class with that attribute calls through a base variable of its own, which `SetBase` fills in. The usual base name (`LowLevelBase`, `TimerBase`) is renamed in the generated C, so neither libnix nor AROS's autoinit tries to open the library. cybergraphics now uses the same mechanism instead of its special case. The joystick bits, timer unit and struct sizes are measured from the toolchain headers (`value` lines in `tools/BindGen/structs.txt`), and the vectors come from the classic fd files.
+
+Verified:
+- 147 unit tests pass. They include the base mechanism compiled with host gcc and run, the sample on the host, and the m68k C output (no `LowLevelBase` or `TimerBase` left for the startup code).
+- A1200, Kickstart 3.1 (40.069) in FS-UAE, with `LIBS:` assigned to the Workbench 3.1 disk (read-only): 12 ok, no FAIL. The E clock runs at 709379 ticks per second, `Delay(10)` measures about 200 ms, and forcing port 1 to a pad and back to a joystick reads back.
+- The same machine without `Libs:`: the program starts, with 9 ok and every joystick read 0.
+- Hosted AROS (nightly 20261106): no FAIL. The clock runs at 200 ticks per second there, and AROS's lowlevel refuses a forced port type (`Force` returns false), which the sample reports rather than fails on.
+- Regression after the cybergraphics change, on the A1200 / 3.1: rtg 5, aga 6, screen 17 and cards 15 ok. Cards on hosted AROS: 16 ok.
+
+Not verified:
+- Real stick or pad input. No buttons were pressed in the emulator: the bits are measured from the headers, but no reading of a pressed button was checked.
+- A real CD32 pad, and real hardware in general.
+- AmigaOS 4 and MorphOS.
+
 ## Hardware test pack (tools/hwpack, samples/hwinfo)
 
 `tools/hwpack/build.sh <m68k image>` builds every sample for the A1200 plus `samples/hwinfo` into one drawer (`obj/hwtest`: the programs, `RunAll`, `README.txt`, an empty `results/`) that can be copied to a real Amiga and run with `Execute RunAll`. `hwinfo` prints the Kickstart and library versions, CPU and FPU flags (read from ExecBase), vertical blank frequency, free chip and fast RAM and whether AGA is present. `RunAll` writes one file per program into `results/` and a `SUMMARY.txt` (hwinfo, then any line containing `FAIL `); `README.txt` tells the tester what to look at by eye and what to report (machine, accelerator, display path, timing). Verified: the pack built from commit 87cc3bb plus this change ran end to end in FS-UAE (A1200, Kickstart 3.1 40.069, the Workbench 3.1 disk mounted read-only as DF0: only to supply `C:`): 17 programs, 330 `ok` lines, no `FAIL`, about 75 seconds, `SUMMARY.txt` clean; `hwinfo` reports 40.10 exec, 68020, no FPU, PAL, 1.97 MB chip free, no fast RAM, AGA yes. Not verified: any real hardware (this is the pack for it, issue #7), the pack on a machine with a different CPU or no `Search`/`Echo` in C:, what the screens and sound look and sound like on a real display and card (the README asks the tester), `Protect RunAll +s` being needed after a copy from a PC (written from knowledge of AmigaDOS, not tested).

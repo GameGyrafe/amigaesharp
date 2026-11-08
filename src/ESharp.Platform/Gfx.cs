@@ -54,6 +54,7 @@ public static unsafe class Graphics
 /// cybergraphics.library bindings (v40): the retargetable graphics (RTG) API that Picasso96, CyberGraphX and the AmigaOS 4 and
 /// MorphOS graphics drivers all provide. The library is absent on a stock Amiga, so <see cref="Video"/> opens it first and only then calls these.
 /// </summary>
+[LibraryBase("cybergraphics", "CyberGfxBase", "struct Library")]
 public static unsafe class CyberGfx
 {
     /// <summary>Emitter intrinsic: sets the library base that the calls below use (the result of OpenLibrary, or null afterwards).</summary>

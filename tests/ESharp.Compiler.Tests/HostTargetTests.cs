@@ -120,6 +120,40 @@ public class HostTargetTests
     }
 
     [Fact]
+    public void Controls_sample_runs_on_the_host()
+    {
+        using var console = HostConsole.Capture();
+        ESharp.Platform.Joystick.HostSet(1, ESharp.Platform.Joystick.KindNone, 0);
+        ControlsSample.Program.Main();
+        Assert.Equal("ok the clock reads 0 before Open\nok timer.device opens\nclock 1000000 ticks per second\nok the clock has a frequency\n"
+            + "ok ticks convert to time\nok the clock moves\nok Delay(10) measures about 200 ms\nok the clock closes\n"
+            + "lowlevel.library present\nport 1 kind 0 bits 0\nok port 1 set to a CD32 pad reads as a pad\n"
+            + "ok port 1 can be set to a joystick\nok port 1 then reads as a joystick\nok a direction is -1, 0 or 1\nok lowlevel closes\n", console.Output);
+    }
+
+    [Fact]
+    public void Joystick_reads_directions_and_buttons_only_from_sticks_and_pads()
+    {
+        ESharp.Platform.Joystick.Open();
+        try
+        {
+            ESharp.Platform.Joystick.HostSet(1, ESharp.Platform.Joystick.KindGamepad, ESharp.Platform.Joystick.Up | ESharp.Platform.Joystick.Left | ESharp.Platform.Joystick.Fire);
+            Assert.Equal((-1, -1), ESharp.Platform.Joystick.Direction(1));
+            Assert.NotEqual(0u, ESharp.Platform.Joystick.Read(1) & ESharp.Platform.Joystick.Fire);
+            ESharp.Platform.Joystick.HostSet(1, ESharp.Platform.Joystick.KindJoystick, ESharp.Platform.Joystick.Down | ESharp.Platform.Joystick.Right);
+            Assert.Equal((1, 1), ESharp.Platform.Joystick.Direction(1));
+            ESharp.Platform.Joystick.HostSet(0, ESharp.Platform.Joystick.KindMouse, 0x1234);
+            Assert.Equal(0u, ESharp.Platform.Joystick.Read(0));                    // a mouse has counters, not directions
+        }
+        finally
+        {
+            ESharp.Platform.Joystick.HostSet(0, ESharp.Platform.Joystick.KindNone, 0);
+            ESharp.Platform.Joystick.HostSet(1, ESharp.Platform.Joystick.KindNone, 0);
+            ESharp.Platform.Joystick.Close();
+        }
+    }
+
+    [Fact]
     public void Rtg_sample_opens_an_rtg_screen_on_the_host_and_falls_back_without_a_card()
     {
         using (var console = HostConsole.Capture())

@@ -38,8 +38,8 @@ public static class Dos
 
     public static void FlushOutput() { Out.Flush(); }
 
-    /// <summary>The host does not wait.</summary>
-    public static void Delay(int ticks) { Sound.HostAdvance(ticks); }
+    /// <summary>The host does not wait; the fake sound and clock move on by the time.</summary>
+    public static void Delay(int ticks) { Sound.HostAdvance(ticks); Clock.HostAdvance((long)ticks * 20000); }
 #endif
 
     /// <summary>Writes a decimal number.</summary>
