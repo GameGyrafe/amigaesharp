@@ -949,6 +949,33 @@ Check(list.Count == 0, ""destroy"");
     }
 
     [Fact]
+    public void Tag_writer_builds_tag_lists_and_refuses_a_list_that_does_not_fit()
+    {
+        if (!HasGcc) return;
+        const string body = @"
+nuint[] a = new nuint[7];
+fixed (nuint* p = a)
+{
+    var t = new TagWriter(p, 7);
+    t.Add(0x80000023u, 320); t.Add(0x80000038u, true); t.Add(5u, -1);
+    Dos.PutStr(t.End() ? ""ok "" : ""no ""); Dos.PutInt(t.Count);
+    for (int i = 0; i < 7; i++) { Dos.PutStr("" ""); Dos.PutInt((int)(uint)p[i]); }
+    Dos.PutStr(""\n"");
+}
+nuint[] b = new nuint[6];
+fixed (nuint* q = b)
+{
+    var u = new TagWriter(q, 6);
+    u.Add(1u, 1); u.Add(2u, 2); u.Add(3u, 3);
+    Dos.PutStr(u.End() ? ""ok "" : ""no ""); Dos.PutInt((int)q[0]); Dos.PutStr(""\n"");
+}";
+        var src = Program("", body).Replace("public static void Main()", "public static unsafe void Main()");
+        var (code, output) = RunWithHostGcc(CompileOk(src, Targets.M68k.ToOptions()));
+        Assert.Equal(0, code);
+        Assert.Equal("ok 3 -2147483613 320 -2147483592 1 5 -1 0\nno 0\n", output);
+    }
+
+    [Fact]
     public void Debug_define_poisons_arena_on_reset()
     {
         if (!HasGcc) return;
