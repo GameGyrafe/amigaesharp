@@ -60,14 +60,14 @@ public static unsafe class Video
         if (cyber == null) return CyberGfx.InvalidId;
         CyberGfx.SetBase(cyber);
         nuint[] tags = new nuint[8];      // tag lists are arrays of pointer-sized pairs
-        tags[0] = CyberGfx.CYBRBIDTG_Depth; tags[1] = 8;
-        tags[2] = CyberGfx.CYBRBIDTG_NominalWidth; tags[3] = (nuint)width;
-        tags[4] = CyberGfx.CYBRBIDTG_NominalHeight; tags[5] = (nuint)height;
-        tags[6] = Intuition.TagDone;
-        uint id;
+        uint id = CyberGfx.InvalidId;
         fixed (nuint* p = tags)
         {
-            id = CyberGfx.BestCModeIDTagList(p);
+            var t = new TagWriter(p, 8);
+            t.Add(CyberGfx.CYBRBIDTG_Depth, 8);
+            t.Add(CyberGfx.CYBRBIDTG_NominalWidth, width);
+            t.Add(CyberGfx.CYBRBIDTG_NominalHeight, height);
+            if (t.End()) id = CyberGfx.BestCModeIDTagList(p);
         }
         CyberGfx.SetBase(null);
         Exec.CloseLibrary(cyber);
@@ -103,37 +103,36 @@ public static unsafe class Video
     private static bool OpenMode(int width, int height, int depth, uint displayId)
     {
         nuint[] tags = new nuint[24];
-        tags[0] = Intuition.SA_Width; tags[1] = (nuint)width;
-        tags[2] = Intuition.SA_Height; tags[3] = (nuint)height;
-        tags[4] = Intuition.SA_Depth; tags[5] = (nuint)depth;
-        tags[6] = Intuition.SA_Quiet; tags[7] = 1;
-        tags[8] = Intuition.SA_Type; tags[9] = Intuition.CustomScreen;
-        tags[10] = Intuition.SA_DisplayID; tags[11] = (nuint)displayId;
-        tags[12] = Intuition.TagDone;
-        if (displayId == 0) tags[10] = Intuition.TagDone;     // native: let the system choose
         fixed (nuint* p = tags)
         {
-            _screen = Intuition.OpenScreenTagList(null, p);
+            var t = new TagWriter(p, 24);
+            t.Add(Intuition.SA_Width, width);
+            t.Add(Intuition.SA_Height, height);
+            t.Add(Intuition.SA_Depth, depth);
+            t.Add(Intuition.SA_Quiet, true);
+            t.Add(Intuition.SA_Type, Intuition.CustomScreen);
+            if (displayId != 0) t.Add(Intuition.SA_DisplayID, displayId);   // native: let the system choose
+            if (t.End()) _screen = Intuition.OpenScreenTagList(null, p);
         }
         if (_screen == null) return false;
 
         nuint[] wtags = new nuint[26];
-        wtags[0] = Intuition.WA_CustomScreen; wtags[1] = (nuint)_screen;
-        wtags[2] = Intuition.WA_Left; wtags[3] = 0;
-        wtags[4] = Intuition.WA_Top; wtags[5] = 0;
-        wtags[6] = Intuition.WA_Width; wtags[7] = (nuint)width;
-        wtags[8] = Intuition.WA_Height; wtags[9] = (nuint)height;
-        wtags[10] = Intuition.WA_Borderless; wtags[11] = 1;
-        wtags[12] = Intuition.WA_Backdrop; wtags[13] = 1;
-        wtags[14] = Intuition.WA_Activate; wtags[15] = 1;
-        wtags[16] = Intuition.WA_RMBTrap; wtags[17] = 1;
-        wtags[18] = Intuition.WA_NoCareRefresh; wtags[19] = 1;
-        wtags[20] = Intuition.WA_IDCMP; wtags[21] = Intuition.IDCMP_MOUSEBUTTONS | Intuition.IDCMP_MOUSEMOVE | Intuition.IDCMP_RAWKEY;
-        wtags[22] = Intuition.WA_ReportMouse; wtags[23] = 1;
-        wtags[24] = Intuition.TagDone;
         fixed (nuint* wp = wtags)
         {
-            _window = Intuition.OpenWindowTagList(null, wp);
+            var w = new TagWriter(wp, 26);
+            w.Add(Intuition.WA_CustomScreen, _screen);
+            w.Add(Intuition.WA_Left, 0);
+            w.Add(Intuition.WA_Top, 0);
+            w.Add(Intuition.WA_Width, width);
+            w.Add(Intuition.WA_Height, height);
+            w.Add(Intuition.WA_Borderless, true);
+            w.Add(Intuition.WA_Backdrop, true);
+            w.Add(Intuition.WA_Activate, true);
+            w.Add(Intuition.WA_RMBTrap, true);
+            w.Add(Intuition.WA_NoCareRefresh, true);
+            w.Add(Intuition.WA_IDCMP, Intuition.IDCMP_MOUSEBUTTONS | Intuition.IDCMP_MOUSEMOVE | Intuition.IDCMP_RAWKEY);
+            w.Add(Intuition.WA_ReportMouse, true);
+            if (w.End()) _window = Intuition.OpenWindowTagList(null, wp);
         }
         if (_window == null)
         {

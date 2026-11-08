@@ -93,6 +93,18 @@ measured values equal every hand-written value on both targets (23 on m68k, 21 o
 unchanged, 141 unit tests pass. Not done: os4 and morphos (the script has their compilers but they were not run),
 offsets for structs we do not read yet, a unit test (needs docker and the images).
 
+## Update: tag lists
+
+`ESharp.Platform.TagWriter` writes a tag list (pointer-sized tag/value pairs, ended by TAG_DONE) into a buffer
+the caller owns: `t.Add(Intuition.SA_Width, width); t.Add(Intuition.SA_Quiet, true); if (t.End()) ...`. `Add`
+takes `int`, `uint`, `nuint`, `bool` and pointers; a list that does not fit is never passed on half-written
+(`End` returns false and leaves only TAG_DONE). `Video` builds its screen, window and RTG mode tag lists with it
+instead of hand-numbered slots. Verified: a unit test compiles a tag list to C and runs it with host gcc (layout,
+negative values, overflow); on the A1200 / Kickstart 3.1 emulator screen 17, aga 6, rtg 5, cards 15, rummy 28,
+sound 21 ok, no FAIL (same as before); on hosted AROS (nightly 20261106) cards 16, rummy 31, screen 17 ok, no
+FAIL; 142 unit tests pass. Not done: typed tag names (tags are still `uint` constants, so a wrong value type for a
+tag is not caught), tags for other libraries, generating the tag constants from an SDK.
+
 ## Not verified
 
 Everything on the Amiga side beyond the `SetChipRev` runs in the emulator (A1200, Kickstart 3.1) above; the
