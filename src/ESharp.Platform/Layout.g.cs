@@ -3,7 +3,7 @@
 #if AMIGA
 namespace ESharp.Platform;
 
-/// <summary>Struct offsets and sizes per target (AmigaOS 3 m68k: 32-bit pointers; AROS x86-64: 64-bit pointers).</summary>
+/// <summary>Struct offsets, sizes and header constants per target (AmigaOS 3 m68k: 32-bit pointers; AROS x86-64: 64-bit pointers).</summary>
 public static class Layout
 {
 #if X86_64
@@ -30,6 +30,31 @@ public static class Layout
     public const int OffPeriod = 92;
     public const int OffVolume = 94;
     public const int OffCycles = 96;
+    public const int TimeRequestSize = 80;
+    public const uint TimerUnitMicroHz = 0u;
+    public const int EClockHi = 0;
+    public const int EClockLo = 4;
+    public const uint JpTypeMask = 4026531840u;
+    public const uint JpTypeNotAvail = 0u;
+    public const uint JpTypeGameCtlr = 268435456u;
+    public const uint JpTypeMouse = 536870912u;
+    public const uint JpTypeJoystk = 805306368u;
+    public const uint JpTypeUnknown = 1073741824u;
+    public const uint JpButtonBlue = 8388608u;
+    public const uint JpButtonRed = 4194304u;
+    public const uint JpButtonYellow = 2097152u;
+    public const uint JpButtonGreen = 1048576u;
+    public const uint JpButtonForward = 524288u;
+    public const uint JpButtonReverse = 262144u;
+    public const uint JpButtonPlay = 131072u;
+    public const uint JpUp = 8u;
+    public const uint JpDown = 4u;
+    public const uint JpLeft = 2u;
+    public const uint JpRight = 1u;
+    public const uint SjaType = 2160066817u;
+    public const uint SjaTypeAuto = 0u;
+    public const uint SjaTypeGameCtlr = 1u;
+    public const uint SjaTypeJoystk = 3u;
 #else
     public const int WindowRPort = 50;
     public const int WindowUserPort = 86;
@@ -54,6 +79,31 @@ public static class Layout
     public const int OffPeriod = 42;
     public const int OffVolume = 44;
     public const int OffCycles = 46;
+    public const int TimeRequestSize = 40;
+    public const uint TimerUnitMicroHz = 0u;
+    public const int EClockHi = 0;
+    public const int EClockLo = 4;
+    public const uint JpTypeMask = 4026531840u;
+    public const uint JpTypeNotAvail = 0u;
+    public const uint JpTypeGameCtlr = 268435456u;
+    public const uint JpTypeMouse = 536870912u;
+    public const uint JpTypeJoystk = 805306368u;
+    public const uint JpTypeUnknown = 1073741824u;
+    public const uint JpButtonBlue = 8388608u;
+    public const uint JpButtonRed = 4194304u;
+    public const uint JpButtonYellow = 2097152u;
+    public const uint JpButtonGreen = 1048576u;
+    public const uint JpButtonForward = 524288u;
+    public const uint JpButtonReverse = 262144u;
+    public const uint JpButtonPlay = 131072u;
+    public const uint JpUp = 8u;
+    public const uint JpDown = 4u;
+    public const uint JpLeft = 2u;
+    public const uint JpRight = 1u;
+    public const uint SjaType = 2160066817u;
+    public const uint SjaTypeAuto = 0u;
+    public const uint SjaTypeGameCtlr = 1u;
+    public const uint SjaTypeJoystk = 3u;
 #endif
 }
 #endif

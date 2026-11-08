@@ -35,6 +35,23 @@ public sealed class SinceAttribute : Attribute
     public int LibraryVersion { get; }
 }
 
+/// <summary>
+/// The [AmigaLib] calls in this class go through a library base that the program opens itself (a library on disk
+/// that may be missing, or a device), not one the startup code opens. <c>SetBase(void*)</c> in the class is an
+/// emitter intrinsic that stores the base; it must be set before any call. <paramref name="baseName"/> is the
+/// base's usual C name (renamed in the generated C, so the startup code never tries to open it) and
+/// <paramref name="baseType"/> its C type.
+/// </summary>
+[AttributeUsage(AttributeTargets.Class)]
+public sealed class LibraryBaseAttribute : Attribute
+{
+    public LibraryBaseAttribute(string library, string baseName, string baseType) { Library = library; BaseName = baseName; BaseType = baseType; }
+
+    public string Library { get; }
+    public string BaseName { get; }
+    public string BaseType { get; }
+}
+
 /// <summary>Places data where the custom chips can reach it (chip RAM).</summary>
 [AttributeUsage(AttributeTargets.Field)]
 public sealed class ChipRamAttribute : Attribute

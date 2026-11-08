@@ -1,11 +1,13 @@
 # Struct offsets E# reads directly (our own list: names of fields, no header text).
-# Lines: "include <header>", "Name = struct.field.path" (offsetof) or "Name = sizeof struct".
+# Lines: "include <header>", "Name = struct.field.path" (offsetof), "Name = sizeof struct" or "Name = value MACRO" (a constant).
 # Measured with the target's own C compiler: tools/BindGen offsets (see docs/BINDINGS_SPIKE.md).
 include exec/io.h
 include intuition/intuition.h
 include intuition/screens.h
 include graphics/gfx.h
 include devices/audio.h
+include devices/timer.h
+include libraries/lowlevel.h
 
 # Intuition (src/ESharp.Platform/Gfx.cs)
 WindowRPort = Window.RPort
@@ -33,3 +35,32 @@ OffDataLength = IOAudio.ioa_Length
 OffPeriod = IOAudio.ioa_Period
 OffVolume = IOAudio.ioa_Volume
 OffCycles = IOAudio.ioa_Cycles
+
+# timer.device (src/ESharp.Platform/Clock.cs)
+TimeRequestSize = sizeof timerequest
+TimerUnitMicroHz = value UNIT_MICROHZ
+EClockHi = EClockVal.ev_hi
+EClockLo = EClockVal.ev_lo
+
+# lowlevel.library (src/ESharp.Platform/Joystick.cs)
+JpTypeMask = value JP_TYPE_MASK
+JpTypeNotAvail = value JP_TYPE_NOTAVAIL
+JpTypeGameCtlr = value JP_TYPE_GAMECTLR
+JpTypeMouse = value JP_TYPE_MOUSE
+JpTypeJoystk = value JP_TYPE_JOYSTK
+JpTypeUnknown = value JP_TYPE_UNKNOWN
+JpButtonBlue = value JPF_BUTTON_BLUE
+JpButtonRed = value JPF_BUTTON_RED
+JpButtonYellow = value JPF_BUTTON_YELLOW
+JpButtonGreen = value JPF_BUTTON_GREEN
+JpButtonForward = value JPF_BUTTON_FORWARD
+JpButtonReverse = value JPF_BUTTON_REVERSE
+JpButtonPlay = value JPF_BUTTON_PLAY
+JpUp = value JPF_JOY_UP
+JpDown = value JPF_JOY_DOWN
+JpLeft = value JPF_JOY_LEFT
+JpRight = value JPF_JOY_RIGHT
+SjaType = value SJA_Type
+SjaTypeAuto = value SJA_TYPE_AUTOSENSE
+SjaTypeGameCtlr = value SJA_TYPE_GAMECTLR
+SjaTypeJoystk = value SJA_TYPE_JOYSTK

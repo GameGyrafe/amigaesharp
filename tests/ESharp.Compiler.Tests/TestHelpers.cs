@@ -44,11 +44,12 @@ public static class P
         catch { return false; }
     }
 
-    /// <summary>Compiles generated C with the host gcc against a shim of proto/dos.h and runs it.</summary>
-    public static (int exitCode, string output) RunWithHostGcc(string c)
+    /// <summary>Compiles generated C with the host gcc against a shim of proto/dos.h (plus any <paramref name="extraHeaders"/>, relative path to text) and runs it.</summary>
+    public static (int exitCode, string output) RunWithHostGcc(string c, System.Collections.Generic.IReadOnlyDictionary<string, string>? extraHeaders = null)
     {
         var dir = Path.Combine(Path.GetTempPath(), "esharp-test-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(Path.Combine(dir, "proto"));
+        if (extraHeaders != null) foreach (var (name, text) in extraHeaders) File.WriteAllText(Path.Combine(dir, name), text);
         File.WriteAllText(Path.Combine(dir, "proto", "dos.h"),
             "#include <stdio.h>\nstatic inline long PutStr(const char *s) { return fputs(s, stdout) < 0; }\n");
         // A tiny exec.library: AllocVec/FreeVec on calloc, with a 2 MB "chip" pool tracked by flags.

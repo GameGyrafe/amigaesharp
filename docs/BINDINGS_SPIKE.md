@@ -161,6 +161,10 @@ or lower out of the total in the fd file.
 AHI (sound on RTG and PPC systems) is third-party, and its header does not use the AROS macro form BindGen
 parses. It needs its own look. Presence on AmigaOS 4 and MorphOS is not verified for any of these libraries.
 
+## Update: lowlevel and timer bound, optional library bases
+
+These are the first two libraries from the list above. `[LibraryBase(lib, base, type)]` replaces the cybergraphics special case: the class's calls go through a base variable of our own, which `SetBase` fills in. The usual base name is renamed with a `#define` before the proto header, so libnix's startup library list and AROS's autoinit never see it, and a missing disk library cannot stop the program from starting. `bindgen offsets` now also measures header constants (`Name = value MACRO`, written as `uint`), so the joystick bits and the timer unit come from the toolchain headers rather than from memory. See STATUS.md, "Joystick and clock", for the runs.
+
 ## Not verified
 
 Everything on the Amiga side beyond the `SetChipRev` runs in the emulator (A1200, Kickstart 3.1) above; the

@@ -825,11 +825,69 @@ Check(list.Count == 0, ""destroy"");
         var path = Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "..", "samples", "rtg", "Rtg.cs");
         var r = EsCompiler.Compile(new[] { new SourceFile("Rtg.cs", File.ReadAllText(path)) }, Targets.M68k.ToOptions());
         Assert.True(r.Success, string.Join("\n", r.Diagnostics));
-        // A program must still start on a machine without cybergraphics.library: no use of the library-list base CyberGfxBase.
-        Assert.Contains("#define CYBERGRAPHICS_BASE_NAME es_CyberBase", r.C!);
-        Assert.Contains("struct Library *es_CyberBase;", r.C!);
+        // A program must still start on a machine without cybergraphics.library: the startup code's base CyberGfxBase is renamed away.
+        Assert.Contains("#define CyberGfxBase es_CyberGfxBase", r.C!);
+        Assert.Contains("struct Library *es_CyberGfxBase;", r.C!);
         Assert.Contains("IsCyberModeID(", r.C!);
         Assert.Contains("BestCModeIDTagList(", r.C!);
+    }
+
+    [Fact]
+    public void Controls_sample_compiles_for_m68k_with_private_lowlevel_and_timer_bases()
+    {
+        var path = Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "..", "samples", "controls", "Controls.cs");
+        var r = EsCompiler.Compile(new[] { new SourceFile("Controls.cs", File.ReadAllText(path)) }, Targets.M68k.ToOptions());
+        Assert.True(r.Success, string.Join("\n", r.Diagnostics));
+        // lowlevel.library is on disk: a program must start without it, so libnix must not see LowLevelBase.
+        Assert.Contains("#define LowLevelBase es_LowLevelBase", r.C!);
+        Assert.Contains("struct Library *es_LowLevelBase;", r.C!);
+        Assert.Contains("#define TimerBase es_TimerBase", r.C!);
+        Assert.Contains("struct Device *es_TimerBase;", r.C!);
+        Assert.Contains("#include <proto/lowlevel.h>", r.C!);
+        Assert.Contains("#include <proto/timer.h>", r.C!);
+        Assert.Contains("ReadJoyPort(", r.C!);
+        Assert.Contains("ReadEClock(", r.C!);
+    }
+
+    [Fact]
+    public void A_library_base_class_calls_through_its_own_base_variable_that_SetBase_fills()
+    {
+        if (!HasGcc) return;
+        var src = Prelude + @"
+[LibraryBase(""widget"", ""WidgetBase"", ""struct Library"")]
+public static unsafe class Widget
+{
+    public static extern void SetBase(void* library);
+    [AmigaLib(""widget"", -30)] public static extern int Scale(int x);
+}
+public static unsafe class P
+{
+    [EntryPoint]
+    public static void Main()
+    {
+        int[] fake = new int[2];
+        fixed (int* lib = fake)
+        {
+            fake[0] = 3;
+            Widget.SetBase(lib);
+            Dos.PutStr($""{Widget.Scale(7)} "");
+            fake[0] = 5;
+            Dos.PutStr($""{Widget.Scale(7)}\n"");
+            Widget.SetBase(null);
+        }
+    }
+}";
+        var c = CompileOk(src, new CompileOptions { Defines = new[] { "AMIGA", "ESHARP_HOSTC" } });
+        Assert.Contains("#define WidgetBase es_WidgetBase", c);
+        // The shim reads the base by its usual name, as a real proto header does; the rename must reach it.
+        var shim = new System.Collections.Generic.Dictionary<string, string>
+        {
+            ["proto/widget.h"] = "struct Library;\nextern struct Library *WidgetBase;\n"
+                + "static inline int Scale(int x) { return *(int *)WidgetBase * x; }\n",
+        };
+        var (code, output) = RunWithHostGcc(c, shim);
+        Assert.Equal(0, code);
+        Assert.Equal("21 35\n", output);
     }
 
     [Fact]
