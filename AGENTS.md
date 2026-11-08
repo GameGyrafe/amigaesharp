@@ -26,6 +26,7 @@ dotnet run --project src/ESharp.Cli -- run samples/lambdas --docker <image> --he
 dotnet run --project src/ESharp.Cli -- run samples/linq --docker <image> --headless --model A1200   # LINQ over arrays, turned into loops
 dotnet run --project tools/CardArt -- samples/cards/cards.png                               # redraw the card sprite sheet
 dotnet run --project tools/BindGen -- check <sdk include dir> src/ESharp.Platform   # compare our [AmigaLib] vectors/arg counts with an SDK you provide (AROS include dir; not committed)
+tools/BindGen/layouts.sh                                  # re-measure struct offsets (tools/BindGen/structs.txt) for m68k and AROS into src/ESharp.Platform/Layout.g.cs (docker)
 tools/hwpack/build.sh <m68k image>                       # build the real-hardware test pack into obj/hwtest (run with Execute RunAll on the Amiga)
 docker build -t esharp-amiga-toolchain docker && docker/smoke-test.sh    # combined toolchain image
 ```

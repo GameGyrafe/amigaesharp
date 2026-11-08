@@ -254,16 +254,11 @@ public static unsafe class Sound
     private static int _open;
     private static int _next;
 
-#if X86_64
-    // 64-bit pointers (AROS x86-64): measured with offsetof() against the AROS headers.
-    private const int IoSize = 152;              // struct IOAudio
-    private const int OffType = 16, OffReplyPort = 32, OffLength = 40, OffCommand = 64, OffFlags = 66, OffError = 67;
-    private const int OffAllocKey = 72, OffData = 80, OffDataLength = 88, OffPeriod = 92, OffVolume = 94, OffCycles = 96;
-#else
-    private const int IoSize = 68;               // struct IOAudio
-    private const int OffType = 8, OffReplyPort = 14, OffLength = 18, OffDevice = 20, OffUnit = 24, OffCommand = 28, OffFlags = 30, OffError = 31;
-    private const int OffAllocKey = 32, OffData = 34, OffDataLength = 38, OffPeriod = 42, OffVolume = 44, OffCycles = 46;
-#endif
+    // struct IOAudio: size and field offsets, measured per target (Layout.g.cs).
+    private const int IoSize = Layout.IoSize;
+    private const int OffType = Layout.OffType, OffReplyPort = Layout.OffReplyPort, OffLength = Layout.OffLength, OffCommand = Layout.OffCommand;
+    private const int OffFlags = Layout.OffFlags, OffError = Layout.OffError, OffAllocKey = Layout.OffAllocKey, OffData = Layout.OffData;
+    private const int OffDataLength = Layout.OffDataLength, OffPeriod = Layout.OffPeriod, OffVolume = Layout.OffVolume, OffCycles = Layout.OffCycles;
     private const int CmdWrite = 3, AdcmdAllocate = 32, AdcmdFree = 33, AdIoPerVol = 16, AdIoNoWait = 64;
 
     /// <summary>Opens audio.device and tries to allocate a channel for each voice. True if at least one voice is available.</summary>

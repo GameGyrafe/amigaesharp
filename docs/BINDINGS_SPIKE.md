@@ -81,6 +81,18 @@ reports exactly that one (so it would have caught the bug). `gen` output for `do
 `[Since(n)]` is now a real attribute (`ESharp.SinceAttribute`) and `gen` writes it; the analyzer rule **ES0101** is an error when a call needs a library version newer than the target's: m68k (Kickstart 3.1) is version 40, AROS is checked against 51 (the highest in the AROS 9.1 headers), and the PowerPC targets are not checked because their library versions are not verified. Verified by three unit tests (error on m68k with both versions in the message, no error for a call within the version or a declaration never called, no error on AROS; 141 tests pass). Our hand-written declarations now carry `Since` where the AROS headers give a version above 0 (11 of 38: v36 for `PutStr`, `Flush`, `AllocVec`, `FreeVec`, `CreateMsgPort`, `DeleteMsgPort`, `GetVPModeID`, `OpenScreenTagList`, `OpenWindowTagList`; v39 for `SetRGB32`, `SetChipRev`); all are within Kickstart 3.1, and the generated C for all 18 samples on m68k and AROS is byte-for-byte unchanged. ES0101 checks calls in user code only; calls inside `ESharp.Platform` are not checked (the platform gates them itself, for example `Video.HasAga` opens graphics v39 first). Checked with a throwaway program calling `Graphics.SetChipRev` with its `Since` raised to 41: ES0101 on m68k, and none at the real value. Not done: struct layouts, tags, `exec`/`graphics`
 generation beyond candidates, a unit test (needs an SDK path, so it would skip by default).
 
+## Update: struct offsets measured, not typed in
+
+`tools/BindGen offsets <spec> <target> --docker <image>` writes a C file of `offsetof`/`sizeof` constants for the
+fields listed in `tools/BindGen/structs.txt` (our own list), compiles it to assembly with the target's own
+compiler and headers (nothing is linked or run) and reads the numbers back. `tools/BindGen/layouts.sh` does this
+for m68k and AROS x86-64 and writes `src/ESharp.Platform/Layout.g.cs`; `Gfx.cs` and `Sound.cs` now take their
+Window, Screen, IntuiMessage, BitMap and IOAudio offsets from it instead of hand-typed tables. Verified: the
+measured values equal every hand-written value on both targets (23 on m68k, 21 on AROS; the AROS table had no
+`io_Device`/`io_Unit`, which nothing uses), the generated C for all 18 samples on m68k and AROS is byte-for-byte
+unchanged, 141 unit tests pass. Not done: os4 and morphos (the script has their compilers but they were not run),
+offsets for structs we do not read yet, a unit test (needs docker and the images).
+
 ## Not verified
 
 Everything on the Amiga side beyond the `SetChipRev` runs in the emulator (A1200, Kickstart 3.1) above; the
