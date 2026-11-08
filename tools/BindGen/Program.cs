@@ -12,30 +12,37 @@ using System.Text.RegularExpressions;
 //   bindgen facts <sdk-include-dir> <lib>                            list name, vector, first version
 //   bindgen offsets <spec> <target> --docker <image> | --cc <compiler> [--cflags "..."]
 //                                                                    measure struct offsets with the target's C compiler
+//   bindgen compare <sdk-include-dir> <fd-dir> <lib...>              where the AROS headers and the classic fd files disagree
+//
+// Wherever <sdk-include-dir> is accepted, an fd directory (m68k toolchain, ndk/lib/fd) works too. The fd files carry
+// the classic first-version markers, which the AROS headers sometimes get wrong (datatypes is all "45" there).
+// gen takes --fd <fd-dir> to use the fd vectors and versions with the AROS argument types.
 //
 // See docs/BINDINGS_SPIKE.md and issue #18 for why the SDK is read from your own copy.
 
 return Cli.Run(args);
-
-internal sealed record Arg(string Type, string Name, string Register);
-internal sealed record Func(string Name, string Ret, IReadOnlyList<Arg> Args, int Lvo, int Since);
 
 internal static class Cli
 {
     public static int Run(string[] args)
     {
         if (args.Length >= 3 && args[0] == "offsets") return Offsets.Run(args.Skip(1).ToArray());
+        if (args.Length >= 4 && args[0] == "compare") return Compare(args[1], args[2], args.Skip(3).ToArray());
         if (args.Length < 3) return Usage();
         string include = args[1];
         switch (args[0])
         {
             case "facts":
-                foreach (var f in Parse(include, args[2]))
+                foreach (var f in Load(include, args[2]))
                     Console.WriteLine($"{f.Name}\t{-6 * f.Lvo}\tsince {f.Since}\t{f.Args.Count} args");
                 return 0;
             case "gen":
-                var text = Generate(args[2], Parse(include, args[2]));
-                if (args.Length > 3) File.WriteAllText(args[3], text); else Console.Write(text);
+                int fdAt = Array.IndexOf(args, "--fd");
+                var funcs = Load(include, args[2]);
+                if (fdAt > 0 && fdAt + 1 < args.Length) funcs = Merge(Fd.Parse(args[fdAt + 1], args[2]), funcs);
+                var rest = args.Where((_, i) => i > 2 && (fdAt < 0 || (i != fdAt && i != fdAt + 1))).ToArray();
+                var text = Generate(args[2], funcs);
+                if (rest.Length > 0) File.WriteAllText(rest[0], text); else Console.Write(text);
                 return 0;
             case "check":
                 return Check(include, args[2], args.Skip(3).ToArray());
@@ -57,6 +64,47 @@ internal static class Cli
     private static readonly Regex Head = new(@"\s*(.+?),\s*(\w+),\s*(?=AROS_LPA|LIBBASETYPEPTR)", RegexOptions.Singleline | RegexOptions.Compiled);
     private static readonly Regex ArgRe = new(@"AROS_LPAM?\(\s*(.+?)\s*,\s*(\w+)\s*,\s*(\w+)\s*\)", RegexOptions.Compiled);
     private static readonly Regex Tail = new(@"LIBBASETYPEPTR,\s*\w+,\s*(\d+),\s*\w+", RegexOptions.Compiled);
+
+    public static List<Func> Load(string source, string lib) => Fd.IsFdDir(source) ? Fd.Parse(source, lib) : Parse(source, lib);
+
+    private static bool Has(string source, string lib) =>
+        File.Exists(Fd.IsFdDir(source) ? Fd.FilePath(source, lib) : Path.Combine(source, "clib", lib + "_protos.h"));
+
+    // fd facts (vector, version, registers) with the argument and return types of the matching AROS prototype.
+    private static List<Func> Merge(List<Func> fd, List<Func> aros)
+    {
+        var byName = aros.GroupBy(f => f.Name).ToDictionary(g => g.Key, g => g.First());
+        return fd.Select(f =>
+        {
+            if (!byName.TryGetValue(f.Name, out var a) || a.Args.Count != f.Args.Count)
+                return f with { Ret = "IPTR", Args = f.Args.Select(x => x with { Type = "IPTR /* untyped */" }).ToList() };
+            return f with { Ret = a.Ret, Args = f.Args.Select((x, i) => x with { Type = a.Args[i].Type }).ToList() };
+        }).ToList();
+    }
+
+    private static int Compare(string include, string fdDir, string[] libs)
+    {
+        int problems = 0;
+        foreach (var lib in libs)
+        {
+            if (!Has(fdDir, lib) || !Has(include, lib)) { Console.WriteLine($"{lib}: missing from one side, skipped"); continue; }
+            var fd = Fd.Parse(fdDir, lib).GroupBy(f => f.Name).ToDictionary(g => g.Key, g => g.First());
+            var aros = Parse(include, lib).GroupBy(f => f.Name).ToDictionary(g => g.Key, g => g.First());
+            int n = 0;
+            foreach (var f in fd.Values.OrderBy(f => f.Lvo))
+            {
+                if (!aros.TryGetValue(f.Name, out var a)) { Console.WriteLine($"{lib}.{f.Name}: in the fd file (vector {-6 * f.Lvo}), not in the AROS headers"); n++; continue; }
+                if (a.Lvo != f.Lvo) { Console.WriteLine($"{lib}.{f.Name}: vector {-6 * f.Lvo} in the fd file, {-6 * a.Lvo} in AROS"); n++; }
+                if (a.Args.Count != f.Args.Count) { Console.WriteLine($"{lib}.{f.Name}: {f.Args.Count} arguments in the fd file, {a.Args.Count} in AROS"); n++; }
+                if (Math.Max(a.Since, 0) != f.Since && (a.Since <= 40 || f.Since <= 40)) { Console.WriteLine($"{lib}.{f.Name}: first version {f.Since} in the fd file, {a.Since} in AROS"); n++; }
+            }
+            foreach (var a in aros.Values.Where(a => !fd.ContainsKey(a.Name) && a.Since <= 40).OrderBy(a => a.Lvo))
+            { Console.WriteLine($"{lib}.{a.Name}: AROS says version {a.Since} (vector {-6 * a.Lvo}), not in the fd file"); n++; }
+            Console.WriteLine($"{lib}: {fd.Count} fd functions, {aros.Count} AROS functions, {n} difference(s)");
+            problems += n;
+        }
+        return problems == 0 ? 0 : 1;
+    }
 
     public static List<Func> Parse(string include, string lib)
     {
@@ -94,8 +142,8 @@ internal static class Cli
         int problems = 0, checkedCount = 0;
         foreach (var lib in mine.Select(x => x.Lib).Distinct().Where(l => only.Length == 0 || only.Contains(l)))
         {
-            if (!File.Exists(Path.Combine(include, "clib", lib + "_protos.h"))) { Console.WriteLine($"{lib}: no prototypes in the SDK, skipped"); continue; }
-            var sdk = Parse(include, lib).ToDictionary(f => f.Name);
+            if (!Has(include, lib)) { Console.WriteLine($"{lib}: no prototypes in the SDK, skipped"); continue; }
+            var sdk = Load(include, lib).GroupBy(f => f.Name).ToDictionary(g => g.Key, g => g.First());
             foreach (var d in mine.Where(x => x.Lib == lib))
             {
                 checkedCount++;

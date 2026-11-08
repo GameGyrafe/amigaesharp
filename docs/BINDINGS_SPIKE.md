@@ -105,6 +105,62 @@ sound 21 ok, no FAIL (same as before); on hosted AROS (nightly 20261106) cards 1
 FAIL; 142 unit tests pass. Not done: typed tag names (tags are still `uint` constants, so a wrong value type for a
 tag is not caught), tags for other libraries, generating the tag constants from an SDK.
 
+## Update: which libraries next, and where the facts come from
+
+**Where each library lives on the minimum system.** I listed the resident modules of the Kickstart 3.1 (40.069)
+A1200 ROM (read in place, RomTag scan) and the `Libs:` directory of the Workbench 3.1 (40.42) disk (read-only):
+
+- In ROM, always there: exec, dos, graphics, intuition, layers, utility, keymap, gadtools, icon, workbench,
+  expansion, mathffp and mathieeesingbas. The devices in ROM are timer, audio, gameport, input, keyboard and console.
+- On disk, in `Libs:`, present only if installed: lowlevel, asl, diskfont, iffparse, datatypes, locale,
+  commodities, amigaguide, bullet, realtime, nonvolatile, rexxsyslib, rexxsupport, the mathieee double and trans
+  libraries and mathtrans.
+
+This matters for the generator. libnix opens every library a program references at startup and refuses to start
+if one is missing. A binding for a disk library therefore needs the optional-base pattern that cybergraphics
+already uses (`CyberGfx.SetBase`), generalised. The ROM libraries can keep libnix's automatic open.
+
+**The fd files are the better source of first versions for the classic OS.** The m68k toolchain ships the
+classic function-description files (`ndk/lib/fd/*_lib.fd`), which carry "functions in Vnn or higher" markers.
+BindGen now reads them (`Fd.cs`), and wherever it takes an SDK include directory it also accepts an fd directory.
+`bindgen compare <aros-include> <fd-dir> <lib...>` lists the differences, and `gen ... --fd <fd-dir>` uses the fd
+vectors and versions with the AROS argument types. Across the 19 libraries below, the comparison found:
+
+- **AROS gives versions that would block working 3.1 calls:** all of datatypes is marked 45 (it is 40 in the fd
+  file), and asl's AbortAslRequest and ActivateAslRequest are marked 50 (36 in the fd file). With the AROS
+  numbers, ES0101 would reject these calls on 3.1.
+- **Version differences that do not change anything on 3.1:** iffparse says 33 against the fd file's 36, and five
+  dos functions and lowlevel's SetJoyPortAttrsA differ by one to three versions. Both sides are 40 or lower, or the
+  difference stays on the AROS side of v40.
+- **Vector differences:** only intuition's ShowWindow and HideWindow differ, and both are 3.2 (v47) additions, not
+  3.1.
+- **Present on one side only:** functions that only AROS has (for example timer GetUpTime and exec's Child*
+  calls), the 3.2 outline-font engine in diskfont that AROS does not have, and private slots.
+- **Our own bindings:** all 27 of our declarations match the fd files (`bindgen check <fd-dir> src/ESharp.Platform`).
+
+So for m68k, Since should come from the fd files, and AROS keeps its own headers.
+
+**Candidates, by use to a game.** Columns are the library, where it lives on 3.1, and its public functions at v40
+or lower out of the total in the fd file.
+
+| library | 3.1 | ≤v40 / all | why |
+| --- | --- | --- | --- |
+| lowlevel | disk | 15 / 15 | joystick and CD32 pad (ReadJoyPort), keyboard and VBlank interrupts, ElapsedTime |
+| timer (device) | ROM | 5 / 5 | frame timing: ReadEClock, GetSysTime |
+| keymap | ROM | 4 / 4 | MapRawKey: raw key to character, for text input |
+| utility | ROM | 38 / 43 | tag-item helpers, hooks, 32-bit multiply/divide |
+| diskfont | disk | 5 / 17 | OpenDiskFont: fonts other than topaz |
+| iffparse | disk | 40 / 40 | read and write ILBM and 8SVX at run time (asset loading, saves) |
+| asl | disk | 8 / 8 | file and screen-mode requesters (mode picker for RTG) |
+| datatypes | disk | 15 / 23 | load any picture or sound the system understands |
+| icon | ROM | 17 / 28 | tool types from the program's .info (settings) |
+| gadtools | ROM | 19 / 21 | system menus and gadgets, for tools rather than games |
+| locale | disk | 24 / 24 | translated strings (catalogs) |
+| layers, commodities, realtime, nonvolatile | | | not needed for games now |
+
+AHI (sound on RTG and PPC systems) is third-party, and its header does not use the AROS macro form BindGen
+parses. It needs its own look. Presence on AmigaOS 4 and MorphOS is not verified for any of these libraries.
+
 ## Not verified
 
 Everything on the Amiga side beyond the `SetChipRev` runs in the emulator (A1200, Kickstart 3.1) above; the
