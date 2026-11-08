@@ -56,6 +56,8 @@
     <Compile Include="..\..\samples\linq\Linq.cs" Link="Samples\Linq\Linq.cs" />
     <Compile Include="..\..\samples\lambdas\Lambdas.cs" Link="Samples\Lambdas\Lambdas.cs" />
     <Compile Include="..\..\samples\collections\Collections.cs" Link="Samples\Collections.cs" />
+    <Compile Include="..\..\tools\BindGen\Model.cs" Link="BindGen\Model.cs" />
+    <Compile Include="..\..\tools\BindGen\Fd.cs" Link="BindGen\Fd.cs" />
   </ItemGroup>
 
 
