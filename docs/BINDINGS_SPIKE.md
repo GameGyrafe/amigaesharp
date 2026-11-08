@@ -165,6 +165,10 @@ parses. It needs its own look. Presence on AmigaOS 4 and MorphOS is not verified
 
 These are the first two libraries from the list above. `[LibraryBase(lib, base, type)]` replaces the cybergraphics special case: the class's calls go through a base variable of our own, which `SetBase` fills in. The usual base name is renamed with a `#define` before the proto header, so libnix's startup library list and AROS's autoinit never see it, and a missing disk library cannot stop the program from starting. `bindgen offsets` now also measures header constants (`Name = value MACRO`, written as `uint`), so the joystick bits and the timer unit come from the toolchain headers rather than from memory. See STATUS.md, "Joystick and clock", for the runs.
 
+## Update: keymap bound
+
+keymap.library (v36, in ROM) is the third. It uses `[LibraryBase]` too, even though it is in ROM, so that the startup code does not need to know about it. `MapRawKey` and `MapANSI` vectors come from the fd file, checked against it and against AROS (`check`: 0 problems for keymap). The InputEvent and IntuiMessage fields it needs, the qualifier bits and `IECLASS_RAWKEY` are measured into Layout.g.cs. The run found a real bug before it shipped: the InputEvent buffer was sized as `nuint[(size + 7) / 8]`, which is 12 bytes on m68k (a `nuint` is 4 bytes there), not 22, so `MapRawKey`'s event overwrote the stack and the next `OpenScreen` hung. It is now sized in 4-byte words. A buffer sized from a Layout value must divide by the element size of the target, not by 8. See STATUS.md, "Keyboard text: keymap.library".
+
 ## Not verified
 
 Everything on the Amiga side beyond the `SetChipRev` runs in the emulator (A1200, Kickstart 3.1) above; the
