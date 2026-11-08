@@ -19,22 +19,11 @@ public static unsafe class Intuition
     public const uint IDCMP_MOUSEBUTTONS = 0x8, IDCMP_MOUSEMOVE = 0x10, IDCMP_RAWKEY = 0x400;
     public const uint CustomScreen = 0xf;
 
-#if X86_64
-    // 64-bit pointers (AROS x86-64): measured with offsetof() against the AROS headers.
-    public const int WindowRPort = 80, ScreenViewPort = 72, WindowUserPort = 144;
-    public const int MsgClass = 48, MsgCode = 52, MsgMouseX = 64, MsgMouseY = 66;
-#else
-    /// <summary>Offsets in struct Window and struct Screen (checked against the NDK headers).</summary>
-    public const int WindowRPort = 50, ScreenViewPort = 44, WindowUserPort = 86;
-    /// <summary>Offsets in struct IntuiMessage.</summary>
-    public const int MsgClass = 20, MsgCode = 24, MsgMouseX = 32, MsgMouseY = 34;
-#endif
+    // Offsets in struct Window, Screen and IntuiMessage, and sizeof(struct BitMap): measured per target (Layout.g.cs).
+    public const int WindowRPort = Layout.WindowRPort, ScreenViewPort = Layout.ScreenViewPort, WindowUserPort = Layout.WindowUserPort;
+    public const int MsgClass = Layout.MsgClass, MsgCode = Layout.MsgCode, MsgMouseX = Layout.MsgMouseX, MsgMouseY = Layout.MsgMouseY;
     /// <summary>struct BitMap: BytesPerRow, Rows (words), Flags, Depth (bytes), a pad word, then the plane pointers from offset 8.</summary>
-#if X86_64
-    public const int BitMapSize = 72;
-#else
-    public const int BitMapSize = 40;
-#endif
+    public const int BitMapSize = Layout.BitMapSize;
 }
 
 /// <summary>graphics.library bindings (v39 or older).</summary>

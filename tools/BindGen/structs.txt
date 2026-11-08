@@ -1,0 +1,35 @@
+# Struct offsets E# reads directly (our own list: names of fields, no header text).
+# Lines: "include <header>", "Name = struct.field.path" (offsetof) or "Name = sizeof struct".
+# Measured with the target's own C compiler: tools/BindGen offsets (see docs/BINDINGS_SPIKE.md).
+include exec/io.h
+include intuition/intuition.h
+include intuition/screens.h
+include graphics/gfx.h
+include devices/audio.h
+
+# Intuition (src/ESharp.Platform/Gfx.cs)
+WindowRPort = Window.RPort
+WindowUserPort = Window.UserPort
+ScreenViewPort = Screen.ViewPort
+MsgClass = IntuiMessage.Class
+MsgCode = IntuiMessage.Code
+MsgMouseX = IntuiMessage.MouseX
+MsgMouseY = IntuiMessage.MouseY
+BitMapSize = sizeof BitMap
+
+# audio.device (src/ESharp.Platform/Sound.cs)
+IoSize = sizeof IOAudio
+OffType = IOAudio.ioa_Request.io_Message.mn_Node.ln_Type
+OffReplyPort = IOAudio.ioa_Request.io_Message.mn_ReplyPort
+OffLength = IOAudio.ioa_Request.io_Message.mn_Length
+OffDevice = IOAudio.ioa_Request.io_Device
+OffUnit = IOAudio.ioa_Request.io_Unit
+OffCommand = IOAudio.ioa_Request.io_Command
+OffFlags = IOAudio.ioa_Request.io_Flags
+OffError = IOAudio.ioa_Request.io_Error
+OffAllocKey = IOAudio.ioa_AllocKey
+OffData = IOAudio.ioa_Data
+OffDataLength = IOAudio.ioa_Length
+OffPeriod = IOAudio.ioa_Period
+OffVolume = IOAudio.ioa_Volume
+OffCycles = IOAudio.ioa_Cycles

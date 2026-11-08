@@ -10,6 +10,8 @@ using System.Text.RegularExpressions;
 //   bindgen check <sdk-include-dir> <ESharp.Platform dir> [lib...]   compare our [AmigaLib] vectors with the SDK
 //   bindgen gen   <sdk-include-dir> <lib> [out.cs]                   write C# declarations (a candidate binding)
 //   bindgen facts <sdk-include-dir> <lib>                            list name, vector, first version
+//   bindgen offsets <spec> <target> --docker <image> | --cc <compiler> [--cflags "..."]
+//                                                                    measure struct offsets with the target's C compiler
 //
 // See docs/BINDINGS_SPIKE.md and issue #18 for why the SDK is read from your own copy.
 
@@ -22,6 +24,7 @@ internal static class Cli
 {
     public static int Run(string[] args)
     {
+        if (args.Length >= 3 && args[0] == "offsets") return Offsets.Run(args.Skip(1).ToArray());
         if (args.Length < 3) return Usage();
         string include = args[1];
         switch (args[0])
