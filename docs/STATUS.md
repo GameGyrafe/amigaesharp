@@ -72,6 +72,7 @@ Verified:
 - 190 unit tests pass (new: ref locals and returns compiled with host gcc and run, 14 checks; foreach over a `Vec`, user struct enumerators, a class enumerator, a call result, nested loops with `break`/`continue`, 9 checks; `ES0099` for a ref indexer, an interface collection, a ref `Current` and an abstract ref return; `samples/refs` on dotnet and as host-gcc C with the same output).
 - A1200, Kickstart 3.1 (40.069) in FS-UAE, m68k build: `samples/refs` prints 18 ok, no FAIL.
 - Hosted AROS x86-64 (nightly 20261106): `samples/refs` prints 18 ok, no FAIL, no traps.
+- Regression on the A1200 / 3.1 after the change: collections 20, linq 37, inherit 24 ok, no FAIL. The hardware pack builds with `refs` (22 programs).
 
 Not verified: real hardware, AmigaOS 4 and MorphOS.
 
