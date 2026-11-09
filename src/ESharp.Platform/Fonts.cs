@@ -65,10 +65,10 @@ public static unsafe class Fonts
     }
 
     /// <summary>
-    /// Opens the font <paramref name="name"/> (with or without ".font") at <paramref name="size"/> pixels. ROM and already
-    /// loaded fonts first, then FONTS: through diskfont.library; a disk font is matched to the closest size it has, so
-    /// check <see cref="FontHandle.Height"/>. The result has <see cref="FontHandle.IsOpen"/> false if there is no such font
-    /// or diskfont.library is missing.
+    /// Opens the font <paramref name="name"/> (with or without ".font") at <paramref name="size"/> pixels. With diskfont.library
+    /// available it asks diskfont, which looks in memory and ROM first, then FONTS:, prefers the exact size and otherwise
+    /// takes the closest one the font has, so check <see cref="FontHandle.Height"/>. Without diskfont.library only a font
+    /// in ROM or memory at exactly <paramref name="size"/> opens. The result has <see cref="FontHandle.IsOpen"/> false if there is no such font.
     /// </summary>
     public static FontHandle Open(string name, int size)
     {
@@ -94,8 +94,13 @@ public static unsafe class Fonts
             *(ushort*)(b + Layout.TaYSize) = (ushort)size;
             b[Layout.TaStyle] = 0;
             b[Layout.TaFlags] = 0;
-            void* f = Graphics.OpenFont(b);
-            if (f == null && OpenDiskFontLibrary()) f = DiskFontLib.OpenDiskFont(b);
+            void* f;
+            if (OpenDiskFontLibrary()) f = DiskFontLib.OpenDiskFont(b);   // searches memory and ROM first, prefers the exact size, else the closest
+            else
+            {
+                f = Graphics.OpenFont(b);                                  // OpenFont alone returns the closest size in memory, so only an exact one counts
+                if (f != null && *(ushort*)((byte*)f + Layout.TfYSize) != (ushort)size) { Graphics.CloseFont(f); f = null; }
+            }
             if (f == null) return h;
             byte* fb = (byte*)f;
             h.Handle = (nuint)f;
@@ -172,11 +177,11 @@ public static unsafe class Fonts
         for (int i = 0; i < HostList.Count; i++)
         {
             var e = HostList[i];
-            if (!Strings.EqualsIgnoreCase(e.Name, name) || (!topaz && !HostDiskFonts)) continue;
+            if (!Strings.EqualsIgnoreCase(e.Name, name)) continue;
+            if (!HostDiskFonts && !(topaz && e.Size == size)) continue;   // no diskfont.library: only exact ROM topaz
             if (best < 0 || System.Math.Abs(e.Size - size) < System.Math.Abs(HostList[best].Size - size)) best = i;
         }
         if (best < 0 || size <= 0) return h;
-        if (topaz && HostList[best].Size != size) return h;       // ROM topaz: exact sizes only, like OpenFont
         var f = HostList[best];
         h.IsOpen = true; h.Height = f.Size; h.Width = f.Width; h.Baseline = f.Baseline; h.Handle = 1;
         _hostOpen++;

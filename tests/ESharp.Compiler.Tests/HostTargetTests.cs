@@ -168,6 +168,29 @@ public class HostTargetTests
     }
 
     [Fact]
+    public void Fonts_open_takes_the_exact_size_or_with_diskfont_the_closest()
+    {
+        try
+        {
+            ESharp.Platform.Fonts.HostDiskFonts = true;
+            var f = ESharp.Platform.Fonts.Open("topaz", 11);       // not exact: with diskfont the closest size
+            Assert.True(f.IsOpen); Assert.Equal(9, f.Height);
+            ESharp.Platform.Fonts.Close(ref f);
+            ESharp.Platform.Fonts.HostAdd("topaz", 11, 8, 9);      // now FONTS:topaz/11 exists and wins over the in-memory sizes
+            f = ESharp.Platform.Fonts.Open("topaz", 11);
+            Assert.Equal(11, f.Height);
+            ESharp.Platform.Fonts.Close(ref f);
+            ESharp.Platform.Fonts.HostDiskFonts = false;
+            f = ESharp.Platform.Fonts.Open("topaz", 10);            // no diskfont: exact sizes only
+            Assert.False(f.IsOpen);
+            f = ESharp.Platform.Fonts.Open("topaz", 9);
+            Assert.True(f.IsOpen); Assert.Equal(9, f.Height);
+            ESharp.Platform.Fonts.Close(ref f);
+        }
+        finally { ESharp.Platform.Fonts.HostDiskFonts = true; }
+    }
+
+    [Fact]
     public void Iff_sample_runs_on_the_host_and_writes_a_valid_iff_file()
     {
         using var console = HostConsole.Capture();
