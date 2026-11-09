@@ -584,8 +584,8 @@ internal sealed partial class CEmitter
             var node = work.Pop();
             var model = Model(node);
             // Calls to [Conditional] methods that are compiled out reach nothing: not the method, not their arguments.
-            var compiledOut = node.DescendantNodesAndSelf().OfType<ExpressionStatementSyntax>()
-                .Where(st => IsCompiledOutCall(st.Expression)).Select(st => st.Span).ToList();
+            var compiledOut = node.DescendantNodesAndSelf().OfType<InvocationExpressionSyntax>()
+                .Where(inv => IsCompiledOutCall(inv)).Select(inv => inv.Span).ToList();
             foreach (var n in node.DescendantNodesAndSelf())
             {
                 if (compiledOut.Count > 0 && compiledOut.Any(sp => sp.Contains(n.Span))) continue;
@@ -1844,6 +1844,8 @@ internal sealed partial class CEmitter
 
             case InvocationExpressionSyntax inv:
             {
+                // A compiled-out [Conditional] call used as an expression body, lambda body or for incrementor.
+                if (IsCompiledOutCall(inv)) return "(void)0";
                 // A ref-returning method returns a pointer; used as a value it is dereferenced (and stays an lvalue).
                 var call = Invocation(inv);
                 return ReturnsRef(inv) ? $"(*{call})" : call;

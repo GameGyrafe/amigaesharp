@@ -72,6 +72,22 @@ public class TraceAddrTests
     }
 
     [Fact]
+    public void Conditional_calls_in_expression_bodies_lambdas_and_incrementors_are_compiled_out()
+    {
+        const string members = @"
+static int hits;
+static int F() { hits++; return 1; }
+[System.Diagnostics.Conditional(""NEVER_DEFINED"")] static void T(int v) { hits += 100; }
+static void L() => T(F());
+static int Count() { System.Action a = () => T(F()); a(); int n = 0; for (int i = 0; i < 3; i++, T(F())) n++; return n; }";
+        var c = CompileOk(Program(members, "L(); int n = Count(); Dos.PutStr(hits == 0 && n == 3 ? \"ok\\n\" : \"bad\\n\");"));
+        if (!HasGcc) return;
+        var (code, output) = RunWithHostGcc(c);
+        Assert.Equal(0, code);
+        Assert.Equal("ok\n", output);
+    }
+
+    [Fact]
     public void Addr_parses_hunk_and_offset_in_the_forms_the_tools_print()
     {
         foreach (var words in new[] { new[] { "0", "e8" }, new[] { "0:e8" }, new[] { "0:0xE8" }, new[] { "0000", "$000000E8" }, new[] { "0,", "000000e8" } })

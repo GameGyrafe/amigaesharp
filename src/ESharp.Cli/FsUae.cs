@@ -100,16 +100,12 @@ internal static class FsUae
 
                 var finished = File.Exists(marker);
                 if (!proc.HasExited) { proc.Kill(entireProcessTree: true); proc.WaitForExit(); }
+                if (!finished) PrintSerial(serial);
                 if (!finished) return Fail($"program did not finish within {timeout.TotalSeconds:0}s (see {runDir})");
 
                 var outFile = Path.Combine(dh0, "out.txt");
                 if (File.Exists(outFile)) Console.Out.Write(File.ReadAllText(outFile));
-                if (serial != null && File.Exists(serial))
-                {
-                    var text = File.ReadAllText(serial);
-                    Console.Error.WriteLine($"--- serial output ({serial}) ---");
-                    Console.Error.Write(text.Length == 0 || text.EndsWith("\n") ? text : text + "\n");
-                }
+                PrintSerial(serial);
                 return 0;
             }
         }
@@ -118,6 +114,14 @@ internal static class FsUae
             if (xvfb is { HasExited: false }) xvfb.Kill();
             xvfb?.Dispose();
         }
+    }
+
+    private static void PrintSerial(string? serial)
+    {
+        if (serial == null || !File.Exists(serial)) return;
+        var text = File.ReadAllText(serial);
+        Console.Error.WriteLine($"--- serial output ({serial}) ---");
+        Console.Error.Write(text.Length == 0 || text.EndsWith("\n") ? text : text + "\n");
     }
 
     private static bool OutputContains(string path, string text)
