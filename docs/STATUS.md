@@ -28,6 +28,20 @@ Not verified:
 - A real CD32 pad, and real hardware in general.
 - AmigaOS 4 and MorphOS.
 
+## Dates and case-insensitive text: utility.library (samples/dates)
+
+`Date.Now()` reads the system clock (dos.library `DateStamp`) as whole seconds since 1 January 1978, the Amiga epoch, in local time. `Date.Split(seconds)` gives a `DateParts` (year, month, day, hour, minute, second, weekday; utility `Amiga2Date`). `Date.TryJoin(parts, out seconds)` goes back (`Date2Amiga`) and returns false for a date that does not exist. It checks by splitting the result back, not with `CheckDate`: `CheckDate` returns 0 for 1 January 1978 00:00:00, a real date, and hosted AROS's `CheckDate` accepts 29 February 2001. `Strings.CompareIgnoreCase` (with an optional length), `EqualsIgnoreCase`, `ToUpper` and `ToLower` use utility's `Stricmp`, `Strnicmp`, `ToUpper` and `ToLower`. They follow ISO-8859-1, so é and É fold, and the locale's rules when locale.library has set them up. utility is in ROM, but it is opened on first use through its own `[LibraryBase]`; `Date.Close()` closes it. The ClockData and DateStamp layouts and `TICKS_PER_SECOND` are measured. On the host, `Date.HostSetNow` sets the fake clock, `Dos.Delay` moves it on, and the conversions use .NET's calendar.
+
+Verified:
+- 152 unit tests pass.
+- A1200, Kickstart 3.1 in FS-UAE: 19 ok. This covers fixed dates both ways, weekdays, leap years, invalid dates, the clock moving about 3 s in `Delay(150)` (the emulated A1200 has no clock battery, so it reads 1978-01-01), case-insensitive compare, and Latin-1 folding.
+- Hosted AROS (nightly 20261106): 19 ok, no traps, with the real host time read.
+- The hardware pack builds with `dates`.
+
+Not verified:
+- A different locale (`locale.library` with a non-English language).
+- Real hardware, AmigaOS 4 and MorphOS.
+
 ## Keyboard text: keymap.library (samples/keys)
 
 `Keys.Char(rawKey, qualifier)` turns an Amiga raw key code into the character it types with the user's keymap (keymap.library `MapRawKey`), so text follows the keyboard the user has rather than a US layout. Characters are ISO-8859-1 codes; 0 means the key types no single character (cursor and function keys send escape sequences, modifier keys, key releases, a dead key waiting for the next key). `Keys.Find(ch)` goes the other way (`MapANSI`): the raw key and qualifier that type a character. The qualifier bits (`Keys.Shift`, `CapsLock`, `Control`, `Alt`, `LeftAmiga`, `RightAmiga`, `Repeat`) are measured from the headers. `Input` now also gives `LastChar` and `LastQualifier` for the last key pressed in the `Video` window. They are mapped while the IDCMP message is still held, with its previous-keys data, so dead keys can combine. keymap.library is opened on first use through its own `[LibraryBase]`, and closed by `Video.Close` or `Keys.Close`. On the host a fixed US layout is used, and `Input.HostKey(code, qualifier)` feeds a key with modifiers. `esharp run --input` takes `key 50+38` to hold keys (here Shift) while the last one is pressed.

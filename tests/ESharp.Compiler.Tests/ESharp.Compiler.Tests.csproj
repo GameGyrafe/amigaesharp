@@ -58,6 +58,7 @@
     <Compile Include="..\..\samples\collections\Collections.cs" Link="Samples\Collections.cs" />
     <Compile Include="..\..\samples\controls\Controls.cs" Link="Samples\Controls.cs" />
     <Compile Include="..\..\samples\keys\Keys.cs" Link="Samples\Keys.cs" />
+    <Compile Include="..\..\samples\dates\Dates.cs" Link="Samples\Dates.cs" />
     <Compile Include="..\..\tools\BindGen\Model.cs" Link="BindGen\Model.cs" />
     <Compile Include="..\..\tools\BindGen\Fd.cs" Link="BindGen\Fd.cs" />
   </ItemGroup>

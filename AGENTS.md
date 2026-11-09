@@ -24,6 +24,7 @@ dotnet run --project src/ESharp.Cli -- build samples/linq --target aros --docker
 AROS_HOSTED=<extracted hosted AROS dir> tools/aros-hosted/aros-hosted.sh cards --shot shot.png --input "click 400,300"   # run a --target aros sample on hosted AROS under Xvfb (needs the nightly archive; re-run on the 20261106 nightly: cards passes with a screenshot and a scripted click; the 20261104 nightly has been rotated out)
 dotnet run --project src/ESharp.Cli -- run samples/controls --docker <image> --headless --model A1200 --kickstart <rom>   # timer E clock and lowlevel joystick (no Libs: there, so the no-lowlevel path; see docs/STATUS.md)
 dotnet run --project src/ESharp.Cli -- run samples/keys --docker <image> --headless --model A1200 --input "click 400,300;key 50+38"   # keymap: raw keys to characters (Shift+A types 65)
+dotnet run --project src/ESharp.Cli -- run samples/dates --docker <image> --headless --model A1200   # utility: dates, case-insensitive text
 dotnet run --project src/ESharp.Cli -- run samples/lambdas --docker <image> --headless --model A1200   # capturing lambdas and delegates
 dotnet run --project src/ESharp.Cli -- run samples/linq --docker <image> --headless --model A1200   # LINQ over arrays, turned into loops
 dotnet run --project tools/CardArt -- samples/cards/cards.png                               # redraw the card sprite sheet

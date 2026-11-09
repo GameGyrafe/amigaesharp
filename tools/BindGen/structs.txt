@@ -9,6 +9,8 @@ include devices/audio.h
 include devices/timer.h
 include libraries/lowlevel.h
 include devices/inputevent.h
+include dos/dos.h
+include utility/date.h
 
 # Intuition (src/ESharp.Platform/Gfx.cs)
 WindowRPort = Window.RPort
@@ -84,3 +86,18 @@ QualRAlt = value IEQUALIFIER_RALT
 QualLCommand = value IEQUALIFIER_LCOMMAND
 QualRCommand = value IEQUALIFIER_RCOMMAND
 QualRepeat = value IEQUALIFIER_REPEAT
+
+# utility.library dates and dos.library DateStamp (src/ESharp.Platform/Date.cs)
+ClockDataSize = sizeof ClockData
+CdSec = ClockData.sec
+CdMin = ClockData.min
+CdHour = ClockData.hour
+CdMday = ClockData.mday
+CdMonth = ClockData.month
+CdYear = ClockData.year
+CdWday = ClockData.wday
+DateStampSize = sizeof DateStamp
+DsDays = DateStamp.ds_Days
+DsMinute = DateStamp.ds_Minute
+DsTick = DateStamp.ds_Tick
+DosTicksPerSecond = value TICKS_PER_SECOND

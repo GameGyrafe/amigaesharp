@@ -26,6 +26,10 @@ public static class Dos
     /// <summary>dos.library Delay(), LVO -198: waits for <paramref name="ticks"/> 50ths of a second.</summary>
     [AmigaLib("dos", -198)]
     public static extern void Delay(int ticks);
+
+    /// <summary>dos.library DateStamp(), LVO -192: fills a struct DateStamp (days since 1978, minute of the day, ticks of the minute). See <see cref="Date.Now"/>.</summary>
+    [AmigaLib("dos", -192)]
+    public static extern unsafe void* DateStamp(void* date);
 #else
     /// <summary>Where PutStr writes on the host. Tests replace it to capture output.</summary>
     public static TextWriter Out = System.Console.Out;
@@ -39,7 +43,7 @@ public static class Dos
     public static void FlushOutput() { Out.Flush(); }
 
     /// <summary>The host does not wait; the fake sound and clock move on by the time.</summary>
-    public static void Delay(int ticks) { Sound.HostAdvance(ticks); Clock.HostAdvance((long)ticks * 20000); }
+    public static void Delay(int ticks) { Sound.HostAdvance(ticks); Clock.HostAdvance((long)ticks * 20000); Date.HostDelay(ticks); }
 #endif
 
     /// <summary>Writes a decimal number.</summary>
