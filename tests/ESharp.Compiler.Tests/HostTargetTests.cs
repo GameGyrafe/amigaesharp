@@ -132,6 +132,18 @@ public class HostTargetTests
     }
 
     [Fact]
+    public void Dates_sample_runs_on_the_host()
+    {
+        using var console = HostConsole.Capture();
+        ESharp.Platform.Date.HostSetNow(0);
+        DatesSample.Program.Main();
+        Assert.DoesNotContain("FAIL", console.Output);
+        Assert.Contains("2000-02-29 12:34:56 is second 699366896\n", console.Output);
+        Assert.Contains("now 1978-1-1 0:0:0\n", console.Output);
+        Assert.Equal(19, console.Output.Split('\n').Count(l => l.StartsWith("ok ")));
+    }
+
+    [Fact]
     public void Keys_sample_runs_on_the_host()
     {
         using var console = HostConsole.Capture();

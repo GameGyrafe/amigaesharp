@@ -850,6 +850,20 @@ Check(list.Count == 0, ""destroy"");
     }
 
     [Fact]
+    public void Dates_sample_compiles_for_m68k_with_a_private_utility_base()
+    {
+        var path = Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "..", "samples", "dates", "Dates.cs");
+        var r = EsCompiler.Compile(new[] { new SourceFile("Dates.cs", File.ReadAllText(path)) }, Targets.M68k.ToOptions());
+        Assert.True(r.Success, string.Join("\n", r.Diagnostics));
+        Assert.Contains("#define UtilityBase es_UtilityBase", r.C!);
+        Assert.Contains("struct Library *es_UtilityBase;", r.C!);
+        Assert.Contains("Amiga2Date(", r.C!);
+        Assert.Contains("Date2Amiga(", r.C!);
+        Assert.Contains("Stricmp(", r.C!);
+        Assert.Contains("DateStamp(", r.C!);
+    }
+
+    [Fact]
     public void Keys_sample_compiles_for_m68k_with_a_private_keymap_base()
     {
         var path = Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "..", "samples", "keys", "Keys.cs");

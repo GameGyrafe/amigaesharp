@@ -72,6 +72,19 @@ public static class Layout
     public const uint QualLCommand = 64u;
     public const uint QualRCommand = 128u;
     public const uint QualRepeat = 512u;
+    public const int ClockDataSize = 14;
+    public const int CdSec = 0;
+    public const int CdMin = 2;
+    public const int CdHour = 4;
+    public const int CdMday = 6;
+    public const int CdMonth = 8;
+    public const int CdYear = 10;
+    public const int CdWday = 12;
+    public const int DateStampSize = 12;
+    public const int DsDays = 0;
+    public const int DsMinute = 4;
+    public const int DsTick = 8;
+    public const uint DosTicksPerSecond = 50u;
 #else
     public const int WindowRPort = 50;
     public const int WindowUserPort = 86;
@@ -138,6 +151,19 @@ public static class Layout
     public const uint QualLCommand = 64u;
     public const uint QualRCommand = 128u;
     public const uint QualRepeat = 512u;
+    public const int ClockDataSize = 14;
+    public const int CdSec = 0;
+    public const int CdMin = 2;
+    public const int CdHour = 4;
+    public const int CdMday = 6;
+    public const int CdMonth = 8;
+    public const int CdYear = 10;
+    public const int CdWday = 12;
+    public const int DateStampSize = 12;
+    public const int DsDays = 0;
+    public const int DsMinute = 4;
+    public const int DsTick = 8;
+    public const uint DosTicksPerSecond = 50u;
 #endif
 }
 #endif
