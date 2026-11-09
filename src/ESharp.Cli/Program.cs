@@ -16,7 +16,9 @@ Usage:
   esharp new <name>                 Create a new hello-world project
   esharp build [path] [options]     Check the subset, emit C, and run the target C compiler
   esharp run [path] [options]       Build for m68k and run it in FS-UAE
-  esharp assets [dir|assets.json]   Convert PNGs to planar chip data: writes Assets.g.cs next to the manifest
+  esharp assets [dir|assets.json] [--force]
+                                    Convert PNGs to planar chip data: writes Assets.g.cs next to the manifest
+                                    (only when stale; build and run do this automatically)
   esharp test [path] [options]      Run the project on the host; with --target m68k --docker also on the Amiga, and compare
 
 Build options:
@@ -109,6 +111,8 @@ Targets:
                     break;
             }
         }
+
+        if (SyncAssets(path) is { } assetError) return Fail(assetError);
 
         var files = CollectSources(path);
         if (files.Count == 0) return Fail($"no .cs files found in '{path}'");
@@ -243,6 +247,8 @@ Targets:
             }
         }
 
+        if (SyncAssets(path) is { } assetError) return Fail(assetError);
+
         var files = CollectSources(path);
         if (files.Count == 0) return Fail($"no .cs files found in '{path}'");
 
@@ -311,23 +317,63 @@ Targets:
         return 0;
     }
 
+    /// <summary>
+    /// Build step: regenerates Assets.g.cs for the project's assets.json (and those of esharp.include directories)
+    /// when it is missing or older than the manifest or a PNG. Returns an error message, or null.
+    /// </summary>
+    /// <summary>Errors a bad assets.json or PNG can raise; reported as a clean message instead of a stack trace.</summary>
+    private static bool IsAssetError(Exception e) =>
+        e is IOException or InvalidDataException or NotSupportedException or System.Text.Json.JsonException or KeyNotFoundException
+            or InvalidOperationException or ArgumentException;   // a wrong JSON type (images not an array), a value out of range
+
+    internal static string? SyncAssets(string path)
+    {
+        if (File.Exists(path)) path = Path.GetDirectoryName(Path.GetFullPath(path))!;   // esharp build File.cs: its directory
+        if (!Directory.Exists(path)) return null;
+        var dirs = new List<string> { path };
+        var include = Path.Combine(path, "esharp.include");
+        if (File.Exists(include))
+            foreach (var raw in File.ReadAllLines(include))
+            {
+                var line = raw.Trim();
+                if (line.Length > 0 && line[0] != '#') dirs.Add(Path.Combine(path, line));
+            }
+        foreach (var dir in dirs)
+        {
+            var manifest = Path.Combine(dir, "assets.json");
+            if (!File.Exists(manifest)) continue;
+            try
+            {
+                var r = ESharp.Assets.AssetBuilder.Sync(manifest);
+                if (r.Status is ESharp.Assets.AssetBuilder.SyncStatus.Created or ESharp.Assets.AssetBuilder.SyncStatus.Updated)
+                    Console.WriteLine($"Regenerated {r.Target} (assets changed)");
+            }
+            catch (Exception e) when (IsAssetError(e))
+            {
+                return $"{manifest}: {e.Message}";
+            }
+        }
+        return null;
+    }
+
     private static int Assets(string[] args)
     {
-        var path = args.Length > 0 ? args[0] : ".";
+        var path = args.FirstOrDefault(a => !a.StartsWith("--")) ?? ".";
         var manifest = Directory.Exists(path) ? Path.Combine(path, "assets.json") : path;
         if (!File.Exists(manifest)) return Fail($"no assets.json at '{manifest}'");
         try
         {
-            var output = ESharp.Assets.AssetBuilder.Build(manifest);
-            var target = Path.Combine(Path.GetDirectoryName(Path.GetFullPath(manifest))!, "Assets.g.cs");
-            File.WriteAllText(target, output.Source);
-            Console.WriteLine($"Wrote {target}");
+            var sync = ESharp.Assets.AssetBuilder.Sync(manifest, force: args.Contains("--force"));
+            var target = sync.Target;
+            if (sync.Output == null) { Console.WriteLine($"{target} is up to date (use --force to rebuild)"); return 0; }
+            var output = sync.Output;
+            Console.WriteLine(sync.Status == ESharp.Assets.AssetBuilder.SyncStatus.Touched ? $"{target} unchanged" : $"Wrote {target}");
             foreach (var r in output.Reports)
                 Console.WriteLine($"  {r.Name,-16} {r.Width}x{r.Height}, {r.Depth} bitplanes, {r.ChipBytes:N0} bytes of chip RAM");
             Console.WriteLine($"  total            {output.Reports.Sum(r => r.ChipBytes):N0} bytes of chip RAM");
             return 0;
         }
-        catch (Exception e) when (e is IOException or InvalidDataException or NotSupportedException or System.Text.Json.JsonException or KeyNotFoundException)
+        catch (Exception e) when (IsAssetError(e))
         {
             return Fail(e.Message);
         }

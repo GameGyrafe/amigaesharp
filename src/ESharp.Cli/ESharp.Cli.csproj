@@ -13,4 +13,7 @@
     <ProjectReference Include="..\ESharp.Assets\ESharp.Assets.csproj" />
   </ItemGroup>
 
+  <ItemGroup>
+    <InternalsVisibleTo Include="ESharp.Compiler.Tests" />
+  </ItemGroup>
 </Project>
