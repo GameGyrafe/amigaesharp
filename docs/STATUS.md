@@ -62,6 +62,19 @@ Not verified:
 - A different locale (`locale.library` with a non-English language).
 - Real hardware, AmigaOS 4 and MorphOS.
 
+## Ref locals, ref returns and foreach over enumerators (samples/refs, issue #12)
+
+**ref locals and ref returns.** `ref T x = ref place;` is a C pointer `T *x = &place;` and every use of `x` reads or writes through it; `x = ref other;` points it somewhere else. The place can be a local, a field, a static, an array or span element, a `ref`/`out`/`in` parameter, another ref local, a ref-returning call or `c ? ref a : ref b`. A method declared `ref T F(...)` or `ref readonly T F(...)` returns `T *`; a call used as a value is `(*F(...))`, so `F(a, i) = 5`, `F(a, i) += 1`, `F().X = 3`, `F().Method()` and `G(ref F())` work. `foreach (ref var x in span)` and `foreach (ref readonly var x in readOnlySpan)` give a pointer to each element. `ref readonly` is C#'s check only; in C it is the same plain pointer. Still `ES0099`: ref returns from properties, indexers, lambdas, delegates, interface methods and virtual, abstract or override methods; ref locals of an array type or declared in a `for` header; ref fields (tested: they give `ES0099`, as do ref-field uses and `h.R = ref x`). `c ? ref a : ref b` also works as a value, an assignment target and an `in` argument (host-gcc tested; `ref (c ? ref a : ref b)` as a ref argument is still `ES0099`).
+
+**foreach over the GetEnumerator pattern.** Besides arrays and spans, `foreach` now works on any struct or class with an instance `GetEnumerator()` returning a struct or class that has `bool MoveNext()` and a `Current` property (an auto-property or one with a getter). It becomes `{ E e = GetEnumerator(&coll); while (MoveNext(&e)) { T x = Current(&e); body } }`: a struct enumerator is a local on the stack, nothing is allocated, and `break`/`continue` are the `while` loop's. A collection that is a call result is copied into a local first. A numeric widening of the element (`foreach (long x in ints)`) is a cast. `Vec<T>` has a `GetEnumerator` (a `VecEnumerator<T>` struct) that walks the items as they were when the loop started: do not add or remove inside the loop. Still `ES0099`: an interface-typed collection or enumerator (that would box), an extension `GetEnumerator`, an enumerator that has `Dispose` (E# would not call it), `foreach` by ref over an enumerator, a ref-returning `Current`, any other element conversion, `await foreach`, and `foreach (var (a, b) in ...)`. The hash collections (`Dictionary`, `HashSet`, `StringMap`, `StringSet`) and `Pool<T>` still have no enumerator.
+
+Verified:
+- 190 unit tests pass (new: ref locals and returns compiled with host gcc and run, 14 checks; foreach over a `Vec`, user struct enumerators, a class enumerator, a call result, nested loops with `break`/`continue`, 9 checks; `ES0099` for a ref indexer, an interface collection, a ref `Current` and an abstract ref return; `samples/refs` on dotnet and as host-gcc C with the same output).
+- A1200, Kickstart 3.1 (40.069) in FS-UAE, m68k build: `samples/refs` prints 18 ok, no FAIL.
+- Hosted AROS x86-64 (nightly 20261106): `samples/refs` prints 18 ok, no FAIL, no traps.
+- Regression on the A1200 / 3.1 after the change: collections 20, linq 37, inherit 24 ok, no FAIL. The hardware pack builds with `refs` (22 programs).
+
+Not verified: real hardware, AmigaOS 4 and MorphOS.
 ## C names of E# types (samples/names, issues #39 and #12)
 
 Every E# class, struct, interface and enum, in user code and in the embedded Runtime/Platform sources, is named in C
@@ -226,7 +239,7 @@ Notes and limits:
 - Bounds checking is off by default: indexing out of range is undefined in a normal build. `esharp build --debug` (or `CompileOptions.BoundsChecks`) checks every array and span index (`ES_IDX`), prints `file(line): index N out of range 0..M` to stderr and exits with 20; `--debug` also defines `DEBUG`, which makes `Arena.Reset` fill with 0xDD. Raw pointer indexing is never checked. Verified: host gcc tests, and the memory and phase2 samples built with `--debug` pass on Kickstart 2.04 (A500+) and 3.1 (A1200). Not verified: where the stderr message appears on a real Amiga (a program started from the Workbench may show nothing), and the cost on a 68000.
 - Overflow wraps: all targets now compile with `-fwrapv` to match unchecked C#.
 - Arrays have no heap form; a `Span<T>` is the only way to hand one to another method. Spans cannot be stored in fields (C# forbids it for ref structs).
-- `Slice`, `foreach` and `Length` on a span or array need a plain name or member access, not a call.
+- `Slice`, `foreach` and `Length` on a span or array need a plain name or member access, not a call (a `foreach` over a GetEnumerator collection may use a call result: it is copied first).
 - Only `Fix` (16.16) exists; an 8.8 `short` type and a `Fix` square root/trig table are not written.
 - Constructor initializers (`: this(...)`), static constructors, calls on temporaries (`Make().Get()`) and a constructor combined with an object initializer are still `ES0099`.
 
@@ -310,7 +323,7 @@ Screenshot: [images/phase4-cards-a1200.png](images/phase4-cards-a1200.png) (Kick
 
 ## Known limits of the emitter
 
-Reported as `ES0099` rather than miscompiled: capturing lambdas that would outlive their method, delegates in struct fields, `is`/`as` against an interface or struct, `ref` locals and returns, `foreach` over anything but arrays and spans, positional/list patterns, `[InlineAsm]`/`[Interrupt]` bodies.
+Reported as `ES0099` rather than miscompiled: capturing lambdas that would outlive their method, delegates in struct fields, `is`/`as` against an interface or struct, ref returns from properties, indexers, delegates and virtual or interface members, `foreach` over anything but arrays, spans and struct/class GetEnumerator types (interface enumerators, `Dispose`, ref `Current`), positional/list patterns, `[InlineAsm]`/`[Interrupt]` bodies.
 
 Two types whose C names meet after joining with `_` (namespace `A_B` class `C` and namespace `A` class `B_C`) are reported
 (ES0099); rename one.

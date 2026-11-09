@@ -34,6 +34,8 @@ Echo "lambdas"
 lambdas >results/lambdas.txt
 Echo "linq"
 linq >results/linq.txt
+Echo "refs"
+refs >results/refs.txt
 Echo "screen (a card picture appears for a few seconds)"
 screen >results/screen.txt
 Echo "aga (a 256 colour picture appears for a few seconds)"

@@ -28,6 +28,7 @@ dotnet run --project src/ESharp.Cli -- run samples/dates --docker <image> --head
 dotnet run --project src/ESharp.Cli -- run samples/names --docker <image> --headless --model A1200   # E# classes named Window, Node, List, ... and same-named types in two namespaces (prefixed C names)
 dotnet run --project src/ESharp.Cli -- run samples/lambdas --docker <image> --headless --model A1200   # capturing lambdas and delegates
 dotnet run --project src/ESharp.Cli -- run samples/linq --docker <image> --headless --model A1200   # LINQ over arrays, turned into loops
+dotnet run --project src/ESharp.Cli -- run samples/refs --docker <image> --headless --model A1200   # ref locals and returns, foreach over Vec and struct enumerators
 dotnet run --project src/ESharp.Cli -- test samples/controls                                # run on the host (ok/FAIL lines, non-zero exit on FAIL); add --target m68k --docker <image> [--kickstart <rom>] [--model A1200] to also run in FS-UAE and compare
 dotnet run --project tools/CardArt -- samples/cards/cards.png                               # redraw the card sprite sheet
 dotnet run --project tools/BindGen -- check <sdk include dir> src/ESharp.Platform   # compare our [AmigaLib] vectors/arg counts with an SDK you provide (AROS include dir; not committed)
