@@ -34,6 +34,8 @@ Echo "lambdas"
 lambdas >results/lambdas.txt
 Echo "linq"
 linq >results/linq.txt
+Echo "refs"
+refs >results/refs.txt
 Echo "screen (a card picture appears for a few seconds)"
 screen >results/screen.txt
 Echo "aga (a 256 colour picture appears for a few seconds)"
@@ -56,6 +58,8 @@ Echo "asl (a file requester opens: click Cancel, or pick a file and OK)"
 Echo >RAM:asl-open x
 asl >results/asl.txt
 Delete RAM:asl-open QUIET
+Echo "names (E# classes named like system structs)"
+names >results/names.txt
 Echo "cards (play a round; Esc quits, or leave it for 10 seconds)"
 cards >results/cards.txt
 Echo "rummy (play a turn; Esc quits, or leave it for 10 seconds)"

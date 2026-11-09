@@ -28,8 +28,10 @@ dotnet run --project src/ESharp.Cli -- run samples/dates --docker <image> --head
 dotnet run --project src/ESharp.Cli -- run samples/fonts --docker <image> --headless --model A1200   # fonts: topaz 8; disk fonts only with diskfont.library in LIBS: (and FONTS: assigned); see docs/STATUS.md for the Workbench-disk startup
 dotnet run --project src/ESharp.Cli -- run samples/iff --docker <image> --headless --model A1200   # IFF write and read back in RAM: (needs iffparse.library in LIBS:; else it says so)
 dotnet run --project src/ESharp.Cli -- run samples/asl --docker <image> --headless --model A1200   # asl.library: allocate/free; create RAM:asl-open first to show the file requester after SHOT, then --input clicks OK or Cancel
+dotnet run --project src/ESharp.Cli -- run samples/names --docker <image> --headless --model A1200   # E# classes named Window, Node, List, ... and same-named types in two namespaces (prefixed C names)
 dotnet run --project src/ESharp.Cli -- run samples/lambdas --docker <image> --headless --model A1200   # capturing lambdas and delegates
 dotnet run --project src/ESharp.Cli -- run samples/linq --docker <image> --headless --model A1200   # LINQ over arrays, turned into loops
+dotnet run --project src/ESharp.Cli -- run samples/refs --docker <image> --headless --model A1200   # ref locals and returns, foreach over Vec and struct enumerators
 dotnet run --project src/ESharp.Cli -- test samples/controls                                # run on the host (ok/FAIL lines, non-zero exit on FAIL); add --target m68k --docker <image> [--kickstart <rom>] [--model A1200] to also run in FS-UAE and compare
 dotnet run --project tools/CardArt -- samples/cards/cards.png                               # redraw the card sprite sheet
 dotnet run --project tools/BindGen -- check <sdk include dir> src/ESharp.Platform   # compare our [AmigaLib] vectors/arg counts with an SDK you provide (AROS include dir; not committed)

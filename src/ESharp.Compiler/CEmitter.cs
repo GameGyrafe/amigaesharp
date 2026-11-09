@@ -76,7 +76,7 @@ internal sealed partial class CEmitter
         return overloads > 1 ? im.Name + "_" + string.Join("_", im.Parameters.Select(p => Mangle(p.Type))) : im.Name;
     }
 
-    private static string VtableName(INamedTypeSymbol iface, INamedTypeSymbol cls) => $"{TypeName(iface)}_vt_{TypeName(cls)}";
+    private static string VtableName(INamedTypeSymbol iface, INamedTypeSymbol cls) => $"{TypeName(iface)}_vt_{QualifiedName(cls)}";
 
     // ---- class hierarchies
     // A derived class holds its base class object as its first member ('es_base'), so a pointer to the derived object is also a pointer to
@@ -138,7 +138,7 @@ internal sealed partial class CEmitter
         return m;
     }
 
-    private static string VSlot(IMethodSymbol def) => $"v_{TypeName(def.ContainingType)}_{SlotName(def)}";
+    private static string VSlot(IMethodSymbol def) => $"v_{QualifiedName(def.ContainingType)}_{SlotName(def)}";
 
     /// <summary>The virtual members a class introduces (not the ones it overrides), in declaration order, accessors of virtual properties included.</summary>
     private static List<IMethodSymbol> OwnSlots(INamedTypeSymbol c) =>
@@ -188,11 +188,12 @@ internal sealed partial class CEmitter
     public string Emit()
     {
         var types = CollectTypes();
-        // C has no namespaces: two types with the same name (in different namespaces) would collide in the generated C.
+        // C has no namespaces: the namespace is part of a type's C name, so same-named types in different namespaces are apart.
+        // Joining with '_' can still make two different types meet (namespace A_B type C and namespace A type B_C), which is reported.
         foreach (var group in types.GroupBy(TypeName).Where(g => g.Count() > 1))
             foreach (var dup in group.Skip(1))
                 Unsupported(dup.DeclaringSyntaxReferences.First().GetSyntax(),
-                    $"type name '{group.Key}' is already used by another type ({group.First().ContainingNamespace}); type names must be unique across namespaces in E#");
+                    $"C name '{group.Key}' of '{dup.ToDisplayString()}' is already used by '{group.First().ToDisplayString()}'; rename one of them");
         var structs = SortStructs(types.OfType<INamedTypeSymbol>().Where(t => t.TypeKind == TypeKind.Struct));
         var heapClasses = types.Where(IsHeapClass).Select(t => (INamedTypeSymbol)t).OrderBy(Depth).ToList();
         foreach (var c in heapClasses)
@@ -558,6 +559,14 @@ internal sealed partial class CEmitter
             var model = Model(node);
             foreach (var n in node.DescendantNodesAndSelf())
             {
+                if (n is ForEachStatementSyntax loop)
+                {
+                    // foreach over the GetEnumerator pattern calls these without naming them.
+                    var fi = model.GetForEachStatementInfo(loop);
+                    Add(fi.GetEnumeratorMethod);
+                    Add(fi.MoveNextMethod);
+                    if (fi.CurrentProperty is { } current) { Add(current.GetMethod); _usedSymbols.Add(current); }
+                }
                 if (n is not ExpressionSyntax e) continue;
                 var info = model.GetSymbolInfo(e);
                 switch (info.Symbol)
@@ -606,16 +615,35 @@ internal sealed partial class CEmitter
 
     // ------------------------------------------------------------------ naming
 
-    private static string TypeName(INamedTypeSymbol t)
+    /// <summary>
+    /// Prefix of the C name of every E# type (class, struct, interface, enum; user code and the embedded library alike).
+    /// The system headers use bare names such as <c>struct Window</c>, <c>struct Node</c> or <c>struct List</c>, so an E#
+    /// class of the same name would clash with them. No identifier in the AmigaOS 3 NDK, libnix or AROS headers starts with
+    /// <c>Es_</c>, and the emitter's own helpers use <c>es_</c> (library bases, runtime functions) and <c>ES_</c> (spans,
+    /// tuples, delegates, type ids), which C keeps apart because it is case sensitive.
+    /// </summary>
+    internal const string TypePrefix = "Es_";
+
+    /// <summary>
+    /// C name of an E# type: <see cref="TypePrefix"/>, then the namespace and the type (with any containing types), joined with
+    /// '_': <c>Cards.Board</c> is <c>Es_Cards_Board</c>, <c>ESharp.Platform.Dos</c> is <c>Es_ESharp_Platform_Dos</c> and a type
+    /// in the global namespace is <c>Es_Board</c>. Functions and static fields of a type start with this name too.
+    /// </summary>
+    private static string TypeName(INamedTypeSymbol t) => TypePrefix + QualifiedName(t);
+
+    /// <summary>Namespace and type, joined with '_', without the prefix: the part of a mangled name that stands for a type.</summary>
+    private static string QualifiedName(INamedTypeSymbol t)
     {
         var parts = new List<string>();
         for (INamedTypeSymbol? c = t; c != null; c = c.ContainingType) parts.Insert(0, c.Name);
+        for (var ns = t.ContainingNamespace; ns is { IsGlobalNamespace: false }; ns = ns.ContainingNamespace) parts.Insert(0, ns.Name);
         return string.Join("_", parts);
     }
 
+    /// <summary>A type inside a longer C name (overloads, span and tuple typedefs); namespaced, so same-named types stay apart.</summary>
     private static string Mangle(ITypeSymbol t) => t switch
     {
-        INamedTypeSymbol n => n.SpecialType != SpecialType.None ? n.ToDisplayString() : TypeName(n),
+        INamedTypeSymbol n => n.SpecialType != SpecialType.None ? n.ToDisplayString() : QualifiedName(n),
         IPointerTypeSymbol p => Mangle(p.PointedAtType) + "Ptr",
         IArrayTypeSymbol a => Mangle(a.ElementType) + "Arr",
         _ => "t",
@@ -727,7 +755,8 @@ internal sealed partial class CEmitter
     private string DelegateType(INamedTypeSymbol del, SyntaxNode at)
     {
         var invoke = del.DelegateInvokeMethod!;
-        var ps = invoke.Parameters.Select(p => p.RefKind == RefKind.None ? CType(p.Type, at) : CType(p.Type, at) + " *").Prepend("void *").ToList();
+        if (invoke.ReturnsByRef || invoke.ReturnsByRefReadonly) Unsupported(at, "delegate type that returns by ref");
+        var ps =invoke.Parameters.Select(p => p.RefKind == RefKind.None ? CType(p.Type, at) : CType(p.Type, at) + " *").Prepend("void *").ToList();
         var signature = $"typedef struct {{ {CType(invoke.ReturnType, at)} (*fn)({string.Join(", ", ps)}); void *env; }} @NAME@;\n";
         if (!_delegateNames.TryGetValue(signature, out var name))
         {
@@ -879,7 +908,8 @@ internal sealed partial class CEmitter
         Line("{");
         _indent++;
         foreach (var f in s.GetMembers().OfType<IFieldSymbol>().Where(f => !f.IsStatic && !f.IsConst && f.AssociatedSymbol == null))
-            Line(f.IsFixedSizeBuffer
+            if (f.RefKind != RefKind.None) Unsupported(f.DeclaringSyntaxReferences.First().GetSyntax(), "ref field");
+            else Line(f.IsFixedSizeBuffer
                 ? Decl(((IPointerTypeSymbol)f.Type).PointedAtType, f.Name, decl) + $"[{f.FixedSize}];"
                 : Decl(f.Type, f.Name, decl) + ";");
         foreach (var p in s.GetMembers().OfType<IPropertySymbol>().Where(p => !p.IsStatic && IsAutoProperty(p)))
@@ -910,6 +940,7 @@ internal sealed partial class CEmitter
     private string SlotParams(IMethodSymbol m, SyntaxNode at, bool named)
     {
         var parts = new List<string> { "void *self" };
+        if (m.ReturnsByRef || m.ReturnsByRefReadonly) Unsupported(at, "ref return from an interface method");
         for (var k = 0; k < m.Parameters.Length; k++)
         {
             if (m.Parameters[k].RefKind != RefKind.None) Unsupported(at, "ref/out parameter in an interface method");
@@ -984,7 +1015,7 @@ internal sealed partial class CEmitter
         foreach (var im in i.GetMembers().OfType<IMethodSymbol>().Where(m => m.MethodKind == MethodKind.Ordinary))
         {
             if (c.FindImplementationForInterfaceMember(im) is not IMethodSymbol impl) { Unsupported(decl, $"'{c.Name}' does not implement '{im.Name}'"); continue; }
-            var thunk = $"{TypeName(c)}_{TypeName(i)}_{SlotName(im)}";
+            var thunk = $"{TypeName(c)}_{QualifiedName(i)}_{SlotName(im)}";
             var args = new List<string>();
             for (var k = 0; k < im.Parameters.Length; k++) args.Add("a" + k);
             Line($"static __attribute__((unused)) {Decl(im.ReturnType, $"{thunk}({SlotParams(im, decl, true)})", decl)}");
@@ -1019,7 +1050,8 @@ internal sealed partial class CEmitter
         if (baseClass != null) Line($"{TypeName(baseClass)} es_base;");
         else if (IsPoly(c)) Line($"const struct {CvtName(c)} *vt;");
         foreach (var field in c.GetMembers().OfType<IFieldSymbol>().Where(f => !f.IsStatic && !f.IsConst && f.AssociatedSymbol == null))
-            Line(Decl(field.Type, field.Name, decl) + ";");
+            if (field.RefKind != RefKind.None) Unsupported(field.DeclaringSyntaxReferences.First().GetSyntax(), "ref field");
+            else Line(Decl(field.Type, field.Name, decl) + ";");
         foreach (var p in c.GetMembers().OfType<IPropertySymbol>().Where(p => !p.IsStatic && IsAutoProperty(p)))
         {
             if (p.DeclaringSyntaxReferences.First().GetSyntax() is PropertyDeclarationSyntax { Initializer: not null } pd)
@@ -1072,6 +1104,13 @@ internal sealed partial class CEmitter
         var ps = parts.Count == 0 ? "void" : string.Join(", ", parts);
         // A constructor is a function that builds and returns the struct.
         var ret = m.MethodKind == MethodKind.Constructor ? m.ContainingType : m.ReturnType;
+        if (m.ReturnsByRef || m.ReturnsByRefReadonly)
+        {
+            // ref T F(...)  ->  T *F(...): the function returns the address of the place.
+            if (m.MethodKind is not (MethodKind.Ordinary or MethodKind.LocalFunction) || m.IsVirtual || m.IsAbstract || m.IsOverride || ret is IArrayTypeSymbol)
+                Unsupported(node, "ref return from a property, indexer, lambda, virtual or abstract member, or of an array type");
+            return Decl(ret, "*" + FuncName(m) + "(" + ps + ")", node);
+        }
         return Decl(ret, FuncName(m) + "(" + ps + ")", node);
     }
 
@@ -1333,7 +1372,15 @@ internal sealed partial class CEmitter
                     var sym = (ILocalSymbol)Model(l).GetDeclaredSymbol(v)!;
                     if (sym.Type is IArrayTypeSymbol localArray)
                     {
+                        if (sym.RefKind != RefKind.None) { Unsupported(v, "ref local of an array type"); continue; }
                         Line(ArrayDeclarator(localArray, sym.Name, v.Initializer?.Value, l) + ";");
+                        continue;
+                    }
+                    if (sym.RefKind != RefKind.None)
+                    {
+                        // ref T x = ref place;  ->  T *x = &place;  (uses of x read and write through the pointer)
+                        if (v.Initializer == null) { Unsupported(v, "ref local without an initializer"); continue; }
+                        Line($"{Decl(sym.Type, "*" + sym.Name, l)} = {Expr(v.Initializer.Value, top: true)};");
                         continue;
                     }
                     var text = Decl(sym.Type, sym.Name, l);
@@ -1478,6 +1525,7 @@ internal sealed partial class CEmitter
             {
                 var sym = (ILocalSymbol)Model(f).GetDeclaredSymbol(v)!;
                 type = sym.Type;
+                if (sym.RefKind != RefKind.None) Unsupported(v, "ref local declared in a for statement");
                 parts.Add(v.Initializer != null
                     ? $"{sym.Name} = {Expr(v.Initializer.Value, top: true)}"
                     : sym.Name);
@@ -1499,14 +1547,14 @@ internal sealed partial class CEmitter
     {
         if (IsLinqSource(fe.Expression)) { EmitLinqForEach(fe); return; }
         var collType = Model(fe).GetTypeInfo(fe.Expression).Type;
+        var local = (ILocalSymbol)Model(fe).GetDeclaredSymbol(fe)!;
         if (collType is not IArrayTypeSymbol && !IsSpan(collType))
         {
-            Unsupported(fe, "foreach over anything but an array or span");
+            EmitPatternForEach(fe, collType, local);
             return;
         }
         if (!RequireSimple(fe.Expression, "foreach")) return;
 
-        var local = (ILocalSymbol)Model(fe).GetDeclaredSymbol(fe)!;
         var coll = Expr(fe.Expression);
         var i = $"_i{++_temp}";
         string len, elem;
@@ -1525,8 +1573,96 @@ internal sealed partial class CEmitter
         Line($"for (int32_t {i} = 0; {i} < {len}; {i}++)");
         Line("{");
         _indent++;
-        Line(Decl(local.Type, local.Name, fe) + $" = {elem};");
+        Line(local.RefKind == RefKind.None
+            ? Decl(local.Type, local.Name, fe) + $" = {elem};"
+            : Decl(local.Type, "*" + local.Name, fe) + $" = ({CType(local.Type, fe)} *)&{elem};");   // foreach (ref var x in span); the cast drops a read-only span's const
         Statement(fe.Statement);
+        _indent--;
+        Line("}");
+    }
+
+    /// <summary>
+    /// foreach over a type with the GetEnumerator pattern (a struct or class GetEnumerator returning a struct or class
+    /// enumerator with MoveNext and Current), lowered without any allocation:
+    /// <c>{ E e = GetEnumerator(&amp;coll); while (MoveNext(&amp;e)) { T x = Current(&amp;e); body } }</c>.
+    /// </summary>
+    private void EmitPatternForEach(ForEachStatementSyntax fe, ITypeSymbol? collType, ILocalSymbol local)
+    {
+        var info = Model(fe).GetForEachStatementInfo(fe);
+        var get = info.GetEnumeratorMethod;
+        var move = info.MoveNextMethod;
+        var cur = info.CurrentProperty;
+        if (collType == null || get == null || move == null || cur == null || info.IsAsynchronous)
+        {
+            Unsupported(fe, "foreach over anything but an array, a span or a type with a GetEnumerator method");
+            return;
+        }
+        if (get.IsExtensionMethod || get.IsStatic || get.MethodKind != MethodKind.Ordinary || IsInterfaceType(collType) || IsInterfaceType(get.ContainingType))
+        {
+            Unsupported(fe, "foreach through an extension or interface GetEnumerator (use a struct or class with its own GetEnumerator)");
+            return;
+        }
+        var enumType = get.ReturnType;
+        if (enumType is not INamedTypeSymbol { TypeKind: TypeKind.Struct } && !IsHeapClass(enumType))
+        {
+            Unsupported(fe, "foreach whose enumerator is not a struct or class (an interface enumerator would be boxed)");
+            return;
+        }
+        // A non-sealed class enumerator gets a Dispose from Roslyn for a possible IDisposable subclass; only an enumerator that has one itself matters.
+        if (info.DisposeMethod != null && (SymbolEqualityComparer.Default.Equals(info.DisposeMethod.ContainingType, enumType) ||
+            enumType.AllInterfaces.Any(i => i.Name == "IDisposable")))
+        {
+            Unsupported(fe, "foreach over an enumerator with Dispose (E# does not call it; remove Dispose or loop with MoveNext)");
+            return;
+        }
+        if (get.ReturnsByRef || get.ReturnsByRefReadonly || cur.ReturnsByRef || cur.ReturnsByRefReadonly || local.RefKind != RefKind.None)
+        {
+            Unsupported(fe, "foreach by ref over an enumerator");
+            return;
+        }
+        if (!info.ElementConversion.IsIdentity && !(info.ElementConversion.IsImplicit && info.ElementConversion.IsNumeric))
+        {
+            Unsupported(fe, "foreach with a conversion of the element (declare the loop variable with the enumerator's type)");
+            return;
+        }
+
+        // The collection: a class reference or a variable is used in place; any other value (a call's result) is copied first.
+        var core = fe.Expression;
+        while (core is ParenthesizedExpressionSyntax pe) core = pe.Expression;
+        var n = ++_temp;
+        Line("{");
+        _indent++;
+        string? receiver;
+        if (IsRef(collType) || core is ThisExpressionSyntax || IsAddressable(core))
+            receiver = ReceiverOf(fe.Expression, fe, "GetEnumerator", "foreach");
+        else
+        {
+            Line($"{Decl(collType, $"_c{n}", fe)} = {Expr(fe.Expression, top: true)};");
+            receiver = $"&_c{n}";
+        }
+        if (receiver != null)
+        {
+            var e = $"_e{n}";
+            var eIsClass = IsHeapClass(enumType);
+            var eAddr = eIsClass ? e : "&" + e;
+            Line($"{Decl(enumType, e, fe)} = {InstanceCall(get, receiver, System.Array.Empty<string>())};");
+            Line($"while ({InstanceCall(move, eAddr, System.Array.Empty<string>())})");
+            Line("{");
+            _indent++;
+            string current;
+            if (IsAutoProperty(cur))
+                current = eIsClass ? $"{e}->{MemberPath(enumType, cur.ContainingType, cur.Name)}" : $"{e}.{cur.Name}";
+            else if (cur.GetMethod == null)
+                current = Unsupported(fe, "enumerator Current without a getter");
+            else
+                current = InstanceCall(cur.GetMethod, eAddr, System.Array.Empty<string>());
+            if (!info.ElementConversion.IsIdentity) current = $"(({CType(local.Type, fe)}){current})";
+            Line(Decl(local.Type, local.Name, fe) + $" = {current};");
+            Line($"(void){local.Name};");   // a loop that only counts does not read it
+            Statement(fe.Statement);
+            _indent--;
+            Line("}");
+        }
         _indent--;
         Line("}");
     }
@@ -1664,7 +1800,16 @@ internal sealed partial class CEmitter
                 };
 
             case InvocationExpressionSyntax inv:
-                return Invocation(inv);
+            {
+                // A ref-returning method returns a pointer; used as a value it is dereferenced (and stays an lvalue).
+                var call = Invocation(inv);
+                return ReturnsRef(inv) ? $"(*{call})" : call;
+            }
+
+            case RefExpressionSyntax re:
+                // Only where an address is wanted (ref local initializer, return ref, x = ref y); a ref conditional used as a value is handled above.
+                if (re.Parent is ConditionalExpressionSyntax) return Unsupported(re, "ref here");
+                return RefAddress(re.Expression);
 
             case BinaryExpressionSyntax b:
                 return Binary(b, top);
@@ -1681,6 +1826,12 @@ internal sealed partial class CEmitter
             {
                 if (a.IsKind(SyntaxKind.SimpleAssignmentExpression) && (a.Left is TupleExpressionSyntax || a.Left is DeclarationExpressionSyntax { Designation: ParenthesizedVariableDesignationSyntax }))
                     return Deconstruction(a);
+                if (a.Right is RefExpressionSyntax && IsRefVariable(Model(a).GetSymbolInfo(a.Left).Symbol) is { } rebound)
+                {
+                    // r = ref other;  points the ref local somewhere else.
+                    var rs = $"{rebound.Name} = {Expr(a.Right, top: true)}";
+                    return top ? rs : $"({rs})";
+                }
                 if (WrittenProperty(a.Left) is { } wp) return PropertyAssignment(wp, a);
                 if (a.Kind() != SyntaxKind.SimpleAssignmentExpression &&
                     Model(a).GetSymbolInfo(a).Symbol is IMethodSymbol { MethodKind: MethodKind.UserDefinedOperator } op)
@@ -1707,6 +1858,9 @@ internal sealed partial class CEmitter
 
             case SwitchExpressionSyntax swe:
                 return SwitchExpression(swe);
+
+            case ConditionalExpressionSyntax { WhenTrue: RefExpressionSyntax, WhenFalse: RefExpressionSyntax } rc:
+                return $"(*{RefAddress(rc)})";   // c ? ref a : ref b used as a value: a C lvalue
 
             case ConditionalExpressionSyntax c:
             {
@@ -2026,6 +2180,8 @@ internal sealed partial class CEmitter
         {
             case IParameterSymbol { RefKind: not RefKind.None } rp:
                 return $"(*{rp.Name})";
+            case ILocalSymbol { RefKind: not RefKind.None } rl:
+                return $"(*{rl.Name})";   // a ref local is a pointer to the variable it refers to
             case IMethodSymbol { IsStatic: true, MethodKind: MethodKind.Ordinary or MethodKind.LocalFunction } group:
                 return MethodGroup(group, id);   // a method group converted to a delegate
             case IRangeVariableSymbol:
@@ -2045,6 +2201,7 @@ internal sealed partial class CEmitter
     private string FieldRef(IFieldSymbol f, SyntaxNode at)
     {
         if (f.ContainingType.TypeKind == TypeKind.Enum) return FieldName(f);
+        if (f.RefKind != RefKind.None) return Unsupported(at, "ref field");
         if (f.IsConst && f.ConstantValue != null)
             return ConstantLiteral(f.ConstantValue, f.Type);
         if (f.IsStatic) return FieldName(f);
@@ -2151,6 +2308,10 @@ internal sealed partial class CEmitter
         }
 
         if (IsLinqCall(inv, out var linqMethod, out var linqReceiver)) return Linq(inv, linqMethod, linqReceiver);
+
+        if ((m.ReturnsByRef || m.ReturnsByRefReadonly) &&
+            (m.MethodKind is not (MethodKind.Ordinary or MethodKind.LocalFunction) || m.IsVirtual || m.IsAbstract || m.IsOverride || IsInterfaceType(m.ContainingType)))
+            return Unsupported(inv, "call of a ref-returning virtual, abstract, interface or delegate member");
 
         if (m.ContainingType is { Name: "Heap" } && m.Name.StartsWith("Free") && m.ContainingNamespace?.ToDisplayString() == "ESharp.Platform"
             && inv.ArgumentList.Arguments.Count == 1)
@@ -2563,13 +2724,44 @@ internal sealed partial class CEmitter
         {
             case IdentifierNameSyntax or MemberAccessExpressionSyntax or ElementAccessExpressionSyntax:
                 var sym = Model(e).GetSymbolInfo(e).Symbol;
+                if (sym is IPropertySymbol { IsIndexer: true, ContainingType.Name: "Span" } spanIndexer && IsSpan(spanIndexer.ContainingType)) return true;   // s.ptr[i]
                 if (sym is IPropertySymbol prop) return IsAutoProperty(prop);
                 if (sym is IFieldSymbol { IsConst: true }) return false;
                 return sym is ILocalSymbol or IParameterSymbol or IFieldSymbol || (sym == null);
             case PrefixUnaryExpressionSyntax { RawKind: (int)SyntaxKind.PointerIndirectionExpression }:
                 return true;
+            case InvocationExpressionSyntax inv:
+                return ReturnsRef(inv);   // emitted as (*call), which is a C lvalue
         }
         return false;
+    }
+
+    /// <summary>A ref local or ref/out/in parameter (held as a pointer in C), or null.</summary>
+    private static ISymbol? IsRefVariable(ISymbol? s) =>
+        s is ILocalSymbol { RefKind: not RefKind.None } or IParameterSymbol { RefKind: not RefKind.None } ? s : null;
+
+    /// <summary>True when <paramref name="inv"/> calls a method that returns by reference (its C function returns a pointer).</summary>
+    private bool ReturnsRef(InvocationExpressionSyntax inv) =>
+        Model(inv).GetSymbolInfo(inv).Symbol is IMethodSymbol { MethodKind: not MethodKind.DelegateInvoke } m && (m.ReturnsByRef || m.ReturnsByRefReadonly);
+
+    /// <summary>The C address of the place a <c>ref</c> expression refers to (<c>ref x</c>, <c>ref a[i]</c>, <c>ref F()</c>, <c>c ? ref a : ref b</c>).</summary>
+    private string RefAddress(ExpressionSyntax e)
+    {
+        while (e is ParenthesizedExpressionSyntax pe) e = pe.Expression;
+        switch (e)
+        {
+            case ConditionalExpressionSyntax { WhenTrue: RefExpressionSyntax t, WhenFalse: RefExpressionSyntax f } c:
+                return $"({Expr(c.Condition)} ? {RefAddress(t.Expression)} : {RefAddress(f.Expression)})";
+            case InvocationExpressionSyntax inv when ReturnsRef(inv):
+                return Invocation(inv);   // already the pointer
+            case IdentifierNameSyntax id when IsRefVariable(Model(id).GetSymbolInfo(id).Symbol) is { } rv:
+                return rv.Name;            // already the pointer
+            case ElementAccessExpressionSyntax ea when Model(ea).GetSymbolInfo(ea).Symbol is IPropertySymbol { IsIndexer: true, ContainingType.Name: "ReadOnlySpan" } ro && IsSpan(ro.ContainingType):
+                // ref readonly to a read-only span element: C# keeps it read-only, so the C const can be dropped.
+                return $"(({CType(ro.Type, ea)} *)&{Expr(ea)})";
+        }
+        if (Model(e).GetTypeInfo(e).Type is { } && IsAddressable(e)) return "&" + Expr(e);
+        return Unsupported(e, "ref to this kind of expression (only variables, fields, array and span elements, and ref-returning calls)");
     }
 
     private static string DiscardName(SyntaxNode e) => "es_discard_" + e.SpanStart;
@@ -2600,6 +2792,7 @@ internal sealed partial class CEmitter
         if (core is IdentifierNameSyntax or MemberAccessExpressionSyntax or ElementAccessExpressionSyntax &&
             Model(at).GetSymbolInfo(core).Symbol is not IMethodSymbol && !(Model(at).GetSymbolInfo(core).Symbol is IPropertySymbol cp && !IsAutoProperty(cp)))
             return "&" + Expr(core);
+        if (core is InvocationExpressionSyntax refCall && ReturnsRef(refCall)) return Invocation(refCall);   // F().M(): the returned pointer
 
         return Unsupported(recv, $"use of '{name}' on a temporary value; assign it to a local first");
     }
@@ -2628,6 +2821,7 @@ internal sealed partial class CEmitter
             var op = IsRef(recvType) ? "->" : ".";
             return $"{Expr(recv)}{op}{(op == "->" ? MemberPath(recvType, p.ContainingType, p.Name) : p.Name)}";
         }
+        if (p.ReturnsByRef || p.ReturnsByRefReadonly) return Unsupported(at, $"ref-returning property or indexer '{p.Name}'");
         if (p.GetMethod == null) return Unsupported(at, $"property '{p.Name}' without a getter");
         if (p.IsStatic) return $"{FuncName(p.GetMethod)}()";
         var receiver = ReceiverOf(recv, at, p.Name, "instance property access");

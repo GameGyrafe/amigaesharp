@@ -11,7 +11,7 @@ public class CEmitterTests
         Assert.Contains("#include <proto/dos.h>", c);
         Assert.Contains("PutStr(\"Hello from E#!\\n\");", c);
         Assert.Contains("int main(void)", c);
-        Assert.Contains("P_Main();", c);
+        Assert.Contains("Es_P_Main();", c);
     }
 
     [Fact]
@@ -33,21 +33,21 @@ public class CEmitterTests
     public void Types_map_to_stdint()
     {
         var c = CompileOk(Program(@"static void F(byte a, sbyte b, short c, ushort d, int e, uint f) { }"));
-        Assert.Contains("void P_F(uint8_t a, int8_t b, int16_t c, uint16_t d, int32_t e, uint32_t f)", c);
+        Assert.Contains("void Es_P_F(uint8_t a, int8_t b, int16_t c, uint16_t d, int32_t e, uint32_t f)", c);
     }
 
     [Fact]
     public void Overloads_get_distinct_names()
     {
         var c = CompileOk(Program("static int F(int a) { return a; } static int F(short a) { return a; }", "F(1); F((short)2);"));
-        Assert.Contains("P_F_int", c);
-        Assert.Contains("P_F_short", c);
+        Assert.Contains("Es_P_F_int", c);
+        Assert.Contains("Es_P_F_short", c);
     }
 
     [Fact]
     public void Unsupported_constructs_report_ES0099()
     {
-        var r = Compile(Program("static void F() { int x = 1; ref int r = ref x; r = 2; }"));
+        var r = Compile(Program("static void F() { goto end; end: ; }"));
         Assert.Contains("ES0099", ErrorIds(r));
     }
 
@@ -795,6 +795,19 @@ Check(list.Count == 0, ""destroy"");
     }
 
     [Fact]
+    public void Refs_sample_compiles_and_runs_natively_with_the_same_output_as_dotnet()
+    {
+        if (!HasGcc) return;
+        var path = Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "..", "samples", "refs", "Refs.cs");
+        var options = new CompileOptions { Defines = new[] { "AMIGA", "ESHARP_HOSTC" } };
+        var r = EsCompiler.Compile(new[] { new SourceFile(path, File.ReadAllText(path)) }, options);
+        Assert.True(r.Success, string.Join("\n", r.Diagnostics));
+        var (code, output) = RunWithHostGcc(r.C!);
+        Assert.Equal(0, code);
+        Assert.Equal(RefsExpected.Output, output);
+    }
+
+    [Fact]
     public void Linq_sample_compiles_and_runs_natively_with_the_same_output_as_dotnet()
     {
         if (!HasGcc) return;
@@ -861,6 +874,64 @@ Check(list.Count == 0, ""destroy"");
         Assert.Contains("Date2Amiga(", r.C!);
         Assert.Contains("Stricmp(", r.C!);
         Assert.Contains("DateStamp(", r.C!);
+    }
+
+    /// <summary>
+    /// A stand-in for the system headers an Amiga build includes (proto/intuition.h pulls in exec and graphics): the
+    /// structs keep their real tag names, so an E# type whose C name were just 'Window' or 'Node' would clash here.
+    /// </summary>
+    private const string SystemStructsShim =
+        "#ifndef SHIM_INTUITION_H\n#define SHIM_INTUITION_H\n#include <stdint.h>\n" +
+        "struct Node { struct Node *ln_Succ; struct Node *ln_Pred; uint8_t ln_Type; int8_t ln_Pri; char *ln_Name; };\n" +
+        "struct List { struct Node *lh_Head; struct Node *lh_Tail; struct Node *lh_TailPred; uint8_t lh_Type; };\n" +
+        "struct Task { struct Node tc_Node; };\nstruct Message { struct Node mn_Node; uint16_t mn_Length; };\n" +
+        "struct Rectangle { int16_t MinX, MinY, MaxX, MaxY; };\nstruct Hook { struct Node h_MinNode; };\n" +
+        "struct Image { int16_t LeftEdge; };\nstruct Border { int16_t LeftEdge; };\nstruct Gadget { struct Gadget *NextGadget; };\n" +
+        "struct Menu { struct Menu *NextMenu; };\nstruct Screen { struct Screen *NextScreen; };\n" +
+        "struct Window { struct Window *NextWindow; struct Screen *WScreen; };\n" +
+        "static inline void CurrentTime(uint32_t *s, uint32_t *m) { *s = 1; *m = 2; }\n#endif\n";
+
+    [Fact]
+    public void Types_named_like_system_structs_and_same_named_types_in_two_namespaces_compile_against_the_system_headers_and_run()
+    {
+        if (!HasGcc) return;
+        var path = Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "..", "samples", "names", "Names.cs");
+        var c = CompileOk(File.ReadAllText(path), new CompileOptions { Defines = new[] { "AMIGA", "ESHARP_HOSTC" } });
+        Assert.Contains("#include <proto/intuition.h>", c);
+        Assert.Contains("typedef struct Es_NamesSample_Window Es_NamesSample_Window;", c);
+        Assert.Contains("typedef struct Es_NamesSample_Left_Item Es_NamesSample_Left_Item;", c);
+        Assert.Contains("typedef struct Es_NamesSample_Right_Item Es_NamesSample_Right_Item;", c);
+        Assert.Contains("Es_NamesSample_Box__NamesSample_Left_Point", c);
+        Assert.Contains("} Es_ESharp_Fix;", c);   // the embedded library is prefixed as well
+        foreach (var system in new[] { "Window", "Gadget", "Screen", "Node", "List", "Menu", "Image", "Task", "Message", "Rectangle", "Border" })
+            Assert.DoesNotContain($"struct {system} ", c);
+        var (code, output) = RunWithHostGcc(c, new System.Collections.Generic.Dictionary<string, string> { ["proto/intuition.h"] = SystemStructsShim });
+        Assert.Equal(0, code);
+        Assert.DoesNotContain("FAIL", output);
+        Assert.Equal(12, output.Split('\n').Count(l => l.StartsWith("ok ")));
+    }
+
+    [Fact]
+    public void Same_named_types_in_different_namespaces_get_their_own_C_names()
+    {
+        if (!HasGcc) return;
+        var src = Program("", "Dos.PutStr($\"{new A.Window().Id() + new B.Window().Id()} {A.Tools.N + B.Tools.N}\\n\");")
+            + "\nnamespace A { public class Window { public int Id() { return 1; } } public static class Tools { public static int N = 10; } }"
+            + "\nnamespace B { public class Window { public int Id() { return 2; } } public static class Tools { public static int N = 20; } }";
+        var c = CompileOk(src);
+        Assert.Contains("int32_t Es_A_Window_Id(Es_A_Window *_this)", c);
+        Assert.Contains("int32_t Es_B_Window_Id(Es_B_Window *_this)", c);
+        var (code, output) = RunWithHostGcc(c);
+        Assert.Equal(0, code);
+        Assert.Equal("3 30\n", output);
+    }
+
+    [Fact]
+    public void Types_whose_mangled_C_names_meet_report_ES0099()
+    {
+        // namespace A_B, class C and namespace A, class B_C both become Es_A_B_C.
+        var r = Compile(Program("", "") + "\nnamespace A_B { public class C { } }\nnamespace A { public class B_C { } }");
+        Assert.Contains("ES0099", ErrorIds(r));
     }
 
     [Fact]
@@ -1011,7 +1082,7 @@ public static unsafe class P
         var c = CompileOk(Program(
             "static int[] T = { 1, 2, 3 }; static int Sum(Span<int> s) { return s.Length > 0 ? s[0] : 0; }",
             "int[] a = new int[4]; Sum(a);").Replace("using ESharp;", "using System;\nusing ESharp;"));
-        Assert.Contains("static int32_t P_T[3] = { 1, 2, 3 };", c);
+        Assert.Contains("static int32_t Es_P_T[3] = { 1, 2, 3 };", c);
         Assert.Contains("int32_t a[4] = {0};", c);
         Assert.Contains("typedef struct { int32_t *ptr; int32_t length; } ES_Span_int;", c);
         Assert.Contains("s.ptr[0]", c);
@@ -1021,8 +1092,8 @@ public static unsafe class P
     public void Operators_on_structs_become_functions()
     {
         var c = CompileOk(Program("", "Fix a = Fix.FromInt(2); Fix b = a * a + a;"));
-        Assert.Contains("Fix_op_Multiply_Fix_Fix(a, a)", c);
-        Assert.Contains("Fix_op_Addition(", c);
+        Assert.Contains("Es_ESharp_Fix_op_Multiply_ESharp_Fix_ESharp_Fix(a, a)", c);
+        Assert.Contains("Es_ESharp_Fix_op_Addition(", c);
     }
 
     [Fact]
@@ -1031,10 +1102,10 @@ public static unsafe class P
         var c = CompileOk(Program(
             "struct S { public int V; public S(int v) { V = v; } public int Get() { return V; } }",
             "S s = new S(3); s.Get();"));
-        Assert.Contains("P_S P_S_new(int32_t v)", c);
-        Assert.Contains("int32_t P_S_Get(P_S *_this)", c);
+        Assert.Contains("Es_P_S Es_P_S_new(int32_t v)", c);
+        Assert.Contains("int32_t Es_P_S_Get(Es_P_S *_this)", c);
         Assert.Contains("_this->V", c);
-        Assert.Contains("P_S_Get(&s)", c);
+        Assert.Contains("Es_P_S_Get(&s)", c);
     }
 
     [Fact]
@@ -1134,10 +1205,200 @@ if (p.First() == 3 && Fix.ToInt(q.B) == 2 && Twice(p) == 2 && m == 9) Dos.PutStr
 ";
         var c = CompileOk(Program(members, body));
         Assert.Contains("Pair__int", c);
-        Assert.Contains("Pair__Fix", c);
+        Assert.Contains("Pair__ESharp_Fix", c);
         Assert.DoesNotContain("Pair_T", c);
         var (code, output) = RunWithHostGcc(c);
         Assert.Equal(0, code);
         Assert.Equal("ok\n", output);
+    }
+
+    // ---- ref locals, ref returns and foreach over the GetEnumerator pattern (issue #12) ----
+
+    [Fact]
+    public void Ref_locals_and_ref_returns_write_through_natively()
+    {
+        if (!HasGcc) return;
+        const string members = @"
+public struct Point { public int X; public int Y; }
+static Point gp;
+static void Check(bool ok, string name) { Dos.PutStr(ok ? ""ok "" : ""FAIL ""); Dos.PutStr(name); Dos.PutStr(""\n""); }
+static ref int Slot(System.Span<int> a, int i) { return ref a[i]; }
+static ref int Pick(ref Point p, bool x) => ref x ? ref p.X : ref p.Y;
+static ref Point At(System.Span<Point> ps, int i) { return ref ps[i]; }
+static ref int GlobalY() { return ref gp.Y; }
+static ref readonly int Peek(System.Span<int> a) { return ref a[0]; }
+static void Bump(ref int v) { v += 100; }
+";
+        const string body = @"
+int x = 1;
+ref int r = ref x;
+r = 2;
+Check(x == 2, ""ref local writes through"");
+r++;
+r += 10;
+Check(x == 13, ""++ and += through a ref local"");
+int y = 10;
+r = ref y;
+r = 11;
+Check(x == 13 && y == 11, ""ref local pointed somewhere else"");
+int[] arr = new int[4];
+ref int e = ref arr[2];
+e = 7;
+Check(arr[2] == 7, ""ref local to an array element"");
+Slot(arr, 1) = 5;
+Slot(arr, 1) += 2;
+Check(arr[1] == 7 && Slot(arr, 1) == 7, ""assignment to a ref return (array element)"");
+ref int s = ref Slot(arr, 3);
+s = 9;
+Check(arr[3] == 9, ""ref local from a ref return"");
+Point p = default;
+Pick(ref p, true) = 4;
+Pick(ref p, false) = 6;
+Check(p.X == 4 && p.Y == 6, ""ref return into a struct field"");
+Point[] pts = new Point[3];
+At(pts, 1).X = 8;
+Check(pts[1].X == 8, ""field of a ref-returned struct"");
+ref Point q = ref pts[2];
+q.Y = 12;
+q.X = q.Y + 1;
+Check(pts[2].Y == 12 && pts[2].X == 13, ""ref local to a struct element"");
+Bump(ref Slot(arr, 0));
+Check(arr[0] == 100, ""ref return passed as a ref argument"");
+GlobalY() = 3;
+Check(gp.Y == 3, ""ref return of a static field"");
+ref readonly int ro = ref Peek(arr);
+arr[0] = 55;
+Check(ro == 55, ""ref readonly sees later writes"");
+System.Span<int> sp = arr;
+foreach (ref int v in sp) v *= 2;
+Check(arr[0] == 110 && arr[3] == 18, ""foreach by ref over a span"");
+System.ReadOnlySpan<int> rs = arr;
+int rsum = 0;
+foreach (ref readonly int v in rs) rsum += v;
+Check(rsum == 156, ""foreach by ref readonly over a read-only span"");
+";
+        var c = CompileOk(Program(members, body));
+        Assert.Contains("int32_t *Es_P_Slot(", c);
+        var (code, output) = RunWithHostGcc(c);
+        Assert.Equal(0, code);
+        Assert.DoesNotContain("FAIL", output);
+        Assert.Equal(14, output.Split('\n', StringSplitOptions.RemoveEmptyEntries).Length);
+    }
+
+    [Fact]
+    public void Foreach_over_enumerator_pattern_runs_natively()
+    {
+        if (!HasGcc) return;
+        const string members = @"
+public struct Countdown { public int From; public CountdownEnum GetEnumerator() { CountdownEnum e = default; e.Left = From + 1; return e; } }
+public struct CountdownEnum { public int Left; public bool MoveNext() { Left--; return Left > 0; } public int Current { get { return Left; } } }
+public struct Evens { public int Below; public EvensEnum GetEnumerator() { return new EvensEnum(Below); } }
+public struct EvensEnum
+{
+    private int _below;
+    public EvensEnum(int below) { _below = below; Current = -2; }
+    public int Current { get; private set; }
+    public bool MoveNext() { Current = Current + 2; return Current < _below; }
+}
+public class Steps
+{
+    public int N;
+    public Steps(int n) { N = n; }
+    public StepsEnum GetEnumerator() { return new StepsEnum(N); }
+}
+public class StepsEnum
+{
+    private int _n;
+    private int _i;
+    public StepsEnum(int n) { _n = n; _i = 0; }
+    public bool MoveNext() { _i++; return _i <= _n; }
+    public int Current { get { return _i * 3; } }
+}
+static Countdown Make(int from) { Countdown c = default; c.From = from; return c; }
+static void Check(bool ok, string name) { Dos.PutStr(ok ? ""ok "" : ""FAIL ""); Dos.PutStr(name); Dos.PutStr(""\n""); }
+";
+        const string body = @"
+Vec<int> v = default;
+for (int i = 1; i <= 5; i++) v.Add(i * 10);
+int sum = 0;
+foreach (int x in v) sum += x;
+Check(sum == 150, ""foreach over a Vec"");
+int seen = 0;
+foreach (var x in v) { if (x == 20) continue; if (x == 40) break; seen += x; }
+Check(seen == 40, ""continue and break over a Vec"");
+Countdown c3 = default;
+c3.From = 4;
+int n = 0;
+foreach (int k in c3) { if (k == 2) continue; n = n * 10 + k; }
+Check(n == 431, ""user struct enumerator with continue"");
+int cd = 0;
+foreach (int k in Make(3)) cd = cd * 10 + k;
+Check(cd == 321, ""enumerable returned by a call"");
+long big = 0;
+foreach (long k in c3) big += k;
+Check(big == 10, ""element widened to long"");
+int pairs = 0;
+foreach (int a in c3) foreach (int b in v) { if (b > 20) break; pairs++; }
+Check(pairs == 8, ""nested foreach with break in the inner loop"");
+Evens ev = default;
+ev.Below = 9;
+int es = 0;
+foreach (int k in ev) es += k;
+Check(es == 20, ""enumerator with an auto-property Current"");
+Steps st = new Steps(4);
+int ss = 0;
+foreach (int k in st) { if (k == 9) break; ss += k; }
+Check(ss == 9, ""class enumerable and class enumerator with break"");
+v.Destroy();
+int none = 0;
+foreach (int x in v) none++;
+Check(none == 0, ""empty Vec"");
+";
+        var c = CompileOk(Program(members, body));
+        Assert.Contains("_MoveNext(&_e", c);   // a struct enumerator is a local on the stack
+        var (code, output) = RunWithHostGcc(c);
+        Assert.Equal(0, code);
+        Assert.DoesNotContain("FAIL", output);
+        Assert.Equal(9, output.Split('\n', StringSplitOptions.RemoveEmptyEntries).Length);
+    }
+
+    [Fact]
+    public void Ref_conditional_works_as_value_assignment_target_and_argument()
+    {
+        if (!HasGcc) return;
+        const string members = @"
+static int s_a = 1; static int s_b = 2;
+static void Check(bool ok, string name) { Dos.PutStr(ok ? ""ok "" : ""FAIL ""); Dos.PutStr(name); Dos.PutStr(""\n""); }
+static int G(in int v) { return v; }
+";
+        const string body = @"
+bool flag = false;
+int v = flag ? ref s_a : ref s_b;
+Check(v == 2, ""ref conditional as a value"");
+(flag ? ref s_a : ref s_b) = 5;
+Check(s_a == 1 && s_b == 5, ""ref conditional as an assignment target"");
+int[] arr = new int[2]; arr[0] = 3; arr[1] = 4;
+Check(G(flag ? ref arr[0] : ref arr[1]) == 4, ""ref conditional as an in argument"");
+";
+        var c = CompileOk(Program(members, body));
+        var (code, output) = RunWithHostGcc(c);
+        Assert.Equal(0, code);
+        Assert.DoesNotContain("FAIL", output);
+        Assert.Equal(3, output.Split('\n', StringSplitOptions.RemoveEmptyEntries).Length);
+    }
+
+    [Theory]
+    [InlineData("public unsafe struct S { int* _p; public ref int this[int i] { get { return ref _p[i]; } } }", "S s = default; int v = s[0];")]
+    [InlineData("public interface ISeq { E GetEnumerator(); } public struct E { public int Current { get { return 0; } } public bool MoveNext() { return false; } } public class C : ISeq { public E GetEnumerator() { return default; } }",
+        "ISeq q = new C(); foreach (int x in q) { }")]
+    [InlineData("public unsafe struct E { int* _p; public ref int Current { get { return ref *_p; } } public bool MoveNext() { return false; } } public struct L { public E GetEnumerator() { return default; } }",
+        "L l = default; foreach (int x in l) { }")]
+    [InlineData("public abstract class B { public abstract ref int Get(); }", "")]
+    [InlineData("public ref struct H { public ref int R; }", "")]
+    [InlineData("public ref struct H { public ref int R; }", "H h = default; h.R = 4;")]
+    public void Unsupported_ref_and_foreach_forms_report_ES0099(string members, string body)
+    {
+        var r = Compile(Program(members, body));
+        Assert.Contains("ES0099", ErrorIds(r));
     }
 }
