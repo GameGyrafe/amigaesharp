@@ -45,6 +45,13 @@ public static unsafe class Graphics
         void* destRastPort, int xDest, int yDest, int xSize, int ySize, int minterm);
     [AmigaLib("graphics", -636)] public static extern void BltMaskBitMapRastPort(void* srcBitMap, int xSrc, int ySrc,
         void* destRastPort, int xDest, int yDest, int xSize, int ySize, uint minterm, void* bltMask);
+    /// <summary>graphics.library OpenFont(): a font that is already in memory (ROM topaz, or one loaded earlier), or null.</summary>
+    [AmigaLib("graphics", -72)] public static extern void* OpenFont(void* textAttr);
+    [AmigaLib("graphics", -78)] public static extern void CloseFont(void* textFont);
+    [AmigaLib("graphics", -66)] public static extern void SetFont(void* rastPort, void* textFont);
+    [AmigaLib("graphics", -60)] public static extern void Text(void* rastPort, string text, int count);
+    [AmigaLib("graphics", -54)] public static extern int TextLength(void* rastPort, string text, int count);
+    [AmigaLib("graphics", -240)] public static extern void Move(void* rastPort, int x, int y);
     [AmigaLib("graphics", -270)] public static extern void WaitTOF();
     /// <summary>graphics.library GetVPModeID() (v36): the display mode ID of a view port.</summary>
     [AmigaLib("graphics", -792), Since(36)] public static extern uint GetVPModeID(void* viewPort);

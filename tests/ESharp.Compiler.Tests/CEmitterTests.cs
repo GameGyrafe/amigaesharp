@@ -877,6 +877,50 @@ Check(list.Count == 0, ""destroy"");
     }
 
     [Fact]
+    public void Fonts_sample_compiles_for_m68k_with_a_private_diskfont_base()
+    {
+        var path = Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "..", "samples", "fonts", "Fonts.cs");
+        var r = EsCompiler.Compile(new[] { new SourceFile("Fonts.cs", File.ReadAllText(path)) }, Targets.M68k.ToOptions());
+        Assert.True(r.Success, string.Join("\n", r.Diagnostics));
+        Assert.Contains("#define DiskfontBase es_DiskfontBase", r.C!);
+        Assert.Contains("struct Library *es_DiskfontBase;", r.C!);
+        Assert.Contains("#include <proto/diskfont.h>", r.C!);
+        Assert.Contains("OpenDiskFont(", r.C!);
+        Assert.Contains("OpenFont(", r.C!);
+        Assert.Contains("Text(", r.C!);
+    }
+
+    [Fact]
+    public void Iff_sample_compiles_for_m68k_with_a_private_iffparse_base()
+    {
+        var path = Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "..", "samples", "iff", "Iff.cs");
+        var r = EsCompiler.Compile(new[] { new SourceFile("Iff.cs", File.ReadAllText(path)) }, Targets.M68k.ToOptions());
+        Assert.True(r.Success, string.Join("\n", r.Diagnostics));
+        Assert.Contains("#define IFFParseBase es_IFFParseBase", r.C!);
+        Assert.Contains("struct Library *es_IFFParseBase;", r.C!);
+        Assert.Contains("#include <proto/iffparse.h>", r.C!);
+        Assert.Contains("AllocIFF(", r.C!);
+        Assert.Contains("ParseIFF(", r.C!);
+        Assert.Contains("PushChunk(", r.C!);
+        Assert.Contains("WriteChunkBytes(", r.C!);
+        Assert.Contains("ReadChunkBytes(", r.C!);
+    }
+
+    [Fact]
+    public void Asl_sample_compiles_for_m68k_with_a_private_asl_base()
+    {
+        var path = Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "..", "samples", "asl", "Asl.cs");
+        var r = EsCompiler.Compile(new[] { new SourceFile("Asl.cs", File.ReadAllText(path)) }, Targets.M68k.ToOptions());
+        Assert.True(r.Success, string.Join("\n", r.Diagnostics));
+        Assert.Contains("#define AslBase es_AslBase", r.C!);
+        Assert.Contains("struct Library *es_AslBase;", r.C!);
+        Assert.Contains("#include <proto/asl.h>", r.C!);
+        Assert.Contains("AllocAslRequest(", r.C!);
+        Assert.Contains("AslRequest(", r.C!);
+        Assert.Contains("FreeAslRequest(", r.C!);
+    }
+
+    [Fact]
     public void A_library_base_class_calls_through_its_own_base_variable_that_SetBase_fills()
     {
         if (!HasGcc) return;

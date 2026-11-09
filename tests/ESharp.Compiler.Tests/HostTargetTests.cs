@@ -144,6 +144,89 @@ public class HostTargetTests
     }
 
     [Fact]
+    public void Fonts_sample_runs_on_the_host_with_and_without_diskfont()
+    {
+        ESharp.Platform.Fonts.HostAdd("ruby", 12, 8, 10);
+        try
+        {
+            using var console = HostConsole.Capture();
+            FontsSample.Program.Main();
+            Assert.DoesNotContain("FAIL", console.Output);
+            Assert.Contains("ruby 12: height 12, width 8, baseline 10\n", console.Output);
+            Assert.Contains("ok text was drawn in the disk font\n", console.Output);
+            Assert.Equal(0, ESharp.Platform.Fonts.HostOpenCount);
+            ESharp.Platform.Fonts.HostDiskFonts = false;
+            using var console2 = HostConsole.Capture();
+            FontsSample.Program.Main();
+            Assert.DoesNotContain("FAIL", console2.Output);
+            Assert.Contains("diskfont.library is not installed: disk fonts skipped\n", console2.Output);
+            Assert.DoesNotContain("ruby 12", console2.Output);
+            Assert.Contains("ok topaz 8 opens\n", console2.Output);
+            Assert.Equal(0, ESharp.Platform.Fonts.HostOpenCount);
+        }
+        finally { ESharp.Platform.Fonts.HostDiskFonts = true; }
+    }
+
+    [Fact]
+    public void Iff_sample_runs_on_the_host_and_writes_a_valid_iff_file()
+    {
+        using var console = HostConsole.Capture();
+        IffSample.Program.Main();
+        Assert.DoesNotContain("FAIL", console.Output);
+        Assert.Equal(10, console.Output.Split('\n').Count(l => l.StartsWith("ok ")));
+    }
+
+    [Fact]
+    public void Iff_file_has_the_standard_layout_and_a_missing_library_gives_a_closed_file()
+    {
+        string path = Path.Combine(Path.GetTempPath(), "esharp_iff_layout_" + Environment.ProcessId + ".iff");
+        try
+        {
+            var w = ESharp.Platform.Iff.Create(path, ESharp.Platform.Iff.Id("ILBM"));
+            unsafe
+            {
+                byte* three = stackalloc byte[3];
+                three[0] = 7; three[1] = 8; three[2] = 9;
+                Assert.True(w.WriteChunk(ESharp.Platform.Iff.Id("ABCD"), three, 3));
+            }
+            Assert.True(w.Finish());
+            var bytes = File.ReadAllBytes(path);
+            Assert.Equal("FORM", System.Text.Encoding.ASCII.GetString(bytes, 0, 4));
+            Assert.Equal(new byte[] { 0, 0, 0, 16 }, bytes[4..8]);                 // ILBM + chunk header (8) + 3 bytes + pad
+            Assert.Equal("ILBMABCD", System.Text.Encoding.ASCII.GetString(bytes, 8, 8));
+            Assert.Equal(new byte[] { 0, 0, 0, 3, 7, 8, 9, 0 }, bytes[16..24]);
+            ESharp.Platform.Iff.HostAvailable = false;
+            Assert.False(ESharp.Platform.Iff.Open());
+            Assert.False(ESharp.Platform.Iff.Create(path, 0).IsOpen);
+            Assert.False(ESharp.Platform.Iff.OpenRead(path).IsOpen);
+            using var console = HostConsole.Capture();
+            IffSample.Program.Main();
+            Assert.Equal("iffparse.library is not installed: nothing to do\n", console.Output);
+        }
+        finally { ESharp.Platform.Iff.HostAvailable = true; File.Delete(path); }
+    }
+
+    [Fact]
+    public void Asl_sample_runs_on_the_host_and_reports_the_pick_or_a_missing_library()
+    {
+        using var console = HostConsole.Capture();
+        AslSample.Program.Main();
+        Assert.DoesNotContain("FAIL", console.Output);
+        Assert.Contains("result: picked RAM:picked.txt\n", console.Output);
+        Assert.Equal("E# file requester", ESharp.Platform.Asl.HostLastTitle);
+        Assert.Equal("RAM:", ESharp.Platform.Asl.HostLastDrawer);
+        ESharp.Platform.Asl.HostAvailable = false;
+        try
+        {
+            using var console2 = HostConsole.Capture();
+            AslSample.Program.Main();
+            Assert.Equal("asl.library is not installed: nothing to do\n", console2.Output);
+            Assert.Null(ESharp.Platform.Asl.PickFile("x", "RAM:"));
+        }
+        finally { ESharp.Platform.Asl.HostAvailable = true; }
+    }
+
+    [Fact]
     public void Keys_sample_runs_on_the_host()
     {
         using var console = HostConsole.Capture();
