@@ -108,11 +108,29 @@ public unsafe class GtGadget
     internal void* WindowHandle;   // struct Window *, while the window is open
 #endif
 
+    /// <summary>Stores a new copy of the text and, while the window is open, points the gadget at it before the old copy is freed.
+    /// If the copy cannot be made, the old text stays in place.</summary>
     internal void SetTextCopy(string? s)
     {
         byte* old = TextCopy;
-        TextCopy = GuiText.Dup(s);
-        if (old != null && old != TextCopy) GuiText.Free(old);
+        byte* fresh = GuiText.Dup(s);
+        if (fresh == null && s != null) return;       // out of memory: keep the old copy, the gadget still points at it
+#if AMIGA
+        if (Handle != null)
+        {
+            if (fresh == null) fresh = GuiText.Dup("");
+            if (fresh == null) return;
+            nuint[] tags = new nuint[4];
+            fixed (nuint* t = tags)
+            {
+                TagWriter w = new TagWriter(t, 4);
+                w.Add(KindId == 1 ? Layout.GtstString : Layout.GttxText, fresh);
+                if (w.End()) GadTools.GT_SetGadgetAttrsA(Handle, WindowHandle, null, t);
+            }
+        }
+#endif
+        TextCopy = fresh;
+        if (old != null && old != fresh) GuiText.Free(old);
     }
 
     internal void FreeCopies()
@@ -173,18 +191,6 @@ public unsafe class GtString : GtGadget
         set
         {
             SetTextCopy(value);
-#if AMIGA
-            if (Handle != null && TextCopy != null)
-            {
-                nuint[] tags = new nuint[4];
-                fixed (nuint* t = tags)
-                {
-                    TagWriter w = new TagWriter(t, 4);
-                    w.Add(Layout.GtstString, TextCopy);
-                    if (w.End()) GadTools.GT_SetGadgetAttrsA(Handle, WindowHandle, null, t);
-                }
-            }
-#endif
         }
     }
 }
@@ -204,18 +210,6 @@ public unsafe class GtText : GtGadget
         set
         {
             SetTextCopy(value);
-#if AMIGA
-            if (Handle != null && TextCopy != null)
-            {
-                nuint[] tags = new nuint[4];
-                fixed (nuint* t = tags)
-                {
-                    TagWriter w = new TagWriter(t, 4);
-                    w.Add(Layout.GttxText, TextCopy);
-                    if (w.End()) GadTools.GT_SetGadgetAttrsA(Handle, WindowHandle, null, t);
-                }
-            }
-#endif
         }
     }
 }
@@ -373,8 +367,11 @@ public unsafe class GtWindow
                 else if (g.KindId == 2)
                 {
                     kind = Layout.KindText;
-                    if (g.TextCopy != null) w.Add(Layout.GttxText, g.TextCopy);
-                    w.Add(Layout.GttxCopyText, true);
+                    if (g.TextCopy != null)
+                    {
+                        w.Add(Layout.GttxText, g.TextCopy);
+                        w.Add(Layout.GttxCopyText, true);
+                    }
                     w.Add(Layout.GttxBorder, true);
                 }
                 ok = w.End();
@@ -518,8 +515,10 @@ public unsafe class GtWindow
         {
             GuiEvent e = Wait();
             if (e.Kind == GuiEventKind.Close) return;
-            if (e.Kind == GuiEventKind.Clicked) handler.Clicked(e.Source!);
-            else handler.Changed(e.Source!);
+            GtGadget? source = e.Source;
+            if (source == null) continue;
+            if (e.Kind == GuiEventKind.Clicked) handler.Clicked(source);
+            else handler.Changed(source);
         }
     }
 

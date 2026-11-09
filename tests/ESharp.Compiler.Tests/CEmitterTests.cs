@@ -1014,6 +1014,41 @@ Check(list.Count == 0, ""destroy"");
         Assert.True(close >= 0 && free > close && vi > free && unlock > vi, "teardown order");
     }
 
+    [Theory]
+    [InlineData("m68k")]
+    [InlineData("aros")]
+    public void GtWindow_Run_with_a_handler_emits_no_null_forgiving_operator(string target)
+    {
+        var src = @"
+using ESharp;
+using ESharp.Platform;
+namespace T;
+public sealed class H : IGuiHandler
+{
+    public int N;
+    public void Clicked(GtGadget gadget) { N++; }
+    public void Changed(GtGadget gadget) { N += 2; }
+}
+public static unsafe class P
+{
+    [EntryPoint]
+    public static void Main()
+    {
+        GtWindow win = new GtWindow { Title = ""t"" };
+        GtText t = new GtText { Label = ""x"" };
+        win.Add(t);
+        H h = new H();
+        if (win.Open()) { win.Run(h); win.Close(); }
+    }
+}";
+        var options = target == "aros" ? Targets.Aros.ToOptions() : Targets.M68k.ToOptions();
+        var r = EsCompiler.Compile(new[] { new SourceFile("P.cs", src) }, options);
+        Assert.True(r.Success, string.Join("\n", r.Diagnostics));
+        Assert.Contains("Clicked(", r.C!);
+        Assert.DoesNotContain("Source!", r.C!);
+        Assert.DoesNotMatch(@"\w!\s*[,;)]", r.C!);
+    }
+
     [Fact]
     public void A_library_base_class_calls_through_its_own_base_variable_that_SetBase_fills()
     {
