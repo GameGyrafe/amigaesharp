@@ -324,8 +324,14 @@ public static class Program
     /// Build step: regenerates Assets.g.cs for the project's assets.json (and those of esharp.include directories)
     /// when it is missing or older than the manifest or a PNG. Returns an error message, or null.
     /// </summary>
-    private static string? SyncAssets(string path)
+    /// <summary>Errors a bad assets.json or PNG can raise; reported as a clean message instead of a stack trace.</summary>
+    private static bool IsAssetError(Exception e) =>
+        e is IOException or InvalidDataException or NotSupportedException or System.Text.Json.JsonException or KeyNotFoundException
+            or InvalidOperationException or ArgumentException;   // a wrong JSON type (images not an array), a value out of range
+
+    internal static string? SyncAssets(string path)
     {
+        if (File.Exists(path)) path = Path.GetDirectoryName(Path.GetFullPath(path))!;   // esharp build File.cs: its directory
         if (!Directory.Exists(path)) return null;
         var dirs = new List<string> { path };
         var include = Path.Combine(path, "esharp.include");
@@ -345,7 +351,7 @@ public static class Program
                 if (r.Status is ESharp.Assets.AssetBuilder.SyncStatus.Created or ESharp.Assets.AssetBuilder.SyncStatus.Updated)
                     Console.WriteLine($"Regenerated {r.Target} (assets changed)");
             }
-            catch (Exception e) when (e is IOException or InvalidDataException or NotSupportedException or System.Text.Json.JsonException or KeyNotFoundException)
+            catch (Exception e) when (IsAssetError(e))
             {
                 return $"{manifest}: {e.Message}";
             }
@@ -370,7 +376,7 @@ public static class Program
             Console.WriteLine($"  total            {output.Reports.Sum(r => r.ChipBytes):N0} bytes of chip RAM");
             return 0;
         }
-        catch (Exception e) when (e is IOException or InvalidDataException or NotSupportedException or System.Text.Json.JsonException or KeyNotFoundException)
+        catch (Exception e) when (IsAssetError(e))
         {
             return Fail(e.Message);
         }

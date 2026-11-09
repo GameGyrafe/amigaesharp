@@ -129,7 +129,12 @@ public static class AssetBuilder
         }
         if (File.ReadAllText(target) == output.Source)
         {
-            File.SetLastWriteTimeUtc(target, DateTime.UtcNow);
+            // Not older than any input, even one with a future time (clock skew, files from another machine),
+            // so the next build is a no-op instead of another regeneration.
+            var stamp = DateTime.UtcNow;
+            foreach (var i in Inputs(manifestPath))
+                if (File.Exists(i) && File.GetLastWriteTimeUtc(i) > stamp) stamp = File.GetLastWriteTimeUtc(i);
+            File.SetLastWriteTimeUtc(target, stamp);
             return new SyncResult(SyncStatus.Touched, target, output);
         }
         File.WriteAllText(target, output.Source);

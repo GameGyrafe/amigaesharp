@@ -2,8 +2,16 @@ using ESharp.Assets;
 
 namespace ESharp.Compiler.Tests;
 
-public class AssetTests
+public class AssetTests : IDisposable
 {
+    private readonly System.Collections.Generic.List<string> _scratch = new();
+
+    public void Dispose()
+    {
+        foreach (var d in _scratch)
+            try { Directory.Delete(d, true); } catch (IOException) { }
+    }
+
     private static RgbaImage Image(int w, int h, Func<int, int, (int r, int g, int b, int a)> f)
     {
         var rgba = new byte[w * h * 4];
@@ -192,11 +200,12 @@ public class AssetTests
     }
 
     // Incremental build step: copy samples/screen to a scratch directory and play with timestamps.
-    private static string ScratchSample()
+    private string ScratchSample()
     {
         var src = Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "..", "samples", "screen");
         var dir = Path.Combine(Path.GetTempPath(), "esharp-assets-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(dir);
+        _scratch.Add(dir);
         foreach (var f in new[] { "assets.json", "card.png", "Assets.g.cs" })
             File.Copy(Path.Combine(src, f), Path.Combine(dir, f));
         var old = DateTime.UtcNow.AddHours(-1);
@@ -261,5 +270,40 @@ public class AssetTests
         var manifest = Path.Combine(dir, "assets.json");
         File.SetLastWriteTimeUtc(manifest, DateTime.UtcNow);
         Assert.True(AssetBuilder.IsStale(manifest));
+    }
+
+    [Fact]
+    public void Sync_after_an_input_with_a_future_time_is_a_no_op_next_time()
+    {
+        var dir = ScratchSample();
+        File.SetLastWriteTimeUtc(Path.Combine(dir, "card.png"), DateTime.UtcNow.AddDays(1));   // clock skew
+        Assert.Equal(AssetBuilder.SyncStatus.Touched, AssetBuilder.Sync(Path.Combine(dir, "assets.json")).Status);
+        Assert.Equal(AssetBuilder.SyncStatus.UpToDate, AssetBuilder.Sync(Path.Combine(dir, "assets.json")).Status);
+    }
+
+    [Fact]
+    public void Build_step_reports_a_malformed_manifest_as_a_message_not_a_crash()
+    {
+        var dir = ScratchSample();
+        File.WriteAllText(Path.Combine(dir, "assets.json"), "{\"images\": 5}");
+        Assert.NotNull(ESharp.Cli.Program.SyncAssets(dir));
+        File.WriteAllText(Path.Combine(dir, "assets.json"), "{\"images\": [{\"name\": \"Card\", \"file\": \"card.png\", \"colors\": 99}]}");
+        Assert.NotNull(ESharp.Cli.Program.SyncAssets(dir));
+    }
+
+    [Fact]
+    public void Build_step_syncs_include_directories_and_the_directory_of_a_file_argument()
+    {
+        var main = ScratchSample();
+        var shared = ScratchSample();
+        File.Delete(Path.Combine(shared, "Assets.g.cs"));
+        File.WriteAllText(Path.Combine(main, "esharp.include"), shared + "\n");
+        Assert.Null(ESharp.Cli.Program.SyncAssets(main));
+        Assert.True(File.Exists(Path.Combine(shared, "Assets.g.cs")));      // regenerated through the include
+
+        File.Delete(Path.Combine(main, "Assets.g.cs"));
+        File.WriteAllText(Path.Combine(main, "Program.cs"), "");
+        Assert.Null(ESharp.Cli.Program.SyncAssets(Path.Combine(main, "Program.cs")));
+        Assert.True(File.Exists(Path.Combine(main, "Assets.g.cs")));        // a file argument syncs its directory
     }
 }
