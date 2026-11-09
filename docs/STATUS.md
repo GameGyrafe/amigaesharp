@@ -153,6 +153,10 @@ Not verified:
 - A keyboard or mouse click on a real machine, real hardware, AmigaOS 4 and MorphOS. The XTEST mouse positions above are specific to that FS-UAE window (the relative-move scale was about 0.89 Amiga pixels per unit).
 - `esharp run` cannot mount the Workbench disk: the Workbench-disk runs used a hand-written FS-UAE config and startup-sequence (the same way as for `controls`), not the CLI.
 
+## FS-UAE debugger trial (issue #14)
+
+Tried the debugger built into FS-UAE 3.2.35 (A1200, Kickstart 3.1, headless under Xvfb, `samples/hello`); recipe and findings in [DEBUGGING.md](DEBUGGING.md#fs-uae-debugger-trial). Verdict: **adopt as a manual recipe**, no `esharp` integration. Verified: `console_debugger = 1` plus the F12+D hot key (sent with XTEST) enters the debugger, its prompt is on FS-UAE's stdin/stdout (needs a pty), and registers (`r`), memory (`m`), disassembly (`d`), breakpoints (`f <addr>`, `g`) and single-step (`t`) work. A breakpoint at the `_main` address (`nm` offset 0xfe plus the load base 0x1B1B8, found through a breakpoint on dos `PutStr`) hit on the first instruction of the E# program, in two separate runs. Not working: `fp "<name>"`, memory search `s`, `T`. Not verified: `w`/`z`/`fi`, programs other than hello, other ROMs, real hardware, any `esharp run` flag (none was added).
+
 ## Serial trace and `esharp addr` (samples/trace, docs/DEBUGGING.md; issue #14)
 
 `Trace.Write/Line/Value` (src/ESharp.Platform/Trace.cs) write to the serial port through exec `RawIOInit`/`RawPutChar` (called by vector, LVO -504/-516: they are in no m68k NDK header; the C prelude has the stubs) and to standard error on the host. They are `[Conditional("TRACE")]`: the emitter drops such call statements, and what only they reach, unless the build has `--trace` or `--debug`. `esharp run --serial <file>` (headless) points FS-UAE's `serial_port` at a file and prints it after the run. `esharp addr <exe|dir> <hunk> <hex offset> --docker <image>` maps a hunk-0 offset to the C# file, line and C function using `<name>.o`, which every m68k build now also writes (the same C with `-g -c`, read with `m68k-amigaos-objdump --dwarf=decodedline`).
