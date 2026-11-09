@@ -258,6 +258,55 @@ public class HostTargetTests
     }
 
     [Fact]
+    public void Gui_sample_runs_on_the_host_with_the_fake_driving_the_window()
+    {
+        using var console = HostConsole.Capture();
+        GuiSample.Program.Main();
+        Assert.DoesNotContain("FAIL", console.Output);
+        Assert.Contains("reply: Hello, Ada!\n", console.Output);
+        Assert.Contains("ok the window is freed\n", console.Output);
+        ESharp.Platform.GtWindow.HostCanOpen = false;
+        try
+        {
+            using var console2 = HostConsole.Capture();
+            GuiSample.Program.Main();
+            Assert.StartsWith("cannot open the window", console2.Output);
+        }
+        finally { ESharp.Platform.GtWindow.HostCanOpen = true; }
+    }
+
+    [Fact]
+    public void Gtwindow_fake_queues_events_dispatches_to_a_handler_and_reports_close_when_empty()
+    {
+        var win = new ESharp.Platform.GtWindow { Title = "T", Width = 200 };
+        var name = new ESharp.Platform.GtString { Label = "Name", MaxChars = 8 };
+        var ok = new ESharp.Platform.GtButton { Label = "OK" };
+        Assert.True(win.Add(name));
+        Assert.True(win.Add(ok));
+        Assert.False(win.Add(ok));
+        Assert.Equal(2, win.HostGadgetCount);
+        Assert.Equal(ESharp.Platform.GuiEventKind.Close, win.Wait().Kind);   // not open yet
+        Assert.True(win.Open());
+        Assert.False(win.Add(new ESharp.Platform.GtButton()));
+        win.HostType(name, "Bob");
+        Assert.Equal("Bob", name.Text);
+        win.HostClick(ok);
+        win.HostClick(name);
+        var h = new RecordingHandler();
+        win.Run(h);
+        Assert.Equal("clicked;changed:Bob;", h.Log);
+        win.Close();
+        Assert.False(win.IsOpen);
+    }
+
+    private sealed class RecordingHandler : ESharp.Platform.IGuiHandler
+    {
+        public string Log = "";
+        public void Clicked(ESharp.Platform.GtGadget g) { Log += "clicked;"; }
+        public void Changed(ESharp.Platform.GtGadget g) { Log += "changed:" + ((ESharp.Platform.GtString)g).Text + ";"; }
+    }
+
+    [Fact]
     public void Names_sample_runs_on_the_host()
     {
         using var console = HostConsole.Capture();

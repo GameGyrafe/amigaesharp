@@ -35,6 +35,8 @@ dotnet run --project src/ESharp.Cli -- run samples/refs --docker <image> --headl
 dotnet run --project src/ESharp.Cli -- test samples/controls                                # run on the host (ok/FAIL lines, non-zero exit on FAIL); add --target m68k --docker <image> [--kickstart <rom>] [--model A1200] to also run in FS-UAE and compare
 dotnet run --project tools/CardArt -- samples/cards/cards.png                               # redraw the card sprite sheet
 dotnet run --project tools/BindGen -- check <sdk include dir> src/ESharp.Platform   # compare our [AmigaLib] vectors/arg counts with an SDK you provide (AROS include dir; not committed)
+dotnet run --project src/ESharp.Cli -- run samples/gui --docker <image> --headless --model A1200 --timeout 60 --input "click 400,300;rel -96,-100;press;rel -72,-63;rel -42,-20;press"   # GadTools window on the Workbench screen: Hello button, then the close gadget (rel moves were found by screenshot; add --screenshot and drop the last press to look)
+AROS_HOSTED=<extracted hosted AROS dir> tools/aros-hosted/aros-hosted.sh gui --shot shot.png --input "click 208,74;click 47,37"   # same sample on hosted AROS (needs a --target aros build)
 dotnet run --project tools/BindGen -- compare <aros include dir> <fd dir> lowlevel asl   # AROS headers vs the m68k toolchain's fd files (ndk/lib/fd); fd versions are right for the classic OS
 tools/BindGen/layouts.sh                                  # re-measure struct offsets (tools/BindGen/structs.txt) for m68k and AROS into src/ESharp.Platform/Layout.g.cs (docker)
 tools/hwpack/build.sh <m68k image>                       # build the real-hardware test pack into obj/hwtest (run with Execute RunAll on the Amiga)
