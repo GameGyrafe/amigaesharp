@@ -14,6 +14,7 @@ include utility/date.h
 include graphics/text.h
 include libraries/iffparse.h
 include libraries/asl.h
+include libraries/gadtools.h
 
 # Intuition (src/ESharp.Platform/Gfx.cs)
 WindowRPort = Window.RPort
@@ -136,3 +137,42 @@ AslFrInitialDrawer = value ASLFR_InitialDrawer
 AslFrInitialFile = value ASLFR_InitialFile
 FrFile = FileRequester.fr_File
 FrDrawer = FileRequester.fr_Drawer
+
+# gadtools.library and the public screen (src/ESharp.Platform/Gui.cs)
+ScreenFont = Screen.Font
+ScreenWBorTop = Screen.WBorTop
+ScreenWBorLeft = Screen.WBorLeft
+ScreenWBorRight = Screen.WBorRight
+ScreenWBorBottom = Screen.WBorBottom
+NewGadgetSize = sizeof NewGadget
+NgLeftEdge = NewGadget.ng_LeftEdge
+NgTopEdge = NewGadget.ng_TopEdge
+NgWidth = NewGadget.ng_Width
+NgHeight = NewGadget.ng_Height
+NgGadgetText = NewGadget.ng_GadgetText
+NgTextAttr = NewGadget.ng_TextAttr
+NgGadgetID = NewGadget.ng_GadgetID
+NgFlags = NewGadget.ng_Flags
+NgVisualInfo = NewGadget.ng_VisualInfo
+NgUserData = NewGadget.ng_UserData
+GadGadgetId = Gadget.GadgetID
+KindButton = value BUTTON_KIND
+KindString = value STRING_KIND
+KindText = value TEXT_KIND
+PlaceTextLeft = value PLACETEXT_LEFT
+GtstString = value GTST_String
+GtstMaxChars = value GTST_MaxChars
+GttxText = value GTTX_Text
+GttxCopyText = value GTTX_CopyText
+GttxBorder = value GTTX_Border
+WaTitle = value WA_Title
+WaGadgets = value WA_Gadgets
+WaPubScreen = value WA_PubScreen
+WaInnerWidth = value WA_InnerWidth
+WaInnerHeight = value WA_InnerHeight
+WaDragBar = value WA_DragBar
+WaDepthGadget = value WA_DepthGadget
+WaCloseGadget = value WA_CloseGadget
+IdcmpGadgetUp = value IDCMP_GADGETUP
+IdcmpCloseWindow = value IDCMP_CLOSEWINDOW
+IdcmpRefreshWindow = value IDCMP_REFRESHWINDOW

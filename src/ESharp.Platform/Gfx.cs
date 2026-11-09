@@ -8,6 +8,9 @@ public static unsafe class Intuition
     [AmigaLib("intuition", -606), Since(36)] public static extern void* OpenWindowTagList(void* newWindow, void* tagList);
     [AmigaLib("intuition", -66)] public static extern int CloseScreen(void* screen);
     [AmigaLib("intuition", -72)] public static extern void CloseWindow(void* window);
+    /// <summary>Locks a public screen by name (null: the default one, normally Workbench) so it cannot close; release it with <see cref="UnlockPubScreen"/>.</summary>
+    [AmigaLib("intuition", -510), Since(36)] public static extern void* LockPubScreen(void* name);
+    [AmigaLib("intuition", -516), Since(36)] public static extern void UnlockPubScreen(void* name, void* screen);
 
     public const uint TagDone = 0;
     public const uint SA_Width = 0x80000023, SA_Height = 0x80000024, SA_Depth = 0x80000025;

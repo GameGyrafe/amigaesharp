@@ -21,6 +21,10 @@ public static unsafe class Exec
     [AmigaLib("exec", -372)]
     public static extern void* GetMsg(void* port);
 
+    /// <summary>exec.library WaitPort(), LVO -384: sleeps until a message is at the port, and returns it without removing it.</summary>
+    [AmigaLib("exec", -384)]
+    public static extern void* WaitPort(void* port);
+
     /// <summary>exec.library ReplyMsg(), LVO -378.</summary>
     [AmigaLib("exec", -378)]
     public static extern void ReplyMsg(void* message);

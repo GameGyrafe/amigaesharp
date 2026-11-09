@@ -991,6 +991,29 @@ Check(list.Count == 0, ""destroy"");
         Assert.Contains("FreeAslRequest(", r.C!);
     }
 
+    [Theory]
+    [InlineData("m68k")]
+    [InlineData("aros")]
+    public void Gui_sample_compiles_with_a_private_gadtools_base_and_releases_in_order(string target)
+    {
+        var path = Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "..", "samples", "gui", "Gui.cs");
+        var options = target == "aros" ? Targets.Aros.ToOptions() : Targets.M68k.ToOptions();
+        var r = EsCompiler.Compile(new[] { new SourceFile("Gui.cs", File.ReadAllText(path)) }, options);
+        Assert.True(r.Success, string.Join("\n", r.Diagnostics));
+        var c = r.C!;
+        Assert.Contains("#define GadToolsBase es_GadToolsBase", c);
+        Assert.Contains("#include <proto/gadtools.h>", c);
+        Assert.Contains("GT_GetIMsg(", c);
+        Assert.Contains("GT_ReplyIMsg(", c);
+        Assert.Contains("LockPubScreen(", c);
+        // Close order: window, gadgets, visual info, screen unlock.
+        int close = c.IndexOf("CloseWindow(", StringComparison.Ordinal);
+        int free = c.IndexOf("FreeGadgets(", close, StringComparison.Ordinal);
+        int vi = c.IndexOf("FreeVisualInfo(", free, StringComparison.Ordinal);
+        int unlock = c.IndexOf("UnlockPubScreen(", vi, StringComparison.Ordinal);
+        Assert.True(close >= 0 && free > close && vi > free && unlock > vi, "teardown order");
+    }
+
     [Fact]
     public void A_library_base_class_calls_through_its_own_base_variable_that_SetBase_fills()
     {
