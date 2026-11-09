@@ -888,7 +888,8 @@ internal sealed partial class CEmitter
         Line("{");
         _indent++;
         foreach (var f in s.GetMembers().OfType<IFieldSymbol>().Where(f => !f.IsStatic && !f.IsConst && f.AssociatedSymbol == null))
-            Line(f.IsFixedSizeBuffer
+            if (f.RefKind != RefKind.None) Unsupported(f.DeclaringSyntaxReferences.First().GetSyntax(), "ref field");
+            else Line(f.IsFixedSizeBuffer
                 ? Decl(((IPointerTypeSymbol)f.Type).PointedAtType, f.Name, decl) + $"[{f.FixedSize}];"
                 : Decl(f.Type, f.Name, decl) + ";");
         foreach (var p in s.GetMembers().OfType<IPropertySymbol>().Where(p => !p.IsStatic && IsAutoProperty(p)))
@@ -1029,7 +1030,8 @@ internal sealed partial class CEmitter
         if (baseClass != null) Line($"{TypeName(baseClass)} es_base;");
         else if (IsPoly(c)) Line($"const struct {CvtName(c)} *vt;");
         foreach (var field in c.GetMembers().OfType<IFieldSymbol>().Where(f => !f.IsStatic && !f.IsConst && f.AssociatedSymbol == null))
-            Line(Decl(field.Type, field.Name, decl) + ";");
+            if (field.RefKind != RefKind.None) Unsupported(field.DeclaringSyntaxReferences.First().GetSyntax(), "ref field");
+            else Line(Decl(field.Type, field.Name, decl) + ";");
         foreach (var p in c.GetMembers().OfType<IPropertySymbol>().Where(p => !p.IsStatic && IsAutoProperty(p)))
         {
             if (p.DeclaringSyntaxReferences.First().GetSyntax() is PropertyDeclarationSyntax { Initializer: not null } pd)
@@ -1785,6 +1787,8 @@ internal sealed partial class CEmitter
             }
 
             case RefExpressionSyntax re:
+                // Only where an address is wanted (ref local initializer, return ref, x = ref y); a ref conditional used as a value is handled above.
+                if (re.Parent is ConditionalExpressionSyntax) return Unsupported(re, "ref here");
                 return RefAddress(re.Expression);
 
             case BinaryExpressionSyntax b:
@@ -1834,6 +1838,9 @@ internal sealed partial class CEmitter
 
             case SwitchExpressionSyntax swe:
                 return SwitchExpression(swe);
+
+            case ConditionalExpressionSyntax { WhenTrue: RefExpressionSyntax, WhenFalse: RefExpressionSyntax } rc:
+                return $"(*{RefAddress(rc)})";   // c ? ref a : ref b used as a value: a C lvalue
 
             case ConditionalExpressionSyntax c:
             {
@@ -2174,6 +2181,7 @@ internal sealed partial class CEmitter
     private string FieldRef(IFieldSymbol f, SyntaxNode at)
     {
         if (f.ContainingType.TypeKind == TypeKind.Enum) return FieldName(f);
+        if (f.RefKind != RefKind.None) return Unsupported(at, "ref field");
         if (f.IsConst && f.ConstantValue != null)
             return ConstantLiteral(f.ConstantValue, f.Type);
         if (f.IsStatic) return FieldName(f);

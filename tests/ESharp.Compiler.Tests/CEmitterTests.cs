@@ -1260,6 +1260,31 @@ Check(none == 0, ""empty Vec"");
         Assert.Equal(9, output.Split('\n', StringSplitOptions.RemoveEmptyEntries).Length);
     }
 
+    [Fact]
+    public void Ref_conditional_works_as_value_assignment_target_and_argument()
+    {
+        if (!HasGcc) return;
+        const string members = @"
+static int s_a = 1; static int s_b = 2;
+static void Check(bool ok, string name) { Dos.PutStr(ok ? ""ok "" : ""FAIL ""); Dos.PutStr(name); Dos.PutStr(""\n""); }
+static int G(in int v) { return v; }
+";
+        const string body = @"
+bool flag = false;
+int v = flag ? ref s_a : ref s_b;
+Check(v == 2, ""ref conditional as a value"");
+(flag ? ref s_a : ref s_b) = 5;
+Check(s_a == 1 && s_b == 5, ""ref conditional as an assignment target"");
+int[] arr = new int[2]; arr[0] = 3; arr[1] = 4;
+Check(G(flag ? ref arr[0] : ref arr[1]) == 4, ""ref conditional as an in argument"");
+";
+        var c = CompileOk(Program(members, body));
+        var (code, output) = RunWithHostGcc(c);
+        Assert.Equal(0, code);
+        Assert.DoesNotContain("FAIL", output);
+        Assert.Equal(3, output.Split('\n', StringSplitOptions.RemoveEmptyEntries).Length);
+    }
+
     [Theory]
     [InlineData("public unsafe struct S { int* _p; public ref int this[int i] { get { return ref _p[i]; } } }", "S s = default; int v = s[0];")]
     [InlineData("public interface ISeq { E GetEnumerator(); } public struct E { public int Current { get { return 0; } } public bool MoveNext() { return false; } } public class C : ISeq { public E GetEnumerator() { return default; } }",
@@ -1267,6 +1292,8 @@ Check(none == 0, ""empty Vec"");
     [InlineData("public unsafe struct E { int* _p; public ref int Current { get { return ref *_p; } } public bool MoveNext() { return false; } } public struct L { public E GetEnumerator() { return default; } }",
         "L l = default; foreach (int x in l) { }")]
     [InlineData("public abstract class B { public abstract ref int Get(); }", "")]
+    [InlineData("public ref struct H { public ref int R; }", "")]
+    [InlineData("public ref struct H { public ref int R; }", "H h = default; h.R = 4;")]
     public void Unsupported_ref_and_foreach_forms_report_ES0099(string members, string body)
     {
         var r = Compile(Program(members, body));
