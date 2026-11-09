@@ -1234,7 +1234,7 @@ foreach (ref readonly int v in rs) rsum += v;
 Check(rsum == 156, ""foreach by ref readonly over a read-only span"");
 ";
         var c = CompileOk(Program(members, body));
-        Assert.Contains("int32_t *P_Slot(", c);
+        Assert.Contains("int32_t *Es_P_Slot(", c);
         var (code, output) = RunWithHostGcc(c);
         Assert.Equal(0, code);
         Assert.DoesNotContain("FAIL", output);
