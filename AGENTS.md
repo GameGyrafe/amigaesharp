@@ -25,6 +25,9 @@ AROS_HOSTED=<extracted hosted AROS dir> tools/aros-hosted/aros-hosted.sh cards -
 dotnet run --project src/ESharp.Cli -- run samples/controls --docker <image> --headless --model A1200 --kickstart <rom>   # timer E clock and lowlevel joystick (no Libs: there, so the no-lowlevel path; see docs/STATUS.md)
 dotnet run --project src/ESharp.Cli -- run samples/keys --docker <image> --headless --model A1200 --input "click 400,300;key 50+38"   # keymap: raw keys to characters (Shift+A types 65)
 dotnet run --project src/ESharp.Cli -- run samples/dates --docker <image> --headless --model A1200   # utility: dates, case-insensitive text
+dotnet run --project src/ESharp.Cli -- run samples/fonts --docker <image> --headless --model A1200   # fonts: topaz 8; disk fonts only with diskfont.library in LIBS: (and FONTS: assigned); see docs/STATUS.md for the Workbench-disk startup
+dotnet run --project src/ESharp.Cli -- run samples/iff --docker <image> --headless --model A1200   # IFF write and read back in RAM: (needs iffparse.library in LIBS:; else it says so)
+dotnet run --project src/ESharp.Cli -- run samples/asl --docker <image> --headless --model A1200   # asl.library: allocate/free; create RAM:asl-open first to show the file requester after SHOT, then --input clicks OK or Cancel
 dotnet run --project src/ESharp.Cli -- run samples/names --docker <image> --headless --model A1200   # E# classes named Window, Node, List, ... and same-named types in two namespaces (prefixed C names)
 dotnet run --project src/ESharp.Cli -- run samples/lambdas --docker <image> --headless --model A1200   # capturing lambdas and delegates
 dotnet run --project src/ESharp.Cli -- run samples/linq --docker <image> --headless --model A1200   # LINQ over arrays, turned into loops

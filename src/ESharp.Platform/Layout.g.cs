@@ -85,6 +85,32 @@ public static class Layout
     public const int DsMinute = 4;
     public const int DsTick = 8;
     public const uint DosTicksPerSecond = 50u;
+    public const int TextAttrSize = 16;
+    public const int TaName = 0;
+    public const int TaYSize = 8;
+    public const int TaStyle = 10;
+    public const int TaFlags = 11;
+    public const int TfYSize = 48;
+    public const int TfXSize = 52;
+    public const int TfBaseline = 54;
+    public const int IffStream = 0;
+    public const int CnType = 20;
+    public const int CnId = 16;
+    public const int CnSize = 24;
+    public const uint IffRead = 0u;
+    public const uint IffWrite = 1u;
+    public const uint IffParseRawStep = 2u;
+    public const uint IffErrEof = 4294967295u;
+    public const uint IffErrEoc = 4294967294u;
+    public const uint IffSizeUnknown = 4294967295u;
+    public const uint IdForm = 1179603533u;
+    public const uint AslFileRequest = 0u;
+    public const uint AslFrWindow = 2148007938u;
+    public const uint AslFrTitleText = 2148007937u;
+    public const uint AslFrInitialDrawer = 2148007945u;
+    public const uint AslFrInitialFile = 2148007944u;
+    public const int FrFile = 8;
+    public const int FrDrawer = 16;
 #else
     public const int WindowRPort = 50;
     public const int WindowUserPort = 86;
@@ -164,6 +190,32 @@ public static class Layout
     public const int DsMinute = 4;
     public const int DsTick = 8;
     public const uint DosTicksPerSecond = 50u;
+    public const int TextAttrSize = 8;
+    public const int TaName = 0;
+    public const int TaYSize = 4;
+    public const int TaStyle = 6;
+    public const int TaFlags = 7;
+    public const int TfYSize = 20;
+    public const int TfXSize = 24;
+    public const int TfBaseline = 26;
+    public const int IffStream = 0;
+    public const int CnType = 12;
+    public const int CnId = 8;
+    public const int CnSize = 16;
+    public const uint IffRead = 0u;
+    public const uint IffWrite = 1u;
+    public const uint IffParseRawStep = 2u;
+    public const uint IffErrEof = 4294967295u;
+    public const uint IffErrEoc = 4294967294u;
+    public const uint IffSizeUnknown = 4294967295u;
+    public const uint IdForm = 1179603533u;
+    public const uint AslFileRequest = 0u;
+    public const uint AslFrWindow = 2148007938u;
+    public const uint AslFrTitleText = 2148007937u;
+    public const uint AslFrInitialDrawer = 2148007945u;
+    public const uint AslFrInitialFile = 2148007944u;
+    public const int FrFile = 4;
+    public const int FrDrawer = 8;
 #endif
 }
 #endif

@@ -11,6 +11,9 @@ include libraries/lowlevel.h
 include devices/inputevent.h
 include dos/dos.h
 include utility/date.h
+include graphics/text.h
+include libraries/iffparse.h
+include libraries/asl.h
 
 # Intuition (src/ESharp.Platform/Gfx.cs)
 WindowRPort = Window.RPort
@@ -101,3 +104,35 @@ DsDays = DateStamp.ds_Days
 DsMinute = DateStamp.ds_Minute
 DsTick = DateStamp.ds_Tick
 DosTicksPerSecond = value TICKS_PER_SECOND
+
+# graphics fonts and diskfont.library (src/ESharp.Platform/Fonts.cs)
+TextAttrSize = sizeof TextAttr
+TaName = TextAttr.ta_Name
+TaYSize = TextAttr.ta_YSize
+TaStyle = TextAttr.ta_Style
+TaFlags = TextAttr.ta_Flags
+TfYSize = TextFont.tf_YSize
+TfXSize = TextFont.tf_XSize
+TfBaseline = TextFont.tf_Baseline
+
+# iffparse.library (src/ESharp.Platform/Iff.cs)
+IffStream = IFFHandle.iff_Stream
+CnType = ContextNode.cn_Type
+CnId = ContextNode.cn_ID
+CnSize = ContextNode.cn_Size
+IffRead = value IFFF_READ
+IffWrite = value IFFF_WRITE
+IffParseRawStep = value IFFPARSE_RAWSTEP
+IffErrEof = value IFFERR_EOF
+IffErrEoc = value IFFERR_EOC
+IffSizeUnknown = value IFFSIZE_UNKNOWN
+IdForm = value ID_FORM
+
+# asl.library (src/ESharp.Platform/Asl.cs)
+AslFileRequest = value ASL_FileRequest
+AslFrWindow = value ASLFR_Window
+AslFrTitleText = value ASLFR_TitleText
+AslFrInitialDrawer = value ASLFR_InitialDrawer
+AslFrInitialFile = value ASLFR_InitialFile
+FrFile = FileRequester.fr_File
+FrDrawer = FileRequester.fr_Drawer

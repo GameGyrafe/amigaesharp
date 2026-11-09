@@ -54,8 +54,8 @@ internal static class Offsets
         var c = new StringBuilder();
         foreach (var inc in includes) c.AppendLine($"#include <{inc}>");
         c.AppendLine("#include <stddef.h>");
-        // Stored as value + 1 so no constant is zero (a zero can be emitted as .zero instead of a number).
-        foreach (var (name, expr) in items) c.AppendLine($"const unsigned int esharp_off_{name} = (unsigned int)({expr}) + 1;");
+        // Stored XOR 0x5A5A5A5A so no constant is zero (a zero can be emitted as .zero instead of a number; value + 1 would hit that for -1).
+        foreach (var (name, expr) in items) c.AppendLine($"const unsigned int esharp_off_{name} = (unsigned int)({expr}) ^ 0x5A5A5A5Au;");
 
         string dir = Path.Combine(Path.GetTempPath(), "bindgen-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(dir);
@@ -81,7 +81,7 @@ internal static class Offsets
             {
                 var m = Regex.Match(asm, @"_?esharp_off_" + Regex.Escape(name) + @":\s*\n\s*\.(?:long|int|4byte)\s+(-?\d+)");
                 if (!m.Success) { Console.WriteLine($"{name} = ?"); missing++; continue; }
-                long v = ((long.Parse(m.Groups[1].Value) - 1) % 0x100000000L + 0x100000000L) % 0x100000000L;
+                long v = ((long.Parse(m.Groups[1].Value) % 0x100000000L + 0x100000000L) % 0x100000000L) ^ 0x5A5A5A5AL;
                 Console.WriteLine(values.Contains(name) ? $"{name} = {v}u" : $"{name} = {v}");
             }
             return missing == 0 ? 0 : 1;

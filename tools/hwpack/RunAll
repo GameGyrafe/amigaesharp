@@ -50,6 +50,14 @@ Echo "keys (a blank screen: press A within 10 seconds)"
 keys >results/keys.txt
 Echo "dates (dates and case-insensitive text)"
 dates >results/dates.txt
+Echo "fonts (text in topaz and, if installed, a disk font)"
+fonts >results/fonts.txt
+Echo "iff (writes and reads back an IFF file in RAM:)"
+iff >results/iff.txt
+Echo "asl (a file requester opens: click Cancel, or pick a file and OK)"
+Echo >RAM:asl-open x
+asl >results/asl.txt
+Delete RAM:asl-open QUIET
 Echo "names (E# classes named like system structs)"
 names >results/names.txt
 Echo "cards (play a round; Esc quits, or leave it for 10 seconds)"
