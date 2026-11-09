@@ -12,7 +12,7 @@ The minimum system is now an **Amiga 1200: 68020, AGA, 2 MB chip RAM, Kickstart 
 
 ## `esharp test` (issue #8)
 
-`esharp test <dir>` builds the project's `.cs` files into a temporary dotnet project (`obj/host`, `HOST` defined, referencing `ESharp.Target.Host`), runs it, and counts output lines starting `ok ` and `FAIL `. A FAIL line, a non-zero exit or no ok/FAIL lines at all fails the run. With `--target m68k --docker <image> [--kickstart <rom>] [--model A1200]` it also builds for m68k, runs headless in FS-UAE (the `run` code) and lists every check that is ok on one side and FAIL or missing on the other. It needs the E# source tree (found from the CLI's location, or `ESHARP_REPO`).
+`esharp test <dir>` builds the project's `.cs` files into a temporary dotnet project (`obj/host`, `HOST` defined, referencing `ESharp.Target.Host`), runs it, and counts output lines starting `ok ` and `FAIL `. A FAIL line, a non-zero exit or no ok/FAIL lines at all fails the run. With `--target m68k --docker <image> [--kickstart <rom>] [--model A1200]` it also builds for m68k, runs headless in FS-UAE (the `run` code) and lists every check that is ok on one side and FAIL or missing on the other. It needs the E# source tree (found from the CLI's location, or `ESHARP_ROOT`; `ESHARP_REPO` still works as a deprecated alias). Passing `--docker`, `--kickstart`, `--model` or `--fsuae` without `--target m68k` prints a warning that they are ignored.
 
 Verified:
 - 154 unit tests pass, including parsing and comparison (`TestReportTests`).
@@ -22,6 +22,13 @@ Verified:
 Not verified:
 - A failing program through the CLI (exit code 1 on FAIL or a difference): covered by unit tests of the comparison only, not run end to end.
 - Other targets (os4, morphos, aros) are not supported by `test`.
+
+## VS Code support (issue #20)
+
+`esharp new <name>` now writes `Program.cs`, `<name>.csproj`, `.gitignore` and `.vscode/{tasks,launch,extensions}.json` (`src/ESharp.Cli/ProjectTemplate.cs`). The csproj references `ESharp.Target.Host` (runtime, platform, host fakes, `HOST` defined) and `ESharp.Analyzers` as an analyzer (`OutputItemType="Analyzer" ReferenceOutputAssembly="false"`), defining `HOST` like `esharp test` does, using an `ESharpRoot` property that `esharp new` fills in from the CLI's location (or `ESHARP_ROOT`; one shared lookup, `SourceTree.Find`, also used by `esharp test`). `esharp new games/demo` creates `games/demo/` with project name `demo`; a name that is not a valid C# identifier (`my-game`, a keyword) is rejected with a suggestion (`my_game`). Tasks call `dotnet <path to esharp.dll> build|run ...` (nothing has to be on PATH; the docker image is a `${input:dockerImage}` prompt defaulting to the pinned m68k image) and `dotnet run --project`. `launch.json` is a coreclr launch of the host build.
+
+- Verified (in a scratch directory, from the shell): `esharp new` output; the JSON files parse; `dotnet build` and `dotnet run` of the new project print `Hello from E#!`; a deliberate violation gives an `ES` error from `dotnet build` (see the PR for the output); the task command lines run. Unit tests check that the files are valid JSON with the expected tasks, the name rules, and `esharp new sub/dir` through the CLI.
+- Not verified: the editor itself (VS Code was not installed or opened, so live squiggles in the editor, the task runner UI, `${input:}` prompts and the coreclr debugger were not tried), Windows and macOS, a CLI installed away from a checkout (the root cannot be found then without `ESHARP_ROOT`), and no NuGet package for the runtime exists yet.
 
 ## Joystick and clock: lowlevel.library and timer.device (samples/controls)
 
@@ -263,7 +270,7 @@ Screenshot: [images/phase4-cards-a1200.png](images/phase4-cards-a1200.png) (Kick
 
 - Run hello on real hardware, the last open item in the phase 1 gate. The emulator side is done: AROS replacement, Kickstart 2.04 and Kickstart 3.1.
 - Running the PPC builds needs a PPC-capable emulator (QEMU `amigaone`/`sam460ex` for OS4, `pegasos2` for MorphOS) or real hardware.
-- `esharp test` (run host tests, optionally the Amiga build in the emulator).
+- `esharp test` follow-ups: other targets (os4, morphos, aros) and the Amiga program's return code (today only the ok/FAIL lines are compared).
 - Finish phase 2: run the samples on the PPC targets once there is a way to run them.
 - Memory management ([MEMORY.md](MEMORY.md)): step 1 (`Mem.AllocChip`/`AllocFast`/`Free`, `Arena`) is done; step 2 (`Pool<T>`) and most of step 3 (`--debug`: bounds checks, arena and pool poisoning) are done; the chip budget report (step 4) is done for constant sizes.
 - Phase 4 (rest): a bigger card game (rummy-style: melds, bots), a shared card library, timing, dithering and IFF/sample assets.

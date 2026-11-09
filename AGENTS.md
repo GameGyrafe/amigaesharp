@@ -48,8 +48,8 @@ Requires the .NET 10 SDK (`global.json`). `src/ESharp.Analyzers` stays on `netst
 - `src/ESharp.Analyzers`: subset rules (`ES0001`-`ES0010`, `ES0100`, `ES0101`). One analyzer, used by the IDE and by the compiler.
 - `src/ESharp.Compiler`: `EsCompiler.Compile` (parse, C# errors, analyzer, entry point check) then `CEmitter` (C output with `#line`). `Targets.cs` defines the CPU x OS target model.
 - `src/ESharp.Runtime` and `src/ESharp.Platform`: parsed together with user code. They are embedded in the compiler as source, built by dotnet with `HOST` defined, and parsed with `AMIGA` defined for Amiga targets. Target-specific code uses `#if`.
-- `src/ESharp.Assets`: PNG reader/writer, colour reduction, planar packing and the `assets.json` -> `Assets.g.cs` generator (used by `esharp assets`), with an incremental `Sync` (run by `esharp build`/`run`; commit the `Assets.g.cs` it writes).
-- `src/ESharp.Target.Host`: managed fakes for tests. `src/ESharp.Cli`: `esharp new|build|run`.
+- `src/ESharp.Assets`: PNG reader/writer, colour reduction, planar packing and the `assets.json` -> `Assets.g.cs` generator (used by `esharp assets`), with an incremental `Sync` (run by `esharp build`/`run`/`test`; commit the `Assets.g.cs` it writes).
+- `src/ESharp.Target.Host`: managed fakes for tests. `src/ESharp.Cli`: `esharp new|build|run`; `esharp new` also writes a host csproj (analyzer wired in) and `.vscode/` tasks, launch and extensions (`ProjectTemplate.cs`, tested in `ProjectTemplateTests`).
 - Emitter gaps are reported as `ES0099`, never miscompiled. Prefer adding the feature over silencing the diagnostic.
 
 ## Rules

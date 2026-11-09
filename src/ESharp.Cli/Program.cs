@@ -83,6 +83,7 @@ Targets:
         string model = "A1200";
         string? fsuae = null;
         bool amiga = false;
+        var amigaOnly = new List<string>();   // options that only matter with --target m68k
         string path = ".";
         var buildArgs = new List<string>();
         for (var i = 0; i < args.Length; i++)
@@ -90,15 +91,16 @@ Targets:
             switch (args[i])
             {
                 case "--timeout" when i + 1 < args.Length && int.TryParse(args[i + 1], out timeout): i++; break;
-                case "--kickstart" when i + 1 < args.Length: kickstart = args[++i]; break;
-                case "--model" when i + 1 < args.Length: model = args[++i]; break;
-                case "--fsuae" when i + 1 < args.Length: fsuae = args[++i]; break;
+                case "--kickstart" when i + 1 < args.Length: amigaOnly.Add("--kickstart"); kickstart = args[++i]; break;
+                case "--model" when i + 1 < args.Length: amigaOnly.Add("--model"); model = args[++i]; break;
+                case "--fsuae" when i + 1 < args.Length: amigaOnly.Add("--fsuae"); fsuae = args[++i]; break;
                 case "--target" when i + 1 < args.Length:
                     if (args[++i] != "m68k") return Fail("test runs on the host, and with --target m68k also in FS-UAE; other targets are not supported");
                     amiga = true;
                     buildArgs.Add("--target"); buildArgs.Add("m68k");
                     break;
                 case "--docker":
+                    amigaOnly.Add("--docker");
                     buildArgs.Add(args[i]);
                     if (i + 1 < args.Length && !args[i + 1].StartsWith("-")) buildArgs.Add(args[++i]);
                     break;
@@ -114,8 +116,10 @@ Targets:
 
         var files = CollectSources(path);
         if (files.Count == 0) return Fail($"no .cs files found in '{path}'");
-        var repo = HostRun.FindRepo();
-        if (repo == null) return Fail("cannot find the E# source tree (src/ESharp.Target.Host); set ESHARP_REPO");
+        if (!amiga && amigaOnly.Count > 0)
+            Console.Error.WriteLine($"esharp: warning: {string.Join(", ", amigaOnly.Distinct())} ignored, because the test only runs on the host; add --target m68k to also run in FS-UAE");
+        var repo = SourceTree.Find();
+        if (repo == null) return Fail("cannot find the E# source tree (src/ESharp.Target.Host); set ESHARP_ROOT");
         var baseDir = Directory.Exists(path) ? path : Path.GetDirectoryName(Path.GetFullPath(path)) ?? ".";
 
         Console.WriteLine("Host:");
@@ -166,26 +170,19 @@ Targets:
 
     private static int New(string[] args)
     {
-        if (args.Length != 1) return Fail("usage: esharp new <name>");
-        var name = args[0];
-        if (Directory.Exists(name)) return Fail($"'{name}' already exists");
+        if (args.Length != 1) return Fail("usage: esharp new <name or path>   (the last path segment is the project name)");
+        var dir = args[0];
+        var name = ProjectTemplate.ProjectName(dir);
+        var problem = ProjectTemplate.NameProblem(name);
+        if (problem != null) return Fail($"'{name}' cannot be a project name: {problem}. It becomes the C# namespace and the csproj name, so use letters, digits and underscores, e.g. {ProjectTemplate.Suggest(name)}");
+        if (Directory.Exists(dir)) return Fail($"'{dir}' already exists");
 
-        Directory.CreateDirectory(name);
-        File.WriteAllText(Path.Combine(name, "Program.cs"), $@"using ESharp;
-using ESharp.Platform;
-
-namespace {name};
-
-public static class Program
-{{
-    [EntryPoint]
-    public static void Main()
-    {{
-        Dos.PutStr(""Hello from E#!\n"");
-    }}
-}}
-");
-        Console.WriteLine($"Created {name}/Program.cs. Build it with: esharp build {name}");
+        Directory.CreateDirectory(dir);
+        var root = SourceTree.Find();
+        ProjectTemplate.Write(dir, name, root, Path.Combine(AppContext.BaseDirectory, "esharp.dll"));
+        Console.WriteLine($"Created {dir}/ (Program.cs, {name}.csproj, .vscode/). Build it with: esharp build {dir}");
+        if (root == null)
+            Console.Error.WriteLine($"esharp: could not find the E# source tree; set ESHARP_ROOT, or ESharpRoot in {Path.Combine(dir, name + ".csproj")}, before using dotnet build or the editor");
         return 0;
     }
 
