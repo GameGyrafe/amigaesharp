@@ -110,6 +110,8 @@ Targets:
             }
         }
 
+        if (SyncAssets(path) is { } assetError) return Fail(assetError);
+
         var files = CollectSources(path);
         if (files.Count == 0) return Fail($"no .cs files found in '{path}'");
         var repo = HostRun.FindRepo();
