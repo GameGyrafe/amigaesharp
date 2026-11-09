@@ -104,6 +104,15 @@ public unsafe struct Vec<T> where T : unmanaged
         return new Span<T>(_items, _count);
     }
 
+    /// <summary>
+    /// Lets <c>foreach (T x in list)</c> walk the items in order with no allocation. It walks the items as they were
+    /// when the loop started: do not add, insert or remove inside the loop.
+    /// </summary>
+    public VecEnumerator<T> GetEnumerator()
+    {
+        return new VecEnumerator<T>(_items, _count);
+    }
+
     /// <summary>Gives the memory back and leaves an empty list.</summary>
     public void Destroy()
     {
@@ -112,4 +121,27 @@ public unsafe struct Vec<T> where T : unmanaged
         _count = 0;
         _capacity = 0;
     }
+}
+
+/// <summary>The enumerator behind <c>foreach</c> over a <see cref="Vec{T}"/>: a plain struct, so the loop allocates nothing.</summary>
+public unsafe struct VecEnumerator<T> where T : unmanaged
+{
+    private T* _items;
+    private int _count;
+    private int _index;
+
+    public VecEnumerator(T* items, int count)
+    {
+        _items = items;
+        _count = count;
+        _index = -1;
+    }
+
+    public bool MoveNext()
+    {
+        _index++;
+        return _index < _count;
+    }
+
+    public T Current { get { return _items[_index]; } }
 }

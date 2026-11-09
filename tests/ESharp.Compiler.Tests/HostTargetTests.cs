@@ -112,6 +112,14 @@ public class HostTargetTests
     }
 
     [Fact]
+    public void Refs_sample_runs_on_the_host()
+    {
+        using var console = HostConsole.Capture();
+        RefsSample.Program.Main();
+        Assert.Equal(RefsExpected.Output, console.Output);
+    }
+
+    [Fact]
     public void Linq_sample_runs_on_the_host()
     {
         using var console = HostConsole.Capture();
@@ -626,6 +634,34 @@ internal static class LambdasExpected
         "assigned delegate",
         "a lambda that uses this",
         "capture of a captured variable",
+    };
+}
+
+/// <summary>What samples/refs prints.</summary>
+internal static class RefsExpected
+{
+    public static string Output => string.Concat(Names.Select(n => "ok " + n + "\n"));
+
+    private static readonly string[] Names =
+    {
+        "ref local writes through",
+        "ref local pointed at another variable",
+        "ref to an array element",
+        "assignment to a ref return (array element)",
+        "ref to the largest element",
+        "ref return into a struct field",
+        "ref return of a static struct",
+        "ref local to a struct in an array",
+        "ref return passed on as a ref argument",
+        "ref readonly local sees later writes",
+        "foreach by ref over a span",
+        "foreach over a Vec",
+        "continue and break in foreach over a Vec",
+        "user struct enumerator",
+        "enumerable returned by a call",
+        "class handing out a Vec enumerator",
+        "nested foreach with break in the inner loop",
+        "foreach over an empty Vec",
     };
 }
 

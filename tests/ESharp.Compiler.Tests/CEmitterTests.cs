@@ -47,7 +47,7 @@ public class CEmitterTests
     [Fact]
     public void Unsupported_constructs_report_ES0099()
     {
-        var r = Compile(Program("static void F() { int x = 1; ref int r = ref x; r = 2; }"));
+        var r = Compile(Program("static void F() { goto end; end: ; }"));
         Assert.Contains("ES0099", ErrorIds(r));
     }
 
@@ -795,6 +795,19 @@ Check(list.Count == 0, ""destroy"");
     }
 
     [Fact]
+    public void Refs_sample_compiles_and_runs_natively_with_the_same_output_as_dotnet()
+    {
+        if (!HasGcc) return;
+        var path = Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "..", "samples", "refs", "Refs.cs");
+        var options = new CompileOptions { Defines = new[] { "AMIGA", "ESHARP_HOSTC" } };
+        var r = EsCompiler.Compile(new[] { new SourceFile(path, File.ReadAllText(path)) }, options);
+        Assert.True(r.Success, string.Join("\n", r.Diagnostics));
+        var (code, output) = RunWithHostGcc(r.C!);
+        Assert.Equal(0, code);
+        Assert.Equal(RefsExpected.Output, output);
+    }
+
+    [Fact]
     public void Linq_sample_compiles_and_runs_natively_with_the_same_output_as_dotnet()
     {
         if (!HasGcc) return;
@@ -1095,5 +1108,168 @@ if (p.First() == 3 && Fix.ToInt(q.B) == 2 && Twice(p) == 2 && m == 9) Dos.PutStr
         var (code, output) = RunWithHostGcc(c);
         Assert.Equal(0, code);
         Assert.Equal("ok\n", output);
+    }
+
+    // ---- ref locals, ref returns and foreach over the GetEnumerator pattern (issue #12) ----
+
+    [Fact]
+    public void Ref_locals_and_ref_returns_write_through_natively()
+    {
+        if (!HasGcc) return;
+        const string members = @"
+public struct Point { public int X; public int Y; }
+static Point gp;
+static void Check(bool ok, string name) { Dos.PutStr(ok ? ""ok "" : ""FAIL ""); Dos.PutStr(name); Dos.PutStr(""\n""); }
+static ref int Slot(System.Span<int> a, int i) { return ref a[i]; }
+static ref int Pick(ref Point p, bool x) => ref x ? ref p.X : ref p.Y;
+static ref Point At(System.Span<Point> ps, int i) { return ref ps[i]; }
+static ref int GlobalY() { return ref gp.Y; }
+static ref readonly int Peek(System.Span<int> a) { return ref a[0]; }
+static void Bump(ref int v) { v += 100; }
+";
+        const string body = @"
+int x = 1;
+ref int r = ref x;
+r = 2;
+Check(x == 2, ""ref local writes through"");
+r++;
+r += 10;
+Check(x == 13, ""++ and += through a ref local"");
+int y = 10;
+r = ref y;
+r = 11;
+Check(x == 13 && y == 11, ""ref local pointed somewhere else"");
+int[] arr = new int[4];
+ref int e = ref arr[2];
+e = 7;
+Check(arr[2] == 7, ""ref local to an array element"");
+Slot(arr, 1) = 5;
+Slot(arr, 1) += 2;
+Check(arr[1] == 7 && Slot(arr, 1) == 7, ""assignment to a ref return (array element)"");
+ref int s = ref Slot(arr, 3);
+s = 9;
+Check(arr[3] == 9, ""ref local from a ref return"");
+Point p = default;
+Pick(ref p, true) = 4;
+Pick(ref p, false) = 6;
+Check(p.X == 4 && p.Y == 6, ""ref return into a struct field"");
+Point[] pts = new Point[3];
+At(pts, 1).X = 8;
+Check(pts[1].X == 8, ""field of a ref-returned struct"");
+ref Point q = ref pts[2];
+q.Y = 12;
+q.X = q.Y + 1;
+Check(pts[2].Y == 12 && pts[2].X == 13, ""ref local to a struct element"");
+Bump(ref Slot(arr, 0));
+Check(arr[0] == 100, ""ref return passed as a ref argument"");
+GlobalY() = 3;
+Check(gp.Y == 3, ""ref return of a static field"");
+ref readonly int ro = ref Peek(arr);
+arr[0] = 55;
+Check(ro == 55, ""ref readonly sees later writes"");
+System.Span<int> sp = arr;
+foreach (ref int v in sp) v *= 2;
+Check(arr[0] == 110 && arr[3] == 18, ""foreach by ref over a span"");
+System.ReadOnlySpan<int> rs = arr;
+int rsum = 0;
+foreach (ref readonly int v in rs) rsum += v;
+Check(rsum == 156, ""foreach by ref readonly over a read-only span"");
+";
+        var c = CompileOk(Program(members, body));
+        Assert.Contains("int32_t *P_Slot(", c);
+        var (code, output) = RunWithHostGcc(c);
+        Assert.Equal(0, code);
+        Assert.DoesNotContain("FAIL", output);
+        Assert.Equal(14, output.Split('\n', StringSplitOptions.RemoveEmptyEntries).Length);
+    }
+
+    [Fact]
+    public void Foreach_over_enumerator_pattern_runs_natively()
+    {
+        if (!HasGcc) return;
+        const string members = @"
+public struct Countdown { public int From; public CountdownEnum GetEnumerator() { CountdownEnum e = default; e.Left = From + 1; return e; } }
+public struct CountdownEnum { public int Left; public bool MoveNext() { Left--; return Left > 0; } public int Current { get { return Left; } } }
+public struct Evens { public int Below; public EvensEnum GetEnumerator() { return new EvensEnum(Below); } }
+public struct EvensEnum
+{
+    private int _below;
+    public EvensEnum(int below) { _below = below; Current = -2; }
+    public int Current { get; private set; }
+    public bool MoveNext() { Current = Current + 2; return Current < _below; }
+}
+public class Steps
+{
+    public int N;
+    public Steps(int n) { N = n; }
+    public StepsEnum GetEnumerator() { return new StepsEnum(N); }
+}
+public class StepsEnum
+{
+    private int _n;
+    private int _i;
+    public StepsEnum(int n) { _n = n; _i = 0; }
+    public bool MoveNext() { _i++; return _i <= _n; }
+    public int Current { get { return _i * 3; } }
+}
+static Countdown Make(int from) { Countdown c = default; c.From = from; return c; }
+static void Check(bool ok, string name) { Dos.PutStr(ok ? ""ok "" : ""FAIL ""); Dos.PutStr(name); Dos.PutStr(""\n""); }
+";
+        const string body = @"
+Vec<int> v = default;
+for (int i = 1; i <= 5; i++) v.Add(i * 10);
+int sum = 0;
+foreach (int x in v) sum += x;
+Check(sum == 150, ""foreach over a Vec"");
+int seen = 0;
+foreach (var x in v) { if (x == 20) continue; if (x == 40) break; seen += x; }
+Check(seen == 40, ""continue and break over a Vec"");
+Countdown c3 = default;
+c3.From = 4;
+int n = 0;
+foreach (int k in c3) { if (k == 2) continue; n = n * 10 + k; }
+Check(n == 431, ""user struct enumerator with continue"");
+int cd = 0;
+foreach (int k in Make(3)) cd = cd * 10 + k;
+Check(cd == 321, ""enumerable returned by a call"");
+long big = 0;
+foreach (long k in c3) big += k;
+Check(big == 10, ""element widened to long"");
+int pairs = 0;
+foreach (int a in c3) foreach (int b in v) { if (b > 20) break; pairs++; }
+Check(pairs == 8, ""nested foreach with break in the inner loop"");
+Evens ev = default;
+ev.Below = 9;
+int es = 0;
+foreach (int k in ev) es += k;
+Check(es == 20, ""enumerator with an auto-property Current"");
+Steps st = new Steps(4);
+int ss = 0;
+foreach (int k in st) { if (k == 9) break; ss += k; }
+Check(ss == 9, ""class enumerable and class enumerator with break"");
+v.Destroy();
+int none = 0;
+foreach (int x in v) none++;
+Check(none == 0, ""empty Vec"");
+";
+        var c = CompileOk(Program(members, body));
+        Assert.Contains("_MoveNext(&_e", c);   // a struct enumerator is a local on the stack
+        var (code, output) = RunWithHostGcc(c);
+        Assert.Equal(0, code);
+        Assert.DoesNotContain("FAIL", output);
+        Assert.Equal(9, output.Split('\n', StringSplitOptions.RemoveEmptyEntries).Length);
+    }
+
+    [Theory]
+    [InlineData("public unsafe struct S { int* _p; public ref int this[int i] { get { return ref _p[i]; } } }", "S s = default; int v = s[0];")]
+    [InlineData("public interface ISeq { E GetEnumerator(); } public struct E { public int Current { get { return 0; } } public bool MoveNext() { return false; } } public class C : ISeq { public E GetEnumerator() { return default; } }",
+        "ISeq q = new C(); foreach (int x in q) { }")]
+    [InlineData("public unsafe struct E { int* _p; public ref int Current { get { return ref *_p; } } public bool MoveNext() { return false; } } public struct L { public E GetEnumerator() { return default; } }",
+        "L l = default; foreach (int x in l) { }")]
+    [InlineData("public abstract class B { public abstract ref int Get(); }", "")]
+    public void Unsupported_ref_and_foreach_forms_report_ES0099(string members, string body)
+    {
+        var r = Compile(Program(members, body));
+        Assert.Contains("ES0099", ErrorIds(r));
     }
 }

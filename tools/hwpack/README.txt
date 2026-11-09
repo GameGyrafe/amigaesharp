@@ -18,7 +18,7 @@ in an emulator. Your run is the first on real hardware.
    A whole run takes about two minutes in an emulator; a real machine may be slower.
    Expected: no line starting FAIL anywhere. In an emulated A1200 (Kickstart 3.1) the programs print
    this many "ok" lines: phase2 32, memory 19, generics 24, properties 18, operators 20, language 28,
-   collections 20, inherit 24, lambdas 16, linq 37, screen 17, aga 6, rtg 5, sound 21, controls 12
+   collections 20, inherit 24, lambdas 16, linq 37, refs 18, screen 17, aga 6, rtg 5, sound 21, controls 12
    (9 if lowlevel.library is not in Libs:), keys 8 (9 if you pressed a key), dates 19, cards 15, rummy 28 (hello and hwinfo print text, not ok lines). To count: Search results/memory.txt "ok " .
 
 3. Please tell us
