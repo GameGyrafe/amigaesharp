@@ -48,6 +48,8 @@ Echo "keys (a blank screen: press A within 10 seconds)"
 keys >results/keys.txt
 Echo "dates (dates and case-insensitive text)"
 dates >results/dates.txt
+Echo "names (E# classes named like system structs)"
+names >results/names.txt
 Echo "cards (play a round; Esc quits, or leave it for 10 seconds)"
 cards >results/cards.txt
 Echo "rummy (play a turn; Esc quits, or leave it for 10 seconds)"

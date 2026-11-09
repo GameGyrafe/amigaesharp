@@ -144,12 +144,16 @@ internal static class Monomorphizer
     private static string Mangle(string name, IEnumerable<ITypeSymbol> args) =>
         name + "__" + string.Join("_", args.Select(MangleType));
 
+    private static string Namespace(INamedTypeSymbol n) =>
+        n.ContainingNamespace is { IsGlobalNamespace: false } ns ? ns.ToDisplayString().Replace('.', '_') + "_" : "";
+
     private static string MangleType(ITypeSymbol t) => t switch
     {
         IPointerTypeSymbol p => MangleType(p.PointedAtType) + "Ptr",
         IArrayTypeSymbol a => MangleType(a.ElementType) + "Arr",
         INamedTypeSymbol n when n.SpecialType != SpecialType.None => n.ToDisplayString().Replace('.', '_'),
-        INamedTypeSymbol n => (n.ContainingType != null ? MangleType(n.ContainingType) + "_" : "") + n.Name +
+        // The namespace is part of the name, so Pair<A.Point> and Pair<B.Point> get copies of their own.
+        INamedTypeSymbol n => (n.ContainingType != null ? MangleType(n.ContainingType) + "_" : Namespace(n)) + n.Name +
                               (n.TypeArguments.Length > 0 ? "__" + string.Join("_", n.TypeArguments.Select(MangleType)) : ""),
         _ => "t",
     };
