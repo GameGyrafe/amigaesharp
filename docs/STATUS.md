@@ -10,6 +10,19 @@ The minimum system is now an **Amiga 1200: 68020, AGA, 2 MB chip RAM, Kickstart 
 - **Kept on purpose:** `HasAga()` and `HasRtg()` with their fallbacks. A classic A1200 always has AGA, but PowerPC, RTG-only and AROS targets may not, so the checks stay as the portable way to ask. **Not yet done:** using 68020 instructions deliberately and AROS (a new target, untested).
 - Verified after the change: all 17 samples built with `-m68020` and run on Kickstart 3.1 (A1200) in FS-UAE: 300 `ok` lines, no `FAIL` (the script shows only the last 25 lines of each sample, so long ones are truncated), 136 unit tests pass. Not verified: PowerPC, real hardware, a 68000/Kickstart 2.04 run (no longer supported).
 
+## `esharp test` (issue #8)
+
+`esharp test <dir>` builds the project's `.cs` files into a temporary dotnet project (`obj/host`, `HOST` defined, referencing `ESharp.Target.Host`), runs it, and counts output lines starting `ok ` and `FAIL `. A FAIL line, a non-zero exit or no ok/FAIL lines at all fails the run. With `--target m68k --docker <image> [--kickstart <rom>] [--model A1200]` it also builds for m68k, runs headless in FS-UAE (the `run` code) and lists every check that is ok on one side and FAIL or missing on the other. It needs the E# source tree (found from the CLI's location, or `ESHARP_REPO`).
+
+Verified:
+- 154 unit tests pass, including parsing and comparison (`TestReportTests`).
+- `esharp test samples/controls` on the host: 12 ok, 0 FAIL, exit 0.
+- `esharp test samples/linq --target m68k` with the m68k image and Kickstart 3.1 (40.069) on A1200: host 37 ok, Amiga 37 ok, no differences, exit 0.
+
+Not verified:
+- A failing program through the CLI (exit code 1 on FAIL or a difference): covered by unit tests of the comparison only, not run end to end.
+- Other targets (os4, morphos, aros) are not supported by `test`.
+
 ## Joystick and clock: lowlevel.library and timer.device (samples/controls)
 
 `Joystick` (lowlevel.library v40) reads a joystick or CD32 pad: `Read(port)` returns direction and button bits (`Up`, `Fire`, `Fire2`, the CD32 colour and transport buttons), `Direction(port)` gives x and y as -1, 0 or 1, `Kind(port)` says what is plugged in, and `Force(port, gamepad)` sets the port type. A mouse port reads 0, because a mouse's low bits are counters. `Clock` (timer.device) reads the E clock: `Ticks`, `Frequency`, `Microseconds(from, to)` and `Milliseconds(from, to)`. On the host both are fakes: `Joystick.HostSet`, and `Clock.HostAdvance` (`Dos.Delay` advances it too).

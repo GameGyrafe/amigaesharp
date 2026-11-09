@@ -28,6 +28,7 @@
     <ProjectReference Include="..\..\src\ESharp.Compiler\ESharp.Compiler.csproj" />
     <ProjectReference Include="..\..\src\ESharp.Target.Host\ESharp.Target.Host.csproj" />
     <ProjectReference Include="..\..\src\ESharp.Assets\ESharp.Assets.csproj" />
+    <ProjectReference Include="..\..\src\ESharp.Cli\ESharp.Cli.csproj" />
   </ItemGroup>
 
   <!-- The hello sample is compiled by dotnet here as the HOST target, proving the same
