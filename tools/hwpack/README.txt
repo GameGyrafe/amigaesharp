@@ -19,7 +19,7 @@ in an emulator. Your run is the first on real hardware.
    Expected: no line starting FAIL anywhere. In an emulated A1200 (Kickstart 3.1) the programs print
    this many "ok" lines: phase2 32, memory 19, generics 24, properties 18, operators 20, language 28,
    collections 20, inherit 24, lambdas 16, linq 37, refs 18, screen 17, aga 6, rtg 5, sound 21, controls 12
-   (9 if lowlevel.library is not in Libs:), keys 8 (9 if you pressed a key), dates 19, fonts 8 (7 without diskfont.library, 10 if a disk font such as ruby is in FONTS:), iff 10 (one line saying so instead if iffparse.library is not in Libs:), asl 4 (one line instead if asl.library is missing), names 12, cards 15, rummy 28 (hello, hwinfo and trace print text, not ok lines; trace also sends 9 lines to the serial port, which nothing needs to be connected to). To count: Search results/memory.txt "ok " .
+   (9 if lowlevel.library is not in Libs:), keys 8 (9 if you pressed a key), dates 19, fonts 8 (7 without diskfont.library, 10 if a disk font such as ruby is in FONTS:), iff 10 (one line saying so instead if iffparse.library is not in Libs:), asl 4 (one line instead if asl.library is missing), gui 7 (if you click Hello then the close gadget; one line instead if there is no Workbench screen), names 12, cards 15, rummy 28 (hello, hwinfo and trace print text, not ok lines; trace also sends 9 lines to the serial port, which nothing needs to be connected to). To count: Search results/memory.txt "ok " .
 
 3. Please tell us
    a) SUMMARY.txt (it starts with what hwinfo found out about your machine), and the results drawer, or at least any file in it that has a line starting FAIL.
@@ -35,6 +35,7 @@ in an emulator. Your run is the first on real hardware.
       keys     the "pressed key 32 ... typed 97" line after pressing A (your keymap, too)  note them
       fonts    the "diskfont.library opens" line and which disk font was found                note them
       asl      a file requester opens on a blue screen; Cancel and OK both close it           yes / no
+      gui      a small window "E# Greeter" on Workbench; Hello puts "Hello, Amiga!" in the Reply field   yes / no
       cards    cards drawn right; mouse moves; clicking Higher/Lower works                yes / no
       rummy    cards drawn right; you can draw, discard, and the bot replies              yes / no
       Roughly how long did the bot take to reply in rummy (seconds)?
