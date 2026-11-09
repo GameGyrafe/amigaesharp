@@ -190,4 +190,76 @@ public class AssetTests
             Assert.InRange((int)((c >> 8) & 255) - y * 8, -24, 24);
         }
     }
+
+    // Incremental build step: copy samples/screen to a scratch directory and play with timestamps.
+    private static string ScratchSample()
+    {
+        var src = Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "..", "samples", "screen");
+        var dir = Path.Combine(Path.GetTempPath(), "esharp-assets-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(dir);
+        foreach (var f in new[] { "assets.json", "card.png", "Assets.g.cs" })
+            File.Copy(Path.Combine(src, f), Path.Combine(dir, f));
+        var old = DateTime.UtcNow.AddHours(-1);
+        foreach (var f in Directory.GetFiles(dir)) File.SetLastWriteTimeUtc(f, old);
+        return dir;
+    }
+
+    [Fact]
+    public void Sync_leaves_a_fresh_Assets_g_cs_untouched()
+    {
+        var dir = ScratchSample();
+        var target = Path.Combine(dir, "Assets.g.cs");
+        var stamp = File.GetLastWriteTimeUtc(target);
+        var before = File.ReadAllBytes(target);
+        var r = AssetBuilder.Sync(Path.Combine(dir, "assets.json"));
+        Assert.Equal(AssetBuilder.SyncStatus.UpToDate, r.Status);
+        Assert.Equal(stamp, File.GetLastWriteTimeUtc(target));
+        Assert.Equal(before, File.ReadAllBytes(target));
+    }
+
+    [Fact]
+    public void Sync_regenerates_a_missing_file_byte_identical_to_the_committed_one()
+    {
+        var dir = ScratchSample();
+        var target = Path.Combine(dir, "Assets.g.cs");
+        var before = File.ReadAllBytes(target);
+        File.Delete(target);
+        Assert.Equal(AssetBuilder.SyncStatus.Created, AssetBuilder.Sync(Path.Combine(dir, "assets.json")).Status);
+        Assert.Equal(before, File.ReadAllBytes(target));
+    }
+
+    [Fact]
+    public void Sync_regenerates_when_a_png_is_touched_and_rewrites_only_if_the_text_changed()
+    {
+        var dir = ScratchSample();
+        var manifest = Path.Combine(dir, "assets.json");
+        var target = Path.Combine(dir, "Assets.g.cs");
+        var before = File.ReadAllBytes(target);
+
+        // Newer PNG with the same pixels: stale, regenerated, but the text is the same -> only touched, and fresh afterwards.
+        File.SetLastWriteTimeUtc(Path.Combine(dir, "card.png"), DateTime.UtcNow);
+        Assert.True(AssetBuilder.IsStale(manifest));
+        Assert.Equal(AssetBuilder.SyncStatus.Touched, AssetBuilder.Sync(manifest).Status);
+        Assert.Equal(before, File.ReadAllBytes(target));
+        Assert.False(AssetBuilder.IsStale(manifest));
+        Assert.Equal(AssetBuilder.SyncStatus.UpToDate, AssetBuilder.Sync(manifest).Status);
+
+        // A PNG with different pixels: the file is rewritten.
+        var png = Png.Read(File.ReadAllBytes(Path.Combine(dir, "card.png")));
+        var rgba = (byte[])png.Rgba.Clone();
+        rgba[0] ^= 0xFF; rgba[1] ^= 0xFF; rgba[2] ^= 0xFF; rgba[3] = 255;
+        File.WriteAllBytes(Path.Combine(dir, "card.png"), Png.Write(new RgbaImage(png.Width, png.Height, rgba)));
+        var r = AssetBuilder.Sync(manifest);
+        Assert.Equal(AssetBuilder.SyncStatus.Updated, r.Status);
+        Assert.NotEqual(before, File.ReadAllBytes(target));
+    }
+
+    [Fact]
+    public void Sync_regenerates_when_the_manifest_is_newer()
+    {
+        var dir = ScratchSample();
+        var manifest = Path.Combine(dir, "assets.json");
+        File.SetLastWriteTimeUtc(manifest, DateTime.UtcNow);
+        Assert.True(AssetBuilder.IsStale(manifest));
+    }
 }

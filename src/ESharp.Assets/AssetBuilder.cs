@@ -81,6 +81,61 @@ public static class AssetBuilder
         return new Output(sb.ToString(), reports);
     }
 
+    public enum SyncStatus { UpToDate, Created, Updated, Touched }
+
+    public sealed record SyncResult(SyncStatus Status, string Target, Output? Output);
+
+    /// <summary>The generated file that belongs to a manifest: <c>Assets.g.cs</c> next to it.</summary>
+    public static string TargetPath(string manifestPath) =>
+        Path.Combine(Path.GetDirectoryName(Path.GetFullPath(manifestPath))!, "Assets.g.cs");
+
+    /// <summary>The files the generated source depends on: the manifest and every PNG it lists.</summary>
+    public static IReadOnlyList<string> Inputs(string manifestPath)
+    {
+        var dir = Path.GetDirectoryName(Path.GetFullPath(manifestPath))!;
+        var list = new List<string> { Path.GetFullPath(manifestPath) };
+        using var doc = JsonDocument.Parse(File.ReadAllText(manifestPath), new JsonDocumentOptions { CommentHandling = JsonCommentHandling.Skip });
+        if (doc.RootElement.TryGetProperty("images", out var images))
+            foreach (var e in images.EnumerateArray())
+                if (e.TryGetProperty("file", out var f) && f.GetString() is { } name)
+                    list.Add(Path.GetFullPath(Path.Combine(dir, name)));
+        return list;
+    }
+
+    /// <summary>True when <c>Assets.g.cs</c> is missing or older than the manifest or any listed PNG.</summary>
+    public static bool IsStale(string manifestPath)
+    {
+        var target = TargetPath(manifestPath);
+        if (!File.Exists(target)) return true;
+        var built = File.GetLastWriteTimeUtc(target);
+        // A missing PNG counts as stale so that Build reports it.
+        return Inputs(manifestPath).Any(i => !File.Exists(i) || File.GetLastWriteTimeUtc(i) > built);
+    }
+
+    /// <summary>
+    /// Incremental build step: regenerates <c>Assets.g.cs</c> only when it is stale (or <paramref name="force"/>).
+    /// The file is rewritten only when the text really changes; if it does not, the file is just touched so
+    /// that it is fresh again (the next call is then a no-op and git sees no change).
+    /// </summary>
+    public static SyncResult Sync(string manifestPath, bool force = false)
+    {
+        var target = TargetPath(manifestPath);
+        if (!force && !IsStale(manifestPath)) return new SyncResult(SyncStatus.UpToDate, target, null);
+        var output = Build(manifestPath);
+        if (!File.Exists(target))
+        {
+            File.WriteAllText(target, output.Source);
+            return new SyncResult(SyncStatus.Created, target, output);
+        }
+        if (File.ReadAllText(target) == output.Source)
+        {
+            File.SetLastWriteTimeUtc(target, DateTime.UtcNow);
+            return new SyncResult(SyncStatus.Touched, target, output);
+        }
+        File.WriteAllText(target, output.Source);
+        return new SyncResult(SyncStatus.Updated, target, output);
+    }
+
     private static bool IsIdentifier(string s) =>
         s.Length > 0 && (char.IsLetter(s[0]) || s[0] == '_') && s.All(ch => char.IsLetterOrDigit(ch) || ch == '_');
 }

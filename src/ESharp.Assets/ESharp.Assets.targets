@@ -1,0 +1,24 @@
+<Project>
+  <!--
+    MSBuild step for E# projects that have a csproj (for `dotnet build` and IDEs): import this file and set
+    ESharpCli to the esharp executable or `dotnet <path>/esharp.dll`. It runs `esharp assets` before compiling,
+    only when assets.json or a listed PNG is newer than Assets.g.cs (Inputs/Outputs); the tool leaves the
+    file's text alone when it would not change.
+      <Import Project="path/to/ESharp.Assets.targets" />
+      <PropertyGroup><ESharpCli>dotnet path/to/esharp.dll</ESharpCli></PropertyGroup>
+    Override ESharpAssetsDir (default: the project directory) if the manifest lives elsewhere.
+  -->
+  <PropertyGroup>
+    <ESharpAssetsDir Condition="'$(ESharpAssetsDir)' == ''">$(MSBuildProjectDirectory)</ESharpAssetsDir>
+    <ESharpCli Condition="'$(ESharpCli)' == ''">esharp</ESharpCli>
+  </PropertyGroup>
+  <ItemGroup>
+    <ESharpAssetImage Include="$(ESharpAssetsDir)/**/*.png" Exclude="$(ESharpAssetsDir)/obj/**;$(ESharpAssetsDir)/bin/**" />
+  </ItemGroup>
+  <Target Name="ESharpAssets" BeforeTargets="BeforeCompile;CoreCompile"
+          Condition="Exists('$(ESharpAssetsDir)/assets.json')"
+          Inputs="$(ESharpAssetsDir)/assets.json;@(ESharpAssetImage)"
+          Outputs="$(ESharpAssetsDir)/Assets.g.cs">
+    <Exec Command="$(ESharpCli) assets &quot;$(ESharpAssetsDir)&quot; --force" />
+  </Target>
+</Project>
