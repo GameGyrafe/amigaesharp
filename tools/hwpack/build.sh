@@ -11,13 +11,14 @@ root="$(cd "$here/../.." && pwd)"
 cd "$root"
 
 # Order: quick pure checks first, then the ones that open a screen or the audio device.
-samples="hwinfo hello phase2 memory generics properties operators language collections inherit lambdas linq refs screen aga rtg sound controls keys dates fonts iff asl names cards rummy"
+samples="hwinfo hello phase2 memory generics properties operators language collections inherit lambdas linq refs screen aga rtg sound controls keys dates fonts iff asl gui names trace cards rummy"
 
 rm -rf "$out"; mkdir -p "$out/results"
 for s in $samples; do
   echo "== $s"
-  dotnet run --project src/ESharp.Cli -- build "samples/$s" --target m68k --docker "$image" >/dev/null
-  exe="$(find "samples/$s/obj/m68k" -maxdepth 1 -type f ! -name '*.c' ! -name run | head -1)"
+  extra=""; [ "$s" = trace ] && extra="--trace"   # the trace sample needs TRACE to write to the serial port
+  dotnet run --project src/ESharp.Cli -- build "samples/$s" --target m68k --docker "$image" $extra >/dev/null
+  exe="$(find "samples/$s/obj/m68k" -maxdepth 1 -type f ! -name '*.c' ! -name '*.o' ! -name run | head -1)"
   [ -n "$exe" ] || { echo "no executable for $s"; exit 1; }
   cp "$exe" "$out/$s"
 done

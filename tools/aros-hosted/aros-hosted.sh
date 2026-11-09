@@ -2,7 +2,7 @@
 # Run an E# sample (built with --target aros) on the hosted AROS x86-64 build, headless under Xvfb.
 #
 #   AROS_HOSTED=<dir of the extracted AROS-*-linux-x86_64-system archive> \
-#   tools/aros-hosted/aros-hosted.sh <sample> [--shot out.png] [--wait N] [--input "click 400,300;key 9"]
+#   tools/aros-hosted/aros-hosted.sh <sample> [--shot out.png] [--wait N] [--log] [--input "click 400,300;key 9"]
 #
 # Prints the program's output. With --shot, waits for the program to print SHOT, then saves a
 # screenshot of the X root. --input is a script for xinput.py (click x,y / key keycode) run after SHOT.
@@ -12,9 +12,9 @@ set -u
 here=$(cd "$(dirname "$0")" && pwd); root=$(cd "$here/../.." && pwd)
 A=${AROS_HOSTED:?set AROS_HOSTED to the extracted hosted AROS directory}
 s=${1:?sample name}; shift
-shot=""; wait=2; input=""
+shot=""; wait=2; input=""; log=0
 while [ $# -gt 0 ]; do case $1 in
-  --shot) shot=$2; shift 2;; --wait) wait=$2; shift 2;; --input) input=$2; shift 2;; *) echo "bad arg $1"; exit 2;; esac; done
+  --shot) shot=$2; shift 2;; --wait) wait=$2; shift 2;; --input) input=$2; shift 2;; --log) log=1; shift;; *) echo "bad arg $1"; exit 2;; esac; done
 bin="$root/samples/$s/obj/aros/$s"; [ -f "$bin" ] || { echo "build it first: esharp build samples/$s --target aros --docker <image>"; exit 1; }
 cd "$A" || exit 1
 cp "$bin" "./$s"; chmod +x "$s"
@@ -45,3 +45,4 @@ fi
 for i in $(seq 80); do [ -f done.txt ] && break; sleep 1; done; sleep 1
 kill $BP $XP 2>/dev/null; wait 2>/dev/null; rm -rf "$tmp"
 echo "traps: $(grep -c Trap boot.log) done: $([ -f done.txt ] && echo y || echo n)"; cat "$s.out" 2>/dev/null
+if [ "$log" = 1 ]; then echo "--- AROS debug output (boot.log: RawPutChar, i.e. Trace) ---"; cat boot.log; fi

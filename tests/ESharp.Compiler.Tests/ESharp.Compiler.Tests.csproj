@@ -63,8 +63,10 @@
     <Compile Include="..\..\samples\fonts\Fonts.cs" Link="Samples\Fonts.cs" />
     <Compile Include="..\..\samples\iff\Iff.cs" Link="Samples\Iff.cs" />
     <Compile Include="..\..\samples\asl\Asl.cs" Link="Samples\Asl.cs" />
+    <Compile Include="..\..\samples\gui\Gui.cs" Link="Samples\Gui.cs" />
     <Compile Include="..\..\samples\refs\Refs.cs" Link="Samples\Refs.cs" />
     <Compile Include="..\..\samples\names\Names.cs" Link="Samples\Names.cs" />
+    <Compile Include="..\..\samples\trace\TraceDemo.cs" Link="Samples\TraceDemo.cs" />
     <Compile Include="..\..\tools\BindGen\Model.cs" Link="BindGen\Model.cs" />
     <Compile Include="..\..\tools\BindGen\Fd.cs" Link="BindGen\Fd.cs" />
   </ItemGroup>

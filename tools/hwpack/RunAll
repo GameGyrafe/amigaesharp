@@ -58,8 +58,12 @@ Echo "asl (a file requester opens: click Cancel, or pick a file and OK)"
 Echo >RAM:asl-open x
 asl >results/asl.txt
 Delete RAM:asl-open QUIET
+Echo "gui (a window opens on Workbench: click Hello, then the close gadget at its top left)"
+gui >results/gui.txt
 Echo "names (E# classes named like system structs)"
 names >results/names.txt
+Echo "trace (writes a few lines to the serial port: a terminal at 9600 baud shows them; the screen shows one line)"
+trace >results/trace.txt
 Echo "cards (play a round; Esc quits, or leave it for 10 seconds)"
 cards >results/cards.txt
 Echo "rummy (play a turn; Esc quits, or leave it for 10 seconds)"
