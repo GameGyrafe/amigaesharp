@@ -419,6 +419,32 @@ internal sealed partial class CEmitter
             result.AppendLine("}");
             result.AppendLine();
         }
+        if (_natives.Contains("es_rawputchar") || _natives.Contains("es_rawioinit"))
+        {
+            // exec's raw serial output: RawIOInit (LVO -504) and RawPutChar (LVO -516) are in no header of the m68k NDK, so call the vectors.
+            result.AppendLine("#if defined(__AROS__)");
+            result.AppendLine("#include <proto/exec.h>");
+            result.AppendLine("static inline void es_rawioinit(void) { }");
+            result.AppendLine("static inline void es_rawputchar(int32_t c) { RawPutChar((UBYTE)c); }");
+            result.AppendLine("#elif defined(__mc68000__)");
+            result.AppendLine("static inline void es_rawioinit(void)");
+            result.AppendLine("{");
+            result.AppendLine("    register void *a6 __asm(\"a6\") = *(void **)4;   /* ExecBase */");
+            result.AppendLine("    register int32_t d0 __asm(\"d0\");");
+            result.AppendLine("    __asm volatile(\"jsr -504(%%a6)\" : \"=r\"(d0), \"+r\"(a6) : : \"d1\", \"a0\", \"a1\", \"memory\", \"cc\");");
+            result.AppendLine("}");
+            result.AppendLine("static inline void es_rawputchar(int32_t c)");
+            result.AppendLine("{");
+            result.AppendLine("    register void *a6 __asm(\"a6\") = *(void **)4;   /* ExecBase */");
+            result.AppendLine("    register int32_t d0 __asm(\"d0\") = c;");
+            result.AppendLine("    __asm volatile(\"jsr -516(%%a6)\" : \"+r\"(d0), \"+r\"(a6) : : \"d1\", \"a0\", \"a1\", \"memory\", \"cc\");");
+            result.AppendLine("}");
+            result.AppendLine("#else");
+            result.AppendLine("static inline void es_rawioinit(void) { }");
+            result.AppendLine("static inline void es_rawputchar(int32_t c) { (void)c; }   /* no serial trace on this target yet */");
+            result.AppendLine("#endif");
+            result.AppendLine();
+        }
         if (_usesLen)
         {
             result.AppendLine("#define ES_LEN(a) ((int32_t)(sizeof(a) / sizeof((a)[0])))");
@@ -557,8 +583,12 @@ internal sealed partial class CEmitter
             if (work.Count == 0) continue;
             var node = work.Pop();
             var model = Model(node);
+            // Calls to [Conditional] methods that are compiled out reach nothing: not the method, not their arguments.
+            var compiledOut = node.DescendantNodesAndSelf().OfType<ExpressionStatementSyntax>()
+                .Where(st => IsCompiledOutCall(st.Expression)).Select(st => st.Span).ToList();
             foreach (var n in node.DescendantNodesAndSelf())
             {
+                if (compiledOut.Count > 0 && compiledOut.Any(sp => sp.Contains(n.Span))) continue;
                 if (n is ForEachStatementSyntax loop)
                 {
                     // foreach over the GetEnumerator pattern calls these without naming them.
@@ -1289,6 +1319,18 @@ internal sealed partial class CEmitter
         if (scoped) { _indent--; Line("}"); }
     }
 
+    /// <summary>A call statement to a [Conditional] method whose symbol is not defined here (C# rule): no code, and no argument evaluation.</summary>
+    private bool IsCompiledOutCall(ExpressionSyntax e)
+    {
+        if (e is not InvocationExpressionSyntax inv || Model(inv).GetSymbolInfo(inv).Symbol is not IMethodSymbol m) return false;
+        var conditions = m.GetAttributes()
+            .Where(a => a.AttributeClass is { Name: "ConditionalAttribute" } && a.ConstructorArguments.Length == 1 && a.ConstructorArguments[0].Value is string)
+            .Select(a => (string)a.ConstructorArguments[0].Value!).ToList();
+        if (conditions.Count == 0) return false;
+        var defined = inv.SyntaxTree.Options.PreprocessorSymbolNames;
+        return !conditions.Any(c => defined.Contains(c));
+    }
+
     private List<string> HoistedDeclarations(StatementSyntax st) => HoistedDeclarations(HoistRoots(st));
 
     private static List<SyntaxNode> HoistRoots(StatementSyntax st)
@@ -1392,6 +1434,7 @@ internal sealed partial class CEmitter
                 break;
 
             case ExpressionStatementSyntax e:
+                if (IsCompiledOutCall(e.Expression)) break;
                 Line(Expr(e.Expression, top: true) + ";");
                 break;
 

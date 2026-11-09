@@ -35,10 +35,11 @@ public sealed class TargetInfo
     public bool IsM68k => Defines.Contains("M68K");
 
     /// <summary>With <paramref name="debug"/>, defines DEBUG (poisoned arenas) and turns bounds checks on.</summary>
-    public CompileOptions ToOptions(bool allowFloat = false, bool debug = false, long? chipBudget = null) =>
+    public CompileOptions ToOptions(bool allowFloat = false, bool debug = false, long? chipBudget = null, bool trace = false) =>
         new()
         {
-            Defines = debug ? Defines.Append("DEBUG").ToArray() : Defines,
+            // --debug implies TRACE: a debug build wants its serial trace.
+            Defines = (debug ? Defines.Append("DEBUG") : Defines).Concat(debug || trace ? new[] { "TRACE" } : new string[0]).ToArray(),
             AllowFloat = allowFloat,
             BoundsChecks = debug,
             ChipBudget = chipBudget,
