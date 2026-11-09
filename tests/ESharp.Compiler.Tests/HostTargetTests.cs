@@ -144,6 +144,15 @@ public class HostTargetTests
     }
 
     [Fact]
+    public void Names_sample_runs_on_the_host()
+    {
+        using var console = HostConsole.Capture();
+        NamesSample.Program.Main();
+        Assert.DoesNotContain("FAIL", console.Output);
+        Assert.Equal(12, console.Output.Split('\n').Count(l => l.StartsWith("ok ")));
+    }
+
+    [Fact]
     public void Keys_sample_runs_on_the_host()
     {
         using var console = HostConsole.Capture();

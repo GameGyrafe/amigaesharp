@@ -62,6 +62,39 @@ Not verified:
 - A different locale (`locale.library` with a non-English language).
 - Real hardware, AmigaOS 4 and MorphOS.
 
+## C names of E# types (samples/names, issues #39 and #12)
+
+Every E# class, struct, interface and enum, in user code and in the embedded Runtime/Platform sources, is named in C
+`Es_` + namespace + type, joined with `_`: `CardsDemo.Board` is `Es_CardsDemo_Board`, `ESharp.Platform.Dos` is
+`Es_ESharp_Platform_Dos`, a nested type adds its containing types, a type in the global namespace is `Es_Board`.
+Functions, static fields, enum members, constructors (`_new`), class tables (`_vt`, `_cvt`, `_alloc`) and interface
+thunks start with that name. Inside longer names (overloads, `ES_Span_`/`ES_Tuple_` typedefs, generic copies such as
+`Box__NamesSample_Left_Point`) a type is written with its namespace but without the prefix. No identifier in the
+m68k toolchain's NDK/libnix headers or in the AROS SDK headers starts with `Es_` (checked with grep in both images); the
+emitter's own helpers keep `es_` (library bases, runtime functions) and `ES_` (spans, tuples, delegates, type ids).
+Delegate types were already structural (`ES_Wfn_N`). `[AmigaLib]` and `[Native]` functions keep their system names.
+
+`samples/names` declares classes `Window`, `Gadget`, `Screen`, `Node`, `List`, `Menu`, `Image`, `Task`, `Message`
+(with inheritance, a virtual member, an interface and a static field), a struct `Rectangle`, an enum `Border`, a
+delegate `Hook`, and `Item`, `Point` and `Tools` twice, in `NamesSample.Left` and `NamesSample.Right` (also through a
+generic struct over both `Point`s). It calls intuition's `CurrentTime`, so `proto/intuition.h` is included.
+
+Verified:
+- 186 unit tests pass. They include the sample compiled to C with `AMIGA` defined and built with host gcc against a
+  stand-in `proto/intuition.h` that declares those structs, the sample on the host, same-named classes in two
+  namespaces, and the ES0099 for names that meet.
+- `--target m68k` and `--target aros` builds against the real headers. The same C with the old, unprefixed names
+  fails in m68k-amigaos-gcc (redefinition of `struct Rectangle`, `struct Node`, `struct List`, `struct Screen`, ...).
+- A1200, Kickstart 3.1 (40.069) in FS-UAE: 12 ok, no FAIL.
+- Hosted AROS (nightly 20261106): 12 ok, no FAIL, no traps.
+- Regression on the A1200 / 3.1: inherit 24 ok, cards 15 ok (with the scripted click, guess and quit).
+- The hardware pack builds with `names` (all 22 programs build for m68k with the new names).
+
+Not verified:
+- OS4 and MorphOS builds of the sample, real hardware.
+- The other samples on the emulator after the rename (only inherit and cards were re-run); they pass as host-gcc and
+  dotnet unit tests.
+
 ## Keyboard text: keymap.library (samples/keys)
 
 `Keys.Char(rawKey, qualifier)` turns an Amiga raw key code into the character it types with the user's keymap (keymap.library `MapRawKey`), so text follows the keyboard the user has rather than a US layout. Characters are ISO-8859-1 codes; 0 means the key types no single character (cursor and function keys send escape sequences, modifier keys, key releases, a dead key waiting for the next key). `Keys.Find(ch)` goes the other way (`MapANSI`): the raw key and qualifier that type a character. The qualifier bits (`Keys.Shift`, `CapsLock`, `Control`, `Alt`, `LeftAmiga`, `RightAmiga`, `Repeat`) are measured from the headers. `Input` now also gives `LastChar` and `LastQualifier` for the last key pressed in the `Video` window. They are mapped while the IDCMP message is still held, with its previous-keys data, so dead keys can combine. keymap.library is opened on first use through its own `[LibraryBase]`, and closed by `Video.Close` or `Keys.Close`. On the host a fixed US layout is used, and `Input.HostKey(code, qualifier)` feeds a key with modifiers. `esharp run --input` takes `key 50+38` to hold keys (here Shift) while the last one is pressed.
@@ -176,7 +209,7 @@ must print the same 32 lines everywhere.
 | `Span<T>` / `ReadOnlySpan<T>`: indexing, `Length`, `Slice`, `foreach`, implicit array -> span and span -> read-only span | Done: emitted as `{ ptr, length }` structs; arrays are passed to methods as spans |
 | Inline arrays in structs (`unsafe struct` with `fixed byte X[8]`) | Done: C array member; indexed through a pointer, no span conversion |
 | Subset rule `ES0011`: no heap, jagged, multi-dimensional, reassigned or non-constant-length arrays; no array parameters or return types | Done |
-| Operators on structs (static `operator` methods, explicit conversions) and static methods in structs | Done: become C functions (`Fix_op_Multiply_Fix_Fix`) |
+| Operators on structs (static `operator` methods, explicit conversions) and static methods in structs | Done: become C functions (`Es_ESharp_Fix_op_Multiply_ESharp_Fix_ESharp_Fix`) |
 | Instance methods and constructors with arguments on structs | Done: a method is a C function taking `T *_this` first (`c.Bump(2)` -> `Card_Bump(&c, 2)`); a constructor returns the struct (`new Card(5, 1)` -> `Card_new(5, 1)`), with overloads, early `return`, `this.X` and unqualified calls. The receiver must be a variable, field, array/span element or pointer, not a call result |
 | `Fix`: 16.16 fixed point (`+ - * /`, comparisons, `FromInt/FromRaw/ToInt/Frac`) in `ESharp.Runtime` | Done. Multiply is four unsigned 16x16 partial products: checked in the m68k-amigaos-gcc 6.5.0b `-m68000 -O2` assembly, it is four `mulu.w` and no `__mulsi3` call (a first signed version did call it), and it matches a 64-bit reference over about 6000 random and edge pairs. Divide by `Fix` uses a 64-bit intermediate (`__divdi3`), so it is slow on 68000. Cycle counts are **not measured** |
 | Generics: generic structs and generic static methods, monomorphised | Done as a source-to-source pass before emission (`Monomorphizer`): each use (`Pair<int>`, `Pick<Fix>(...)`, inferred `Pick(true, 1, 2)`, nested `Pair<Pair<int>>`) is renamed (`Pair__int`) and a copy of the declaration with the type arguments substituted is added next to the original; the pass repeats until nothing generic is left (limit 16 rounds, ES0098). Copies carry `#line` so errors and the C `#line` output point at the generic source. Constraints are accepted and ignored. A library generic (such as `Pool<T>`) needs publicly accessible type arguments, otherwise Roslyn reports CS0122 in the library copy. Generic classes (ES0008), generic methods from outside E# source, generics inside generic types' methods called on other generic methods of a generic type, and generic nested types of generic types are not supported. Tested on host, host gcc and m68k, see `samples/generics` |
@@ -240,7 +273,7 @@ Found by comparing what a real card game needs (heavy use of collections, tuples
 | `Vec<T>` (`ESharp.Platform`, named so as not to clash with `System.Collections.Generic.List<T>`): growable list of an unmanaged `T` | Done: `Add`, `Insert`, `RemoveAt`, `SwapRemoveAt`, `Clear`, indexer, `Count`, `Capacity`, `AsSpan`, `Destroy`; no exceptions (false / zero value). Counted in the chip budget by its initial capacity only |
 | `Dos.PutInt` | Done |
 | String interpolation and concatenation (`$"score {n,5:D3}"`, `"a" + n`) | Done: the text is formatted into one of 8 static 128-byte buffers and returned as a `string`, so it is **valid only until 8 more strings have been formatted** (use it at once: draw it, print it; copy it if it must stay) and is cut at 127 bytes. Holes: integers including `long`/`ulong` (the 64-bit ones use software division on a 68000, so they are slow; alignment `,N`/`,-N`, formats `D<n>`, `X<n>`, `x<n>`), `char`, `bool` (`True`/`False` like C#), `string`, enums (the member's name, or the number for a value that is none of them, like `ToString`; `D`/`X` give the number); `{{` and `}}` work; constant strings are folded. Not done (ES0099): floats and fixed-point, `[Flags]` combinations (printed as a number, not `A, B`), other format strings, `string.Format`, `StringBuilder`. Parity with dotnet is checked in `samples/language` |
-| Heap classes (non-static `class`) | Done: fields, auto-properties, methods, constructors, static members, `new` (also with an object initializer), `null`, reference equality, arrays of references, `this`. A class variable is a C pointer (`Foo *`), `new` is `calloc` (stops with exit 20 when memory runs out), and objects are freed with `Heap.Free(ref obj)` (frees and sets the variable to null); objects never freed are released when the program ends. There is no garbage collector: keep one owner per object. **Single inheritance with `virtual`/`abstract`/`override` (see the inheritance section above), no generic classes (ES0008), no instance field initializers in classes (ES0099, assign in the constructor)**. Class names live in C's single namespace, so a name that is also in the NDK headers (`Node`, `List`, `Window`, ...) fails in gcc: pick another. Two E# types with the same name in different namespaces are reported (ES0099) |
+| Heap classes (non-static `class`) | Done: fields, auto-properties, methods, constructors, static members, `new` (also with an object initializer), `null`, reference equality, arrays of references, `this`. A class variable is a C pointer (`Foo *`), `new` is `calloc` (stops with exit 20 when memory runs out), and objects are freed with `Heap.Free(ref obj)` (frees and sets the variable to null); objects never freed are released when the program ends. There is no garbage collector: keep one owner per object. **Single inheritance with `virtual`/`abstract`/`override` (see the inheritance section above), no generic classes (ES0008), no instance field initializers in classes (ES0099, assign in the constructor)**. Every E# type gets a prefixed, namespaced C name (`Es_<namespace>_<type>`, see the C names section), so a class may be called `Node`, `List` or `Window` like an NDK struct, and two types with the same name in different namespaces are apart |
 | Interfaces | Plain-method interfaces (no properties, events, generic methods or default implementations). Two ways to use them: as generic constraints (`where T : IScorer`, monomorphised, any struct or class, static dispatch), and as **variable types** (`IRules rules = new FlatRules();`, fields, parameters, returns, statics): an interface value is a C struct of the object pointer and a table of functions, so the call is dynamic. Only **classes** can be converted to an interface value (a struct would need boxing: ES0099). `x == null`, `x is null`, `default`, equality (same object) and `Heap.Free(ref x)` (frees the object) work. Not done: interface-to-interface conversion, inheritance between interfaces, explicit casts back to the class (`as`/`is Foo`) |
 | Lambdas, method groups and delegates (`Func<>`, `Action<>`, `Predicate<>`, user `delegate` types) | Done: a delegate is a function pointer plus an environment; lambdas may capture locals, parameters and `this` (by reference, on the stack: they cannot be returned or stored, see the top of this file). Calls `f(x)` and `f.Invoke(x)`, `null` and `== null` work. Not done: delegates as struct fields, `?.Invoke`, `delegate { }` anonymous methods, instance-method groups, combining delegates (`+=`), local functions that capture |
 | LINQ | Over arrays and `Enumerable.Range`, as fused loops: Where, Select, Take, Skip, Count, Sum, Min, Max, Any, All, First, Last, Contains, Aggregate, OrderBy/ThenBy (stack copy, stable insertion sort) and simple queries (see the top of this file). No `ToArray`/`ToList`, no sequences stored in variables |
@@ -279,8 +312,8 @@ Screenshot: [images/phase4-cards-a1200.png](images/phase4-cards-a1200.png) (Kick
 
 Reported as `ES0099` rather than miscompiled: capturing lambdas that would outlive their method, delegates in struct fields, `is`/`as` against an interface or struct, `ref` locals and returns, `foreach` over anything but arrays and spans, positional/list patterns, `[InlineAsm]`/`[Interrupt]` bodies.
 
-Namespaces are dropped when naming C symbols, so two types with the same name in different
-namespaces would collide.
+Two types whose C names meet after joining with `_` (namespace `A_B` class `C` and namespace `A` class `B_C`) are reported
+(ES0099); rename one.
 
 ## Targets
 
