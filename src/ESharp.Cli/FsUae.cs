@@ -11,7 +11,7 @@ namespace ESharp.Cli;
 /// </summary>
 internal static class FsUae
 {
-    public static int Run(string exe, bool headless, TimeSpan timeout, string? kickstart, string model = "A1200", string? fsuaePath = null, string? screenshot = null, string? input = null)
+    public static int Run(string exe, bool headless, TimeSpan timeout, string? kickstart, string model = "A1200", string? fsuaePath = null, string? screenshot = null, string? input = null, string? serial = null)
     {
         var name = Path.GetFileName(exe);
         var runDir = Path.Combine(Path.GetDirectoryName(Path.GetFullPath(exe))!, "run");
@@ -19,6 +19,7 @@ internal static class FsUae
         if (Directory.Exists(runDir)) Directory.Delete(runDir, recursive: true);
         Directory.CreateDirectory(Path.Combine(dh0, "S"));
         File.Copy(exe, Path.Combine(dh0, name));
+        if (serial != null) File.WriteAllText(serial, "");   // FS-UAE writes the Amiga's serial output into this file
 
         // Headless runs redirect the program's output to a file and then write a marker, so the
         // host can tell when the program has finished without scraping the screen.
@@ -33,6 +34,7 @@ internal static class FsUae
             $"kickstart_file = {(kickstart ?? "internal")}\n" +
             $"hard_drive_0 = {dh0}\n" +
             "hard_drive_0_label = DH0\n" +
+            (serial != null ? $"serial_port = {Path.GetFullPath(serial)}\n" : "") +
             "window_width = 640\nwindow_height = 480\nfullscreen = 0\n");
 
         Process? xvfb = null;
@@ -98,10 +100,12 @@ internal static class FsUae
 
                 var finished = File.Exists(marker);
                 if (!proc.HasExited) { proc.Kill(entireProcessTree: true); proc.WaitForExit(); }
+                if (!finished) PrintSerial(serial);
                 if (!finished) return Fail($"program did not finish within {timeout.TotalSeconds:0}s (see {runDir})");
 
                 var outFile = Path.Combine(dh0, "out.txt");
                 if (File.Exists(outFile)) Console.Out.Write(File.ReadAllText(outFile));
+                PrintSerial(serial);
                 return 0;
             }
         }
@@ -110,6 +114,14 @@ internal static class FsUae
             if (xvfb is { HasExited: false }) xvfb.Kill();
             xvfb?.Dispose();
         }
+    }
+
+    private static void PrintSerial(string? serial)
+    {
+        if (serial == null || !File.Exists(serial)) return;
+        var text = File.ReadAllText(serial);
+        Console.Error.WriteLine($"--- serial output ({serial}) ---");
+        Console.Error.Write(text.Length == 0 || text.EndsWith("\n") ? text : text + "\n");
     }
 
     private static bool OutputContains(string path, string text)

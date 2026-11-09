@@ -19,6 +19,8 @@ Usage:
   esharp assets [dir|assets.json] [--force]
                                     Convert PNGs to planar chip data: writes Assets.g.cs next to the manifest
                                     (only when stale; build and run do this automatically)
+  esharp addr <exe | dir> <hunk> <hex offset> [--docker [image]]
+                                    Map a crash address of a built m68k program to the C# file:line (see docs/DEBUGGING.md)
   esharp test [path] [options]      Run the project on the host; with --target m68k --docker also on the Amiga, and compare
 
 Build options:
@@ -30,7 +32,8 @@ Build options:
   --cflags <flags>  Override the target's C compiler flags
   --allow-float     Permit float/double
   --chip-budget <n> Fail if constant chip RAM reservations exceed n bytes (k/m suffix ok; 68k)
-  --debug           Define DEBUG: bounds-checked arrays and spans, poisoned arena Reset
+  --debug           Define DEBUG: bounds-checked arrays and spans, poisoned arena Reset (also defines TRACE)
+  --trace           Define TRACE: keep Trace.Write/Line/Value calls (serial output); without it they compile to nothing
 
 Run options (build options also apply; run is m68k only):
   --headless        No window: run on a virtual display, print the program's output, exit
@@ -40,6 +43,7 @@ Run options (build options also apply; run is m68k only):
   --model <name>    Amiga model for FS-UAE: A1200 (default), A500, A500+, A600 (below the minimum spec)
   --fsuae <path>    FS-UAE executable (or set ESHARP_FSUAE)
   --screenshot <png> Headless only: when the program prints SHOT, save the emulator screen to a PNG (needs xwd)
+  --serial <file>   Headless only: write the program's serial output (Trace) to this file, and print it after the run
   --input <script>  Headless only: after SHOT send mouse/keyboard input to the emulator (before the screenshot):
                     ""click X,Y;key 9;key 50+38"" with display pixels and X11 key codes, + holds keys (needs libXtst)
 
@@ -64,6 +68,7 @@ Targets:
             "new" => New(args.Skip(1).ToArray()),
             "build" => Build(args.Skip(1).ToArray(), out _),
             "run" => Run(args.Skip(1).ToArray()),
+            "addr" => Addr.Run(args.Skip(1).ToArray()),
             "assets" => Assets(args.Skip(1).ToArray()),
             "test" => Test(args.Skip(1).ToArray()),
             _ => Fail($"unknown command '{args[0]}'"),
@@ -104,7 +109,7 @@ Targets:
                     buildArgs.Add(args[i]);
                     if (i + 1 < args.Length && !args[i + 1].StartsWith("-")) buildArgs.Add(args[++i]);
                     break;
-                case "--allow-float": case "--debug": buildArgs.Add(args[i]); break;
+                case "--allow-float": case "--debug": case "--trace": buildArgs.Add(args[i]); break;
                 default:
                     if (args[i].StartsWith("-")) return Fail($"unknown option '{args[i]}'");
                     path = args[i];
@@ -212,7 +217,7 @@ Targets:
         builtExe = null;
         string path = ".";
         string? outDir = null;
-        bool emitOnly = false, allowFloat = false, debug = false;
+        bool emitOnly = false, allowFloat = false, debug = false, trace = false;
         long? chipBudget = null;
         var target = Targets.M68k;
         string? cc = null, cflags = null, docker = null;
@@ -225,6 +230,7 @@ Targets:
                 case "--emit-only": emitOnly = true; break;
                 case "--allow-float": allowFloat = true; break;
                 case "--debug": debug = true; break;
+                case "--trace": trace = true; break;
                 case "--chip-budget" when i + 1 < args.Length:
                     chipBudget = ParseSize(args[++i]);
                     if (chipBudget == null) return Fail($"bad --chip-budget '{args[i]}' (use bytes, or a number followed by k or m)");
@@ -254,7 +260,7 @@ Targets:
 
         var baseDir = Directory.Exists(path) ? path : Path.GetDirectoryName(Path.GetFullPath(path)) ?? ".";
         var sources = files.Select(f => new SourceFile(Path.GetRelativePath(Directory.GetCurrentDirectory(), f), File.ReadAllText(f))).ToList();
-        var result = EsCompiler.Compile(sources, target.ToOptions(allowFloat, debug, chipBudget));
+        var result = EsCompiler.Compile(sources, target.ToOptions(allowFloat, debug, chipBudget, trace));
 
         foreach (var d in result.Diagnostics)
             Console.Error.WriteLine(d.ToString());
@@ -282,35 +288,44 @@ Targets:
         var exe = Path.Combine(outDir, name);
 
         // Inside the container the output directory is mounted at /work.
-        var compilerArgs = new List<string>();
-        compilerArgs.AddRange(cflags.Split(' ', StringSplitOptions.RemoveEmptyEntries));
-        compilerArgs.AddRange(new[] { "-o", docker == null ? exe : name, docker == null ? cFile : name + ".c" });
-        compilerArgs.AddRange(target.Libs.Split(' ', StringSplitOptions.RemoveEmptyEntries));
+        int Compile(string[] flags, string outFile, bool link)
+        {
+            var compilerArgs = new List<string>();
+            compilerArgs.AddRange(cflags.Split(' ', StringSplitOptions.RemoveEmptyEntries));
+            compilerArgs.AddRange(flags);
+            compilerArgs.AddRange(new[] { "-o", docker == null ? Path.Combine(outDir, outFile) : outFile, docker == null ? cFile : name + ".c" });
+            if (link) compilerArgs.AddRange(target.Libs.Split(' ', StringSplitOptions.RemoveEmptyEntries));
 
-        ProcessStartInfo psi;
-        if (docker == null)
-        {
-            psi = new ProcessStartInfo(cc) { UseShellExecute = false };
-            foreach (var a in compilerArgs) psi.ArgumentList.Add(a);
-        }
-        else
-        {
-            psi = new ProcessStartInfo("docker") { UseShellExecute = false };
-            foreach (var a in new[] { "run", "--rm", "-v", $"{Path.GetFullPath(outDir)}:/work", "-w", "/work", docker, cc })
-                psi.ArgumentList.Add(a);
-            foreach (var a in compilerArgs) psi.ArgumentList.Add(a);
+            ProcessStartInfo psi;
+            if (docker == null)
+            {
+                psi = new ProcessStartInfo(cc) { UseShellExecute = false };
+                foreach (var a in compilerArgs) psi.ArgumentList.Add(a);
+            }
+            else
+            {
+                psi = new ProcessStartInfo("docker") { UseShellExecute = false };
+                foreach (var a in new[] { "run", "--rm", "-v", $"{Path.GetFullPath(outDir)}:/work", "-w", "/work", docker, cc })
+                    psi.ArgumentList.Add(a);
+                foreach (var a in compilerArgs) psi.ArgumentList.Add(a);
+            }
+
+            try
+            {
+                using var proc = Process.Start(psi)!;
+                proc.WaitForExit();
+                if (proc.ExitCode != 0) return Fail($"{cc} failed with exit code {proc.ExitCode}");
+            }
+            catch (System.ComponentModel.Win32Exception)
+            {
+                return Fail($"'{psi.FileName}' not found. Install {cc} (see docker/Dockerfile), pass --docker, or use --emit-only.");
+            }
+            return 0;
         }
 
-        try
-        {
-            using var proc = Process.Start(psi)!;
-            proc.WaitForExit();
-            if (proc.ExitCode != 0) return Fail($"{cc} failed with exit code {proc.ExitCode}");
-        }
-        catch (System.ComponentModel.Win32Exception)
-        {
-            return Fail($"'{psi.FileName}' not found. Install {cc} (see docker/Dockerfile), pass --docker, or use --emit-only.");
-        }
+        if (Compile(Array.Empty<string>(), name, link: true) != 0) return 1;
+        // m68k: the same C compiled with -g, for 'esharp addr' (the hunk exe's own debug data is not readable by the binutils).
+        if (target.IsM68k && Compile(new[] { "-g", "-c" }, name + ".o", link: false) != 0) return 1;
 
         Console.WriteLine($"Built {exe}");
         builtExe = exe;
@@ -388,6 +403,7 @@ Targets:
         string? fsuae = null;
         string? screenshot = null;
         string? input = null;
+        string? serial = null;
         var buildArgs = new List<string>();
         for (var i = 0; i < args.Length; i++)
         {
@@ -400,6 +416,7 @@ Targets:
                 case "--fsuae" when i + 1 < args.Length: fsuae = args[++i]; break;
                 case "--screenshot" when i + 1 < args.Length: screenshot = args[++i]; break;
                 case "--input" when i + 1 < args.Length: input = args[++i]; break;
+                case "--serial" when i + 1 < args.Length: serial = args[++i]; break;
                 default: buildArgs.Add(args[i]); break;
             }
         }
@@ -417,7 +434,7 @@ Targets:
 
         var rc = Build(buildArgs.ToArray(), out var exe);
         if (rc != 0 || exe == null) return rc;
-        return FsUae.Run(exe, headless, TimeSpan.FromSeconds(timeout), kickstart, model, fsuae, screenshot, input);
+        return FsUae.Run(exe, headless, TimeSpan.FromSeconds(timeout), kickstart, model, fsuae, screenshot, input, serial);
     }
 
     private static List<string> CollectSources(string path)

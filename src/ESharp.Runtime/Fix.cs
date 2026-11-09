@@ -67,6 +67,13 @@ internal static class Intrinsics
 #if AMIGA
     [Native]
     public static extern int es_fixdiv(int a, int b);
+
+    /// <summary>exec RawIOInit and RawPutChar (serial output for Trace); defined in the C prelude per target.</summary>
+    [Native]
+    public static extern void es_rawioinit();
+
+    [Native]
+    public static extern void es_rawputchar(int c);
 #else
     public static int es_fixdiv(int a, int b) => (int)(((long)a << 16) / b);
 #endif
