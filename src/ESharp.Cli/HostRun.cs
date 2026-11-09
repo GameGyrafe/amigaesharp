@@ -10,18 +10,6 @@ namespace ESharp.Cli;
 /// <summary>Builds and runs a project's .cs files under plain dotnet with HOST defined (the test host).</summary>
 public static class HostRun
 {
-    public static string? FindRepo()
-    {
-        var env = Environment.GetEnvironmentVariable("ESHARP_REPO");
-        foreach (var start in new[] { env, AppContext.BaseDirectory, Directory.GetCurrentDirectory() })
-        {
-            for (var d = start == null ? null : new DirectoryInfo(start); d != null; d = d.Parent)
-                if (File.Exists(Path.Combine(d.FullName, "src", "ESharp.Target.Host", "ESharp.Target.Host.csproj")))
-                    return d.FullName;
-        }
-        return null;
-    }
-
     public static string ProjectText(string repo, IEnumerable<string> sources) =>
         "<Project Sdk=\"Microsoft.NET.Sdk\">\n" +
         "  <PropertyGroup>\n    <OutputType>Exe</OutputType>\n    <TargetFramework>net10.0</TargetFramework>\n" +

@@ -66,7 +66,7 @@ pass `--fsuae /Applications/FSUAE.app/Contents/MacOS/fs-uae` (or set `ESHARP_FSU
 
 ### Editing in VS Code
 
-`esharp new <name>` writes a project you can open in VS Code (with the C# extension): `Program.cs`, a `<name>.csproj`
+`esharp new <name>` (or a path such as `games/demo`; the last segment is the project name and must be a valid C# identifier) writes a project you can open in VS Code (with the C# extension): `Program.cs`, a `<name>.csproj`
 that builds the same source under .NET against the E# runtime and loads the subset analyzer, and a `.vscode/` folder
 with `tasks.json` (build for m68k, run in FS-UAE, run on the host, check the subset), `launch.json` (debug the host run
 with the coreclr debugger, so logic can be stepped through; the Amiga build cannot be debugged yet) and

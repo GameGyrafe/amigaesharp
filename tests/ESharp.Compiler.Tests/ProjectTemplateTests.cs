@@ -61,14 +61,100 @@ public class ProjectTemplateTests : IDisposable
     }
 
     [Fact]
-    public void FindRoot_walks_up_to_the_solution()
+    public void SourceTree_walks_up_and_honours_ESHARP_ROOT()
     {
-        File.WriteAllText(Path.Combine(_dir, "ESharp.sln"), "");
+        foreach (var p in new[] { "ESharp.Target.Host", "ESharp.Analyzers" })
+        {
+            Directory.CreateDirectory(Path.Combine(_dir, "src", p));
+            File.WriteAllText(Path.Combine(_dir, "src", p, p + ".csproj"), "");
+        }
         var deep = Path.Combine(_dir, "a", "b");
         Directory.CreateDirectory(deep);
         var saved = Environment.GetEnvironmentVariable("ESHARP_ROOT");
-        Environment.SetEnvironmentVariable("ESHARP_ROOT", null);
-        try { Assert.Equal(Path.GetFullPath(_dir), ProjectTemplate.FindRoot(deep)); }
-        finally { Environment.SetEnvironmentVariable("ESHARP_ROOT", saved); }
+        var savedOld = Environment.GetEnvironmentVariable("ESHARP_REPO");
+        try
+        {
+            Environment.SetEnvironmentVariable("ESHARP_ROOT", null);
+            Environment.SetEnvironmentVariable("ESHARP_REPO", null);
+            Assert.Equal(Path.GetFullPath(_dir), SourceTree.Find(deep));
+            Environment.SetEnvironmentVariable("ESHARP_ROOT", _dir);
+            Assert.Equal(Path.GetFullPath(_dir), SourceTree.Find("/"));
+            Environment.SetEnvironmentVariable("ESHARP_ROOT", null);
+            Environment.SetEnvironmentVariable("ESHARP_REPO", _dir);
+            Assert.Equal(Path.GetFullPath(_dir), SourceTree.Find("/"));
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("ESHARP_ROOT", saved);
+            Environment.SetEnvironmentVariable("ESHARP_REPO", savedOld);
+        }
+    }
+
+    [Fact]
+    public void Csproj_defines_HOST()
+    {
+        Assert.Contains("$(DefineConstants);HOST", ProjectTemplate.Csproj("/opt/esharp"));
+    }
+
+    [Theory]
+    [InlineData("demo", "demo")]
+    [InlineData("games/demo", "demo")]
+    [InlineData("games/demo/", "demo")]
+    [InlineData("a/b/c", "c")]
+    public void ProjectName_is_the_last_segment(string path, string expected) =>
+        Assert.Equal(expected, ProjectTemplate.ProjectName(path));
+
+    [Theory]
+    [InlineData("my-game")]
+    [InlineData("1game")]
+    [InlineData("class")]
+    [InlineData("a b")]
+    [InlineData("")]
+    public void Invalid_names_are_rejected(string name) => Assert.NotNull(ProjectTemplate.NameProblem(name));
+
+    [Theory]
+    [InlineData("Demo")]
+    [InlineData("my_game2")]
+    public void Valid_names_are_accepted(string name) => Assert.Null(ProjectTemplate.NameProblem(name));
+
+    [Fact]
+    public void Suggest_gives_a_valid_name()
+    {
+        foreach (var n in new[] { "my-game", "1game", "class", "a b", "---" })
+            Assert.Null(ProjectTemplate.NameProblem(ProjectTemplate.Suggest(n)));
+        Assert.Equal("my_game", ProjectTemplate.Suggest("my-game"));
+    }
+
+    private static (int Exit, string Err) Cli(string workDir, params string[] args)
+    {
+        var dll = Path.Combine(AppContext.BaseDirectory, "esharp.dll");
+        var psi = new System.Diagnostics.ProcessStartInfo("dotnet") { WorkingDirectory = workDir, RedirectStandardError = true, RedirectStandardOutput = true };
+        psi.ArgumentList.Add(dll);
+        foreach (var a in args) psi.ArgumentList.Add(a);
+        using var p = System.Diagnostics.Process.Start(psi)!;
+        var err = p.StandardError.ReadToEndAsync();
+        p.StandardOutput.ReadToEnd();
+        p.WaitForExit();
+        return (p.ExitCode, err.Result);
+    }
+
+    [Fact]
+    public void Esharp_new_with_a_nested_path_names_the_project_after_the_last_segment()
+    {
+        var (exit, _) = Cli(_dir, "new", "sub/dir");
+        Assert.Equal(0, exit);
+        Assert.True(File.Exists(Path.Combine(_dir, "sub", "dir", "dir.csproj")));
+        Assert.Contains("namespace dir;", File.ReadAllText(Path.Combine(_dir, "sub", "dir", "Program.cs")));
+        Assert.True(File.Exists(Path.Combine(_dir, "sub", "dir", ".vscode", "tasks.json")));
+    }
+
+    [Fact]
+    public void Esharp_new_rejects_a_name_that_is_not_an_identifier()
+    {
+        var (exit, err) = Cli(_dir, "new", "my-game");
+        Assert.Equal(1, exit);
+        Assert.Contains("not a valid C# identifier", err);
+        Assert.Contains("my_game", err);
+        Assert.False(Directory.Exists(Path.Combine(_dir, "my-game")));
     }
 }
