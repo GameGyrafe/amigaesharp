@@ -17,7 +17,7 @@ Usage:
   esharp build [path] [options]     Check the subset, emit C, and run the target C compiler
   esharp run [path] [options]       Build for m68k and run it in FS-UAE
   esharp assets [dir|assets.json]   Convert PNGs to planar chip data: writes Assets.g.cs next to the manifest
-  esharp test                       Not implemented yet
+  esharp test [path] [options]      Run the project on the host; with --target m68k --docker also on the Amiga, and compare
 
 Build options:
   --target <name>   m68k (default), os4, morphos or aros
@@ -41,6 +41,11 @@ Run options (build options also apply; run is m68k only):
   --input <script>  Headless only: after SHOT send mouse/keyboard input to the emulator (before the screenshot):
                     ""click X,Y;key 9;key 50+38"" with display pixels and X11 key codes, + holds keys (needs libXtst)
 
+Test options (esharp test; a program prints ""ok NAME"" / ""FAIL NAME"" lines):
+  Always runs on the host (dotnet, HOST defined). With --target m68k it also builds for m68k and runs headless in
+  FS-UAE (--docker, --kickstart, --model, --fsuae, --timeout as for run), then reports checks that differ.
+  Exit code is non-zero on any FAIL, crash, build error or host/Amiga difference.
+
 Targets:
 " + string.Join("\n", Targets.All.Select(t => $"  {t.Name,-9} {t.Description}")) + "\n";
 
@@ -58,7 +63,7 @@ Targets:
             "build" => Build(args.Skip(1).ToArray(), out _),
             "run" => Run(args.Skip(1).ToArray()),
             "assets" => Assets(args.Skip(1).ToArray()),
-            "test" => NotYet(args[0]),
+            "test" => Test(args.Skip(1).ToArray()),
             _ => Fail($"unknown command '{args[0]}'"),
         };
     }
@@ -69,10 +74,90 @@ Targets:
         return 1;
     }
 
-    private static int NotYet(string command)
+    private static int Test(string[] args)
     {
-        Console.Error.WriteLine($"esharp: '{command}' is not implemented yet");
-        return 2;
+        int timeout = 120;
+        string? kickstart = Environment.GetEnvironmentVariable("ESHARP_KICKSTART");
+        string model = "A1200";
+        string? fsuae = null;
+        bool amiga = false;
+        string path = ".";
+        var buildArgs = new List<string>();
+        for (var i = 0; i < args.Length; i++)
+        {
+            switch (args[i])
+            {
+                case "--timeout" when i + 1 < args.Length && int.TryParse(args[i + 1], out timeout): i++; break;
+                case "--kickstart" when i + 1 < args.Length: kickstart = args[++i]; break;
+                case "--model" when i + 1 < args.Length: model = args[++i]; break;
+                case "--fsuae" when i + 1 < args.Length: fsuae = args[++i]; break;
+                case "--target" when i + 1 < args.Length:
+                    if (args[++i] != "m68k") return Fail("test runs on the host, and with --target m68k also in FS-UAE; other targets are not supported");
+                    amiga = true;
+                    buildArgs.Add("--target"); buildArgs.Add("m68k");
+                    break;
+                case "--docker":
+                    buildArgs.Add(args[i]);
+                    if (i + 1 < args.Length && !args[i + 1].StartsWith("-")) buildArgs.Add(args[++i]);
+                    break;
+                case "--allow-float": case "--debug": buildArgs.Add(args[i]); break;
+                default:
+                    if (args[i].StartsWith("-")) return Fail($"unknown option '{args[i]}'");
+                    path = args[i];
+                    break;
+            }
+        }
+
+        var files = CollectSources(path);
+        if (files.Count == 0) return Fail($"no .cs files found in '{path}'");
+        var repo = HostRun.FindRepo();
+        if (repo == null) return Fail("cannot find the E# source tree (src/ESharp.Target.Host); set ESHARP_REPO");
+        var baseDir = Directory.Exists(path) ? path : Path.GetDirectoryName(Path.GetFullPath(path)) ?? ".";
+
+        Console.WriteLine("Host:");
+        var host = HostRun.Run(Path.Combine(baseDir, "obj", "host"), repo, files, TimeSpan.FromSeconds(timeout));
+        if (host.BuildFailed) return Fail("host build failed");
+        Console.Write(host.Output);
+        var hostReport = TestReport.Parse(host.Output);
+        var failed = false;
+        Console.WriteLine($"Host: {hostReport.Ok} ok, {hostReport.Failed} FAIL" + (host.Exit != 0 ? $", exit code {host.Exit} (crash or error)" : ""));
+        if (host.Exit != 0 || hostReport.Failed > 0) failed = true;
+        if (hostReport.Checks.Count == 0) { Console.Error.WriteLine("esharp: the program printed no ok/FAIL lines"); failed = true; }
+
+        if (amiga)
+        {
+            if (kickstart != null)
+            {
+                kickstart = Path.GetFullPath(kickstart.Replace("~", Environment.GetFolderPath(Environment.SpecialFolder.UserProfile)));
+                if (!File.Exists(kickstart)) return Fail($"Kickstart ROM not found: {kickstart}");
+            }
+            Console.WriteLine("\nAmiga (m68k, FS-UAE):");
+            buildArgs.Insert(0, path);
+            var rc = Build(buildArgs.ToArray(), out var exe);
+            if (rc != 0 || exe == null) return Fail("m68k build failed");
+            var captured = new StringWriter();
+            var saved = Console.Out;
+            int runRc;
+            Console.SetOut(captured);
+            try { runRc = FsUae.Run(exe, true, TimeSpan.FromSeconds(timeout), kickstart, model, fsuae, null, null); }
+            finally { Console.SetOut(saved); }
+            Console.Write(captured.ToString());
+            if (runRc != 0) return Fail("the Amiga run failed (see above)");
+            var amigaReport = TestReport.Parse(captured.ToString());
+            Console.WriteLine($"Amiga: {amigaReport.Ok} ok, {amigaReport.Failed} FAIL");
+            if (amigaReport.Failed > 0) failed = true;
+            var diffs = TestReport.Compare(hostReport, amigaReport);
+            if (diffs.Count == 0) Console.WriteLine("Host and Amiga agree on every check.");
+            else
+            {
+                Console.WriteLine($"{diffs.Count} difference(s) between host and Amiga:");
+                foreach (var d in diffs) Console.WriteLine("  " + d);
+                failed = true;
+            }
+        }
+
+        Console.WriteLine(failed ? "TEST FAILED" : "TEST PASSED");
+        return failed ? 1 : 0;
     }
 
     private static int New(string[] args)
