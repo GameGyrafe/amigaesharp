@@ -167,21 +167,11 @@ Targets:
         if (Directory.Exists(name)) return Fail($"'{name}' already exists");
 
         Directory.CreateDirectory(name);
-        File.WriteAllText(Path.Combine(name, "Program.cs"), $@"using ESharp;
-using ESharp.Platform;
-
-namespace {name};
-
-public static class Program
-{{
-    [EntryPoint]
-    public static void Main()
-    {{
-        Dos.PutStr(""Hello from E#!\n"");
-    }}
-}}
-");
-        Console.WriteLine($"Created {name}/Program.cs. Build it with: esharp build {name}");
+        var root = ProjectTemplate.FindRoot();
+        ProjectTemplate.Write(name, name, root, Path.Combine(AppContext.BaseDirectory, "esharp.dll"));
+        Console.WriteLine($"Created {name}/ (Program.cs, {name}.csproj, .vscode/). Build it with: esharp build {name}");
+        if (root == null)
+            Console.Error.WriteLine($"esharp: could not find the E# source tree; set ESHARP_ROOT, or ESharpRoot in {name}/{name}.csproj, before using dotnet build or the editor");
         return 0;
     }
 

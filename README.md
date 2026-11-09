@@ -64,6 +64,16 @@ dotnet run --project src/ESharp.Cli -- run samples/hello --docker --headless   #
 `ESHARP_KICKSTART`). Use a ROM you own; ROMs are git-ignored and must never be committed. On macOS
 pass `--fsuae /Applications/FSUAE.app/Contents/MacOS/fs-uae` (or set `ESHARP_FSUAE`).
 
+### Editing in VS Code
+
+`esharp new <name>` writes a project you can open in VS Code (with the C# extension): `Program.cs`, a `<name>.csproj`
+that builds the same source under .NET against the E# runtime and loads the subset analyzer, and a `.vscode/` folder
+with `tasks.json` (build for m68k, run in FS-UAE, run on the host, check the subset), `launch.json` (debug the host run
+with the coreclr debugger, so logic can be stepped through; the Amiga build cannot be debugged yet) and
+`extensions.json`. The ES0001-ES0010 subset errors show as you type and in `dotnet build`. The csproj and the tasks
+point at the E# checkout the CLI was built from (found from the CLI's location, or `ESHARP_ROOT`); edit `ESharpRoot`
+in the csproj if you move it.
+
 Without Docker, install the compiler yourself and drop `--docker` (`--cc` and `--cflags` override it).
 
 ## Layout

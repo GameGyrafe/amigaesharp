@@ -23,6 +23,13 @@ Not verified:
 - A failing program through the CLI (exit code 1 on FAIL or a difference): covered by unit tests of the comparison only, not run end to end.
 - Other targets (os4, morphos, aros) are not supported by `test`.
 
+## VS Code support (issue #20)
+
+`esharp new <name>` now writes `Program.cs`, `<name>.csproj`, `.gitignore` and `.vscode/{tasks,launch,extensions}.json` (`src/ESharp.Cli/ProjectTemplate.cs`). The csproj references `ESharp.Target.Host` (runtime, platform, host fakes, `HOST` defined) and `ESharp.Analyzers` as an analyzer (`OutputItemType="Analyzer" ReferenceOutputAssembly="false"`), using an `ESharpRoot` property that `esharp new` fills in from the CLI's location (or `ESHARP_ROOT`). Tasks call `dotnet <path to esharp.dll> build|run ...` (nothing has to be on PATH; the docker image is a `${input:dockerImage}` prompt defaulting to the pinned m68k image) and `dotnet run --project`. `launch.json` is a coreclr launch of the host build.
+
+- Verified (in a scratch directory, from the shell): `esharp new` output; the JSON files parse; `dotnet build` and `dotnet run` of the new project print `Hello from E#!`; a deliberate violation gives an `ES` error from `dotnet build` (see the PR for the output); the task command lines run. A unit test checks that the files are valid JSON with the expected tasks.
+- Not verified: the editor itself (VS Code was not installed or opened, so live squiggles in the editor, the task runner UI, `${input:}` prompts and the coreclr debugger were not tried), Windows and macOS, a CLI installed away from a checkout (the root cannot be found then without `ESHARP_ROOT`), and no NuGet package for the runtime exists yet.
+
 ## Joystick and clock: lowlevel.library and timer.device (samples/controls)
 
 `Joystick` (lowlevel.library v40) reads a joystick or CD32 pad: `Read(port)` returns direction and button bits (`Up`, `Fire`, `Fire2`, the CD32 colour and transport buttons), `Direction(port)` gives x and y as -1, 0 or 1, `Kind(port)` says what is plugged in, and `Force(port, gamepad)` sets the port type. A mouse port reads 0, because a mouse's low bits are counters. `Clock` (timer.device) reads the E clock: `Ticks`, `Frequency`, `Microseconds(from, to)` and `Milliseconds(from, to)`. On the host both are fakes: `Joystick.HostSet`, and `Clock.HostAdvance` (`Dos.Delay` advances it too).
