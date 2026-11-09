@@ -11,7 +11,7 @@ public class CEmitterTests
         Assert.Contains("#include <proto/dos.h>", c);
         Assert.Contains("PutStr(\"Hello from E#!\\n\");", c);
         Assert.Contains("int main(void)", c);
-        Assert.Contains("P_Main();", c);
+        Assert.Contains("Es_P_Main();", c);
     }
 
     [Fact]
@@ -33,15 +33,15 @@ public class CEmitterTests
     public void Types_map_to_stdint()
     {
         var c = CompileOk(Program(@"static void F(byte a, sbyte b, short c, ushort d, int e, uint f) { }"));
-        Assert.Contains("void P_F(uint8_t a, int8_t b, int16_t c, uint16_t d, int32_t e, uint32_t f)", c);
+        Assert.Contains("void Es_P_F(uint8_t a, int8_t b, int16_t c, uint16_t d, int32_t e, uint32_t f)", c);
     }
 
     [Fact]
     public void Overloads_get_distinct_names()
     {
         var c = CompileOk(Program("static int F(int a) { return a; } static int F(short a) { return a; }", "F(1); F((short)2);"));
-        Assert.Contains("P_F_int", c);
-        Assert.Contains("P_F_short", c);
+        Assert.Contains("Es_P_F_int", c);
+        Assert.Contains("Es_P_F_short", c);
     }
 
     [Fact]
@@ -876,6 +876,64 @@ Check(list.Count == 0, ""destroy"");
         Assert.Contains("DateStamp(", r.C!);
     }
 
+    /// <summary>
+    /// A stand-in for the system headers an Amiga build includes (proto/intuition.h pulls in exec and graphics): the
+    /// structs keep their real tag names, so an E# type whose C name were just 'Window' or 'Node' would clash here.
+    /// </summary>
+    private const string SystemStructsShim =
+        "#ifndef SHIM_INTUITION_H\n#define SHIM_INTUITION_H\n#include <stdint.h>\n" +
+        "struct Node { struct Node *ln_Succ; struct Node *ln_Pred; uint8_t ln_Type; int8_t ln_Pri; char *ln_Name; };\n" +
+        "struct List { struct Node *lh_Head; struct Node *lh_Tail; struct Node *lh_TailPred; uint8_t lh_Type; };\n" +
+        "struct Task { struct Node tc_Node; };\nstruct Message { struct Node mn_Node; uint16_t mn_Length; };\n" +
+        "struct Rectangle { int16_t MinX, MinY, MaxX, MaxY; };\nstruct Hook { struct Node h_MinNode; };\n" +
+        "struct Image { int16_t LeftEdge; };\nstruct Border { int16_t LeftEdge; };\nstruct Gadget { struct Gadget *NextGadget; };\n" +
+        "struct Menu { struct Menu *NextMenu; };\nstruct Screen { struct Screen *NextScreen; };\n" +
+        "struct Window { struct Window *NextWindow; struct Screen *WScreen; };\n" +
+        "static inline void CurrentTime(uint32_t *s, uint32_t *m) { *s = 1; *m = 2; }\n#endif\n";
+
+    [Fact]
+    public void Types_named_like_system_structs_and_same_named_types_in_two_namespaces_compile_against_the_system_headers_and_run()
+    {
+        if (!HasGcc) return;
+        var path = Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "..", "samples", "names", "Names.cs");
+        var c = CompileOk(File.ReadAllText(path), new CompileOptions { Defines = new[] { "AMIGA", "ESHARP_HOSTC" } });
+        Assert.Contains("#include <proto/intuition.h>", c);
+        Assert.Contains("typedef struct Es_NamesSample_Window Es_NamesSample_Window;", c);
+        Assert.Contains("typedef struct Es_NamesSample_Left_Item Es_NamesSample_Left_Item;", c);
+        Assert.Contains("typedef struct Es_NamesSample_Right_Item Es_NamesSample_Right_Item;", c);
+        Assert.Contains("Es_NamesSample_Box__NamesSample_Left_Point", c);
+        Assert.Contains("} Es_ESharp_Fix;", c);   // the embedded library is prefixed as well
+        foreach (var system in new[] { "Window", "Gadget", "Screen", "Node", "List", "Menu", "Image", "Task", "Message", "Rectangle", "Border" })
+            Assert.DoesNotContain($"struct {system} ", c);
+        var (code, output) = RunWithHostGcc(c, new System.Collections.Generic.Dictionary<string, string> { ["proto/intuition.h"] = SystemStructsShim });
+        Assert.Equal(0, code);
+        Assert.DoesNotContain("FAIL", output);
+        Assert.Equal(12, output.Split('\n').Count(l => l.StartsWith("ok ")));
+    }
+
+    [Fact]
+    public void Same_named_types_in_different_namespaces_get_their_own_C_names()
+    {
+        if (!HasGcc) return;
+        var src = Program("", "Dos.PutStr($\"{new A.Window().Id() + new B.Window().Id()} {A.Tools.N + B.Tools.N}\\n\");")
+            + "\nnamespace A { public class Window { public int Id() { return 1; } } public static class Tools { public static int N = 10; } }"
+            + "\nnamespace B { public class Window { public int Id() { return 2; } } public static class Tools { public static int N = 20; } }";
+        var c = CompileOk(src);
+        Assert.Contains("int32_t Es_A_Window_Id(Es_A_Window *_this)", c);
+        Assert.Contains("int32_t Es_B_Window_Id(Es_B_Window *_this)", c);
+        var (code, output) = RunWithHostGcc(c);
+        Assert.Equal(0, code);
+        Assert.Equal("3 30\n", output);
+    }
+
+    [Fact]
+    public void Types_whose_mangled_C_names_meet_report_ES0099()
+    {
+        // namespace A_B, class C and namespace A, class B_C both become Es_A_B_C.
+        var r = Compile(Program("", "") + "\nnamespace A_B { public class C { } }\nnamespace A { public class B_C { } }");
+        Assert.Contains("ES0099", ErrorIds(r));
+    }
+
     [Fact]
     public void Keys_sample_compiles_for_m68k_with_a_private_keymap_base()
     {
@@ -980,7 +1038,7 @@ public static unsafe class P
         var c = CompileOk(Program(
             "static int[] T = { 1, 2, 3 }; static int Sum(Span<int> s) { return s.Length > 0 ? s[0] : 0; }",
             "int[] a = new int[4]; Sum(a);").Replace("using ESharp;", "using System;\nusing ESharp;"));
-        Assert.Contains("static int32_t P_T[3] = { 1, 2, 3 };", c);
+        Assert.Contains("static int32_t Es_P_T[3] = { 1, 2, 3 };", c);
         Assert.Contains("int32_t a[4] = {0};", c);
         Assert.Contains("typedef struct { int32_t *ptr; int32_t length; } ES_Span_int;", c);
         Assert.Contains("s.ptr[0]", c);
@@ -990,8 +1048,8 @@ public static unsafe class P
     public void Operators_on_structs_become_functions()
     {
         var c = CompileOk(Program("", "Fix a = Fix.FromInt(2); Fix b = a * a + a;"));
-        Assert.Contains("Fix_op_Multiply_Fix_Fix(a, a)", c);
-        Assert.Contains("Fix_op_Addition(", c);
+        Assert.Contains("Es_ESharp_Fix_op_Multiply_ESharp_Fix_ESharp_Fix(a, a)", c);
+        Assert.Contains("Es_ESharp_Fix_op_Addition(", c);
     }
 
     [Fact]
@@ -1000,10 +1058,10 @@ public static unsafe class P
         var c = CompileOk(Program(
             "struct S { public int V; public S(int v) { V = v; } public int Get() { return V; } }",
             "S s = new S(3); s.Get();"));
-        Assert.Contains("P_S P_S_new(int32_t v)", c);
-        Assert.Contains("int32_t P_S_Get(P_S *_this)", c);
+        Assert.Contains("Es_P_S Es_P_S_new(int32_t v)", c);
+        Assert.Contains("int32_t Es_P_S_Get(Es_P_S *_this)", c);
         Assert.Contains("_this->V", c);
-        Assert.Contains("P_S_Get(&s)", c);
+        Assert.Contains("Es_P_S_Get(&s)", c);
     }
 
     [Fact]
@@ -1103,7 +1161,7 @@ if (p.First() == 3 && Fix.ToInt(q.B) == 2 && Twice(p) == 2 && m == 9) Dos.PutStr
 ";
         var c = CompileOk(Program(members, body));
         Assert.Contains("Pair__int", c);
-        Assert.Contains("Pair__Fix", c);
+        Assert.Contains("Pair__ESharp_Fix", c);
         Assert.DoesNotContain("Pair_T", c);
         var (code, output) = RunWithHostGcc(c);
         Assert.Equal(0, code);

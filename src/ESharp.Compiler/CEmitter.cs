@@ -76,7 +76,7 @@ internal sealed partial class CEmitter
         return overloads > 1 ? im.Name + "_" + string.Join("_", im.Parameters.Select(p => Mangle(p.Type))) : im.Name;
     }
 
-    private static string VtableName(INamedTypeSymbol iface, INamedTypeSymbol cls) => $"{TypeName(iface)}_vt_{TypeName(cls)}";
+    private static string VtableName(INamedTypeSymbol iface, INamedTypeSymbol cls) => $"{TypeName(iface)}_vt_{QualifiedName(cls)}";
 
     // ---- class hierarchies
     // A derived class holds its base class object as its first member ('es_base'), so a pointer to the derived object is also a pointer to
@@ -138,7 +138,7 @@ internal sealed partial class CEmitter
         return m;
     }
 
-    private static string VSlot(IMethodSymbol def) => $"v_{TypeName(def.ContainingType)}_{SlotName(def)}";
+    private static string VSlot(IMethodSymbol def) => $"v_{QualifiedName(def.ContainingType)}_{SlotName(def)}";
 
     /// <summary>The virtual members a class introduces (not the ones it overrides), in declaration order, accessors of virtual properties included.</summary>
     private static List<IMethodSymbol> OwnSlots(INamedTypeSymbol c) =>
@@ -188,11 +188,12 @@ internal sealed partial class CEmitter
     public string Emit()
     {
         var types = CollectTypes();
-        // C has no namespaces: two types with the same name (in different namespaces) would collide in the generated C.
+        // C has no namespaces: the namespace is part of a type's C name, so same-named types in different namespaces are apart.
+        // Joining with '_' can still make two different types meet (namespace A_B type C and namespace A type B_C), which is reported.
         foreach (var group in types.GroupBy(TypeName).Where(g => g.Count() > 1))
             foreach (var dup in group.Skip(1))
                 Unsupported(dup.DeclaringSyntaxReferences.First().GetSyntax(),
-                    $"type name '{group.Key}' is already used by another type ({group.First().ContainingNamespace}); type names must be unique across namespaces in E#");
+                    $"C name '{group.Key}' of '{dup.ToDisplayString()}' is already used by '{group.First().ToDisplayString()}'; rename one of them");
         var structs = SortStructs(types.OfType<INamedTypeSymbol>().Where(t => t.TypeKind == TypeKind.Struct));
         var heapClasses = types.Where(IsHeapClass).Select(t => (INamedTypeSymbol)t).OrderBy(Depth).ToList();
         foreach (var c in heapClasses)
@@ -614,16 +615,35 @@ internal sealed partial class CEmitter
 
     // ------------------------------------------------------------------ naming
 
-    private static string TypeName(INamedTypeSymbol t)
+    /// <summary>
+    /// Prefix of the C name of every E# type (class, struct, interface, enum; user code and the embedded library alike).
+    /// The system headers use bare names such as <c>struct Window</c>, <c>struct Node</c> or <c>struct List</c>, so an E#
+    /// class of the same name would clash with them. No identifier in the AmigaOS 3 NDK, libnix or AROS headers starts with
+    /// <c>Es_</c>, and the emitter's own helpers use <c>es_</c> (library bases, runtime functions) and <c>ES_</c> (spans,
+    /// tuples, delegates, type ids), which C keeps apart because it is case sensitive.
+    /// </summary>
+    internal const string TypePrefix = "Es_";
+
+    /// <summary>
+    /// C name of an E# type: <see cref="TypePrefix"/>, then the namespace and the type (with any containing types), joined with
+    /// '_': <c>Cards.Board</c> is <c>Es_Cards_Board</c>, <c>ESharp.Platform.Dos</c> is <c>Es_ESharp_Platform_Dos</c> and a type
+    /// in the global namespace is <c>Es_Board</c>. Functions and static fields of a type start with this name too.
+    /// </summary>
+    private static string TypeName(INamedTypeSymbol t) => TypePrefix + QualifiedName(t);
+
+    /// <summary>Namespace and type, joined with '_', without the prefix: the part of a mangled name that stands for a type.</summary>
+    private static string QualifiedName(INamedTypeSymbol t)
     {
         var parts = new List<string>();
         for (INamedTypeSymbol? c = t; c != null; c = c.ContainingType) parts.Insert(0, c.Name);
+        for (var ns = t.ContainingNamespace; ns is { IsGlobalNamespace: false }; ns = ns.ContainingNamespace) parts.Insert(0, ns.Name);
         return string.Join("_", parts);
     }
 
+    /// <summary>A type inside a longer C name (overloads, span and tuple typedefs); namespaced, so same-named types stay apart.</summary>
     private static string Mangle(ITypeSymbol t) => t switch
     {
-        INamedTypeSymbol n => n.SpecialType != SpecialType.None ? n.ToDisplayString() : TypeName(n),
+        INamedTypeSymbol n => n.SpecialType != SpecialType.None ? n.ToDisplayString() : QualifiedName(n),
         IPointerTypeSymbol p => Mangle(p.PointedAtType) + "Ptr",
         IArrayTypeSymbol a => Mangle(a.ElementType) + "Arr",
         _ => "t",
@@ -995,7 +1015,7 @@ internal sealed partial class CEmitter
         foreach (var im in i.GetMembers().OfType<IMethodSymbol>().Where(m => m.MethodKind == MethodKind.Ordinary))
         {
             if (c.FindImplementationForInterfaceMember(im) is not IMethodSymbol impl) { Unsupported(decl, $"'{c.Name}' does not implement '{im.Name}'"); continue; }
-            var thunk = $"{TypeName(c)}_{TypeName(i)}_{SlotName(im)}";
+            var thunk = $"{TypeName(c)}_{QualifiedName(i)}_{SlotName(im)}";
             var args = new List<string>();
             for (var k = 0; k < im.Parameters.Length; k++) args.Add("a" + k);
             Line($"static __attribute__((unused)) {Decl(im.ReturnType, $"{thunk}({SlotParams(im, decl, true)})", decl)}");

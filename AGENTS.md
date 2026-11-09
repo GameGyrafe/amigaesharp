@@ -25,6 +25,7 @@ AROS_HOSTED=<extracted hosted AROS dir> tools/aros-hosted/aros-hosted.sh cards -
 dotnet run --project src/ESharp.Cli -- run samples/controls --docker <image> --headless --model A1200 --kickstart <rom>   # timer E clock and lowlevel joystick (no Libs: there, so the no-lowlevel path; see docs/STATUS.md)
 dotnet run --project src/ESharp.Cli -- run samples/keys --docker <image> --headless --model A1200 --input "click 400,300;key 50+38"   # keymap: raw keys to characters (Shift+A types 65)
 dotnet run --project src/ESharp.Cli -- run samples/dates --docker <image> --headless --model A1200   # utility: dates, case-insensitive text
+dotnet run --project src/ESharp.Cli -- run samples/names --docker <image> --headless --model A1200   # E# classes named Window, Node, List, ... and same-named types in two namespaces (prefixed C names)
 dotnet run --project src/ESharp.Cli -- run samples/lambdas --docker <image> --headless --model A1200   # capturing lambdas and delegates
 dotnet run --project src/ESharp.Cli -- run samples/linq --docker <image> --headless --model A1200   # LINQ over arrays, turned into loops
 dotnet run --project src/ESharp.Cli -- run samples/refs --docker <image> --headless --model A1200   # ref locals and returns, foreach over Vec and struct enumerators
