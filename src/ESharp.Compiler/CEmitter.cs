@@ -1479,14 +1479,14 @@ internal sealed partial class CEmitter
                 break;
 
             case WhileStatementSyntax w:
-                Line($"while ({Expr(w.Condition, top: true)})");
+                Line($"while ({Cond(Expr(w.Condition, top: true))})");
                 Body(w.Statement);
                 break;
 
             case DoStatementSyntax d:
                 Line("do");
                 Body(d.Statement);
-                Line($"while ({Expr(d.Condition, top: true)});");
+                Line($"while ({Cond(Expr(d.Condition, top: true))});");
                 break;
 
             case ForStatementSyntax f:
@@ -1572,7 +1572,7 @@ internal sealed partial class CEmitter
 
     private void EmitIf(IfStatementSyntax i, bool isElseIf)
     {
-        Line($"{(isElseIf ? "else " : "")}if ({Expr(i.Condition, top: true)})");
+        Line($"{(isElseIf ? "else " : "")}if ({Cond(Expr(i.Condition, top: true))})");
         Body(i.Statement);
         if (i.Else == null) return;
         if (i.Else.Statement is IfStatementSyntax nested)
@@ -1612,7 +1612,7 @@ internal sealed partial class CEmitter
 
         var cond = f.Condition == null ? "" : Expr(f.Condition, top: true);
         var incr = string.Join(", ", f.Incrementors.Select(e => Expr(e, top: true)));
-        Line($"for ({init}; {cond}; {incr})");
+        Line($"for ({init}; {Cond(cond)}; {incr})");
         Body(f.Statement);
     }
 
@@ -2204,7 +2204,8 @@ internal sealed partial class CEmitter
         var target = Expr(a.Left);
         var test = IsInterfaceType(type) ? $"{target}.obj == NULL" : type.TypeKind == TypeKind.Delegate ? $"{target}.fn == NULL" : $"{target} == NULL";
         var value = IsHeapClass(type) ? $"({CType(type, a)})({Expr(a.Right, top: true)})" : Expr(a.Right, top: true);
-        return $"({{ if ({test}) {target} = {value}; {target}; }})";
+        var set = $"if ({Cond(test)}) {target} = {value};";
+        return IsStatementContext(a) ? $"({{ {set} }})" : $"({{ {set} {target}; }})";
     }
 
     /// <summary>
@@ -2714,7 +2715,7 @@ internal sealed partial class CEmitter
         {
             var test = PatternTest(arm.Pattern, subject, type);
             if (arm.WhenClause != null) test = $"({test}) && ({Expr(arm.WhenClause.Condition, top: true)})";
-            sb.Append($"{(first ? "" : "else ")}if ({test}) {value} = {Expr(arm.Expression, top: true)}; ");
+            sb.Append($"{(first ? "" : "else ")}if ({Cond(test)}) {value} = {Expr(arm.Expression, top: true)}; ");
             first = false;
         }
         sb.Append($"else __builtin_trap(); {value}; }})");
@@ -3102,6 +3103,27 @@ internal sealed partial class CEmitter
         var sym = Model(target).GetSymbolInfo(target).Symbol;
         // Span<T> and array indexers are plain C indexing, not accessor calls.
         return sym is IPropertySymbol p && !IsAutoProperty(p) && !(p.IsIndexer && IsSpan(p.ContainingType)) ? p : null;
+    }
+
+    /// <summary>Drops the parentheses that wrap a whole condition, so clang's -Wparentheses-equality stays quiet on <c>if ((a == b))</c>. A statement expression <c>({ ... })</c> keeps them.</summary>
+    private static string Cond(string c)
+    {
+        while (c.Length >= 2 && c[0] == '(' && c[^1] == ')' && c[1] != '{' && WholeGroup(c)) c = c.Substring(1, c.Length - 2);
+        return c;
+    }
+
+    private static bool WholeGroup(string c)
+    {
+        var depth = 0; var inStr = false; var inChr = false;
+        for (var k = 0; k < c.Length; k++)
+        {
+            var ch = c[k];
+            if (inStr || inChr) { if (ch == '\\') k++; else if (inStr && ch == '"') inStr = false; else if (inChr && ch == '\'') inChr = false; continue; }
+            if (ch == '"') inStr = true; else if (ch == '\'') inChr = true;
+            else if (ch == '(') depth++;
+            else if (ch == ')' && --depth == 0 && k < c.Length - 1) return false;
+        }
+        return true;
     }
 
     private static bool IsStatementContext(SyntaxNode n) => n.Parent is ExpressionStatementSyntax or ForStatementSyntax;

@@ -10,6 +10,13 @@ The minimum system is now an **Amiga 1200: 68020, AGA, 2 MB chip RAM, Kickstart 
 - **Kept on purpose:** `HasAga()` and `HasRtg()` with their fallbacks. A classic A1200 always has AGA, but PowerPC, RTG-only and AROS targets may not, so the checks stay as the portable way to ask. **Not yet done:** using 68020 instructions deliberately and AROS (a new target, untested).
 - Verified after the change: all 17 samples built with `-m68020` and run on Kickstart 3.1 (A1200) in FS-UAE: 300 `ok` lines, no `FAIL` (the script shows only the last 25 lines of each sample, so long ones are truncated), 136 unit tests pass. Not verified: PowerPC, real hardware, a 68000/Kickstart 2.04 run (no longer supported).
 
+## Clang-clean C
+
+The generated C builds without warnings under clang `-Wall -Werror` as well as gcc: no doubled parentheses around if/while/for conditions
+(`-Wparentheses-equality`), and `x ??= y` as a statement no longer yields an unused value. The C tests honour `ESHARP_TEST_CC` (default
+`gcc`). Verified: the whole suite (268 tests) passes with gcc on Linux and with Ubuntu clang 18.1.3 in a container, and CI repeats the run
+with clang; samples/language agrees on the A1200 emulator. macOS itself (Apple clang 21) was not re-run.
+
 ## String equality, null-forgiving `!`, base/derived comparisons (issue #49, part of #12)
 
 - **`==` and `!=` on strings compare the characters**, as in C# (before, the C compared the addresses: a silent miscompile). They call an emitted helper `es_streq` (our own loop, no libc `strcmp`, for the same AROS reason as `es_strlen`): null equals null, null never equals a string (not even `""`). A comparison with the null constant (`s == null`, `s != default`) stays a pointer test. The same applies to `string.Equals(a, b)` and `a.Equals(b)` (a null receiver gives false, not an exception), `switch` statements on strings (each label is matched in order, then a C `switch` on the label's number, so `break` and `default` behave as before; `case null` works), string constant patterns (`s is "x"`, `"a" or "b"`, switch expression arms, property patterns on string fields), `==` inside lambdas and LINQ lambdas, and LINQ `Contains` on string arrays. `Hashing.SameText` (used by `StringMap`/`StringSet`) is now just `a == b`.

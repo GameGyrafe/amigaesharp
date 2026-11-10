@@ -30,7 +30,9 @@ public static class P
         return r.C!;
     }
 
-    public static bool HasGcc { get; } = Which("gcc");
+    /// <summary>The C compiler for the native tests: ESHARP_TEST_CC, default gcc.</summary>
+    public static string Cc { get; } = Environment.GetEnvironmentVariable("ESHARP_TEST_CC") is { Length: > 0 } v ? v : "gcc";
+    public static bool HasGcc { get; } = Which(Cc);
 
     private static bool Which(string exe)
     {
@@ -70,11 +72,11 @@ public static class P
         File.WriteAllText(cFile, c);
         var exe = Path.Combine(dir, "prog");
 
-        var cc = Process.Start(new ProcessStartInfo("gcc", $"-std=gnu11 -fwrapv -Wall -Werror -I\"{dir}\" -o \"{exe}\" \"{cFile}\"")
+        var cc = Process.Start(new ProcessStartInfo(Cc, $"-std=gnu11 -fwrapv -Wall -Werror -I\"{dir}\" -o \"{exe}\" \"{cFile}\"")
         { RedirectStandardError = true })!;
         var err = cc.StandardError.ReadToEnd();
         cc.WaitForExit();
-        Assert.True(cc.ExitCode == 0, "gcc failed:\n" + err + "\n" + c);
+        Assert.True(cc.ExitCode == 0, Cc + " failed:\n" + err + "\n" + c);
 
         var run = Process.Start(new ProcessStartInfo(exe) { RedirectStandardOutput = true })!;
         var output = run.StandardOutput.ReadToEnd();
