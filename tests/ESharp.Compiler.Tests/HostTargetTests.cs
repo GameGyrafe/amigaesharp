@@ -817,6 +817,8 @@ internal static class LanguageExpected
         "null interface value", "Heap.Free on an interface value",
         "interpolated string", "concatenation and escaped braces",
         "lambdas with two parameters", "method group and delegate variable",
+        "string == compares characters", "string null rules", "switch on a string", "string patterns",
+        "null-forgiving operator", "base and derived references", "?? and ??=",
     };
 }
 

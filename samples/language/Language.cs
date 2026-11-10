@@ -32,6 +32,10 @@ public class ListNode
     public int Sum() { return Value + (Next == null ? 0 : Next.Sum()); }
 }
 
+public class Card { public int Rank; }
+
+public class Ace : Card { public Ace() { Rank = 14; } }
+
 public interface IScorer
 {
     int Score(int card);
@@ -121,13 +125,23 @@ public static class Program
         return sum;
     }
 
-    /// <summary>String equality by characters (strings are plain byte strings on the Amiga).</summary>
-    static bool Same(string a, string b)
+    /// <summary>A copy of the text at a different address (formatted into a buffer), so == has to compare characters.</summary>
+    static string Copy(string s) => $"{s}";
+
+    static int SuitColor(string suit)
     {
-        if (a.Length != b.Length) return false;
-        for (int i = 0; i < a.Length; i++) if (a[i] != b[i]) return false;
-        return true;
+        switch (suit)
+        {
+            case "hearts":
+            case "diamonds": return 1;
+            case "spades":
+            case "clubs": return 2;
+            case null: return -1;
+            default: return 0;
+        }
     }
+
+    static int Points(string rank) => rank switch { "ace" => 11, "king" or "queen" => 10, null => -1, _ => 0 };
 
     static int Fact(int n)
     {
@@ -200,13 +214,35 @@ public static class Program
         string who = "Ann";
         int count = 42;
         string text = $"Hi {who}: {count,5}|{count,-5}|{count:D5}|{255:X}|{-7}|{true}|{'x'}";
-        Check(Same(text, "Hi Ann:    42|42   |00042|FF|-7|True|x"), "interpolated string");
-        Check(Same("n=" + count + "!", "n=42!") && Same($"{{literal}} {count}", "{literal} 42"), "concatenation and escaped braces");
+        Check(text == "Hi Ann:    42|42   |00042|FF|-7|True|x", "interpolated string");
+        Check("n=" + count + "!" == "n=42!" && $"{{literal}} {count}" == "{literal} 42", "concatenation and escaped braces");
 
         int[] nums = new int[4];
         for (int i = 0; i < nums.Length; i++) nums[i] = i + 1;
         Check(Fold(nums, 0, (a, b) => a + b) == 10 && Fold(nums, 1, (a, b) => a * b) == 24, "lambdas with two parameters");
         Func<int, int> twice = Double;
         Check(twice(21) == 42 && Fold(nums, 0, (a, b) => a + Double(b)) == 20, "method group and delegate variable");
+
+        // Strings compare by their characters (C# semantics), whatever their addresses; null equals only null.
+        string ann = Copy("Ann");
+        string noText = null;
+        Check(ann == who && who == ann && ann != "Anne" && !(ann != "Ann") && ann.Equals(who) && string.Equals(who, ann), "string == compares characters");
+        Check(noText == null && noText != ann && ann != noText && noText != "" && !string.Equals(noText, ""), "string null rules");
+        Check(SuitColor(Copy("diamonds")) == 1 && SuitColor(Copy("clubs")) == 2 && SuitColor(Copy("stars")) == 0 && SuitColor(null) == -1, "switch on a string");
+        Check(Points(Copy("queen")) == 10 && Points(Copy("ace")) == 11 && Points(Copy("two")) == 0 && Points(null) == -1
+            && Copy("Ann") is "Ann" && Copy("Ann") is not "Bob", "string patterns");
+
+        // The null-forgiving operator only quiets the nullable analysis: no code.
+        ListNode chain = new ListNode(1, new ListNode(2, null));
+        string bob = Copy("Bob");
+        Check(chain!.Next!.Value == 2 && chain.Next!.Sum() == 2 && bob! == "Bob", "null-forgiving operator");
+
+        // A base-typed and a derived-typed reference to the same object are equal; ?? and ??= pick the first non-null one.
+        Ace ace = new Ace();
+        Card face = ace;
+        Card none = null;
+        Check(face == ace && ace == face && none != ace && (none ?? face) == ace, "base and derived references");
+        none ??= ace;
+        Check(none == face && (noText ?? "empty") == "empty", "?? and ??=");
     }
 }

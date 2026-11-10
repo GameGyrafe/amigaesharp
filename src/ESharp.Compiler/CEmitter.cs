@@ -30,6 +30,7 @@ internal sealed partial class CEmitter
     private bool _usesLen;
     private readonly SortedDictionary<string, string> _bases = new(StringComparer.Ordinal);   // base name -> C type, for [LibraryBase] classes
     private bool _usesStrlen;
+    private bool _usesStreq;
 
     /// <summary>How <c>this</c> is spelled inside the method being emitted.</summary>
     private enum ThisKind { None, Pointer, Value }
@@ -188,6 +189,10 @@ internal sealed partial class CEmitter
     public string Emit()
     {
         var types = CollectTypes();
+        // Records get members made by the C# compiler (Equals, ==, ToString, copy) that E# has no bodies for.
+        foreach (var record in types.Where(t => t.IsRecord))
+            Unsupported(record.DeclaringSyntaxReferences.First().GetSyntax(), $"record '{record.Name}'; write a class or struct (with your own == if needed)");
+        types = types.Where(t => !t.IsRecord).ToList();
         // C has no namespaces: the namespace is part of a type's C name, so same-named types in different namespaces are apart.
         // Joining with '_' can still make two different types meet (namespace A_B type C and namespace A type B_C), which is reported.
         foreach (var group in types.GroupBy(TypeName).Where(g => g.Count() > 1))
@@ -399,6 +404,17 @@ internal sealed partial class CEmitter
             result.AppendLine("    const char *p = s;");
             result.AppendLine("    while (*p != 0) p++;");
             result.AppendLine("    return (int32_t)(p - s);");
+            result.AppendLine("}");
+        }
+        if (_usesStreq)
+        {
+            // String equality as in C#: by the characters, and null equals only null. Our own loop, not libc's strcmp (see es_strlen).
+            result.AppendLine("static inline int es_streq(const char *a, const char *b)");
+            result.AppendLine("{");
+            result.AppendLine("    if (a == b) return 1;");
+            result.AppendLine("    if (a == 0 || b == 0) return 0;");
+            result.AppendLine("    while (*a != 0 && *a == *b) { a++; b++; }");
+            result.AppendLine("    return *a == *b;");
             result.AppendLine("}");
         }
         if (_natives.Contains("es_fixdiv"))
@@ -772,7 +788,8 @@ internal sealed partial class CEmitter
         if (!_spans.ContainsKey(name))
         {
             var ptr = CType(elem, at);
-            _spans[name] = $"typedef struct {{ {(readOnly ? "const " : "")}{ptr} *ptr; int32_t length; }} {name};\n";
+            // 'T const *' (not 'const T *') so that a string element ('const char *') gives 'const char * const *', not a doubled const.
+            _spans[name] = $"typedef struct {{ {ptr}{(readOnly ? " const" : "")} *ptr; int32_t length; }} {name};\n";
         }
         return name;
     }
@@ -825,10 +842,22 @@ internal sealed partial class CEmitter
             switch (x)
             {
                 case ParenthesizedExpressionSyntax p: x = p.Expression; continue;
+                case PostfixUnaryExpressionSyntax { RawKind: (int)SyntaxKind.SuppressNullableWarningExpression } nf: x = nf.Operand; continue;
                 case IdentifierNameSyntax: return true;
                 case MemberAccessExpressionSyntax ma: x = ma.Expression; continue;
                 default: return false;
             }
+    }
+
+    /// <summary>The expression without enclosing parentheses and null-forgiving operators (<c>((x)!)</c> is <c>x</c>).</summary>
+    private static ExpressionSyntax Strip(ExpressionSyntax e)
+    {
+        while (true)
+        {
+            if (e is ParenthesizedExpressionSyntax p) e = p.Expression;
+            else if (e is PostfixUnaryExpressionSyntax { RawKind: (int)SyntaxKind.SuppressNullableWarningExpression } nf) e = nf.Operand;
+            else return e;
+        }
     }
 
     /// <summary>Only side-effect-free expressions may be written twice in the output.</summary>
@@ -839,6 +868,7 @@ internal sealed partial class CEmitter
             switch (x)
             {
                 case ParenthesizedExpressionSyntax p: x = p.Expression; continue;
+                case PostfixUnaryExpressionSyntax { RawKind: (int)SyntaxKind.SuppressNullableWarningExpression } nf: x = nf.Operand; continue;
                 case IdentifierNameSyntax: return true;
                 case MemberAccessExpressionSyntax ma: x = ma.Expression; continue;
                 default:
@@ -1712,6 +1742,11 @@ internal sealed partial class CEmitter
 
     private void EmitSwitch(SwitchStatementSyntax sw)
     {
+        if (Model(sw).GetTypeInfo(sw.Expression).Type?.SpecialType == SpecialType.System_String)
+        {
+            EmitStringSwitch(sw);
+            return;
+        }
         Line($"switch ({Expr(sw.Expression, top: true)})");
         Line("{");
         _indent++;
@@ -1736,10 +1771,65 @@ internal sealed partial class CEmitter
         Line("}");
     }
 
+    /// <summary>
+    /// <c>switch</c> on a string: C cannot switch on text, so the subject is matched against each case label in order (by the
+    /// characters; <c>case null</c> matches null) giving the label's number, and a C switch on that number keeps break and fall-out as they are.
+    /// </summary>
+    private void EmitStringSwitch(SwitchStatementSyntax sw)
+    {
+        var subject = "es_ss" + _patternTemp++;
+        var tests = new List<string>();
+        var numbers = new Dictionary<CaseSwitchLabelSyntax, int>();
+        foreach (var label in sw.Sections.SelectMany(s => s.Labels).OfType<CaseSwitchLabelSyntax>())
+        {
+            numbers[label] = tests.Count;
+            tests.Add(IsNullConstant(label.Value) ? $"{subject} == NULL" : StrEq(subject, Expr(label.Value, top: true)));
+        }
+        var pick = new StringBuilder();
+        for (var i = 0; i < tests.Count; i++) pick.Append($"{tests[i]} ? {i} : ");
+        pick.Append("-1");
+        Line("{");
+        _indent++;
+        Line($"const char *{subject} = {Expr(sw.Expression, top: true)};");
+        if (tests.Count == 0) Line($"(void){subject};");
+        Line($"switch ({pick})");
+        Line("{");
+        _indent++;
+        foreach (var section in sw.Sections)
+        {
+            foreach (var label in section.Labels)
+            {
+                switch (label)
+                {
+                    case CaseSwitchLabelSyntax c: Line($"case {numbers[c]}:"); break;
+                    case DefaultSwitchLabelSyntax: Line("default:"); break;
+                    default: Unsupported(label, "pattern case label"); break;
+                }
+            }
+            Line("{");
+            _indent++;
+            foreach (var s in section.Statements) Statement(s);
+            _indent--;
+            Line("}");
+        }
+        _indent--;
+        Line("}");
+        _indent--;
+        Line("}");
+    }
+
     // ------------------------------------------------------------------ expressions
 
     private string Expr(ExpressionSyntax e, bool top = false)
     {
+        // x! only silences a nullable warning: no code. Parentheses add none either (the emitter brackets what it needs).
+        // The operand carries the same converted type, so an implicit conversion is applied once, on the operand,
+        // and not a second time on the '!' or '( )' node.
+        if (e is PostfixUnaryExpressionSyntax { RawKind: (int)SyntaxKind.SuppressNullableWarningExpression } nf)
+            return Expr(nf.Operand, top);
+        if (e is ParenthesizedExpressionSyntax paren)
+            return Expr(paren.Expression, top);
+
         var info = Model(e).GetTypeInfo(e);
 
         // 'null' where a span is expected is the empty span (the compiler sees it as the array -> span operator).
@@ -1796,8 +1886,11 @@ internal sealed partial class CEmitter
     {
         switch (e)
         {
+            // Reached only from callers that want the value without its implicit conversion (Expr unwraps these itself).
             case ParenthesizedExpressionSyntax p:
-                return Expr(p.Expression, top);
+                return ExprCore(p.Expression, top);
+            case PostfixUnaryExpressionSyntax { RawKind: (int)SyntaxKind.SuppressNullableWarningExpression } nf:
+                return ExprCore(nf.Operand, top);
 
             case LiteralExpressionSyntax { RawKind: (int)SyntaxKind.DefaultLiteralExpression }:
                 return DefaultValue(e);
@@ -1877,6 +1970,7 @@ internal sealed partial class CEmitter
                     var rs = $"{rebound.Name} = {Expr(a.Right, top: true)}";
                     return top ? rs : $"({rs})";
                 }
+                if (a.IsKind(SyntaxKind.CoalesceAssignmentExpression)) return CoalesceAssignment(a);
                 if (WrittenProperty(a.Left) is { } wp) return PropertyAssignment(wp, a);
                 if (a.Kind() != SyntaxKind.SimpleAssignmentExpression &&
                     Model(a).GetSymbolInfo(a).Symbol is IMethodSymbol { MethodKind: MethodKind.UserDefinedOperator } op)
@@ -1959,6 +2053,9 @@ internal sealed partial class CEmitter
     {
         if (b.IsKind(SyntaxKind.IsExpression) || b.IsKind(SyntaxKind.AsExpression))
         {
+            // 'x is K' with a named constant K is a constant pattern, not a type test (the parser cannot tell them apart).
+            if (Model(b).GetSymbolInfo(b.Right).Symbol is not ITypeSymbol && Model(b).GetConstantValue(b.Right).HasValue)
+                return NamedConstantIs(b);
             var from = Model(b).GetTypeInfo(b.Left).Type as INamedTypeSymbol;
             var target = Model(b).GetTypeInfo(b.Right).Type as INamedTypeSymbol;
             if (from == null || target == null || !IsHeapClass(from) || !IsHeapClass(target))
@@ -1970,8 +2067,29 @@ internal sealed partial class CEmitter
                 : $"({{ {TypeName(from)} *{tmp} = {Expr(b.Left, top: true)}; ({isTest}) ? ({TypeName(target)} *){tmp} : ({TypeName(target)} *)NULL; }})";
         }
 
+        if (b.IsKind(SyntaxKind.CoalesceExpression)) return Coalesce(b);
+
+        var isEquality = b.IsKind(SyntaxKind.EqualsExpression) || b.IsKind(SyntaxKind.NotEqualsExpression);
+        var leftType = Model(b).GetTypeInfo(b.Left).Type;
+        var rightType = Model(b).GetTypeInfo(b.Right).Type;
+        if (isEquality && (leftType is INamedTypeSymbol { IsTupleType: true } || rightType is INamedTypeSymbol { IsTupleType: true }))
+            return Unsupported(b, "== and != on tuples; compare the elements");
+
+        // string == string compares the characters (C# semantics), not the addresses; against the null constant it is a pointer test.
+        if (isEquality && leftType?.SpecialType == SpecialType.System_String && rightType?.SpecialType == SpecialType.System_String
+            && !IsNullConstant(b.Left) && !IsNullConstant(b.Right))
+        {
+            var eq = StrEq(Expr(b.Left, top: true), Expr(b.Right, top: true));
+            return b.IsKind(SyntaxKind.EqualsExpression) ? eq : $"(!{eq})";
+        }
+
         if (Model(b).GetSymbolInfo(b).Symbol is IMethodSymbol { MethodKind: MethodKind.UserDefinedOperator } user)
+        {
+            // A record's == and != are made by the C# compiler (member-wise, strings by characters); E# has no body to call for them.
+            if (user.IsImplicitlyDeclared || !user.Locations.Any(l => l.IsInSource))
+                return Unsupported(b, $"operator {b.OperatorToken.Text} that the C# compiler generates (records); write the operator yourself");
             return $"{FuncName(user)}({Expr(b.Left, top: true)}, {Expr(b.Right, top: true)})";
+        }
 
         var type = Model(b).GetTypeInfo(b).Type;
         if (type?.SpecialType == SpecialType.System_String)
@@ -2006,8 +2124,87 @@ internal sealed partial class CEmitter
             return top ? cmp : $"({cmp})";
         }
 
+        // Two class references of different (base and derived) classes: the same object has the same address, so compare the addresses
+        // as untyped pointers (C would warn about comparing distinct pointer types).
+        if (isEquality && leftType is INamedTypeSymbol lc && rightType is INamedTypeSymbol rc && IsHeapClass(lc) && IsHeapClass(rc)
+            && !SymbolEqualityComparer.Default.Equals(lc, rc))
+        {
+            var cmp = $"(const void *)({Expr(b.Left, top: true)}) {b.OperatorToken.Text} (const void *)({Expr(b.Right, top: true)})";
+            return top ? cmp : $"({cmp})";
+        }
+
         var s = $"{Expr(b.Left)} {b.OperatorToken.Text} {Expr(b.Right)}";
         return top ? s : $"({s})";
+    }
+
+    /// <summary>True for the null literal and other constants whose value is null (<c>default</c>, <c>(string)null</c>, a null const).</summary>
+    // 'x is K' where K names a constant: strings compare by characters (a null constant is a pointer test),
+    // numbers, chars, bools and enums of the same type compare with ==; anything else is not supported.
+    private string NamedConstantIs(BinaryExpressionSyntax b)
+    {
+        var subjectType = Model(b).GetTypeInfo(b.Left).Type;
+        var constType = Model(b).GetTypeInfo(b.Right).Type;
+        if (subjectType?.SpecialType == SpecialType.System_String)
+            return IsNullConstant(b.Right) ? $"({Expr(b.Left, top: true)} == NULL)" : StrEq(Expr(b.Left, top: true), Expr(b.Right, top: true));
+        var simple = subjectType != null && (subjectType.TypeKind == TypeKind.Enum ||
+            subjectType.SpecialType is SpecialType.System_Boolean or SpecialType.System_Char or SpecialType.System_SByte or SpecialType.System_Byte
+                or SpecialType.System_Int16 or SpecialType.System_UInt16 or SpecialType.System_Int32 or SpecialType.System_UInt32
+                or SpecialType.System_Int64 or SpecialType.System_UInt64 or SpecialType.System_Single or SpecialType.System_Double);
+        if (!simple || !SymbolEqualityComparer.Default.Equals(subjectType, constType))
+            return Unsupported(b, "'is' with a named constant on this type");
+        return $"({Expr(b.Left, top: true)} == {Expr(b.Right, top: true)})";
+    }
+
+    private bool IsNullConstant(ExpressionSyntax e)
+    {
+        var c = Model(e).GetConstantValue(e);
+        return c.HasValue && c.Value == null;
+    }
+
+    /// <summary>A C condition: the strings <paramref name="left"/> and <paramref name="right"/> are equal as C# compares them (characters; null equals only null).</summary>
+    private string StrEq(string left, string right)
+    {
+        _usesStreq = true;
+        return $"es_streq({left}, {right})";
+    }
+
+    /// <summary><c>a ?? b</c> for references (classes, strings, interface values, delegates): a is evaluated once; b only when a is null.</summary>
+    private string Coalesce(BinaryExpressionSyntax b)
+    {
+        var info = Model(b).GetTypeInfo(b);
+        var type = info.Type ?? info.ConvertedType;
+        var leftType = Model(b).GetTypeInfo(b.Left).Type;
+        if (type == null || leftType == null) return Unsupported(b, "?? without a type");
+        var tmp = "es_c" + _patternTemp++;
+        string test, left, right;
+        if (IsInterfaceType(type) && IsInterfaceType(leftType) || type.TypeKind == TypeKind.Delegate && leftType.TypeKind == TypeKind.Delegate)
+        {
+            test = $"{tmp}{(IsInterfaceType(type) ? ".obj" : ".fn")} != NULL";
+            left = Expr(b.Left, top: true);
+            right = Expr(b.Right, top: true);
+        }
+        else if (IsHeapClass(type) && IsHeapClass(leftType))
+        {
+            // Casts keep C quiet when one side is a derived class of the result type.
+            test = $"{tmp} != NULL";
+            left = $"({CType(type, b)})({Expr(b.Left, top: true)})";
+            right = $"({CType(type, b)})({Expr(b.Right, top: true)})";
+        }
+        else return Unsupported(b, "?? on a nullable value type");
+        return $"({{ {Decl(type, tmp, b)} = {left}; {test} ? {tmp} : {right}; }})";
+    }
+
+    /// <summary><c>x ??= y</c> on a variable or field of a reference type: y is evaluated and stored only when x is null.</summary>
+    private string CoalesceAssignment(AssignmentExpressionSyntax a)
+    {
+        var type = Model(a).GetTypeInfo(a.Left).Type;
+        if (type == null || WrittenProperty(a.Left) != null || !(IsHeapClass(type) || IsInterfaceType(type) || type.TypeKind == TypeKind.Delegate))
+            return Unsupported(a, "??= other than on a variable or field of a class, string, interface or delegate type");
+        if (!RequireSimple(a.Left, "??=")) return "0";
+        var target = Expr(a.Left);
+        var test = IsInterfaceType(type) ? $"{target}.obj == NULL" : type.TypeKind == TypeKind.Delegate ? $"{target}.fn == NULL" : $"{target} == NULL";
+        var value = IsHeapClass(type) ? $"({CType(type, a)})({Expr(a.Right, top: true)})" : Expr(a.Right, top: true);
+        return $"({{ if ({test}) {target} = {value}; {target}; }})";
     }
 
     /// <summary>
@@ -2354,6 +2551,18 @@ internal sealed partial class CEmitter
 
         if (IsLinqCall(inv, out var linqMethod, out var linqReceiver)) return Linq(inv, linqMethod, linqReceiver);
 
+        if (m.ContainingType?.SpecialType == SpecialType.System_String && m.Name == "Equals")
+        {
+            // string.Equals(a, b) and a.Equals(b): by the characters, like ==. (A null receiver gives false here, not an exception.)
+            var eargs = inv.ArgumentList.Arguments;
+            var stringArgs = m.Parameters.All(p => p.Type.SpecialType == SpecialType.System_String);
+            if (m.IsStatic && eargs.Count == 2 && stringArgs)
+                return StrEq(Expr(eargs[0].Expression, top: true), Expr(eargs[1].Expression, top: true));
+            if (!m.IsStatic && eargs.Count == 1 && stringArgs && inv.Expression is MemberAccessExpressionSyntax eq)
+                return StrEq(Expr(eq.Expression, top: true), Expr(eargs[0].Expression, top: true));
+            return Unsupported(inv, "this form of string.Equals (only string.Equals(a, b) and a.Equals(b) on two strings)");
+        }
+
         if ((m.ReturnsByRef || m.ReturnsByRefReadonly) &&
             (m.MethodKind is not (MethodKind.Ordinary or MethodKind.LocalFunction) || m.IsVirtual || m.IsAbstract || m.IsOverride || IsInterfaceType(m.ContainingType)))
             return Unsupported(inv, "call of a ref-returning virtual, abstract, interface or delegate member");
@@ -2529,6 +2738,10 @@ internal sealed partial class CEmitter
             case ConstantPatternSyntax c:
                 if (c.Expression is LiteralExpressionSyntax nullLit && nullLit.IsKind(SyntaxKind.NullLiteralExpression))
                     return IsInterfaceType(type) ? $"({subject}.obj == NULL)" : $"({subject} == NULL)";
+                if (type.SpecialType == SpecialType.System_String)
+                    return IsNullConstant(c.Expression) ? $"({subject} == NULL)" : StrEq(subject, Expr(c.Expression, top: true));   // "x" matches by the characters
+                if (Model(c.Expression).GetTypeInfo(c.Expression).Type?.SpecialType == SpecialType.System_String)
+                    return Unsupported(c, "a string constant pattern on a value that is not typed string");
                 return $"({subject} == {Expr(c.Expression)})";
             case RelationalPatternSyntax r:
                 return $"({subject} {r.OperatorToken.Text} {Expr(r.Expression)})";
@@ -2746,8 +2959,7 @@ internal sealed partial class CEmitter
         }
         if (param == null || param.RefKind == RefKind.None) return Expr(a.Expression, top: true);
 
-        var e = a.Expression;
-        while (e is ParenthesizedExpressionSyntax pe) e = pe.Expression;
+        var e = Strip(a.Expression);
         switch (e)
         {
             case DeclarationExpressionSyntax decl when decl.Designation is SingleVariableDesignationSyntax single:
@@ -2792,7 +3004,7 @@ internal sealed partial class CEmitter
     /// <summary>The C address of the place a <c>ref</c> expression refers to (<c>ref x</c>, <c>ref a[i]</c>, <c>ref F()</c>, <c>c ? ref a : ref b</c>).</summary>
     private string RefAddress(ExpressionSyntax e)
     {
-        while (e is ParenthesizedExpressionSyntax pe) e = pe.Expression;
+        e = Strip(e);
         switch (e)
         {
             case ConditionalExpressionSyntax { WhenTrue: RefExpressionSyntax t, WhenFalse: RefExpressionSyntax f } c:
@@ -2829,11 +3041,11 @@ internal sealed partial class CEmitter
             };
         }
 
+        recv = Strip(recv);
         if (recv is ThisExpressionSyntax or BaseExpressionSyntax) return _this == ThisKind.Pointer ? ThisName : "&" + ThisName;
         if (IsRef(Model(at).GetTypeInfo(recv).Type)) return Expr(recv);   // a pointer or a class reference is already the address
 
         var core = recv;
-        while (core is ParenthesizedExpressionSyntax pe) core = pe.Expression;
         if (core is IdentifierNameSyntax or MemberAccessExpressionSyntax or ElementAccessExpressionSyntax &&
             Model(at).GetSymbolInfo(core).Symbol is not IMethodSymbol && !(Model(at).GetSymbolInfo(core).Symbol is IPropertySymbol cp && !IsAutoProperty(cp)))
             return "&" + Expr(core);
@@ -2938,6 +3150,7 @@ internal sealed partial class CEmitter
     private static bool IsPure(ExpressionSyntax e) => e switch
     {
         ParenthesizedExpressionSyntax p => IsPure(p.Expression),
+        PostfixUnaryExpressionSyntax { RawKind: (int)SyntaxKind.SuppressNullableWarningExpression } nf => IsPure(nf.Operand),
         IdentifierNameSyntax or ThisExpressionSyntax or LiteralExpressionSyntax => true,
         MemberAccessExpressionSyntax ma => IsPure(ma.Expression),
         ElementAccessExpressionSyntax ea => IsPure(ea.Expression) && ea.ArgumentList.Arguments.All(a => IsPure(a.Expression)),

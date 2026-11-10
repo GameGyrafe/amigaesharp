@@ -477,6 +477,8 @@ internal sealed partial class CEmitter
                 break;
             case "Min" or "Max":
                 if (args.Count == 1) stages.Add(new LinqStage(StageKind.Select, args[0].Expression, SelectorResult(args[0].Expression)));
+                if (!Orderable(stages.Count > 0 ? stages[^1].Out : elem))
+                    return Unsupported(inv, $"{m.Name} of values that are not numbers, chars, bools or enums");
                 pre.Add($"bool {H} = 0;");
                 var cmp = m.Name == "Min" ? "<" : ">";
                 sink = (c, _) => Line($"if (!{H} || {c} {cmp} {R}) {{ {R} = {c}; {H} = 1; }}");
@@ -503,7 +505,12 @@ internal sealed partial class CEmitter
                 extra = Expr(args[0].Expression, top: true);
                 pre.Add($"{Decl(elem, X, inv)} = {extra};");
                 init = $"{decl} = 0;";
-                sink = (c, _) => Line($"if ({c} == {X}) {{ {R} = 1; break; }}");
+                if (elem.SpecialType == SpecialType.System_String)
+                    sink = (c, _) => Line($"if ({StrEq(c, X)}) {{ {R} = 1; break; }}");   // strings match by the characters
+                else if (IsHeapClass(elem) || elem.TypeKind is TypeKind.Enum || elem.SpecialType != SpecialType.None)
+                    sink = (c, _) => Line($"if ({c} == {X}) {{ {R} = 1; break; }}");
+                else
+                    return Unsupported(inv, "Contains on elements that are not numbers, chars, bools, enums, strings or classes");
                 break;
             case "Aggregate" when args.Count is 1 or 2:
             {

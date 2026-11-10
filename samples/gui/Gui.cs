@@ -18,17 +18,6 @@ public static unsafe class Program
         Dos.PutStr("\n");
     }
 
-    /// <summary>Text equality. (<c>==</c> on strings compares addresses once compiled to C, so the sample compares the bytes.)</summary>
-    static bool Same(string? a, string b)
-    {
-        if (a == null) return false;
-        byte* x = Cast.StringToPtr(a);
-        byte* y = Cast.StringToPtr(b);
-        int i = 0;
-        while (x[i] != 0 && x[i] == y[i]) i++;
-        return x[i] == y[i];
-    }
-
     [EntryPoint]
     public static void Main()
     {
@@ -43,7 +32,7 @@ public static unsafe class Program
         win.Add(reply);
         if (!win.Open()) { Dos.PutStr("cannot open the window (no gadtools.library or no Workbench screen)\n"); return; }
         Check(true, "the window opens");
-        Check(Same(name.Text, "Amiga"), "the string gadget holds the default name");
+        Check(name.Text == "Amiga", "the string gadget holds the default name");
 #if !AMIGA
         win.HostType(name, "Ada");
         win.HostClick(hello);
@@ -67,9 +56,9 @@ public static unsafe class Program
         }
         Check(clicks >= 1, "a click arrived");
 #if AMIGA
-        Check(Same(reply.Text, "Hello, Amiga!"), "the reply is Hello, Amiga!");
+        Check(reply.Text == "Hello, Amiga!", "the reply is Hello, Amiga!");
 #else
-        Check(Same(reply.Text, "Hello, Ada!"), "the reply is Hello, Ada!");
+        Check(reply.Text == "Hello, Ada!", "the reply is Hello, Ada!");
 #endif
         Check(true, "the close gadget arrived");
         win.Close();

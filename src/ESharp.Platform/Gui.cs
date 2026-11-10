@@ -256,8 +256,7 @@ public unsafe class GtWindow
     public bool Add(GtGadget gadget)
     {
         if (_open || _count >= 16 || gadget.Next != null || gadget == _last) return false;
-        GtGadget? last = _last;
-        if (last == null) _first = gadget; else last.Next = gadget;
+        if (_last == null) _first = gadget; else _last.Next = gadget;
         _last = gadget;
         _count++;
         return true;
