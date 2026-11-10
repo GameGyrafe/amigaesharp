@@ -38,6 +38,8 @@ public static class Layout
     public const int EClockLo = 4;
     public const int GfxDisplayFlags = 416;
     public const uint GfxPalFlag = 4u;
+    public const uint GfxNtscFlag = 1u;
+    public const int ExecVBlankFrequency = 1096;
     public const uint JpTypeMask = 4026531840u;
     public const uint JpTypeNotAvail = 0u;
     public const uint JpTypeGameCtlr = 268435456u;
@@ -182,6 +184,8 @@ public static class Layout
     public const int EClockLo = 4;
     public const int GfxDisplayFlags = 206;
     public const uint GfxPalFlag = 4u;
+    public const uint GfxNtscFlag = 1u;
+    public const int ExecVBlankFrequency = 530;
     public const uint JpTypeMask = 4026531840u;
     public const uint JpTypeNotAvail = 0u;
     public const uint JpTypeGameCtlr = 268435456u;

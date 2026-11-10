@@ -863,10 +863,13 @@ Check(list.Count == 0, ""destroy"");
     }
 
     [Theory]
-    [InlineData(true, 50)]
-    [InlineData(false, 60)]
-    public void Frame_timing_runs_natively_against_a_shimmed_timer_and_graphics(bool pal, int fps)
+    [InlineData("pal", 50)]
+    [InlineData("ntsc", 60)]
+    [InlineData("exec50", 50)]   // neither display flag set (hosted AROS): ExecBase.VBlankFrequency decides
+    [InlineData("exec60", 60)]
+    public void Frame_timing_runs_natively_against_a_shimmed_timer_and_graphics(string mode, int fps)
     {
+        bool pal = fps == 50;
         if (!HasGcc) return;
         const string body = @"
 Clock.Open();
@@ -891,7 +894,7 @@ Clock.Close();";
             $"static const int es_shim_pal = {(pal ? 1 : 0)};\n" +
             "static uint64_t es_shim_clock;\n" +
             "struct Library; struct Device;\n" +
-            "static inline void *OpenLibrary(const char *n, uint32_t v) { (void)n; (void)v; static unsigned char gb[1024]; memset(gb, es_shim_pal ? 0x04 : 0, sizeof gb); return gb; }\n" +
+            "static inline void *OpenLibrary(const char *n, uint32_t v) { (void)n; (void)v; static unsigned char gb[1024]; memset(gb, 0, sizeof gb); " + (mode == "pal" ? "memset(gb, 0x04, sizeof gb);" : mode == "ntsc" ? "memset(gb, 0x01, sizeof gb);" : $"gb[530] = {fps};") + " return gb; }\n" +
             "static inline void CloseLibrary(void *l) { (void)l; }\n" +
             "static inline int OpenDevice(const char *n, uint32_t u, void *io, uint32_t f) { (void)n; (void)u; (void)io; (void)f; return 0; }\n" +
             "static inline void CloseDevice(void *io) { (void)io; }\n" +

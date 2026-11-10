@@ -2,6 +2,7 @@
 # Lines: "include <header>", "Name = struct.field.path" (offsetof), "Name = sizeof struct" or "Name = value MACRO" (a constant).
 # Measured with the target's own C compiler: tools/BindGen offsets (see docs/BINDINGS_SPIKE.md).
 include exec/io.h
+include exec/execbase.h
 include intuition/intuition.h
 include intuition/screens.h
 include graphics/gfx.h
@@ -55,6 +56,8 @@ EClockLo = EClockVal.ev_lo
 # Frame timing (src/ESharp.Platform/Frame.cs)
 GfxDisplayFlags = GfxBase.DisplayFlags
 GfxPalFlag = value PAL
+GfxNtscFlag = value NTSC
+ExecVBlankFrequency = ExecBase.VBlankFrequency
 
 # lowlevel.library (src/ESharp.Platform/Joystick.cs)
 JpTypeMask = value JP_TYPE_MASK

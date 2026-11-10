@@ -3,9 +3,8 @@ namespace ESharp.Platform;
 /// <summary>
 /// Frame timing for game loops: wait for the display's vertical blank, count frames, and know whether the machine
 /// runs 50 Hz (PAL) or 60 Hz (NTSC). On the Amiga <see cref="WaitVBlank"/> is graphics.library WaitTOF, so drawing
-/// syncs to the display; the rate comes from the DisplayFlags PAL bit of GfxBase (set from the chips on classic
-/// machines; on hosted AROS it is whatever that port reports, so treat <see cref="FramesPerSecond"/> as a good guess
-/// rather than a measurement). On the host it is a deterministic fake: each <see cref="WaitVBlank"/> advances the
+/// syncs to the display; the rate comes from the PAL or NTSC bit of GfxBase.DisplayFlags (set from the chips on classic
+/// machines); when neither bit is set (hosted AROS) it is ExecBase.VBlankFrequency. On the host it is a deterministic fake: each <see cref="WaitVBlank"/> advances the
 /// fake <see cref="Clock"/> by one frame (20000 or 16666 microseconds), so tests can drive a game loop.
 /// </summary>
 public static unsafe class Frame
@@ -39,11 +38,25 @@ public static unsafe class Frame
 #if AMIGA
     private static int Detect()
     {
+        int rate = 0;
         void* gfx = Exec.OpenLibrary("graphics.library", 39);
-        if (gfx == null) return 50;
-        ushort flags = *(ushort*)((byte*)gfx + Layout.GfxDisplayFlags);
-        Exec.CloseLibrary(gfx);
-        return (flags & Layout.GfxPalFlag) != 0 ? 50 : 60;
+        if (gfx != null)
+        {
+            ushort flags = *(ushort*)((byte*)gfx + Layout.GfxDisplayFlags);
+            if ((flags & Layout.GfxPalFlag) != 0) rate = 50;
+            else if ((flags & Layout.GfxNtscFlag) != 0) rate = 60;
+            Exec.CloseLibrary(gfx);
+        }
+        if (rate != 0) return rate;
+        // Neither bit is set (hosted AROS): use exec's own vertical blank frequency. Opening exec.library gives ExecBase.
+        void* sys = Exec.OpenLibrary("exec.library", 0);
+        if (sys != null)
+        {
+            int hz = *((byte*)sys + Layout.ExecVBlankFrequency);
+            Exec.CloseLibrary(sys);
+            if (hz == 50 || hz == 60) return hz;
+        }
+        return 50;
     }
 
     /// <summary>Waits for the top of the next frame (graphics.library WaitTOF) and counts it.</summary>
