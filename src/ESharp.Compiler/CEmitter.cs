@@ -3109,7 +3109,32 @@ internal sealed partial class CEmitter
     private static string Cond(string c)
     {
         while (c.Length >= 2 && c[0] == '(' && c[^1] == ')' && c[1] != '{' && WholeGroup(c)) c = c.Substring(1, c.Length - 2);
-        return c;
+        // An assignment used as a condition keeps one pair: the C idiom that tells gcc/clang -Wparentheses it is meant.
+        return TopLevelAssignment(c) ? "(" + c + ")" : c;
+    }
+
+    /// <summary>True when <paramref name="c"/> has an assignment operator (=, +=, ...) outside any parentheses, brackets or literals.</summary>
+    private static bool TopLevelAssignment(string c)
+    {
+        var depth = 0; var inStr = false; var inChr = false;
+        for (var k = 0; k < c.Length; k++)
+        {
+            var ch = c[k];
+            if (inStr || inChr) { if (ch == '\\') k++; else if (inStr && ch == '"') inStr = false; else if (inChr && ch == '\'') inChr = false; continue; }
+            if (ch == '"') inStr = true; else if (ch == '\'') inChr = true;
+            else if (ch is '(' or '[' or '{') depth++;
+            else if (ch is ')' or ']' or '}') depth--;
+            else if (ch == '=' && depth == 0)
+            {
+                var prev = k > 0 ? c[k - 1] : ' ';
+                var next = k + 1 < c.Length ? c[k + 1] : ' ';
+                if (next == '=') { k++; continue; }                       // ==
+                var shift = k >= 2 && (c[k - 2] == '<' || c[k - 2] == '>') && c[k - 2] == prev;   // <<=, >>=
+                if (!shift && prev is '!' or '<' or '>' or '=') continue;  // !=, <=, >=, second '=' of ==
+                return true;                                               // =, +=, -=, <<=, ...
+            }
+        }
+        return false;
     }
 
     private static bool WholeGroup(string c)
