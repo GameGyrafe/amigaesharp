@@ -1,7 +1,7 @@
 ; E# hardware test pack. Run from this drawer:  Execute RunAll
 ; (AmigaDOS comments start with a semicolon at the beginning of a line only.)
 ; Writes one file per program into results/ and a summary in SUMMARY.txt.
-; Self-checking programs print "ok name" or "FAIL name". screen, aga, rtg, sound, cards and rummy
+; Self-checking programs print "ok name" or "FAIL name". screen, aga, assets, rtg, sound, cards and rummy
 ; also show a picture or play sound: look and listen (see README.txt), press Esc or wait.
 
 FailAt 21
@@ -40,6 +40,8 @@ Echo "screen (a card picture appears for a few seconds)"
 screen >results/screen.txt
 Echo "aga (a 256 colour picture appears for a few seconds)"
 aga >results/aga.txt
+Echo "assets (dithered gradients and a badge appear for a few seconds; a short beep)"
+assets >results/assets.txt
 Echo "rtg"
 rtg >results/rtg.txt
 Echo "sound (you should hear tones)"
@@ -64,6 +66,8 @@ Echo "names (E# classes named like system structs)"
 names >results/names.txt
 Echo "trace (writes a few lines to the serial port: a terminal at 9600 baud shows them; the screen shows one line)"
 trace >results/trace.txt
+Echo "timing (frame timing: a second of vertical blanks)"
+timing >results/timing.txt
 Echo "cards (play a round; Esc quits, or leave it for 10 seconds)"
 cards >results/cards.txt
 Echo "rummy (play a turn; Esc quits, or leave it for 10 seconds)"

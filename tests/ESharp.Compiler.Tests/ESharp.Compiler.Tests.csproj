@@ -50,6 +50,8 @@
     <Compile Include="..\..\samples\rummy\Program.cs" Link="Samples\Rummy\Program.cs" />
     <Compile Include="..\..\samples\rummy\Assets.g.cs" Link="Samples\Rummy\Assets.g.cs" />
     <Compile Include="..\..\samples\sound\Sound.cs" Link="Samples\Sound.cs" />
+    <Compile Include="..\..\samples\assets\AssetsSample.cs" Link="Samples\Assets\AssetsSample.cs" />
+    <Compile Include="..\..\samples\assets\Assets.g.cs" Link="Samples\Assets\Assets.g.cs" />
     <Compile Include="..\..\samples\aga\Aga.cs" Link="Samples\Aga\Aga.cs" />
     <Compile Include="..\..\samples\aga\Assets.g.cs" Link="Samples\Aga\Assets.g.cs" />
     <Compile Include="..\..\samples\rtg\Rtg.cs" Link="Samples\Rtg\Rtg.cs" />
@@ -58,6 +60,7 @@
     <Compile Include="..\..\samples\lambdas\Lambdas.cs" Link="Samples\Lambdas\Lambdas.cs" />
     <Compile Include="..\..\samples\collections\Collections.cs" Link="Samples\Collections.cs" />
     <Compile Include="..\..\samples\controls\Controls.cs" Link="Samples\Controls.cs" />
+    <Compile Include="..\..\samples\timing\Timing.cs" Link="Samples\Timing.cs" />
     <Compile Include="..\..\samples\keys\Keys.cs" Link="Samples\Keys.cs" />
     <Compile Include="..\..\samples\dates\Dates.cs" Link="Samples\Dates.cs" />
     <Compile Include="..\..\samples\fonts\Fonts.cs" Link="Samples\Fonts.cs" />

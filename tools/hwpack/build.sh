@@ -11,7 +11,7 @@ root="$(cd "$here/../.." && pwd)"
 cd "$root"
 
 # Order: quick pure checks first, then the ones that open a screen or the audio device.
-samples="hwinfo hello phase2 memory generics properties operators language collections inherit lambdas linq refs screen aga rtg sound controls keys dates fonts iff asl gui names trace cards rummy"
+samples="hwinfo hello phase2 memory generics properties operators language collections inherit lambdas linq refs screen aga assets rtg sound controls keys dates fonts iff asl gui names trace timing cards rummy"
 
 rm -rf "$out"; mkdir -p "$out/results"
 for s in $samples; do

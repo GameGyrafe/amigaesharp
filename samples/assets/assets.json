@@ -1,0 +1,13 @@
+{
+  "namespace": "AssetsSample",
+  "class": "Assets",
+  "images": [
+    { "name": "Fs", "file": "gradient.png", "colors": 8, "dither": "fs" },
+    { "name": "Ordered", "file": "gradient.png", "colors": 8, "dither": "ordered" },
+    { "name": "Flat", "file": "gradient.png", "colors": 8 },
+    { "name": "Badge", "file": "badge.iff", "colors": 8, "mask": true }
+  ],
+  "samples": [
+    { "name": "Beep", "file": "beep.wav" }
+  ]
+}

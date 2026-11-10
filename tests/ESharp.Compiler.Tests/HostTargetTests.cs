@@ -75,6 +75,21 @@ public class HostTargetTests
     }
 
     [Fact]
+    public void Assets_sample_runs_on_the_host()
+    {
+        using var console = HostConsole.Capture();
+        ESharp.Platform.Sound.HostReset();
+        AssetsSample.Program.Main();
+        var lines = console.Output.Split('\n', StringSplitOptions.RemoveEmptyEntries);
+        Assert.DoesNotContain(lines, l => l.StartsWith("FAIL"));
+        Assert.Equal(17, lines.Count(l => l.StartsWith("ok ")));
+        Assert.Contains("SHOT", lines);
+        Assert.Equal(1, ESharp.Platform.Sound.HostPlays);
+        Assert.Equal(443, ESharp.Platform.Sound.HostLastPeriod);   // 3546895 / 8000
+        ESharp.Platform.Sound.HostReset();
+    }
+
+    [Fact]
     public void Aga_sample_runs_on_the_host_with_a_24_bit_palette()
     {
         using var console = HostConsole.Capture();
@@ -137,6 +152,36 @@ public class HostTargetTests
             + "ok ticks convert to time\nok the clock moves\nok Delay(10) measures about 200 ms\nok the clock closes\n"
             + "lowlevel.library present\nport 1 kind 0 bits 0\nok port 1 set to a CD32 pad reads as a pad\n"
             + "ok port 1 can be set to a joystick\nok port 1 then reads as a joystick\nok a direction is -1, 0 or 1\nok lowlevel closes\n", console.Output);
+    }
+
+    [Fact]
+    public void Timing_sample_runs_on_the_host_deterministically()
+    {
+        ESharp.Platform.Frame.HostPal = true;
+        ESharp.Platform.Frame.Redetect();
+        using var console = HostConsole.Capture();
+        TimingSample.Program.Main();
+        Assert.Equal("ok timer.device opens\ndisplay runs at 50 frames per second (PAL)\nok the rate is 50 or 60\nok a frame lasts 1/rate seconds\n"
+            + "50 WaitVBlank calls took 1000 ms\nok the frame counter counts each wait\nok a second of frames takes about a second\n"
+            + "10 frames owed 10 steps\nok ten frames owe about ten steps at the frame rate\nok a stall owes only the capped number of steps\n"
+            + "ok the backlog is dropped after a stall\nok elapsed time covers the stall\nelapsed 1200 ms\n"
+            + "ok Video.WaitFrames waits that many vertical blanks\n", console.Output);
+    }
+
+    [Fact]
+    public void Timing_sample_runs_on_a_60_Hz_host()
+    {
+        ESharp.Platform.Frame.HostPal = false;
+        ESharp.Platform.Frame.Redetect();
+        try
+        {
+            using var console = HostConsole.Capture();
+            TimingSample.Program.Main();
+            Assert.Contains("display runs at 60 frames per second (NTSC)\n", console.Output);
+            Assert.Contains("60 WaitVBlank calls took 999 ms\n", console.Output);   // 60 x 16666 us
+            Assert.DoesNotContain("FAIL", console.Output);
+        }
+        finally { ESharp.Platform.Frame.HostPal = true; ESharp.Platform.Frame.Redetect(); }
     }
 
     [Fact]
