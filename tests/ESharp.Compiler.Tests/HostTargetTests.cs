@@ -75,6 +75,21 @@ public class HostTargetTests
     }
 
     [Fact]
+    public void Assets_sample_runs_on_the_host()
+    {
+        using var console = HostConsole.Capture();
+        ESharp.Platform.Sound.HostReset();
+        AssetsSample.Program.Main();
+        var lines = console.Output.Split('\n', StringSplitOptions.RemoveEmptyEntries);
+        Assert.DoesNotContain(lines, l => l.StartsWith("FAIL"));
+        Assert.Equal(17, lines.Count(l => l.StartsWith("ok ")));
+        Assert.Contains("SHOT", lines);
+        Assert.Equal(1, ESharp.Platform.Sound.HostPlays);
+        Assert.Equal(443, ESharp.Platform.Sound.HostLastPeriod);   // 3546895 / 8000
+        ESharp.Platform.Sound.HostReset();
+    }
+
+    [Fact]
     public void Aga_sample_runs_on_the_host_with_a_24_bit_palette()
     {
         using var console = HostConsole.Capture();

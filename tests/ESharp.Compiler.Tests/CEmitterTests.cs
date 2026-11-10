@@ -821,6 +821,18 @@ Check(list.Count == 0, ""destroy"");
     }
 
     [Fact]
+    public void Assets_sample_compiles_for_m68k_with_chip_data_for_images_and_the_sample()
+    {
+        var dir = Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "..", "samples", "assets");
+        var sources = new[] { "AssetsSample.cs", "Assets.g.cs" }
+            .Select(f => new SourceFile(f, File.ReadAllText(Path.Combine(dir, f)))).ToArray();
+        var r = EsCompiler.Compile(sources, Targets.M68k.ToOptions());
+        Assert.True(r.Success, string.Join("\n", r.Diagnostics));
+        Assert.Contains("__chip", r.C!);
+        Assert.Contains("BeginIO(", r.C!);
+    }
+
+    [Fact]
     public void Aga_sample_compiles_for_m68k_with_a_24_bit_palette_call()
     {
         var dir = Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "..", "samples", "aga");

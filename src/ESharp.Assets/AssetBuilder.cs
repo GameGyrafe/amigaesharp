@@ -11,15 +11,19 @@ namespace ESharp.Assets;
 /// Reads an <c>assets.json</c> manifest and generates a C# source file with the images as planar chip RAM
 /// data and OCS palettes (or, with <c>"aga": true</c> and up to 256 colours, 24-bit AGA palettes):
 /// <code>{ "namespace": "Game", "class": "Assets", "images": [ { "name": "Card", "file": "card.png", "colors": 16, "mask": true } ] }</code>
+/// An image may be a PNG or an IFF ILBM file, and <c>"dither": "fs"</c> or <c>"ordered"</c> spreads the colour error when colours are reduced (default none).
+/// A <c>"samples"</c> list of WAV or 8SVX files is embedded as 8-bit signed mono chip data: <c>NameData</c>, <c>NameLength</c>, <c>NameRate</c>.
 /// For each image it writes <c>NameWidth</c>, <c>NameHeight</c>, <c>NameDepth</c>, <c>NamePlanes</c> and <c>NamePalette</c>, and <c>NameMask</c> when the entry has <c>"mask": true</c>.
 /// </summary>
 public static class AssetBuilder
 {
-    public sealed record Entry(string Name, string File, int Colors, bool Mask = false, bool Aga = false);
+    public sealed record Entry(string Name, string File, int Colors, bool Mask = false, bool Aga = false, Dither Dither = Dither.None);
 
-    public sealed record Report(string Name, int Width, int Height, int Depth, int ChipBytes);
+    public sealed record SampleEntry(string Name, string File);
 
-    public sealed record Output(string Source, IReadOnlyList<Report> Reports);
+    public sealed record Report(string Name, int Width, int Height, int Depth, int ChipBytes, bool IsSample = false);
+
+    public sealed record Output(string Source, IReadOnlyList<Report> Reports, IReadOnlyList<string>? Warnings = null);
 
     public static Output Build(string manifestPath)
     {
@@ -36,7 +40,13 @@ public static class AssetBuilder
                     e.GetProperty("file").GetString()!,
                     e.TryGetProperty("colors", out var col) ? col.GetInt32() : 16,
                     e.TryGetProperty("mask", out var mk) && mk.GetBoolean(),
-                    e.TryGetProperty("aga", out var ag) && ag.GetBoolean()));
+                    e.TryGetProperty("aga", out var ag) && ag.GetBoolean(),
+                    Planar.ParseDither(e.TryGetProperty("dither", out var dt) && dt.ValueKind != JsonValueKind.Null ? dt.GetString() : null)));
+        var sampleEntries = new List<SampleEntry>();
+        if (root.TryGetProperty("samples", out var samples))
+            foreach (var e in samples.EnumerateArray())
+                sampleEntries.Add(new SampleEntry(e.GetProperty("name").GetString()!, e.GetProperty("file").GetString()!));
+        var warnings = new List<string>();
 
         // "if": "AROS" wraps the whole file in #if, so an asset set that only some targets use costs the others nothing.
         var condition = root.TryGetProperty("if", out var cond) ? cond.GetString() : null;
@@ -50,8 +60,8 @@ public static class AssetBuilder
         foreach (var entry in entries)
         {
             if (!IsIdentifier(entry.Name)) throw new InvalidDataException($"asset name '{entry.Name}' is not a C# identifier");
-            var png = Png.Read(File.ReadAllBytes(Path.Combine(dir, entry.File)));
-            var planar = Planar.Convert(png, entry.Colors, entry.Aga);
+            var png = ImageFile.Read(File.ReadAllBytes(Path.Combine(dir, entry.File)));
+            var planar = Planar.Convert(png, entry.Colors, entry.Aga, entry.Dither);
             reports.Add(new Report(entry.Name, planar.Width, planar.Height, planar.Depth, planar.Planes.Length + (entry.Mask ? planar.Mask.Length : 0)));
 
             sb.Append($"    // {entry.File}: {planar.Width}x{planar.Height}, {planar.Depth} bitplanes, {(entry.Aga ? planar.Palette24.Length : planar.Palette.Length)} colours{(entry.Aga ? " (AGA, 24-bit palette)" : "")}\n");
@@ -76,10 +86,35 @@ public static class AssetBuilder
             }
             sb.Append("\n");
         }
+        foreach (var s in sampleEntries)
+        {
+            if (!IsIdentifier(s.Name)) throw new InvalidDataException($"asset name '{s.Name}' is not a C# identifier");
+            var sound = SoundFile.Read(File.ReadAllBytes(Path.Combine(dir, s.File)));
+            var data = sound.Data;
+            if (data.Length > MaxSampleLength)
+            {
+                warnings.Add($"{s.File}: {data.Length:N0} samples cut to {MaxSampleLength:N0} (the longest audio.device takes in one write)");
+                data = data.Take(MaxSampleLength).ToArray();
+            }
+            var length = Math.Max(4, (data.Length + 1) & ~1);   // even, at least 4, padded with silence
+            var bytes = new byte[length];
+            for (var i = 0; i < data.Length; i++) bytes[i] = (byte)data[i];
+            reports.Add(new Report(s.Name, length, 1, 8, length, IsSample: true));
+            sb.Append($"    // {s.File}: {length} bytes of 8-bit signed mono, {sound.Rate} Hz\n");
+            sb.Append($"    public const int {s.Name}Length = {length};\n");
+            sb.Append($"    public const int {s.Name}Rate = {sound.Rate};\n");
+            sb.Append($"    [ChipRam] public static byte[] {s.Name}Data =\n    {{\n");
+            for (var i = 0; i < bytes.Length; i += 16)
+                sb.Append("        " + string.Join(", ", bytes.Skip(i).Take(16).Select(b => "0x" + b.ToString("X2"))) + ",\n");
+            sb.Append("    };\n\n");
+        }
         sb.Append("}\n");
         if (condition != null) sb.Append("#endif\n");
-        return new Output(sb.ToString(), reports);
+        return new Output(sb.ToString(), reports, warnings);
     }
+
+    /// <summary>The longest sample audio.device takes in one write (Sound.MaxLength).</summary>
+    public const int MaxSampleLength = 131070;
 
     public enum SyncStatus { UpToDate, Created, Updated, Touched }
 
@@ -89,20 +124,21 @@ public static class AssetBuilder
     public static string TargetPath(string manifestPath) =>
         Path.Combine(Path.GetDirectoryName(Path.GetFullPath(manifestPath))!, "Assets.g.cs");
 
-    /// <summary>The files the generated source depends on: the manifest and every PNG it lists.</summary>
+    /// <summary>The files the generated source depends on: the manifest and every PNG, ILBM or sound file it lists.</summary>
     public static IReadOnlyList<string> Inputs(string manifestPath)
     {
         var dir = Path.GetDirectoryName(Path.GetFullPath(manifestPath))!;
         var list = new List<string> { Path.GetFullPath(manifestPath) };
         using var doc = JsonDocument.Parse(File.ReadAllText(manifestPath), new JsonDocumentOptions { CommentHandling = JsonCommentHandling.Skip });
-        if (doc.RootElement.TryGetProperty("images", out var images))
-            foreach (var e in images.EnumerateArray())
-                if (e.TryGetProperty("file", out var f) && f.GetString() is { } name)
-                    list.Add(Path.GetFullPath(Path.Combine(dir, name)));
+        foreach (var key in new[] { "images", "samples" })
+            if (doc.RootElement.TryGetProperty(key, out var images))
+                foreach (var e in images.EnumerateArray())
+                    if (e.TryGetProperty("file", out var f) && f.GetString() is { } name)
+                        list.Add(Path.GetFullPath(Path.Combine(dir, name)));
         return list;
     }
 
-    /// <summary>True when <c>Assets.g.cs</c> is missing or older than the manifest or any listed PNG.</summary>
+    /// <summary>True when <c>Assets.g.cs</c> is missing or older than the manifest or any listed input file.</summary>
     public static bool IsStale(string manifestPath)
     {
         var target = TargetPath(manifestPath);

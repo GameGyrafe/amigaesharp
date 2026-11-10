@@ -18,6 +18,7 @@ dotnet run --project src/ESharp.Cli -- run samples/screen --docker <image> --hea
 dotnet run --project src/ESharp.Cli -- run samples/cards --docker <image> --headless --input "click 400,300;rel -80,50;press;key 9"   # scripted mouse/keys (XTEST)
 dotnet run --project src/ESharp.Cli -- run samples/rummy --docker <image> --headless --input "click 400,300;rel 16,-80;press;key 9"   # rummy: stock at (128,80)
 dotnet run --project src/ESharp.Cli -- run samples/aga --docker <image> --headless --model A1200 --screenshot shot.png   # AGA 256 colours (a non-AGA machine would run the fallback checks)
+dotnet run --project src/ESharp.Cli -- run samples/assets --docker <image> --headless --model A1200 --screenshot shot.png   # dithered gradients, an ILBM picture and an embedded WAV from assets.json (inputs made by tools/AssetSamples)
 dotnet run --project src/ESharp.Cli -- run samples/rtg --docker <image> --headless --model A1200   # RTG: no card in the emulator, so this runs the fallback checks
 dotnet run --project src/ESharp.Cli -- run samples/inherit --docker <image> --headless --model A1200   # inheritance, virtual members, is/as
 dotnet run --project src/ESharp.Cli -- build samples/linq --target aros --docker amigadev/crosstools@sha256:9c4e978301da6b6584d68d4014caa1fa9e2689529e79e71f7190d40d1cb62e50   # AROS x86-64: builds; the pure samples run on hosted AROS (see docs/STATUS.md)

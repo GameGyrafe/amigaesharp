@@ -18,8 +18,8 @@ in an emulator. Your run is the first on real hardware.
    A whole run takes about two minutes in an emulator; a real machine may be slower.
    Expected: no line starting FAIL anywhere. In an emulated A1200 (Kickstart 3.1) the programs print
    this many "ok" lines: phase2 32, memory 19, generics 24, properties 18, operators 20, language 28,
-   collections 20, inherit 24, lambdas 16, linq 37, refs 18, screen 17, aga 6, rtg 5, sound 21, controls 12
-   (9 if lowlevel.library is not in Libs:), keys 8 (9 if you pressed a key), dates 19, fonts 8 (7 without diskfont.library, 10 if a disk font such as ruby is in FONTS:), iff 10 (one line saying so instead if iffparse.library is not in Libs:), asl 4 (one line instead if asl.library is missing), gui 7 (if you click Hello then the close gadget; one line instead if there is no Workbench screen), names 12, timing 10 (9 and a "note" line if the machine is not real time), cards 15, rummy 28 (hello, hwinfo and trace print text, not ok lines; trace also sends 9 lines to the serial port, which nothing needs to be connected to). To count: Search results/memory.txt "ok " .
+   collections 20, inherit 24, lambdas 16, linq 37, refs 18, screen 17, aga 6, assets 17, rtg 5, sound 21, controls 12
+   (9 if lowlevel.library is not in Libs:), keys 8 (9 if you pressed a key), dates 19, fonts 8 (7 without diskfont.library, 10 if a disk font such as ruby is in FONTS:), iff 10 (one line saying so instead if iffparse.library is not in Libs:), asl 4 (one line instead if asl.library is missing), gui 7 (if you click Hello then the close gadget; one line instead if there is no Workbench screen), names 12, timing 14 (one fewer and a "note" line if the machine is not real time), cards 15, rummy 28 (hello, hwinfo and trace print text, not ok lines; trace also sends 9 lines to the serial port, which nothing needs to be connected to). To count: Search results/memory.txt "ok " .
 
 3. Please tell us
    a) SUMMARY.txt (it starts with what hwinfo found out about your machine), and the results drawer, or at least any file in it that has a line starting FAIL.
