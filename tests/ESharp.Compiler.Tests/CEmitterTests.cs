@@ -874,6 +874,63 @@ Check(list.Count == 0, ""destroy"");
         Assert.Contains("ReadEClock(", r.C!);
     }
 
+    [Theory]
+    [InlineData("pal", 50)]
+    [InlineData("ntsc", 60)]
+    [InlineData("exec50", 50)]   // neither display flag set (hosted AROS): ExecBase.VBlankFrequency decides
+    [InlineData("exec60", 60)]
+    public void Frame_timing_runs_natively_against_a_shimmed_timer_and_graphics(string mode, int fps)
+    {
+        bool pal = fps == 50;
+        if (!HasGcc) return;
+        const string body = @"
+Clock.Open();
+Dos.PutStr(Frame.FramesPerSecond + "" "" + Frame.FrameMicroseconds + ""\n"");
+Frame.WaitVBlank(); Frame.ResetCount();
+long t0 = Clock.Ticks;
+Frame.Wait(Frame.FramesPerSecond);
+int ms = Clock.Milliseconds(t0, Clock.Ticks);
+FrameTimer t = new FrameTimer(50, 5);
+t.Begin();
+int steps = 0;
+for (int i = 0; i < 10; i++) { Frame.WaitVBlank(); steps += t.Update(); }
+Dos.Delay(50);
+int stall = t.Update();
+int after = t.Update();
+Dos.PutStr(Frame.Count + "" "" + ms + "" "" + steps + "" "" + stall + "" "" + after + ""\n"");
+Clock.Close();";
+        var c = CompileOk(Program("", body), Targets.M68k.ToOptions());
+        // A shim of timer.device and graphics.library: an E clock at 709379 Hz that Delay and WaitTOF advance by a frame (1/50 or 1/60 s).
+        string shim =
+            "#include <stdint.h>\n#include <stdlib.h>\n#include <string.h>\n" +
+            $"static const int es_shim_pal = {(pal ? 1 : 0)};\n" +
+            "static uint64_t es_shim_clock;\n" +
+            "struct Library; struct Device;\n" +
+            "static inline void *OpenLibrary(const char *n, uint32_t v) { (void)n; (void)v; static unsigned char gb[1024]; memset(gb, 0, sizeof gb); " + (mode == "pal" ? "memset(gb, 0x04, sizeof gb);" : mode == "ntsc" ? "memset(gb, 0x01, sizeof gb);" : $"gb[530] = {fps};") + " return gb; }\n" +
+            "static inline void CloseLibrary(void *l) { (void)l; }\n" +
+            "static inline int OpenDevice(const char *n, uint32_t u, void *io, uint32_t f) { (void)n; (void)u; (void)io; (void)f; return 0; }\n" +
+            "static inline void CloseDevice(void *io) { (void)io; }\n" +
+            "static inline uint32_t ReadEClock(void *dest) { uint32_t *p = (uint32_t *)dest; p[0] = (uint32_t)(es_shim_clock >> 32); p[1] = (uint32_t)es_shim_clock; return 709379; }\n" +
+            "static inline void WaitTOF(void) { es_shim_clock += es_shim_pal ? 709379 / 50 : 709379 / 60; }\n" +
+            "static inline void Delay(int32_t t) { es_shim_clock += (uint64_t)t * 709379 / 50; }\n" +
+            "struct Device *TimerBase;\n";
+        var headers = new System.Collections.Generic.Dictionary<string, string>
+        {
+            ["proto/timer.h"] = shim,
+            ["proto/graphics.h"] = "",
+        };
+        var (code, output) = RunWithHostGcc(c, headers);
+        Assert.Equal(0, code);
+        var lines = output.Split('\n');
+        Assert.Equal($"{fps} {1000000 / fps}", lines[0]);
+        var parts = lines[1].Split(' ');
+        Assert.Equal($"{fps + 10}", parts[0]);                           // the counter has the second's frames and ten more
+        Assert.InRange(int.Parse(parts[1]), 990, 1010);                  // the shimmed 709379 Hz clock gives close to, not exactly, 1000 ms
+        Assert.InRange(int.Parse(parts[2]), 8, 10);                      // ten frames owe about ten 1/50 s steps
+        Assert.Equal("5", parts[3]);                                     // a one second stall is capped
+        Assert.Equal("0", parts[4]);                                     // and the backlog is dropped
+    }
+
     [Fact]
     public void Dates_sample_compiles_for_m68k_with_a_private_utility_base()
     {
