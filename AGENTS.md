@@ -47,9 +47,9 @@ tools/hwpack/build.sh <m68k image>                       # build the real-hardwa
 docker build -t esharp-amiga-toolchain docker && docker/smoke-test.sh    # combined toolchain image
 ```
 
-`<image>` is `esharp-amiga-toolchain` (all three targets) or, for m68k only,
+`<image>` is `esharp-amiga-toolchain` (all four targets: m68k, os4, morphos, aros) or, for m68k only,
 `amigadev/crosstools:m68k-amigaos@sha256:32ec76dac03a642203f0f09f0416480d6c25de1092ed7ed472db870304a64859`
-(1.1 GB instead of ~5.7 GB). Toolchains are pinned by digest in `docker/Dockerfile`; update them
+(1.1 GB instead of ~5.7 GB for the four-target image). Toolchains are pinned by digest in `docker/Dockerfile`; update them
 deliberately and re-run the smoke test.
 
 Requires the .NET 10 SDK (`global.json`). `src/ESharp.Analyzers` stays on `netstandard2.0` so IDEs can load it.

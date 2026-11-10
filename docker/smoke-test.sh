@@ -22,4 +22,13 @@ echo "os4     ok (PPC ELF)"
 ppc-morphos-gcc -noixemul -O2 -Wall -o t.mos t.c
 [ "$(magic t.mos)" = "7f454c46" ] || { echo "morphos: not ELF"; exit 1; }
 echo "morphos ok (PPC ELF)"
+
+cat > a.c <<C
+int main(void) { return 0; }
+C
+x86_64-aros-gcc --sysroot=/opt/x86_64-aros -O2 -fwrapv -Wall -o t.aros a.c
+[ "$(magic t.aros)" = "7f454c46" ] || { echo "aros: not ELF"; exit 1; }
+# ELF e_machine (offset 18, little endian) 0x3e = x86-64
+[ "$(od -A n -t x1 -j 18 -N 2 t.aros | tr -d " ")" = "3e00" ] || { echo "aros: not x86-64"; exit 1; }
+echo "aros    ok (x86-64 ELF)"
 '
