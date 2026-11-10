@@ -1528,4 +1528,201 @@ Check(G(flag ? ref arr[0] : ref arr[1]) == 4, ""ref conditional as an in argumen
         var r = Compile(Program(members, body));
         Assert.Contains("ES0099", ErrorIds(r));
     }
+
+    // ---- #49: string equality by characters, null-forgiving operator, base/derived comparisons ----
+
+    private const string CheckMember = @"
+static void Check(bool ok, string name) { Dos.PutStr(ok ? ""ok "" : ""FAIL ""); Dos.PutStr(name); Dos.PutStr(""\n""); }
+";
+
+    private static void AssertAllOk(string members, string body, int expected)
+    {
+        var c = CompileOk("using System.Linq;\n" + Program(CheckMember + members, body));
+        var (code, output) = RunWithHostGcc(c);
+        Assert.Equal(0, code);
+        Assert.True(!output.Contains("FAIL") && output.Split('\n', StringSplitOptions.RemoveEmptyEntries).Length == expected, output);
+    }
+
+    [Fact]
+    public void String_equality_compares_characters_with_csharp_null_rules()
+    {
+        if (!HasGcc) return;
+        const string members = @"
+static string s_null;
+static string Name(int n) => $""card{n}"";
+static string Lit() => ""card7"";
+static bool Eq(string a, string b) => a == b;
+static bool Ne(string a, string b) => a != b;
+";
+        const string body = @"
+string built = Name(7);
+string lit = Lit();
+Check(built == ""card7"" && lit == built && !(built != lit), ""equal contents at different addresses"");
+Check(built != ""card8"" && built != ""card"" && ""card"" != built && Ne(""ab"", ""abc""), ""different contents"");
+Check(lit == ""card7"" && Eq(lit, lit), ""interned literals and the same pointer"");
+string none = null;
+Check(Eq(none, s_null) && !Ne(none, null), ""null equals null"");
+Check(!Eq(none, ""x"") && !Eq(""x"", none) && Ne(none, """") && Ne("""", none), ""null is not equal to a string, not even the empty one"");
+Check(none == null && lit != null && null != lit && !(lit == null) && none == default, ""comparisons with the null constant"");
+Check(string.Equals(built, ""card7"") && lit.Equals(built) && !lit.Equals(""card"") && !string.Equals(none, lit) && string.Equals(none, s_null), ""string.Equals"");
+";
+        AssertAllOk(members, body, 7);
+        var c = CompileOk(Program(CheckMember + members, body));
+        Assert.Contains("es_streq", c);
+        Assert.DoesNotContain("strcmp", c);
+    }
+
+    [Fact]
+    public void Switch_and_patterns_on_strings_match_by_characters()
+    {
+        if (!HasGcc) return;
+        const string members = @"
+static string Copy(string s) => $""{s}"";
+static int Kind(string s)
+{
+    switch (s)
+    {
+        case ""hearts"":
+        case ""diamonds"": return 1;
+        case ""spades"": return 2;
+        case null: return 9;
+        default: return 0;
+    }
+}
+static int Rank(string s) => s switch { ""ace"" => 14, ""king"" => 13, null => -1, _ => 0 };
+static int Fall(string s)
+{
+    int n = 0;
+    switch (s) { case ""a"": n = 1; break; case ""b"": n = 2; break; }
+    return n;
+}
+public class Named { public string Name; }
+";
+        const string body = @"
+Check(Kind(Copy(""hearts"")) == 1 && Kind(Copy(""diamonds"")) == 1 && Kind(Copy(""spades"")) == 2 && Kind(Copy(""clubs"")) == 0 && Kind(null) == 9, ""switch statement on a string"");
+Check(Fall(Copy(""b"")) == 2 && Fall(Copy(""c"")) == 0, ""switch with break and no default"");
+Check(Rank(Copy(""king"")) == 13 && Rank(Copy(""ace"")) == 14 && Rank(Copy(""two"")) == 0 && Rank(null) == -1, ""switch expression on a string"");
+string q = Copy(""queen"");
+Check(q is ""queen"" && q is not ""king"" && !(q is null) && (q is ""jack"" or ""queen""), ""is with string constants"");
+Named n = new Named { Name = Copy(""Ann"") };
+Check(n is { Name: ""Ann"" } && !(n is { Name: ""Bob"" }), ""property pattern with a string"");
+";
+        AssertAllOk(members, body, 5);
+    }
+
+    [Fact]
+    public void String_comparisons_in_linq_and_lambdas_use_characters()
+    {
+        if (!HasGcc) return;
+        const string members = @"
+static string Copy(string s) => $""{s}"";
+static int CountIf(System.ReadOnlySpan<string> xs, System.Func<string, bool> f) { int n = 0; for (int i = 0; i < xs.Length; i++) if (f(xs[i])) n++; return n; }
+";
+        const string body = @"
+string[] words = new string[3];
+words[0] = Copy(""red""); words[1] = Copy(""green""); words[2] = Copy(""red"");
+string red = Copy(""red"");
+Check(words.Contains(""green"") && !words.Contains(""blue"") && words.Contains(red), ""Contains on strings"");
+Check(words.Count(w => w == ""red"") == 2 && words.Any(w => w == red) && words.Where(w => w != ""red"").Count() == 1, ""== in LINQ lambdas"");
+Check(CountIf(words, w => w == red) == 2, ""== in a delegate lambda"");
+";
+        AssertAllOk(members, body, 3);
+    }
+
+    [Fact]
+    public void Null_forgiving_operator_emits_only_its_operand()
+    {
+        if (!HasGcc) return;
+        const string members = @"
+public class Node { public int Value; public Node Next; public int Twice() { return Value * 2; } }
+public class Chain
+{
+    private Node _last;
+    public Node First;
+    public void Add(Node n) { if (_last == null) First = n; else _last!.Next = n; _last = n!; }
+}
+public struct Counter { public int N; public void Bump() { N++; } }
+static int Read(Node n) { return n.Value; }
+static void Set(ref int v, int x) { v = x; }
+static void Get(out int v) { v = 7; }
+";
+        const string body = @"
+Chain c = new Chain();
+c.Add(new Node { Value = 1 });
+c.Add(new Node { Value = 2 });
+Node first = c.First!;
+Check(first!.Next!.Value == 2 && c.First!.Next!.Next == null, ""member access through !"");
+Check(Read(first!) == 1 && first!.Twice() == 2 && (first!).Next!.Twice() == 4, ""! on arguments and receivers"");
+Node n = null;
+n = first!;
+Check(n == first, ""! in an assignment"");
+int v = 0;
+Set(ref v!, 5);
+Check(v == 5, ""! on a ref argument"");
+Get(out v!);
+Check(v == 7, ""! on an out argument"");
+Counter k = default;
+k!.Bump();
+Check(k.N == 1, ""! on a struct receiver"");
+string s = null;
+Check(s! == null, ""! on a string"");
+";
+        var c = CompileOk(Program(CheckMember + members, body));
+        Assert.DoesNotContain("!.", c);
+        Assert.DoesNotContain("!)", c);
+        AssertAllOk(members, body, 7);
+    }
+
+    [Fact]
+    public void Base_and_derived_references_compare_without_warnings()
+    {
+        if (!HasGcc) return;
+        const string members = @"
+public class Shape { public int Id; }
+public class Square : Shape { }
+public class Circle : Shape { }
+public interface IHas { int Get(); }
+public class Holder : IHas { public int Get() { return 3; } }
+public class Special : Holder { }
+static Shape Pick(bool b, Square s, Circle c) => b ? s : c;
+";
+        const string body = @"
+Square sq = new Square { Id = 1 };
+Circle ci = new Circle { Id = 2 };
+Shape sh = sq;
+Check(sh == sq && sq == sh && !(sh != sq) && ci != sh && sh != ci, ""base and derived references"");
+Shape none = null;
+Check(none != sq && sq != none && none == null, ""base null against derived"");
+Check(Pick(true, sq, ci) == sq && Pick(false, sq, ci) == ci, ""derived classes through ?:"");
+Shape p = sh == null ? ci : sq;
+Check(p == sq, ""conditional with a derived branch"");
+Shape q = none ?? ci;
+Check(q == ci && (sh ?? ci) == sq, ""?? with base and derived"");
+Shape r = null;
+r ??= sq;
+r ??= ci;
+Check(r == sq, ""??= keeps the first value"");
+string t = null;
+Check((t ?? ""dflt"") == ""dflt"", ""?? on a string"");
+Special sp = new Special();
+Holder h = sp;
+IHas ih = sp;
+Check(h == sp && ih == sp && sp == ih && ih == h, ""interface and class references to the same object"");
+";
+        AssertAllOk(members, body, 8);
+    }
+
+    [Theory]
+    [InlineData("", "var a = (1, \"x\"); var b = (1, \"x\"); bool e = a == b;")]
+    [InlineData("public record R(string Name);", "R a = new R(\"x\"); R b = new R(\"x\"); bool e = a == b;")]
+    [InlineData("", "object o = \"x\"; bool e = o is \"x\";")]
+    [InlineData("", "string s = \"x\"; object o = s; bool e = s.Equals(o);")]
+    [InlineData("", "string[] a = new string[2]; string m = a.Max();")]
+    [InlineData("", "string[] a = new string[2]; string m = a.Min(x => x);")]
+    [InlineData("", "int? a = null; int b = a ?? 3;")]
+    public void String_and_record_equality_forms_that_cannot_be_compiled_report_ES0099(string members, string body)
+    {
+        var r = Compile("using System.Linq;\n" + Program(members, body));
+        Assert.Contains("ES0099", ErrorIds(r));
+    }
 }

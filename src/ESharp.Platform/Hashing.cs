@@ -62,11 +62,6 @@ public static unsafe class Hashing
         return h ^ (h >> 15);
     }
 
-    /// <summary>String equality by characters.</summary>
-    public static bool SameText(string a, string b)
-    {
-        if (a.Length != b.Length) return false;
-        for (int i = 0; i < a.Length; i++) if (a[i] != b[i]) return false;
-        return true;
-    }
+    /// <summary>String equality by characters (the same as <c>a == b</c>).</summary>
+    public static bool SameText(string a, string b) { return a == b; }
 }
