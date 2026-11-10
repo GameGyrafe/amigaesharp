@@ -1743,6 +1743,33 @@ Check(n is Seven && !(n is not Seven) && u is Trump && !(Suit.Hearts is Trump), 
     }
 
     [Fact]
+    public void Conditions_build_without_parentheses_warnings()
+    {
+        // gcc and clang -Wall -Werror: no doubled parentheses around a comparison, one pair kept around an assignment.
+        if (!HasGcc) return;
+        const string members = @"
+static int _n = 3;
+static bool More() { _n--; return _n > 0; }
+";
+        const string body = @"
+int k = 0;
+bool b;
+if (b = More()) k++;
+while (b = More()) k++;
+Check(k == 2 && !b, ""assignment as a condition"");
+int m = 1;
+if ((m <<= 2) == 4) m++;
+Check(m == 5, ""shift-assign inside a comparison"");
+int i = 0;
+while ((i == 0)) i++;
+do { i++; } while ((i < 3));
+for (int j = 0; (j < 2); j++) i++;
+Check(i == 5, ""doubled parentheses in loop conditions"");
+";
+        AssertAllOk(members, body, 3);
+    }
+
+    [Fact]
     public void Base_and_derived_references_compare_without_warnings()
     {
         if (!HasGcc) return;
