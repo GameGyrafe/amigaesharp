@@ -48,6 +48,20 @@ Not verified:
 - A real CD32 pad, and real hardware in general.
 - AmigaOS 4 and MorphOS.
 
+## Frame timing (samples/timing, issue #13, timing part)
+
+`Frame` (src/ESharp.Platform/Frame.cs) is the game-loop timing API. `Frame.WaitVBlank()` is graphics.library `WaitTOF`, so drawing syncs to the display, and counts frames in `Frame.Count` (`ResetCount()`). `Frame.FramesPerSecond` is 50 or 60 (`IsPal`, `FrameMicroseconds`), read once from the PAL bit of `GfxBase.DisplayFlags` (offset and flag measured into `Layout.g.cs` for m68k and AROS x86-64). `FrameTimer(stepsPerSecond, maxSteps)` is a fixed-timestep helper over `Clock`: `Begin()`, then `Update()` each frame returns the logic steps owed, capped at `maxSteps` with the backlog dropped so a stall cannot spiral; `ElapsedMicroseconds`/`ElapsedMilliseconds` since `Begin`, and `Fraction` (0..1000) for interpolation. `Video.WaitVBlank()` is a shortcut, and `Video.WaitFrames(n)` is now n `WaitTOF` calls on the Amiga (it was `Dos.Delay(n)`, 50 Hz ticks, which is wrong on NTSC and not synced to the display). Host fake: `WaitVBlank` advances the fake `Clock` by one frame (20000 or 16666 microseconds; `Frame.HostPal` + `Frame.Redetect()` pick the rate), so tests drive game loops deterministically; the host `Video.WaitFrames` used to do nothing and now advances the fake clock too.
+
+Verified:
+- 224 unit tests pass (this adds the sample on the host at 50 and 60 Hz, and the generated m68k C for `Frame`/`FrameTimer` compiled and run with host gcc against a shimmed timer and graphics, PAL and NTSC; the shim is a model, not the OS).
+- A1200, Kickstart 3.1 (40.069) in FS-UAE headless (PAL): 10 ok, no FAIL. `50 WaitVBlank calls took 1001 ms`, so under Xvfb the emulator ran in real time on this host (the host was shared and not idle). Ten frames owed 9 steps of 1/50 s (the timer's rounding, within the sample's 8..12), a one second stall owed exactly the cap of 5, and the next update owed 0.
+- Regression after `Video.WaitFrames` moved to `WaitTOF`, same machine: screen 17 ok, cards 15 ok, rummy 28 ok, no FAIL.
+- Hosted AROS x86-64 (nightly 20261106): 9 ok, no FAIL, and a "note" line. The detected rate was 60 (NTSC) although the measured frames took 20 ms each (60 calls took 1200 ms, a 50 Hz pace): hosted AROS's `DisplayFlags` has no PAL bit, so `FramesPerSecond` is unreliable there and the one second check is skipped with a note. Not fixed: a rate from a better source (for example `ExecBase.VBlankFrequency`) is not wired.
+
+Not verified:
+- Real hardware (the sample is in the hardware pack as `timing`), an NTSC machine (60 is checked only against the host fake and the gcc shim), and AmigaOS 4, MorphOS.
+- The emulator was not run at other speeds, so what the sample does on a slow emulator (it prints the note) was not seen.
+
 ## Dates and case-insensitive text: utility.library (samples/dates)
 
 `Date.Now()` reads the system clock (dos.library `DateStamp`) as whole seconds since 1 January 1978, the Amiga epoch, in local time. `Date.Split(seconds)` gives a `DateParts` (year, month, day, hour, minute, second, weekday; utility `Amiga2Date`). `Date.TryJoin(parts, out seconds)` goes back (`Date2Amiga`) and returns false for a date that does not exist. It checks by splitting the result back, not with `CheckDate`: `CheckDate` returns 0 for 1 January 1978 00:00:00, a real date, and hosted AROS's `CheckDate` accepts 29 February 2001. `Strings.CompareIgnoreCase` (with an optional length), `EqualsIgnoreCase`, `ToUpper` and `ToLower` use utility's `Stricmp`, `Strnicmp`, `ToUpper` and `ToLower`. They follow ISO-8859-1, so é and É fold, and the locale's rules when locale.library has set them up. utility is in ROM, but it is opened on first use through its own `[LibraryBase]`; `Date.Close()` closes it. The ClockData and DateStamp layouts and `TICKS_PER_SECOND` are measured. On the host, `Date.HostSetNow` sets the fake clock, `Dos.Delay` moves it on, and the conversions use .NET's calendar.

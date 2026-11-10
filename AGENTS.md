@@ -30,6 +30,7 @@ dotnet run --project src/ESharp.Cli -- run samples/iff --docker <image> --headle
 dotnet run --project src/ESharp.Cli -- run samples/asl --docker <image> --headless --model A1200   # asl.library: allocate/free; create RAM:asl-open first to show the file requester after SHOT, then --input clicks OK or Cancel
 dotnet run --project src/ESharp.Cli -- run samples/names --docker <image> --headless --model A1200   # E# classes named Window, Node, List, ... and same-named types in two namespaces (prefixed C names)
 dotnet run --project src/ESharp.Cli -- run samples/trace --trace --serial trace.txt --docker <image> --headless --model A1200   # serial Trace.Line/Value: FS-UAE writes the Amiga serial port into trace.txt, printed after the run (docs/DEBUGGING.md)
+dotnet run --project src/ESharp.Cli -- run samples/timing --docker <image> --headless --model A1200   # frame timing: Frame.WaitVBlank (WaitTOF), PAL/NTSC rate, FrameTimer fixed steps; prints a note instead of failing if the emulator is not real time
 dotnet run --project src/ESharp.Cli -- addr samples/trace 0 e4 --docker <image>   # crash address (hunk 0, hex offset) -> C# file:line, using obj/m68k/<name>.o that every m68k build writes (docs/DEBUGGING.md)
 dotnet run --project src/ESharp.Cli -- run samples/lambdas --docker <image> --headless --model A1200   # capturing lambdas and delegates
 dotnet run --project src/ESharp.Cli -- run samples/linq --docker <image> --headless --model A1200   # LINQ over arrays, turned into loops

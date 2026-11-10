@@ -36,6 +36,8 @@ public static class Layout
     public const uint TimerUnitMicroHz = 0u;
     public const int EClockHi = 0;
     public const int EClockLo = 4;
+    public const int GfxDisplayFlags = 416;
+    public const uint GfxPalFlag = 4u;
     public const uint JpTypeMask = 4026531840u;
     public const uint JpTypeNotAvail = 0u;
     public const uint JpTypeGameCtlr = 268435456u;
@@ -178,6 +180,8 @@ public static class Layout
     public const uint TimerUnitMicroHz = 0u;
     public const int EClockHi = 0;
     public const int EClockLo = 4;
+    public const int GfxDisplayFlags = 206;
+    public const uint GfxPalFlag = 4u;
     public const uint JpTypeMask = 4026531840u;
     public const uint JpTypeNotAvail = 0u;
     public const uint JpTypeGameCtlr = 268435456u;
