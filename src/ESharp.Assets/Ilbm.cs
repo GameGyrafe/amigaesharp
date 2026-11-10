@@ -59,6 +59,7 @@ public static class Ilbm
         if (compression > 1) throw new InvalidDataException($"ILBM: compression {compression} is not supported");
         if (planes != 24 && cmap == null) throw new InvalidDataException("ILBM: no CMAP chunk");
 
+        if ((long)width * height > 4096L * 4096L) throw new InvalidDataException("ILBM: picture too large");
         var rowBytes = (width + 15) / 16 * 2;
         var rowPlanes = planes + (masking == 1 ? 1 : 0);
         var rgba = new byte[width * height * 4];

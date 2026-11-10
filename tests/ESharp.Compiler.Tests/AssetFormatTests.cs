@@ -168,6 +168,35 @@ public class AssetFormatTests : IDisposable
     }
 
     [Fact]
+    public void Ilbm_reader_rejects_huge_pictures_before_allocating()
+    {
+        var (idx, pal) = Picture(16, 4, 3);
+        foreach (var (w, h) in new[] { (65535, 65535), (40000, 40000) })
+        {
+            var f = Ilbm.Write(16, 4, 3, idx, pal, false);
+            f[12 + 8] = (byte)(w >> 8); f[12 + 9] = (byte)w; f[12 + 10] = (byte)(h >> 8); f[12 + 11] = (byte)h;
+            var ex = Assert.Throws<InvalidDataException>(() => Ilbm.Read(f));
+            Assert.Contains("too large", ex.Message);
+        }
+    }
+
+    [Theory]
+    [InlineData(Dither.FloydSteinberg)]
+    [InlineData(Dither.Ordered)]
+    public void Dithering_also_runs_when_the_12_bit_rounding_alone_fits_the_budget(Dither dither)
+    {
+        var image = Image(256, 4, (x, _) => (x, x, x, 255));      // 16 levels after rounding, which fits 32 colours
+        var flat = Planar.Convert(image, 32);
+        var dithered = Planar.Convert(image, 32, dither: dither);
+        Assert.Equal(flat.Palette, dithered.Palette);
+        var band = Enumerable.Range(0, 256).Where(x => flat.Indices[x] == flat.Indices[128]).ToList();
+        Assert.True(band.Select(x => (int)dithered.Indices[x]).Distinct().Count() > 1);
+        // Exactly representable colours still map exactly.
+        var exact = Image(16, 1, (x, _) => (x * 17, x * 17, x * 17, 255));
+        Assert.Equal(Planar.Convert(exact, 32).Indices, Planar.Convert(exact, 32, dither: dither).Indices);
+    }
+
+    [Fact]
     public void Ilbm_reader_rejects_bad_files()
     {
         Assert.Throws<InvalidDataException>(() => Ilbm.Read(new byte[] { 1, 2, 3 }));

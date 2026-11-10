@@ -70,7 +70,7 @@ public static class Planar
     /// <paramref name="maxColors"/> distinct colours the mapping is exact, otherwise median cut chooses the palette.
     /// Pixels with alpha below 128 become palette entry 0, which is black (opaque black pixels use it too; the mask tells them apart).
     /// With <paramref name="dither"/> the pixels are mapped to the reduced palette with error diffusion or an ordered matrix (computed from the full 8-bit source colours); it
-    /// only matters when colours were really reduced (an exact mapping is left alone), and transparent pixels neither take nor give error.
+    /// only matters when colours were really reduced, by median cut or by the rounding (an exact mapping is left alone), and transparent pixels neither take nor give error.
     /// </summary>
     public static PlanarImage Convert(RgbaImage image, int maxColors, bool aga = false, Dither dither = Dither.None)
     {
@@ -106,7 +106,7 @@ public static class Planar
         }
 
         var indices = new byte[n];
-        if (dither != Dither.None && distinct.Count > colorBudget)
+        if (dither != Dither.None && (distinct.Count > colorBudget || RoundingLosesColour(image, transparent, rgb12, bits)))
             DitherMap(image, transparent, palette, bits, dither, indices);
         else
         {
@@ -138,6 +138,24 @@ public static class Planar
                     mask[y * bytesPerRow + (x >> 3)] |= (byte)(0x80 >> (x & 7));
 
         return new PlanarImage(image.Width, image.Height, depth, planes, entries, indices) { Mask = mask, Palette24 = entries24 };
+    }
+
+    /// <summary>True when some opaque pixel's 8-bit colour differs from its rounded palette colour (expanded back to 8 bits), so rounding alone bands.</summary>
+    private static bool RoundingLosesColour(RgbaImage image, bool[] transparent, int[] rgb12, int bits)
+    {
+        var max = (1 << bits) - 1;
+        for (var i = 0; i < transparent.Length; i++)
+        {
+            if (transparent[i]) continue;
+            var c = rgb12[i];
+            for (var k = 0; k < 3; k++)
+            {
+                var shift = (2 - k) * bits;
+                var back = (((c >> shift) & max) * 255 + max / 2) / max;
+                if (back != image.Rgba[i * 4 + k]) return true;
+            }
+        }
+        return false;
     }
 
     private static void DitherMap(RgbaImage image, bool[] transparent, List<int> palette, int bits, Dither dither, byte[] indices)
