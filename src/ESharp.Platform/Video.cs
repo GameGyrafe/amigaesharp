@@ -278,11 +278,14 @@ public static unsafe class Video
         }
     }
 
-    /// <summary>Waits for <paramref name="frames"/> video frames (50 per second on PAL).</summary>
+    /// <summary>Waits for <paramref name="frames"/> video frames (50 per second on PAL, 60 on NTSC): each is a WaitTOF, so it is synced to the display.</summary>
     public static void WaitFrames(int frames)
     {
-        Dos.Delay(frames);
+        Frame.Wait(frames);
     }
+
+    /// <summary>Waits for the next vertical blank (graphics.library WaitTOF), so drawing after it syncs to the display.</summary>
+    public static void WaitVBlank() { Frame.WaitVBlank(); }
 #else
     private static byte[] _pixels = new byte[0];
     private static ushort[] _palette = new ushort[0];
@@ -437,7 +440,9 @@ public static unsafe class Video
         }
     }
 
-    public static void WaitFrames(int frames) { }
+    public static void WaitFrames(int frames) { Frame.Wait(frames); }
+
+    public static void WaitVBlank() { Frame.WaitVBlank(); }
 #endif
 
     /// <summary>

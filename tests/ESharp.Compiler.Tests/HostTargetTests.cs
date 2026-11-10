@@ -140,6 +140,36 @@ public class HostTargetTests
     }
 
     [Fact]
+    public void Timing_sample_runs_on_the_host_deterministically()
+    {
+        ESharp.Platform.Frame.HostPal = true;
+        ESharp.Platform.Frame.Redetect();
+        using var console = HostConsole.Capture();
+        TimingSample.Program.Main();
+        Assert.Equal("ok timer.device opens\ndisplay runs at 50 frames per second (PAL)\nok the rate is 50 or 60\nok a frame lasts 1/rate seconds\n"
+            + "50 WaitVBlank calls took 1000 ms\nok the frame counter counts each wait\nok a second of frames takes about a second\n"
+            + "10 frames owed 10 steps\nok ten frames owe about ten steps at the frame rate\nok a stall owes only the capped number of steps\n"
+            + "ok the backlog is dropped after a stall\nok elapsed time covers the stall\nelapsed 1200 ms\n"
+            + "ok Video.WaitFrames waits that many vertical blanks\n", console.Output);
+    }
+
+    [Fact]
+    public void Timing_sample_runs_on_a_60_Hz_host()
+    {
+        ESharp.Platform.Frame.HostPal = false;
+        ESharp.Platform.Frame.Redetect();
+        try
+        {
+            using var console = HostConsole.Capture();
+            TimingSample.Program.Main();
+            Assert.Contains("display runs at 60 frames per second (NTSC)\n", console.Output);
+            Assert.Contains("60 WaitVBlank calls took 999 ms\n", console.Output);   // 60 x 16666 us
+            Assert.DoesNotContain("FAIL", console.Output);
+        }
+        finally { ESharp.Platform.Frame.HostPal = true; ESharp.Platform.Frame.Redetect(); }
+    }
+
+    [Fact]
     public void Dates_sample_runs_on_the_host()
     {
         using var console = HostConsole.Capture();
