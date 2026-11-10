@@ -1674,6 +1674,75 @@ Check(s! == null, ""! on a string"");
     }
 
     [Fact]
+    public void Null_forgiving_operator_applies_an_implicit_conversion_once()
+    {
+        if (!HasGcc) return;
+        const string members = @"
+public interface IScore { int Score(); }
+public class Card : IScore { public int Rank; public int Score() { return Rank * 10; } }
+public class Ace : Card { }
+static int Use(IScore s) { return s.Score(); }
+static int Sum(System.Span<int> xs) { int n = 0; for (int i = 0; i < xs.Length; i++) n += xs[i]; return n; }
+static int First(System.ReadOnlySpan<int> xs) { return xs[0]; }
+static int Raw(Fix f) { return f.Raw; }
+static int[] Arr = new int[3];
+static string[] Names = new string[2];
+static string Copy(string s) => $""{s}"";
+";
+        const string body = @"
+Card c = new Card { Rank = 4 };
+IScore s = c!;
+Check(s.Score() == 40 && Use(c!) == 40 && Use((c!)) == 40, ""! where a class becomes an interface"");
+IScore none = null!;
+Check(none == null, ""null! as an interface"");
+Arr[0] = 1; Arr[1] = 2; Arr[2] = 3;
+System.Span<int> sp = Arr!;
+Check(sp.Length == 3 && Sum(Arr!) == 6 && Sum(sp!) == 6 && First(sp!) == 1, ""! where an array becomes a span"");
+Names[0] = Copy(""aa""); Names[1] = Copy(""bb"");
+Check(Names!.Contains(""bb"") && !Names!.Contains(""cc""), ""! on an array receiver of Contains"");
+int n = 3;
+Fix b = n!;
+Check(b.Raw == 3 * 65536 && Raw(n!) == 3 * 65536, ""! where a user-defined implicit conversion applies"");
+Ace a = new Ace { Rank = 2 };
+Card asCard = a!;
+Check(asCard.Rank == 2 && Use(a!) == 20, ""! where a derived class becomes its base or an interface"");
+IScore p = (c);
+System.Span<int> ps = (Arr);
+Fix pf = (n);
+IScore pn = (null);
+Check(p.Score() == 40 && Use((c)) == 40 && Use(((c!))) == 40 && ps.Length == 3 && Sum((Arr)) == 6 && pf.Raw == 3 * 65536 && pn == null, ""parentheses where a conversion applies"");
+";
+        var c = CompileOk("using System.Linq;\n" + Program(CheckMember + members, body));
+        Assert.DoesNotContain("op_Implicit_ESharp_Fix(Es_ESharp_Fix_op_Implicit", c);
+        AssertAllOk(members, body, 7);
+    }
+
+    [Fact]
+    public void Is_with_a_named_constant_is_a_constant_pattern()
+    {
+        if (!HasGcc) return;
+        const string members = @"
+const string K = ""abc"";
+const string Nothing = null;
+const int Seven = 7;
+public enum Suit { Hearts, Spades }
+const Suit Trump = Suit.Spades;
+static string Copy(string s) => $""{s}"";
+";
+        const string body = @"
+string s = Copy(""abc"");
+string t = Copy(""abd"");
+Check(s is K && !(t is K) && t is not K && !(s is not K), ""string is a named constant, by characters"");
+string none = null;
+Check(!(none is K) && none is Nothing && !(s is Nothing), ""null subject and a null constant"");
+int n = 7;
+Suit u = Suit.Spades;
+Check(n is Seven && !(n is not Seven) && u is Trump && !(Suit.Hearts is Trump), ""int and enum named constants"");
+";
+        AssertAllOk(members, body, 3);
+    }
+
+    [Fact]
     public void Base_and_derived_references_compare_without_warnings()
     {
         if (!HasGcc) return;

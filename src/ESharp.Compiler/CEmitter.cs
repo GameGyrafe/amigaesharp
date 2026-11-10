@@ -1822,6 +1822,14 @@ internal sealed partial class CEmitter
 
     private string Expr(ExpressionSyntax e, bool top = false)
     {
+        // x! only silences a nullable warning: no code. Parentheses add none either (the emitter brackets what it needs).
+        // The operand carries the same converted type, so an implicit conversion is applied once, on the operand,
+        // and not a second time on the '!' or '( )' node.
+        if (e is PostfixUnaryExpressionSyntax { RawKind: (int)SyntaxKind.SuppressNullableWarningExpression } nf)
+            return Expr(nf.Operand, top);
+        if (e is ParenthesizedExpressionSyntax paren)
+            return Expr(paren.Expression, top);
+
         var info = Model(e).GetTypeInfo(e);
 
         // 'null' where a span is expected is the empty span (the compiler sees it as the array -> span operator).
@@ -1878,8 +1886,11 @@ internal sealed partial class CEmitter
     {
         switch (e)
         {
+            // Reached only from callers that want the value without its implicit conversion (Expr unwraps these itself).
             case ParenthesizedExpressionSyntax p:
-                return Expr(p.Expression, top);
+                return ExprCore(p.Expression, top);
+            case PostfixUnaryExpressionSyntax { RawKind: (int)SyntaxKind.SuppressNullableWarningExpression } nf:
+                return ExprCore(nf.Operand, top);
 
             case LiteralExpressionSyntax { RawKind: (int)SyntaxKind.DefaultLiteralExpression }:
                 return DefaultValue(e);
@@ -1943,9 +1954,6 @@ internal sealed partial class CEmitter
 
             case PrefixUnaryExpressionSyntax u:
                 return Prefix(u);
-
-            case PostfixUnaryExpressionSyntax { RawKind: (int)SyntaxKind.SuppressNullableWarningExpression } nf:
-                return Expr(nf.Operand, top);   // x! only silences a nullable warning: no code
 
             case PostfixUnaryExpressionSyntax pu:
                 if (WrittenProperty(pu.Operand) is { } pp)
@@ -2045,6 +2053,9 @@ internal sealed partial class CEmitter
     {
         if (b.IsKind(SyntaxKind.IsExpression) || b.IsKind(SyntaxKind.AsExpression))
         {
+            // 'x is K' with a named constant K is a constant pattern, not a type test (the parser cannot tell them apart).
+            if (Model(b).GetSymbolInfo(b.Right).Symbol is not ITypeSymbol && Model(b).GetConstantValue(b.Right).HasValue)
+                return NamedConstantIs(b);
             var from = Model(b).GetTypeInfo(b.Left).Type as INamedTypeSymbol;
             var target = Model(b).GetTypeInfo(b.Right).Type as INamedTypeSymbol;
             if (from == null || target == null || !IsHeapClass(from) || !IsHeapClass(target))
@@ -2127,6 +2138,23 @@ internal sealed partial class CEmitter
     }
 
     /// <summary>True for the null literal and other constants whose value is null (<c>default</c>, <c>(string)null</c>, a null const).</summary>
+    // 'x is K' where K names a constant: strings compare by characters (a null constant is a pointer test),
+    // numbers, chars, bools and enums of the same type compare with ==; anything else is not supported.
+    private string NamedConstantIs(BinaryExpressionSyntax b)
+    {
+        var subjectType = Model(b).GetTypeInfo(b.Left).Type;
+        var constType = Model(b).GetTypeInfo(b.Right).Type;
+        if (subjectType?.SpecialType == SpecialType.System_String)
+            return IsNullConstant(b.Right) ? $"({Expr(b.Left, top: true)} == NULL)" : StrEq(Expr(b.Left, top: true), Expr(b.Right, top: true));
+        var simple = subjectType != null && (subjectType.TypeKind == TypeKind.Enum ||
+            subjectType.SpecialType is SpecialType.System_Boolean or SpecialType.System_Char or SpecialType.System_SByte or SpecialType.System_Byte
+                or SpecialType.System_Int16 or SpecialType.System_UInt16 or SpecialType.System_Int32 or SpecialType.System_UInt32
+                or SpecialType.System_Int64 or SpecialType.System_UInt64 or SpecialType.System_Single or SpecialType.System_Double);
+        if (!simple || !SymbolEqualityComparer.Default.Equals(subjectType, constType))
+            return Unsupported(b, "'is' with a named constant on this type");
+        return $"({Expr(b.Left, top: true)} == {Expr(b.Right, top: true)})";
+    }
+
     private bool IsNullConstant(ExpressionSyntax e)
     {
         var c = Model(e).GetConstantValue(e);
