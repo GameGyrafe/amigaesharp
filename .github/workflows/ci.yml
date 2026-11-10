@@ -26,7 +26,7 @@ jobs:
         run: |
           df -h /
           sudo rm -rf /usr/local/lib/android /opt/ghc /usr/local/.ghcup /opt/hostedtoolcache/CodeQL /usr/share/swift
-          docker image prune -af -q
+          docker image prune -af >/dev/null
           df -h /
       - name: Build the Amiga toolchain image
         run: |
