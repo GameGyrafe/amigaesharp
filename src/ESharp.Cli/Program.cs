@@ -362,6 +362,7 @@ Targets:
                 var r = ESharp.Assets.AssetBuilder.Sync(manifest);
                 if (r.Status is ESharp.Assets.AssetBuilder.SyncStatus.Created or ESharp.Assets.AssetBuilder.SyncStatus.Updated)
                     Console.WriteLine($"Regenerated {r.Target} (assets changed)");
+                foreach (var w in r.Output?.Warnings ?? Array.Empty<string>()) Console.WriteLine($"warning: {w}");
             }
             catch (Exception e) when (IsAssetError(e))
             {
@@ -384,7 +385,10 @@ Targets:
             var output = sync.Output;
             Console.WriteLine(sync.Status == ESharp.Assets.AssetBuilder.SyncStatus.Touched ? $"{target} unchanged" : $"Wrote {target}");
             foreach (var r in output.Reports)
-                Console.WriteLine($"  {r.Name,-16} {r.Width}x{r.Height}, {r.Depth} bitplanes, {r.ChipBytes:N0} bytes of chip RAM");
+                Console.WriteLine(r.IsSample
+                    ? $"  {r.Name,-16} sample, {r.ChipBytes:N0} bytes of chip RAM"
+                    : $"  {r.Name,-16} {r.Width}x{r.Height}, {r.Depth} bitplanes, {r.ChipBytes:N0} bytes of chip RAM");
+            foreach (var w in output.Warnings ?? Array.Empty<string>()) Console.WriteLine($"warning: {w}");
             Console.WriteLine($"  total            {output.Reports.Sum(r => r.ChipBytes):N0} bytes of chip RAM");
             return 0;
         }
