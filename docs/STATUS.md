@@ -13,9 +13,11 @@ The minimum system is now an **Amiga 1200: 68020, AGA, 2 MB chip RAM, Kickstart 
 ## Clang-clean C
 
 The generated C builds without warnings under clang `-Wall -Werror` as well as gcc: no doubled parentheses around if/while/for conditions
-(`-Wparentheses-equality`), and `x ??= y` as a statement no longer yields an unused value. The C tests honour `ESHARP_TEST_CC` (default
-`gcc`). Verified: the whole suite (268 tests) passes with gcc on Linux and with Ubuntu clang 18.1.3 in a container, and CI repeats the run
-with clang; samples/language agrees on the A1200 emulator. macOS itself (Apple clang 21) was not re-run.
+(`-Wparentheses-equality`; an assignment used as a condition keeps exactly one pair, for `-Wparentheses`), and `x ??= y` as a statement no
+longer yields an unused value. The C tests honour `ESHARP_TEST_CC` (default `gcc`). Verified: the whole suite passes with gcc on Linux
+(269), with Ubuntu clang 18.1.3 in a container (268, before the assignment test was added), and on macOS 27 / Apple Silicon where `gcc` is
+Apple clang 21.0.0 (269, run by Dave; this is where the warnings were found); CI repeats the run with clang; samples/language agrees on the
+A1200 emulator.
 
 ## String equality, null-forgiving `!`, base/derived comparisons (issue #49, part of #12)
 
@@ -47,7 +49,8 @@ Not verified:
 `esharp new <name>` now writes `Program.cs`, `<name>.csproj`, `.gitignore` and `.vscode/{tasks,launch,extensions}.json` (`src/ESharp.Cli/ProjectTemplate.cs`). The csproj references `ESharp.Target.Host` (runtime, platform, host fakes, `HOST` defined) and `ESharp.Analyzers` as an analyzer (`OutputItemType="Analyzer" ReferenceOutputAssembly="false"`), defining `HOST` like `esharp test` does, using an `ESharpRoot` property that `esharp new` fills in from the CLI's location (or `ESHARP_ROOT`; one shared lookup, `SourceTree.Find`, also used by `esharp test`). `esharp new games/demo` creates `games/demo/` with project name `demo`; a name that is not a valid C# identifier (`my-game`, a keyword) is rejected with a suggestion (`my_game`). Tasks call `dotnet <path to esharp.dll> build|run ...` (nothing has to be on PATH; the docker image is a `${input:dockerImage}` prompt defaulting to the pinned m68k image) and `dotnet run --project`. `launch.json` is a coreclr launch of the host build.
 
 - Verified (in a scratch directory, from the shell): `esharp new` output; the JSON files parse; `dotnet build` and `dotnet run` of the new project print `Hello from E#!`; a deliberate violation gives an `ES` error from `dotnet build` (see the PR for the output); the task command lines run. Unit tests check that the files are valid JSON with the expected tasks, the name rules, and `esharp new sub/dir` through the CLI.
-- Not verified: the editor itself (VS Code was not installed or opened, so live squiggles in the editor, the task runner UI, `${input:}` prompts and the coreclr debugger were not tried), Windows and macOS, a CLI installed away from a checkout (the root cannot be found then without `ESHARP_ROOT`), and no NuGet package for the runtime exists yet.
+- **Verified on macOS (Dave, 2026-11-10; macOS 27, Apple Silicon, .NET 10 SDK, VS Code with the C# extension):** `dotnet test` (269 passed after the clang fix), `esharp new mygame` from a checkout, the project loads in VS Code, the analyzer shows ES0001 live while typing (squiggle and hover), the tasks "check subset and emit C" (error in the Problems panel; then `obj/m68k/mygame.c`), "run on the host" (`Hello from E#!`), "build for the host", F5 "debug on the host (.NET)" (breakpoint hit, step over), and "build (m68k)" through Docker Desktop (pulled the pinned m68k image under emulation, `Built .../obj/m68k/mygame`). Clicking a task error in Problems to jump to the line was not reported back.
+- Not verified: the editor on Windows and Linux, a CLI installed away from a checkout (the root cannot be found then without `ESHARP_ROOT`), and no NuGet package for the runtime exists yet.
 
 ## Joystick and clock: lowlevel.library and timer.device (samples/controls)
 
