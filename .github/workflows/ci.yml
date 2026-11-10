@@ -22,13 +22,22 @@ jobs:
       - uses: actions/setup-dotnet@v4
         with:
           dotnet-version: 10.0.x
+      - name: Free runner disk space (the image with AROS is about 5.7 GB and its source images more)
+        run: |
+          df -h /
+          sudo rm -rf /usr/local/lib/android /opt/ghc /usr/local/.ghcup /opt/hostedtoolcache/CodeQL /usr/share/swift
+          docker image prune -af -q
+          df -h /
       - name: Build the Amiga toolchain image
-        run: docker build -t esharp-amiga-toolchain docker
+        run: |
+          docker build -t esharp-amiga-toolchain docker
+          docker builder prune -af
+          df -h /
       - name: Smoke-test every target compiler
         run: docker/smoke-test.sh
       - name: Build the hello sample for every target
         run: |
-          for t in m68k os4 morphos; do
+          for t in m68k os4 morphos aros; do
             dotnet run --project src/ESharp.Cli -- build samples/hello --target $t --docker
           done
       - name: Run hello in FS-UAE (m68k, AROS ROM replacement)
