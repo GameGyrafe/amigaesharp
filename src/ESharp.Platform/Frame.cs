@@ -3,7 +3,9 @@ namespace ESharp.Platform;
 /// <summary>
 /// Frame timing for game loops: wait for the display's vertical blank, count frames, and know whether the machine
 /// runs 50 Hz (PAL) or 60 Hz (NTSC). On the Amiga <see cref="WaitVBlank"/> is graphics.library WaitTOF, so drawing
-/// syncs to the display; the rate comes from the PAL or NTSC bit of GfxBase.DisplayFlags (set from the chips on classic
+/// syncs to the display; when WaitTOF comes back well inside a frame (a display without a vertical blank interrupt, such
+/// as the emulated sm501 of AmigaOS 4 in QEMU), timer.device waits for the rest of the frame instead (<see cref="PacedFrames"/>).
+/// The rate comes from the PAL or NTSC bit of GfxBase.DisplayFlags (set from the chips on classic
 /// machines); when neither bit is set (hosted AROS) it is ExecBase.VBlankFrequency. On SDL each <see cref="WaitVBlank"/> shows the
 /// screen and paces the loop to a steady 50 frames per second (vsync is not used). On the host it is a deterministic fake: each <see cref="WaitVBlank"/> advances the
 /// fake <see cref="Clock"/> by one frame (20000 or 16666 microseconds), so tests can drive a game loop.
@@ -12,6 +14,13 @@ public static unsafe class Frame
 {
     private static int _count;
     private static int _fps;
+    private static int _paced;
+
+    /// <summary>
+    /// Waits that timer.device finished because the display's wait came back too early (well inside a frame). Always 0
+    /// on a display with a working vertical blank, on SDL and on the host.
+    /// </summary>
+    public static int PacedFrames { get { return _paced; } }
 
     /// <summary>Frames waited for since start (or the last <see cref="ResetCount"/>).</summary>
     public static int Count { get { return _count; } }
@@ -60,10 +69,105 @@ public static unsafe class Frame
         return 50;
     }
 
-    /// <summary>Waits for the top of the next frame (graphics.library WaitTOF) and counts it.</summary>
+    // The fallback for a WaitTOF that does not wait: our own timer.device request (UNIT_MICROHZ) with a reply port,
+    // opened on the first WaitVBlank and closed after the program's Main returns ([AtExit]).
+    private static byte* _tio;
+    private static void* _tport;
+    private static void* _tbase;
+    private static int _efreq;
+    private static bool _tried;
+    private static long _last;
+    private static bool _haveLast;
+
+    private static bool OpenTimer()
+    {
+        if (_tio != null) return true;
+        if (_tried) return false;
+        _tried = true;
+        _tport = Exec.CreateMsgPort();
+        if (_tport == null) return false;
+        _tio = Mem.AllocFast(Layout.TimeRequestSize);
+        if (_tio == null) { Exec.DeleteMsgPort(_tport); _tport = null; return false; }
+        _tio[Layout.OffType] = 5;                                        // ln_Type = NT_MESSAGE
+        *(void**)(_tio + Layout.OffReplyPort) = _tport;
+        *(ushort*)(_tio + Layout.OffLength) = Layout.TimeRequestSize;
+        if (Exec.OpenDevice("timer.device", Layout.TimerUnitMicroHz, _tio, 0) != 0)
+        {
+            Mem.Free(_tio);
+            _tio = null;
+            Exec.DeleteMsgPort(_tport);
+            _tport = null;
+            return false;
+        }
+        _tbase = *(void**)(_tio + Layout.OffDevice);
+        TimerDevice.SetBase(_tbase);
+        uint[] ev = new uint[2];
+        fixed (uint* p = ev) _efreq = (int)TimerDevice.ReadEClock(p);
+        if (_efreq <= 0) { CloseTimer(); return false; }
+        return true;
+    }
+
+    private static long EClock()
+    {
+        TimerDevice.SetBase(_tbase);      // Clock.Close clears the shared base; every opener of timer.device gets the same one
+        uint[] ev = new uint[2];
+        fixed (uint* p = ev)
+        {
+            TimerDevice.ReadEClock(p);
+            uint hi = *(uint*)((byte*)p + Layout.EClockHi), lo = *(uint*)((byte*)p + Layout.EClockLo);
+            return (long)(((ulong)hi << 32) | lo);
+        }
+    }
+
+    [AtExit]
+    private static void CloseTimer()
+    {
+        if (_tio == null) return;
+        Exec.CloseDevice(_tio);
+        Mem.Free(_tio);
+        _tio = null;
+        Exec.DeleteMsgPort(_tport);
+        _tport = null;
+        _haveLast = false;
+        _tofBroken = false;
+        _quick = 0;
+    }
+
+    private static bool _tofBroken;
+    private static int _quick;
+
+    /// <summary>
+    /// Waits for the top of the next frame (graphics.library WaitTOF) and counts it. The E clock is read around WaitTOF: if
+    /// it returns within a tenth of a frame on three calls in a row, or less than half a frame after the previous
+    /// WaitVBlank, it did not wait. After three quick returns the display is marked broken for good and from then on every
+    /// frame is padded by timer.device to a whole frame from the previous return (so a loop with 0.7 frame of work still
+    /// runs at the display rate). A working display never sets the flag and is not paced.
+    /// </summary>
     public static void WaitVBlank()
     {
+        bool timer = OpenTimer();
+        long before = timer ? EClock() : 0;
         Graphics.WaitTOF();
+        if (timer)
+        {
+            long now = EClock();
+            long frame = _efreq / FramesPerSecond;                      // E clock ticks per frame
+            long gap = now - _last;
+            if (now - before >= 0 && now - before < frame / 10) { if (_quick < 3) _quick++; } else _quick = 0;
+            if (_quick >= 3) _tofBroken = true;
+            if (_haveLast && gap >= 0 && (_tofBroken ? gap < frame : gap < frame / 2))
+            {
+                long us = (frame - gap) * 1000000 / _efreq;
+                *(ushort*)(_tio + Layout.TrCommand) = (ushort)Layout.TimerAddRequest;
+                *(uint*)(_tio + Layout.TrSecs) = (uint)(us / 1000000);
+                *(uint*)(_tio + Layout.TrMicro) = (uint)(us % 1000000);
+                Exec.DoIO(_tio);
+                now = EClock();
+                _paced++;
+            }
+            _last = now;
+            _haveLast = true;
+        }
         _count++;
     }
 #elif SDL

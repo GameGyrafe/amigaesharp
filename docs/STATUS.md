@@ -112,6 +112,8 @@ A1200 emulator.
 
 `esharp test <dir>` builds the project's `.cs` files into a temporary dotnet project (`obj/host`, `HOST` defined, referencing `ESharp.Target.Host`), runs it, and counts output lines starting `ok ` and `FAIL `. A FAIL line, a non-zero exit or no ok/FAIL lines at all fails the run. With `--target m68k --docker <image> [--kickstart <rom>] [--model A1200]` it also builds for m68k, runs headless in FS-UAE (the `run` code) and lists every check that is ok on one side and FAIL or missing on the other. It needs the E# source tree (found from the CLI's location, or `ESHARP_ROOT`; `ESHARP_REPO` still works as a deprecated alias). Passing `--docker`, `--kickstart`, `--model` or `--fsuae` without `--target m68k` prints a warning that they are ignored.
 
+`skip NAME` lines (new, issue #57): a program prints one for a check it cannot run on this machine (no working sound hardware, an emulator that is not real time). A skip is neither ok nor FAIL, the summary counts it (`OS4: 13 ok, 0 FAIL, 8 skipped`), and a check that one side skipped is not a difference. `samples/sound`, `samples/assets` and `samples/timing` use it; a FAIL on the other side, or a check missing without a skip line, still is a difference (`TestReportTests`).
+
 Verified:
 - 154 unit tests pass, including parsing and comparison (`TestReportTests`).
 - `esharp test samples/controls` on the host: 12 ok, 0 FAIL, exit 0.
@@ -151,6 +153,9 @@ Not verified:
 
 `Frame` (src/ESharp.Platform/Frame.cs) is the game-loop timing API. `Frame.WaitVBlank()` is graphics.library `WaitTOF`, so drawing syncs to the display, and counts frames in `Frame.Count` (`ResetCount()`). `Frame.FramesPerSecond` is 50 or 60 (`IsPal`, `FrameMicroseconds`), read once from the PAL or NTSC bit of `GfxBase.DisplayFlags`, falling back to `ExecBase.VBlankFrequency` when neither is set (offsets and flags measured into `Layout.g.cs` for m68k and AROS x86-64). `FrameTimer(stepsPerSecond, maxSteps)` is a fixed-timestep helper over `Clock`: `Begin()`, then `Update()` each frame returns the logic steps owed, capped at `maxSteps` with the backlog dropped so a stall cannot spiral; `ElapsedMicroseconds`/`ElapsedMilliseconds` since `Begin`, and `Fraction` (0..1000) for interpolation. `Video.WaitVBlank()` is a shortcut, and `Video.WaitFrames(n)` is now n `WaitTOF` calls on the Amiga (it was `Dos.Delay(n)`, 50 Hz ticks, which is wrong on NTSC and not synced to the display). Host fake: `WaitVBlank` advances the fake `Clock` by one frame (20000 or 16666 microseconds; `Frame.HostPal` + `Frame.Redetect()` pick the rate), so tests drive game loops deterministically; the host `Video.WaitFrames` used to do nothing and now advances the fake clock too.
 
+**WaitTOF that does not wait (issue #57):** on AmigaOS 4 in QEMU, `WaitTOF` returns at once on the emulated sm501 display ("50 WaitVBlank calls took 0 ms"). `Frame.WaitVBlank` now reads the E clock after `WaitTOF` (its own timer.device request, `UNIT_MICROHZ`, opened on the first call); if it returned less than half a frame after the previous `WaitVBlank`, `WaitTOF` did not wait; and if `WaitTOF` itself took under a tenth of a frame on three calls in a row, the display is marked broken for good (`_tofBroken`, cleared by `[AtExit]`) and every later frame is padded to a whole frame from the previous return, so a game with 0.5 to 1 frame of work per frame still runs at the display rate, and a `TR_ADDREQUEST` (`DoIO`) waits out the rest of the frame. `Frame.PacedFrames` counts those waits (always 0 on a working display, on SDL and on the host). On a working display consecutive returns are a whole frame or more apart, so the check never fires there (hosted AROS's E clock runs at 200 Hz, so a frame is 4 ticks and the half-frame threshold is 2: one tick of jitter does not trigger it). The request and its message port are given back after `Main` returns through a new `[AtExit]` attribute (the emitter calls every `[AtExit]` method of a class the program uses, after the entry point; unit-tested with host gcc, including an `int Main` exit code). New offsets and constants (`TrCommand`, `TrSecs`, `TrMicro`, `TimerAddRequest`) are measured into `Layout.g.cs`.
+- Verified: 300 unit tests, including a "stuckwork" mode (as stuck, with 0.7 frame of simulated work between waits: 50 frames take about 1000 ms; fails without the sticky flag) and the shimmed m68k timing test in a new "stuck" mode (WaitTOF does nothing, `DoIO` advances the shim clock): 50 waits take 999 ms, ten frames owe 9 steps, 60 frames paced. AmigaOS 4.1 VM (`esharp test samples/timing --target os4`): before 8 ok, 1 FAIL (`50 WaitVBlank calls took 0 ms`); after 10 ok, 0 FAIL, "50 WaitVBlank calls took 1000 ms", "10 frames owed 9 steps", and the note "the display's WaitTOF did not wait for 64 of the frames, so timer.device paced them"; host and OS4 agree. A1200 / Kickstart 3.1 (40.069) in FS-UAE: 10 ok, 1000 ms, no pacing note (WaitTOF works there). Hosted AROS (nightly 20261106): 10 ok, 1000 ms, no pacing note. SDL headless (`esharp-sdl`): 10 ok, host and SDL agree (SDL keeps its own 50 Hz pacing; the fallback is Amiga only).
+
 Verified:
 - 224 unit tests pass (this adds the sample on the host at 50 and 60 Hz, and the generated m68k C for `Frame`/`FrameTimer` compiled and run with host gcc against a shimmed timer and graphics, PAL and NTSC; the shim is a model, not the OS).
 - A1200, Kickstart 3.1 (40.069) in FS-UAE headless (PAL): 10 ok, no FAIL. `50 WaitVBlank calls took 1001 ms`, so under Xvfb the emulator ran in real time on this host (the host was shared and not idle). Ten frames owed 9 steps of 1/50 s (the timer's rounding, within the sample's 8..12), a one second stall owed exactly the cap of 5, and the next update owed 0.
@@ -158,7 +163,7 @@ Verified:
 - Hosted AROS x86-64 (nightly 20261106): first run showed 60 (NTSC) with frames at a 50 Hz pace, because hosted AROS sets neither the PAL nor the NTSC bit. Fixed: `Detect` answers 60 only when the NTSC bit is set, and with neither bit it reads `ExecBase.VBlankFrequency` (exec.library base from `OpenLibrary("exec.library")`; offset 1096 on AROS x86-64, 530 on m68k, measured into `Layout.g.cs`). Re-run on hosted AROS: 14 ok, no FAIL, `display runs at 50 frames per second (PAL)`, `50 WaitVBlank calls took 1000 ms`. A1200 / Kickstart 3.1 re-run: 14 ok, no FAIL, PAL, 1001 ms. Unit test covers PAL bit, NTSC bit and neither-bit (50 and 60 via the ExecBase byte) against a shim. Not verified: a hosted AROS configured for 60 Hz, real NTSC hardware.
 
 Not verified:
-- Real hardware (the sample is in the hardware pack as `timing`), an NTSC machine (60 is checked only against the host fake and the gcc shim), and AmigaOS 4, MorphOS.
+- Real hardware (the sample is in the hardware pack as `timing`), an NTSC machine (60 is checked only against the host fake and the gcc shim), MorphOS, and AmigaOS 4 on real hardware (only the QEMU VM, where the timer paces the frames). A display whose WaitTOF waits only sometimes was not seen. The sticky flag was re-run on the OS4 VM and Kickstart 3.1 with the timing sample only (10 ok each, 1001 ms / 1000 ms); a busy game loop on the OS4 VM, hosted AROS and SDL were not re-run after the flag (the code is Amiga-only and unchanged for SDL/host).
 - The emulator was not run at other speeds, so what the sample does on a slow emulator (it prints the note) was not seen.
 
 ## Dates and case-insensitive text: utility.library (samples/dates)
@@ -347,6 +352,7 @@ A class can derive from one other plain class of the program: fields, methods an
 `Sound` (in `ESharp.Platform`) plays 8-bit samples through audio.device: up to four voices, one Paula channel each, allocated by `Sound.Open()`. Samples are generated in code (`Square`, `Triangle`, `Noise`; chip RAM, freed with `Sound.Free`) or loaded from sound files: `Sound.Load(path)` reads a WAV (PCM, 8 or 16 bit, mono or stereo, mixed down to 8-bit mono) or an IFF 8SVX (uncompressed or Fibonacci-delta; first octave only, loop points ignored) into chip RAM, and `LoadWav` / `Load8svx` do the same from bytes already in memory (for example an embedded asset). `Sample.Rate` is the file's rate and `Sound.PeriodForRate(rate)` gives the period for natural pitch. A sample is cut off at 131070 bytes (one audio.device write). A failed load gives an empty sample (`Data == null`). The file calls are `Files.ReadAll`, `WriteAll` and `Delete` (whole files; dos.library on the Amiga, `System.IO` on the host). `Play(in sample, period, volume, cycles)` uses a free voice (or the oldest), `Busy`, `Stop`, `Close`, and `PeriodFor(hz, length)` convert a pitch. On the host the calls are recorded (`Sound.HostPlays` etc.) and `Dos.Delay` lets voices finish, so game logic that plays sounds can be tested under dotnet.
 
 - Verified: `samples/sound` prints 21 `ok` lines (9 of them for loading: WAV 8-bit mono, WAV 16-bit stereo, 8SVX, Fibonacci-delta 8SVX built in memory, refusal of other data, a write-then-load round trip through a file, a missing file, delete, period for a rate) on Kickstart 2.04 (A500+) and 3.1 (A1200) in FS-UAE, and on the host. The loading checks use test files the sample makes itself (`RAM:` on the Amiga), not files from real tools. That shows audio.device opens, accepts writes, reports a voice busy and then free, and that Stop and Close work.
+- `Sound.Available` (new, issue #57): true when sound is open or a trial `Open` succeeds (closed again); a failed trial is remembered. False where no audio hardware works (AmigaOS 4 in the QEMU VM, see "AmigaOS 4.1 VM runs"); a game should then run silently. `samples/sound` and `samples/assets` then print a note and `skip` lines for the playback checks; on a classic Amiga (`AMIGAOS3`) a failed open is still a FAIL, because Paula and audio.device are always there. Host: `Sound.HostHasAudio = false` makes `Open` fail (unit test: the sound sample with no audio has 0 FAIL, its skips, no leaks, and agrees with the normal host run). Re-run after the change: A1200 / Kickstart 3.1 21 ok (sound) and 17 ok (assets), SDL headless 21 ok (sound), host and target agree.
 - **Not verified:** how it sounds (the headless emulator gives no audible output), real hardware, volume and period accuracy, PPC. Not verified: loading a WAV or 8SVX written by a real sound editor (only files this repo's sample builds), 8SVX with several octaves, WAV with extra chunks before `data` beyond the skip logic, a WAV over 128 KB, a PPC run. The gcc build of `Files.WriteAll` warns about a discarded `const` (harmless).
 - Full ten-sample regression re-run after string interpolation: no failures on both ROMs.
 
@@ -489,7 +495,7 @@ Screenshot: [images/phase4-cards-a1200.png](images/phase4-cards-a1200.png) (Kick
 ## Next
 
 - Run hello on real hardware, the last open item in the phase 1 gate. The emulator side is done: AROS replacement, Kickstart 2.04 and Kickstart 3.1.
-- OS4 findings from the first VM runs (see "AmigaOS 4.1 VM runs"): audio.device, WaitTOF timing, lowlevel port types, the RTG link error, the classic-only checks in memory/generics, scripted input for os4 runs.
+- OS4 findings from the first VM runs (see "AmigaOS 4.1 VM runs"): lowlevel port types, the RTG link error, the classic-only checks in memory/generics, scripted input for os4 runs. Done in wave 8: WaitTOF timing (timer fallback), the screen mode (centred), sound (clean skip; no working audio in the VM). Open: OS4 sound on real hardware.
 - MorphOS runs (QEMU `pegasos2` can boot MorphOS too; not tried) and PowerPC real hardware.
 - `esharp test` follow-ups: other targets (morphos, aros) and the Amiga program's return code (today only the ok/FAIL lines are compared; the os4 pipe hides it).
 - Memory management ([MEMORY.md](MEMORY.md)): step 1 (`Mem.AllocChip`/`AllocFast`/`Free`, `Arena`) is done; step 2 (`Pool<T>`) and most of step 3 (`--debug`: bounds checks, arena and pool poisoning) are done; the chip budget report (step 4) is done for constant sizes.
@@ -570,12 +576,13 @@ Verified (`esharp test samples/X --target os4 --docker esharp-amiga-toolchain`, 
 
 Platform samples never run on OS4 before (`esharp run ... --target os4 --screenshot`):
 - screen: 17 ok, screenshot viewed (rectangles, blitted card, font). The 320x200 screen shows in the top-left corner of a
-  640x480 display (mode selection on the RTG system; not scaled).
+  640x480 display (mode selection on the RTG system; not scaled). Now centred: see "Sound, timing and screen on OS4" below.
 - cards: 15 ok, screenshot viewed (table, cards and buttons drawn; it then ends after 10 s without input).
-- sound: 12 ok, 1 FAIL: `audio.device opens` (no audio.device in this install: AmigaOS 4 uses AHI, and the VIA AC97
-  driver reports "soft resume timed out" in QEMU). File loading and the sample checks pass.
+- sound: 12 ok, 1 FAIL: `audio.device opens` (AmigaOS 4's audio.device is AHI's, and the VIA AC97
+  driver reports "soft resume timed out" in QEMU; "no audio.device in this install" was wrong, see below). File loading and the sample checks pass.
 - timing: 8 ok, 1 FAIL: `ten frames owe about ten steps at the frame rate`; "50 WaitVBlank calls took 0 ms", so `WaitTOF`
   does not wait on the sm501 display in QEMU (the sample's "not real time" note is printed too). The E clock part works.
+  Fixed in wave 8 (below).
 - trace (`--trace --serial f`): output `trace sample done, sum 14`, and the serial file has every Trace line
   (`trace start` ... `trace end`).
 - Also run once: aga 6 ok, asl 3 ok, fonts 10 ok (topaz and a disk font), iff 10 ok, keys 8 ok, names 12 ok, rummy 28 ok,
@@ -637,9 +644,54 @@ Not verified / not done:
 - PowerPC real hardware (Pegasos II, AmigaOne, X5000, ...). MorphOS: still not run.
 - The program's return code (the pipe hides it), a crash (it should end at the timeout with the Grim Reaper waiting; not
   provoked).
-- Still open from the os4 findings (issue #57): audio.device (sound, assets), WaitTOF timing (timing), the 320x200 screen in
-  the corner of a 640x480 mode (screen).
+- All os4 findings from issue #57 are addressed: the ones above in this section, and sound, timing and the screen mode in the
+  next section (sound in the VM is a QEMU limitation and is skipped cleanly).
 - macOS or Windows hosts for the harness (it uses `/proc` and `/tmp`; Linux only so far).
+
+### Sound, timing and screen on OS4 (wave 8, issue #57)
+
+**Sound: a VM limitation; E# now degrades cleanly.** A probe program in the VM (a throwaway, `List`/`Version` through
+dos `Execute` and test `OpenDevice` calls) found: `DEVS:audio.device` 53.3 and `DEVS:ahi.device` 6.6 are installed, with the AHI
+drivers in `DEVS:AHI` (via-ac97, sb128, emu10kx, Envy24, CMI8738, cs4281, ...), their `DEVS:AudioModes`, `ENV:Sys/ahi.prefs` and
+the AHI prefs editor. `OpenDevice("ahi.device", AHI_NO_UNIT)` succeeds (AHI itself loads), but `ahi.device` unit 0 and `audio.device`
+both fail (-1, IOERR_OPENFAIL), and at that moment the serial log shows `[VIA-AC97] Error: soft resume timed out!`: the
+driver for the Pegasos II's on-board VIA AC97 (QEMU's `via-ac97` function of the emulated VT8231) does not get the codec to
+answer, so AHI unit 0 cannot open and audio.device, which plays through it, cannot either. That is the emulated sound
+hardware, not E#. Decision: keep the audio.device path on AmigaOS 4 (it is the OS's own AHI-backed audio.device, so programs
+need no second code path; an `ahi.device` path would fail the same way here because it uses the same unit 0 driver) and report
+unavailability cleanly: `Sound.Available` is false, `samples/sound` and `samples/assets` print a note and `skip` lines.
+Not tried: other QEMU sound devices (QEMU has `ES1370`, which AHI's sb128 driver may support, but that needs a QEMU argument in
+the harness and AHI prefs for unit 0 on the VM disk; out of scope here). Not verified: sound on real AmigaOS 4 hardware.
+
+**Timing: fixed in `Frame.WaitVBlank`** (timer.device fallback, see "Frame timing").
+
+**Screen: centred in the nearest mode.** A second probe listed the display database: the sm501 board offers
+640x480, 800x600, 1024x768, 1280x720, 1280x800, 1280x960 and 1280x1024 (CLUT8 and RGB16), and the classic mode IDs (`PAL:640x480
+LowRes` and so on) are aliases of 640x480 board modes; `BestModeIDA` for 320x200 (depth 4, 5 or 8) answers `PAL:640x480 LowRes`.
+There is no 320-wide mode, and the OS does not scale a smaller screen, so `Video.Open` on AmigaOS 4 (`#if AMIGAOS4`) now asks
+`BestModeIDA` for the nearest mode, reads its nominal size (`GetDisplayInfoData`, `DTAG_DIMS`; offsets measured into `Layout.g.cs`),
+opens the screen at that size with `SA_DisplayID`, and puts the backdrop window, which every drawing call and the mouse
+coordinates use, in the middle. m68k (PAL lowres, window at 0,0) and AROS are unchanged; a card with a 320x200 or 320x240 mode
+would get it and an offset of 0 (not verified: no such card here). Screenshots viewed: screen before (top-left corner) and after
+(centred), cards, rummy, aga and assets centred on the 640x480 display.
+
+Verified (AmigaOS 4.1 VM, `ESHARP_OS4_VM` set, `--docker esharp-amiga-toolchain`):
+
+| Sample | Before (wave 7) | After |
+|---|---|---|
+| sound (`test`) | 12 ok, 1 FAIL | 13 ok, 0 FAIL, 8 skipped; host and OS4 agree |
+| assets (`test`) | 15 ok, 1 FAIL | 15 ok, 0 FAIL, 2 skipped; host and OS4 agree; centred |
+| timing (`test`) | 8 ok, 1 FAIL | 10 ok, 0 FAIL; 1000 ms for 50 frames, 64 frames paced; host and OS4 agree |
+| screen (`test`) | 17 ok (corner) | 17 ok, centred; host and OS4 agree |
+| cards (`run`) | 15 ok | 15 ok, centred |
+| rummy (`run`) | 28 ok | 28 ok, centred |
+| aga (`run`) | 6 ok | 6 ok, centred |
+
+Regression elsewhere: A1200 / Kickstart 3.1 (40.069) in FS-UAE (`esharp test --target m68k`): sound 21 ok, timing 10 ok, screen
+17 ok, assets 17 ok, all agreeing with the host; `run samples/screen` screenshot unchanged (top of the PAL display); `run samples/cards`
+with the AGENTS.md input: 15 ok, `guess higher: right`. Hosted AROS (nightly 20261106, `--target aros` builds): timing 10 ok
+(1000 ms, no pacing), cards 15 ok with a scripted click (`guess lower: wrong`), screenshot unchanged (top-left). SDL headless
+(`esharp test --target sdl --docker esharp-sdl`): timing 10 ok, sound 21 ok, agreeing with the host. 299 unit tests pass.
 
 ## Known limits of the emitter
 

@@ -594,6 +594,8 @@ internal sealed partial class CEmitter
     private int _objectTemps;
     private readonly HashSet<ISymbol> _usedSymbols = new(SymbolEqualityComparer.Default);
 
+    private readonly List<IMethodSymbol> _atExit = new();
+
     private HashSet<IMethodSymbol> ReachableMethods(List<INamedTypeSymbol> types)
     {
         var reachable = new HashSet<IMethodSymbol>(SymbolEqualityComparer.Default);
@@ -606,6 +608,9 @@ internal sealed partial class CEmitter
         }
 
         foreach (var entry in FindEntryPoints(_compilation, _user)) Add(entry);
+        // [AtExit] methods are reached when anything else of their class is (EmitMain calls them).
+        var atExit = types.SelectMany(t => t.GetMembers().OfType<IMethodSymbol>())
+            .Where(m => m.IsStatic && m.Parameters.Length == 0 && HasAttribute(m, "AtExitAttribute")).ToList();
         // Everything the user wrote is emitted (and checked), used or not; only library code is pruned.
         foreach (var t in types.Where(t => t.DeclaringSyntaxReferences.Any(r => _user.Contains(r.SyntaxTree))))
             foreach (var member in t.GetMembers())
@@ -632,6 +637,8 @@ internal sealed partial class CEmitter
                         else if (decl is PropertyDeclarationSyntax { Initializer: { } pinit }) { work.Push(pinit); more = true; }
                     }
                 }
+                foreach (var m in atExit)
+                    if (!reachable.Contains(m.OriginalDefinition) && ClassUsed(m)) { Add(m); more = true; }
                 if (!more) break;
             }
             if (work.Count == 0) continue;
@@ -664,7 +671,13 @@ internal sealed partial class CEmitter
                 if (conversion.IsUserDefined) Add(conversion.MethodSymbol);
             }
         }
+        // Main calls each [AtExit] method of a class the program uses (for the user's own classes: every one, as they are all emitted).
+        foreach (var m in atExit)
+            if (reachable.Contains(m.OriginalDefinition) && ClassUsed(m)) _atExit.Add(m.OriginalDefinition);
         return reachable;
+
+        bool ClassUsed(IMethodSymbol m) =>
+            reachable.Any(r => SymbolEqualityComparer.Default.Equals(r.ContainingType, m.OriginalDefinition.ContainingType) && !HasAttribute(r, "AtExitAttribute"));
     }
 
     private static bool IsAttributeType(INamedTypeSymbol t)
@@ -1349,14 +1362,22 @@ internal sealed partial class CEmitter
         _indent++;
         // Static constructors run once at start-up, in the order the types appear (C# runs them lazily).
         foreach (var cctor in _staticConstructors) Line(FuncName(cctor) + "();");
+        // [AtExit] methods of the classes the program used run after the entry point returns, in the order they were reached.
         if (entry.ReturnsVoid)
         {
             Line(FuncName(entry) + "();");
+            foreach (var m in _atExit) Line(FuncName(m) + "();");
             Line("return 0;");
+        }
+        else if (_atExit.Count == 0)
+        {
+            Line("return (int)" + FuncName(entry) + "();");
         }
         else
         {
-            Line("return (int)" + FuncName(entry) + "();");
+            Line("int es_rc = (int)" + FuncName(entry) + "();");
+            foreach (var m in _atExit) Line(FuncName(m) + "();");
+            Line("return es_rc;");
         }
         _indent--;
         Line("}");

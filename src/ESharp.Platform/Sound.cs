@@ -246,6 +246,27 @@ public static unsafe class Sound
         sample.Length = 0;
     }
 
+    private static bool _unavailable;
+
+    /// <summary>
+    /// True when sound can play on this machine: it is open, or a trial <see cref="Open"/> succeeds (and is closed
+    /// again). A failed trial is remembered, so asking again is cheap. False where no audio hardware works, for
+    /// example AmigaOS 4 without a working AHI driver for unit 0 (audio.device there is AHI's), or an SDL machine
+    /// without an audio device; a game should then run silently. On a classic Amiga audio.device is in ROM and
+    /// this is true unless every channel is taken.
+    /// </summary>
+    public static bool Available
+    {
+        get
+        {
+            if (VoiceCount > 0) return true;
+            if (_unavailable) return false;
+            if (!Open()) { _unavailable = true; return false; }
+            Close();
+            return true;
+        }
+    }
+
 #if AMIGA
     private static nuint[] _io = new nuint[Voices];
     private static bool[] _pending = new bool[Voices];
@@ -415,7 +436,15 @@ public static unsafe class Sound
     private static int _next;
     private static readonly long[] Remaining = new long[Voices];   // 0 free, -1 until stopped, else 1/3546895 s units left
 
-    public static bool Open() { _open = Voices; return true; }
+    /// <summary>Host: false makes <see cref="Open"/> fail, as on a machine without working audio hardware.</summary>
+    public static bool HostHasAudio = true;
+
+    public static bool Open()
+    {
+        if (!HostHasAudio) return false;
+        _open = Voices;
+        return true;
+    }
 
     public static int VoiceCount { get { return _open; } }
 
@@ -460,6 +489,6 @@ public static unsafe class Sound
 
     public static int HostLastLength { get { return _lastLength; } }
 
-    public static void HostReset() { Stop(); _open = 0; _plays = 0; _lastPeriod = 0; _lastVolume = 0; _lastCycles = 0; _lastLength = 0; _next = 0; }
+    public static void HostReset() { Stop(); _open = 0; _unavailable = false; _plays = 0; _lastPeriod = 0; _lastVolume = 0; _lastCycles = 0; _lastLength = 0; _next = 0; }
 #endif
 }

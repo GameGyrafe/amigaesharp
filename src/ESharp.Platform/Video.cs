@@ -110,14 +110,55 @@ public static unsafe class Video
         return yes;
     }
 
+#if AMIGAOS4
+    /// <summary>
+    /// AmigaOS 4: the display mode nearest to <paramref name="width"/> x <paramref name="height"/> (graphics BestModeIDA) and its
+    /// nominal size, at least the requested one. Graphics cards often have no mode as small as 320 x 200 (the sm501 in QEMU starts at
+    /// 640 x 480), so the screen is opened at the mode's size and the picture centred in it. 0 (system's choice) if there is none.
+    /// </summary>
+    private static uint NearestMode(int width, int height, int depth, out int modeWidth, out int modeHeight)
+    {
+        modeWidth = width;
+        modeHeight = height;
+        uint id = Layout.InvalidModeId;
+        nuint[] tags = new nuint[8];
+        fixed (nuint* p = tags)
+        {
+            var t = new TagWriter(p, 8);
+            t.Add(Layout.BidNominalWidth, width);
+            t.Add(Layout.BidNominalHeight, height);
+            t.Add(Layout.BidDepth, depth);
+            if (t.End()) id = Graphics.BestModeIDA(p);
+        }
+        if (id == Layout.InvalidModeId) return 0;
+        byte* dims = Mem.AllocFast(Layout.DimInfoSize);
+        if (dims == null) return id;
+        void* handle = Graphics.FindDisplayInfo(id);
+        if (handle != null && Graphics.GetDisplayInfoData(handle, dims, Layout.DimInfoSize, Layout.DtagDims, id) != 0)
+        {
+            byte* r = dims + Layout.DimNominal;
+            int w = *(short*)(r + Layout.RectMaxX) - *(short*)(r + Layout.RectMinX) + 1;
+            int h = *(short*)(r + Layout.RectMaxY) - *(short*)(r + Layout.RectMinY) + 1;
+            if (w > modeWidth) modeWidth = w;
+            if (h > modeHeight) modeHeight = h;
+        }
+        Mem.Free(dims);
+        return id;
+    }
+#endif
+
     private static bool OpenMode(int width, int height, int depth, uint displayId)
     {
+        int screenWidth = width, screenHeight = height;
+#if AMIGAOS4
+        if (displayId == 0) displayId = NearestMode(width, height, depth, out screenWidth, out screenHeight);
+#endif
         nuint[] tags = new nuint[24];
         fixed (nuint* p = tags)
         {
             var t = new TagWriter(p, 24);
-            t.Add(Intuition.SA_Width, width);
-            t.Add(Intuition.SA_Height, height);
+            t.Add(Intuition.SA_Width, screenWidth);
+            t.Add(Intuition.SA_Height, screenHeight);
             t.Add(Intuition.SA_Depth, depth);
             t.Add(Intuition.SA_Quiet, true);
             t.Add(Intuition.SA_Type, Intuition.CustomScreen);
@@ -131,8 +172,8 @@ public static unsafe class Video
         {
             var w = new TagWriter(wp, 26);
             w.Add(Intuition.WA_CustomScreen, _screen);
-            w.Add(Intuition.WA_Left, 0);
-            w.Add(Intuition.WA_Top, 0);
+            w.Add(Intuition.WA_Left, (screenWidth - width) / 2);      // centred when the mode is larger (AmigaOS 4); else 0
+            w.Add(Intuition.WA_Top, (screenHeight - height) / 2);
             w.Add(Intuition.WA_Width, width);
             w.Add(Intuition.WA_Height, height);
             w.Add(Intuition.WA_Borderless, true);

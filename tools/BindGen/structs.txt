@@ -17,6 +17,8 @@ include graphics/text.h
 include libraries/iffparse.h
 include libraries/asl.h
 include libraries/gadtools.h
+include graphics/displayinfo.h
+include graphics/modeid.h
 
 # Intuition (src/ESharp.Platform/Gfx.cs)
 WindowRPort = Window.RPort
@@ -52,12 +54,29 @@ TimeRequestSize = sizeof timerequest
 TimerUnitMicroHz = value UNIT_MICROHZ
 EClockHi = EClockVal.ev_hi
 EClockLo = EClockVal.ev_lo
+TrCommand = timerequest.tr_node.io_Command
+TrSecs = timerequest.tr_time.tv_secs
+TrMicro = timerequest.tr_time.tv_micro
+TimerAddRequest = value TR_ADDREQUEST
 
 # Frame timing (src/ESharp.Platform/Frame.cs)
 GfxDisplayFlags = GfxBase.DisplayFlags
 GfxPalFlag = value PAL
 GfxNtscFlag = value NTSC
 ExecVBlankFrequency = ExecBase.VBlankFrequency
+
+# Display modes: the nearest mode for a screen on AmigaOS 4 (src/ESharp.Platform/Video.cs)
+DimInfoSize = sizeof DimensionInfo
+DimNominal = DimensionInfo.Nominal
+RectMinX = Rectangle.MinX
+RectMinY = Rectangle.MinY
+RectMaxX = Rectangle.MaxX
+RectMaxY = Rectangle.MaxY
+DtagDims = value DTAG_DIMS
+BidNominalWidth = value BIDTAG_NominalWidth
+BidNominalHeight = value BIDTAG_NominalHeight
+BidDepth = value BIDTAG_Depth
+InvalidModeId = value INVALID_ID
 
 # lowlevel.library (src/ESharp.Platform/Joystick.cs)
 JpTypeMask = value JP_TYPE_MASK

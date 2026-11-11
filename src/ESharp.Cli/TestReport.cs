@@ -4,12 +4,21 @@ using System.Linq;
 
 namespace ESharp.Cli;
 
-/// <summary>Parsed "ok NAME" / "FAIL NAME" lines of one run, and the comparison between two runs.</summary>
+/// <summary>
+/// Parsed "ok NAME" / "FAIL NAME" / "skip NAME" lines of one run, and the comparison between two runs. A program prints
+/// "skip NAME" for a check it could not run on this machine (no working sound hardware, an emulator that is not real
+/// time): that is neither a pass nor a failure, and a skipped name never counts as a difference.
+/// </summary>
 public sealed class TestReport
 {
     public List<(string Name, bool Ok)> Checks { get; } = new();
+    public List<string> Skips { get; } = new();
     public int Ok => Checks.Count(c => c.Ok);
     public int Failed => Checks.Count(c => !c.Ok);
+    public int Skipped => Skips.Count;
+
+    /// <summary>"N ok, N FAIL" plus ", N skipped" when there are skips.</summary>
+    public string Summary => $"{Ok} ok, {Failed} FAIL" + (Skipped > 0 ? $", {Skipped} skipped" : "");
 
     public static TestReport Parse(string output)
     {
@@ -19,13 +28,15 @@ public sealed class TestReport
             var line = raw.TrimEnd('\r');
             if (line.StartsWith("ok ", StringComparison.Ordinal)) r.Checks.Add((line[3..], true));
             else if (line.StartsWith("FAIL ", StringComparison.Ordinal)) r.Checks.Add((line[5..], false));
+            else if (line.StartsWith("skip ", StringComparison.Ordinal)) r.Skips.Add(line[5..]);
         }
         return r;
     }
 
     /// <summary>
     /// Differences between host and Amiga (or another target, named by <paramref name="label"/>): a check that is ok on one and FAIL or missing on the other.
-    /// A name repeated in a program is matched by occurrence (first with first, and so on).
+    /// A name repeated in a program is matched by occurrence (first with first, and so on). A check that one side
+    /// skipped is not a difference when it is missing on that side.
     /// </summary>
     public static List<string> Compare(TestReport host, TestReport amiga, string label = "Amiga")
     {
@@ -52,6 +63,8 @@ public sealed class TestReport
             {
                 var hs = Describe(hl, i);
                 var asx = Describe(al, i);
+                if (hs == "missing" && host.Skips.Contains(name)) continue;
+                if (asx == "missing" && amiga.Skips.Contains(name)) continue;
                 if (hs != asx) diffs.Add($"{name}: host {hs}, {label} {asx}");
             }
         }
