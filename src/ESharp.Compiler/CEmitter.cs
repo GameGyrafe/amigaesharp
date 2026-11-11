@@ -461,6 +461,15 @@ internal sealed partial class CEmitter
             result.AppendLine("#endif");
             result.AppendLine();
         }
+        // Non-Amiga targets: [Native] calls named es_std_* are standard C (stdio, stdlib, time), es_sdl_* need SDL 3. The C runtime is
+        // pasted in whole (its functions are static and marked unused), so a program that only prints needs no SDL at all.
+        var usesSdl = _natives.Any(n => n.StartsWith("es_sdl_", StringComparison.Ordinal));
+        if (usesSdl || _natives.Any(n => n.StartsWith("es_std_", StringComparison.Ordinal)))
+        {
+            result.Append(LibrarySources.CRuntime("es_std.h"));
+            if (usesSdl) result.Append(LibrarySources.CRuntime("es_sdl.h"));
+            result.AppendLine();
+        }
         if (_usesLen)
         {
             result.AppendLine("#define ES_LEN(a) ((int32_t)(sizeof(a) / sizeof((a)[0])))");
@@ -1553,7 +1562,8 @@ internal sealed partial class CEmitter
             var initType = Model(fx).GetTypeInfo(init).Type;
             string value;
             if (IsSpan(initType))
-                value = RequireSimple(init, "fixed over a span") ? Expr(init) + ".ptr" : "0";
+                // A ReadOnlySpan's pointer is const in C; C# allows a plain pointer to it in fixed, so cast (no -Wdiscarded-qualifiers).
+                value = RequireSimple(init, "fixed over a span") ? $"({CType(sym.Type, fx)})({Expr(init)}.ptr)" : "0";
             else if (initType is IArrayTypeSymbol)
                 value = Expr(init);
             else if (initType is IPointerTypeSymbol)

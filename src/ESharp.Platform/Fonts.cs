@@ -1,3 +1,5 @@
+// Amiga-only (GadTools, ASL, iffparse, diskfont, lowlevel): not part of the sdl target, where using it is a compile error (ES0102).
+#if !SDL
 namespace ESharp.Platform;
 
 #if AMIGA
@@ -204,3 +206,4 @@ public static unsafe class Fonts
     }
 #endif
 }
+#endif

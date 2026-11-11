@@ -15,19 +15,20 @@ internal static class Program
 Usage:
   esharp new <name>                 Create a new hello-world project
   esharp build [path] [options]     Check the subset, emit C, and run the target C compiler
-  esharp run [path] [options]       Build for m68k and run it in FS-UAE
+  esharp run [path] [options]       Build for m68k and run it in FS-UAE (or --target sdl: run it through SDL)
   esharp assets [dir|assets.json] [--force]
                                     Convert PNGs to planar chip data: writes Assets.g.cs next to the manifest
                                     (only when stale; build and run do this automatically)
   esharp addr <exe | dir> <hunk> <hex offset> [--docker [image]]
                                     Map a crash address of a built m68k program to the C# file:line (see docs/DEBUGGING.md)
-  esharp test [path] [options]      Run the project on the host; with --target m68k --docker also on the Amiga, and compare
+  esharp test [path] [options]      Run the project on the host; with --target m68k --docker also on the Amiga (or
+                                    --target sdl --docker also through SDL, headless), and compare
 
 Build options:
-  --target <name>   m68k (default), os4, morphos or aros
+  --target <name>   m68k (default), os4, morphos, aros or sdl (desktop, SDL 3)
   -o <dir>          Output directory (default: obj next to the sources)
   --emit-only       Stop after writing the C file
-  --docker [image]  Run the C compiler inside the toolchain image (default: esharp-amiga-toolchain)
+  --docker [image]  Run the C compiler inside the toolchain image (default: esharp-amiga-toolchain; esharp-sdl for sdl)
   --cc <compiler>   Override the target's C compiler
   --cflags <flags>  Override the target's C compiler flags
   --allow-float     Permit float/double
@@ -35,8 +36,9 @@ Build options:
   --debug           Define DEBUG: bounds-checked arrays and spans, poisoned arena Reset (also defines TRACE)
   --trace           Define TRACE: keep Trace.Write/Line/Value calls (serial output); without it they compile to nothing
 
-Run options (build options also apply; run is m68k only):
+Run options (build options also apply; run is m68k or sdl):
   --headless        No window: run on a virtual display, print the program's output, exit
+                    (sdl: SDL's offscreen video and dummy audio, inside the --docker image if given)
   --timeout <sec>   Headless time limit (default 120; AROS needs ~20 s to boot)
   --kickstart <rom> Use a real Kickstart ROM instead of FS-UAE's built-in AROS replacement
                     (or set ESHARP_KICKSTART)
@@ -46,10 +48,13 @@ Run options (build options also apply; run is m68k only):
   --serial <file>   Headless only: write the program's serial output (Trace) to this file, and print it after the run
   --input <script>  Headless only: after SHOT send mouse/keyboard input to the emulator (before the screenshot):
                     ""click X,Y;key 9;key 50+38"" with display pixels and X11 key codes, + holds keys (needs libXtst)
+                    sdl: the same script is replayed by the program itself after SHOT, with X,Y in the program's
+                    screen pixels; the screenshot is the program's own frame (both also work without --headless)
 
 Test options (esharp test; a program prints ""ok NAME"" / ""FAIL NAME"" lines):
   Always runs on the host (dotnet, HOST defined). With --target m68k it also builds for m68k and runs headless in
   FS-UAE (--docker, --kickstart, --model, --fsuae, --timeout as for run), then reports checks that differ.
+  With --target sdl it builds for sdl and runs it headless (in the --docker image if given) and compares the same way.
   Exit code is non-zero on any FAIL, crash, build error or host/Amiga difference.
 
 Targets:
@@ -87,7 +92,7 @@ Targets:
         string? kickstart = Environment.GetEnvironmentVariable("ESHARP_KICKSTART");
         string model = "A1200";
         string? fsuae = null;
-        bool amiga = false;
+        bool amiga = false, sdl = false;
         var amigaOnly = new List<string>();   // options that only matter with --target m68k
         string path = ".";
         var buildArgs = new List<string>();
@@ -100,9 +105,12 @@ Targets:
                 case "--model" when i + 1 < args.Length: amigaOnly.Add("--model"); model = args[++i]; break;
                 case "--fsuae" when i + 1 < args.Length: amigaOnly.Add("--fsuae"); fsuae = args[++i]; break;
                 case "--target" when i + 1 < args.Length:
-                    if (args[++i] != "m68k") return Fail("test runs on the host, and with --target m68k also in FS-UAE; other targets are not supported");
-                    amiga = true;
-                    buildArgs.Add("--target"); buildArgs.Add("m68k");
+                    var t = args[++i];
+                    if (t != "m68k" && t != "sdl")
+                        return Fail("test runs on the host, and with --target m68k also in FS-UAE or with --target sdl also through SDL (headless); other targets are not supported");
+                    if (t == "m68k") amiga = true; else sdl = true;
+                    if (amiga && sdl) return Fail("test takes one --target");
+                    buildArgs.Add("--target"); buildArgs.Add(t);
                     break;
                 case "--docker":
                     amigaOnly.Add("--docker");
@@ -121,8 +129,10 @@ Targets:
 
         var files = CollectSources(path);
         if (files.Count == 0) return Fail($"no .cs files found in '{path}'");
+        if (sdl) amigaOnly.RemoveAll(o => o == "--docker");
         if (!amiga && amigaOnly.Count > 0)
-            Console.Error.WriteLine($"esharp: warning: {string.Join(", ", amigaOnly.Distinct())} ignored, because the test only runs on the host; add --target m68k to also run in FS-UAE");
+            Console.Error.WriteLine($"esharp: warning: {string.Join(", ", amigaOnly.Distinct())} ignored, because " +
+                (sdl ? "they only matter for --target m68k" : "the test only runs on the host; add --target m68k to also run in FS-UAE"));
         var repo = SourceTree.Find();
         if (repo == null) return Fail("cannot find the E# source tree (src/ESharp.Target.Host); set ESHARP_ROOT");
         var baseDir = Directory.Exists(path) ? path : Path.GetDirectoryName(Path.GetFullPath(path)) ?? ".";
@@ -164,6 +174,26 @@ Targets:
             else
             {
                 Console.WriteLine($"{diffs.Count} difference(s) between host and Amiga:");
+                foreach (var d in diffs) Console.WriteLine("  " + d);
+                failed = true;
+            }
+        }
+
+        if (sdl)
+        {
+            Console.WriteLine("\nSDL (headless" + (DockerImage(buildArgs, Targets.Sdl) is { } image ? ", in " + image : ", on this machine") + "):");
+            buildArgs.Insert(0, path);
+            var rc = Build(buildArgs.ToArray(), out var exe);
+            if (rc != 0 || exe == null) return Fail("sdl build failed");
+            var (exit, output) = SdlRun.Run(exe, true, TimeSpan.FromSeconds(timeout), DockerImage(buildArgs, Targets.Sdl), null, null);
+            var sdlReport = TestReport.Parse(output);
+            Console.WriteLine($"SDL: {sdlReport.Ok} ok, {sdlReport.Failed} FAIL" + (exit != 0 ? $", exit code {exit} (crash or error)" : ""));
+            if (exit != 0 || sdlReport.Failed > 0) failed = true;
+            var diffs = TestReport.Compare(hostReport, sdlReport, "SDL");
+            if (diffs.Count == 0) Console.WriteLine("Host and SDL agree on every check.");
+            else
+            {
+                Console.WriteLine($"{diffs.Count} difference(s) between host and SDL:");
                 foreach (var d in diffs) Console.WriteLine("  " + d);
                 failed = true;
             }
@@ -242,7 +272,7 @@ Targets:
                     target = found;
                     break;
                 case "--docker":
-                    docker = i + 1 < args.Length && !args[i + 1].StartsWith("-") ? args[++i] : "esharp-amiga-toolchain";
+                    docker = i + 1 < args.Length && !args[i + 1].StartsWith("-") ? args[++i] : "";
                     break;
                 case "--cc" when i + 1 < args.Length: cc = args[++i]; break;
                 case "--cflags" when i + 1 < args.Length: cflags = args[++i]; break;
@@ -253,6 +283,7 @@ Targets:
             }
         }
 
+        if (docker == "") docker = DefaultImage(target);
         if (SyncAssets(path) is { } assetError) return Fail(assetError);
 
         var files = CollectSources(path);
@@ -297,7 +328,18 @@ Targets:
             if (link) compilerArgs.AddRange(target.Libs.Split(' ', StringSplitOptions.RemoveEmptyEntries));
 
             ProcessStartInfo psi;
-            if (docker == null)
+            if (target.PkgConfig.Length > 0)
+            {
+                // The sdl target links SDL 3 statically: the flags come from pkg-config, so the compiler runs under sh.
+                var line = string.Join(" ", compilerArgs.Prepend(cc).Select(ShellQuote)) + $" $(pkg-config --static --cflags --libs {target.PkgConfig})";
+                psi = new ProcessStartInfo(docker == null ? "sh" : "docker") { UseShellExecute = false };
+                if (docker != null)
+                    foreach (var a in new[] { "run", "--rm", "-v", $"{Path.GetFullPath(outDir)}:/work", "-w", "/work", docker, "sh" })
+                        psi.ArgumentList.Add(a);
+                psi.ArgumentList.Add("-c");
+                psi.ArgumentList.Add(line);
+            }
+            else if (docker == null)
             {
                 psi = new ProcessStartInfo(cc) { UseShellExecute = false };
                 foreach (var a in compilerArgs) psi.ArgumentList.Add(a);
@@ -426,9 +468,18 @@ Targets:
         }
 
         var targetIndex = buildArgs.IndexOf("--target");
-        if (targetIndex >= 0 && targetIndex + 1 < buildArgs.Count && buildArgs[targetIndex + 1] != "m68k")
-            return Fail("run uses FS-UAE, which emulates 68k Amigas only; use --target m68k");
+        var targetName = targetIndex >= 0 && targetIndex + 1 < buildArgs.Count ? buildArgs[targetIndex + 1] : "m68k";
         if (buildArgs.Contains("--emit-only")) return Fail("--emit-only cannot be combined with run");
+        if (string.Equals(targetName, "sdl", StringComparison.OrdinalIgnoreCase))
+        {
+            var sdlRc = Build(buildArgs.ToArray(), out var sdlExe);
+            if (sdlRc != 0 || sdlExe == null) return sdlRc;
+            var (exit, _) = SdlRun.Run(sdlExe, headless, TimeSpan.FromSeconds(timeout), DockerImage(buildArgs, Targets.Sdl), screenshot, input);
+            if (exit != 0) Console.Error.WriteLine($"esharp: the program exited with code {exit}");
+            return exit;
+        }
+        if (targetName != "m68k")
+            return Fail("run uses FS-UAE, which emulates 68k Amigas only, or SDL on this machine; use --target m68k or --target sdl");
 
         if (kickstart != null)
         {
@@ -440,6 +491,20 @@ Targets:
         if (rc != 0 || exe == null) return rc;
         return FsUae.Run(exe, headless, TimeSpan.FromSeconds(timeout), kickstart, model, fsuae, screenshot, input, serial);
     }
+
+    /// <summary>The image a build's <c>--docker [image]</c> option names, or null without the option.</summary>
+    private static string? DockerImage(IList<string> buildArgs, TargetInfo target)
+    {
+        var i = buildArgs.IndexOf("--docker");
+        if (i < 0) return null;
+        return i + 1 < buildArgs.Count && !buildArgs[i + 1].StartsWith("-") ? buildArgs[i + 1] : DefaultImage(target);
+    }
+
+    /// <summary>The image <c>--docker</c> without a name uses: esharp-sdl for the sdl target, else the Amiga toolchain.</summary>
+    internal static string DefaultImage(TargetInfo target) => target.IsAmiga ? "esharp-amiga-toolchain" : "esharp-sdl";
+
+    private static string ShellQuote(string s) =>
+        s.Length > 0 && s.All(c => char.IsLetterOrDigit(c) || "-_./=+:,".Contains(c)) ? s : "'" + s.Replace("'", "'\\''") + "'";
 
     private static List<string> CollectSources(string path)
     {

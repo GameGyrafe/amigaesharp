@@ -63,10 +63,10 @@ public static class P
     }
 
     [Fact]
-    public void Hello_emits_identical_C_for_every_target_except_the_cpu_specific_parts()
+    public void Hello_emits_identical_C_for_every_amiga_target_except_the_cpu_specific_parts()
     {
         const string src = "public static class P { [EntryPoint] public static void Main() { Dos.PutStr(\"x\"); } }";
-        var outputs = Targets.All.Select(t => CompileOk(Prelude + src, t.ToOptions())).Distinct().ToList();
+        var outputs = Targets.All.Where(t => t.IsAmiga).Select(t => CompileOk(Prelude + src, t.ToOptions())).Distinct().ToList();
         Assert.Single(outputs);
     }
 }

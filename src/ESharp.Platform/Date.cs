@@ -60,7 +60,7 @@ public struct DateParts
 /// <summary>
 /// The system clock and calendar dates. Times are whole seconds since 1 January 1978 00:00, the Amiga's epoch, in
 /// the local time the system clock is set to (AmigaOS 3 has no time zones). <see cref="Split"/> and <see cref="TryJoin"/>
-/// convert to and from a <see cref="DateParts"/> with utility.library. On the host the clock is a fake that reads
+/// convert to and from a <see cref="DateParts"/> with utility.library (on SDL with the Gregorian calendar in code). On the host the clock is a fake that reads
 /// whatever <see cref="HostSetNow"/> set (0 at start), so tests are repeatable.
 /// </summary>
 public static unsafe class Date
@@ -136,6 +136,59 @@ public static unsafe class Date
         DateParts back = Split(seconds);
         return back.Year == d.Year && back.Month == d.Month && back.Day == d.Day
             && back.Hour == d.Hour && back.Minute == d.Minute && back.Second == d.Second;
+    }
+#elif SDL
+    /// <summary>The local time now, in seconds since 1 January 1978 (from the C library's clock and time zone).</summary>
+    public static uint Now() { return Crt.es_std_now(); }
+
+    // Days since 1 January 1978 of a date in the Gregorian calendar (the civil-days formula, shifted to the Amiga epoch).
+    private static int DaysFrom1978(int y, int m, int d)
+    {
+        if (m <= 2) y--;
+        int era = y / 400;                                      // years >= 1977 here, so no negative division
+        int yoe = y - era * 400;
+        int doy = (153 * (m > 2 ? m - 3 : m + 9) + 2) / 5 + d - 1;
+        int doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+        return era * 146097 + doe - 719468 - 2922;              // 2922 days from 1970 to 1978
+    }
+
+    private static bool IsLeap(int y) { return (y % 4 == 0 && y % 100 != 0) || y % 400 == 0; }
+
+    private static int DaysInMonth(int y, int m)
+    {
+        if (m == 2) return IsLeap(y) ? 29 : 28;
+        return m == 4 || m == 6 || m == 9 || m == 11 ? 30 : 31;
+    }
+
+    public static DateParts Split(uint seconds)
+    {
+        DateParts d = new DateParts();
+        uint days = seconds / Day;
+        uint rest = seconds % Day;
+        d.Hour = (int)(rest / 3600);
+        d.Minute = (int)(rest % 3600 / 60);
+        d.Second = (int)(rest % 60);
+        d.Weekday = (int)(days % 7);                            // 1 January 1978 was a Sunday
+        int y = 1978;
+        int left = (int)days;
+        while (left >= (IsLeap(y) ? 366 : 365)) { left -= IsLeap(y) ? 366 : 365; y++; }
+        int m = 1;
+        while (left >= DaysInMonth(y, m)) { left -= DaysInMonth(y, m); m++; }
+        d.Year = y;
+        d.Month = m;
+        d.Day = left + 1;
+        return d;
+    }
+
+    public static bool TryJoin(DateParts d, out uint seconds)
+    {
+        seconds = 0;
+        if (d.Year < 1978 || d.Year > 2113 || d.Month < 1 || d.Month > 12 || d.Day < 1 || d.Day > DaysInMonth(d.Year, d.Month)
+            || d.Hour < 0 || d.Hour > 23 || d.Minute < 0 || d.Minute > 59 || d.Second < 0 || d.Second > 59) return false;
+        long s = (long)DaysFrom1978(d.Year, d.Month, d.Day) * Day + d.Hour * 3600 + d.Minute * 60 + d.Second;
+        if (s > 4294967295L) return false;
+        seconds = (uint)s;
+        return true;
     }
 #else
     private static uint _now;

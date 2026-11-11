@@ -9,7 +9,7 @@ namespace ESharp.Platform;
 /// </summary>
 public static unsafe class Cast
 {
-#if AMIGA
+#if AMIGA || SDL
     /// <summary>The address of the string's bytes. Emitter intrinsic: <c>(uint8_t *)s</c>.</summary>
     public static extern byte* StringToPtr(string s);
 

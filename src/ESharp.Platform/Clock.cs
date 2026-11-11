@@ -19,7 +19,7 @@ public static unsafe class TimerDevice
 /// <summary>
 /// A fine-grained clock for frame timing and measuring code. On the Amiga it is timer.device's E clock (about
 /// 709 kHz on PAL, 716 kHz on NTSC, so a tick is about 1.4 microseconds; hosted AROS reports only 200 per second,
-/// so always use <see cref="Frequency"/>). On the host it is a fake that
+/// so always use <see cref="Frequency"/>). On SDL it is SDL's clock in microseconds (1 MHz). On the host it is a fake that
 /// starts at 0, runs at 1 MHz and only moves when <see cref="HostAdvance"/> or <c>Dos.Delay</c> is called, so
 /// tests are repeatable. Call <see cref="Open"/> first; before that, and if it fails, every reading is 0.
 /// </summary>
@@ -74,6 +74,19 @@ public static unsafe class Clock
         _io = null;
         _frequency = 0;
     }
+#elif SDL
+    // SDL: microseconds from SDL's monotonic nanosecond clock.
+    private static bool _open;
+
+    public static bool Open() { _open = true; return true; }
+
+    public static bool IsOpen { get { return _open; } }
+
+    public static int Frequency { get { return _open ? 1000000 : 0; } }
+
+    public static long Ticks { get { return _open ? Crt.es_sdl_ticks_us() : 0; } }
+
+    public static void Close() { _open = false; }
 #else
     private static bool _open;
     private static long _now;

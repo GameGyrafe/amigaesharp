@@ -5,7 +5,7 @@ namespace ESharp.Platform;
 /// <summary>
 /// A single full-screen indexed-colour display. On the Amiga it opens a quiet custom Intuition screen
 /// with a borderless backdrop window (system friendly: no hardware takeover) and draws with the
-/// graphics.library blitter calls. On the host it is a software framebuffer so game logic can be
+/// graphics.library blitter calls. On SDL it is a chunky framebuffer shown in a window. On the host it is a software framebuffer so game logic can be
 /// tested under dotnet. Colours are 4 bits per channel (OCS); pixels are palette indices.
 /// </summary>
 public static unsafe class Video
@@ -285,6 +285,90 @@ public static unsafe class Video
     }
 
     /// <summary>Waits for the next vertical blank (graphics.library WaitTOF), so drawing after it syncs to the display.</summary>
+    public static void WaitVBlank() { Frame.WaitVBlank(); }
+#elif SDL
+    // SDL: a chunky 8-bit framebuffer and palette in the C runtime, shown in a window (integer scaled) at every
+    // Frame.WaitVBlank and Dos.Delay. Drawing works on the framebuffer like the blitter works on the Amiga screen.
+
+    /// <summary>SDL shows 256 colours on any desktop, so the AGA depths (6 to 8 bitplanes) are always available.</summary>
+    public static bool HasAga() { return true; }
+
+    public static bool Open(int width, int height, int depth) { return Crt.es_sdl_video_open(width, height, depth); }
+
+    /// <summary>There is no RTG card on SDL: false. Use <see cref="Open"/>, which takes up to 8 bitplanes (256 colours).</summary>
+    public static bool HasRtg(int width, int height) { return false; }
+
+    public static bool OpenRtg(int width, int height, int depth) { return false; }
+
+    public static bool IsRtg() { return false; }
+
+    public static bool IsOpen() { return Crt.es_sdl_video_is_open(); }
+
+    public static void Close()
+    {
+        Crt.es_sdl_video_close();
+        Keys.Close();
+    }
+
+    public static void SetColor(int index, int r, int g, int b)
+    {
+        Crt.es_sdl_set_color(index, (r & 15) * 17, (g & 15) * 17, (b & 15) * 17);
+    }
+
+    /// <summary>As on the Amiga: all 24 bits on a screen of more than 5 bitplanes, otherwise rounded to 4 bits per channel.</summary>
+    public static void SetColor24(int index, int r, int g, int b)
+    {
+        if (Crt.es_sdl_video_depth() > 5) Crt.es_sdl_set_color(index, r & 255, g & 255, b & 255);
+        else SetColor(index, (r & 255) >> 4, (g & 255) >> 4, (b & 255) >> 4);
+    }
+
+    public static void SetPalette24(ReadOnlySpan<uint> rgb)
+    {
+        for (int i = 0; i < rgb.Length; i++)
+            SetColor24(i, (int)((rgb[i] >> 16) & 255), (int)((rgb[i] >> 8) & 255), (int)(rgb[i] & 255));
+    }
+
+    public static void SetPalette(ReadOnlySpan<ushort> rgb4)
+    {
+        for (int i = 0; i < rgb4.Length; i++) SetColor(i, (rgb4[i] >> 8) & 15, (rgb4[i] >> 4) & 15, rgb4[i] & 15);
+    }
+
+    public static void FillRect(int x, int y, int width, int height, int color) { Crt.es_sdl_fill(x, y, width, height, color); }
+
+    public static int GetPixel(int x, int y) { return Crt.es_sdl_get_pixel(x, y); }
+
+    public static void Blit(ReadOnlySpan<byte> planar, int width, int height, int depth, int x, int y)
+    {
+        BlitRegion(planar, width, height, depth, 0, 0, width, height, x, y);
+    }
+
+    public static void BlitRegion(ReadOnlySpan<byte> planar, int width, int height, int depth,
+        int sx, int sy, int w, int h, int x, int y)
+    {
+        BltCommon(planar, null, width, height, depth, sx, sy, w, h, x, y);
+    }
+
+    public static void BlitMasked(ReadOnlySpan<byte> planar, ReadOnlySpan<byte> mask, int width, int height, int depth,
+        int sx, int sy, int w, int h, int x, int y)
+    {
+        BltCommon(planar, mask, width, height, depth, sx, sy, w, h, x, y);
+    }
+
+    private static void BltCommon(ReadOnlySpan<byte> planar, ReadOnlySpan<byte> mask, int width, int height, int depth,
+        int sx, int sy, int w, int h, int x, int y)
+    {
+        if (w <= 0 || h <= 0) return;
+        fixed (byte* data = planar)
+        {
+            fixed (byte* m = mask)
+            {
+                Crt.es_sdl_blit(data, mask.Length == 0 ? null : m, width, height, depth, sx, sy, w, h, x, y);
+            }
+        }
+    }
+
+    public static void WaitFrames(int frames) { Frame.Wait(frames); }
+
     public static void WaitVBlank() { Frame.WaitVBlank(); }
 #else
     private static byte[] _pixels = new byte[0];

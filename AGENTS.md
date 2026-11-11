@@ -45,6 +45,10 @@ dotnet run --project tools/BindGen -- compare <aros include dir> <fd dir> lowlev
 tools/BindGen/layouts.sh                                  # re-measure struct offsets (tools/BindGen/structs.txt) for m68k and AROS into src/ESharp.Platform/Layout.g.cs (docker)
 tools/hwpack/build.sh <m68k image>                       # build the real-hardware test pack into obj/hwtest (run with Execute RunAll on the Amiga)
 docker build -t esharp-amiga-toolchain docker && docker/smoke-test.sh    # combined toolchain image
+docker build -t esharp-sdl docker/sdl && docker/sdl/smoke-test.sh   # gcc + static SDL 3.4.20 (Linux x86-64) for the sdl target; offscreen/dummy drivers
+dotnet run --project src/ESharp.Cli -- run samples/cards --target sdl --docker esharp-sdl --headless --input "click 60,145;key 9" --screenshot shot.png   # sdl, headless in the image: --input X,Y are the game's screen pixels (keys are X11 codes, as for FS-UAE), replayed after SHOT; the shot is the game's own frame
+dotnet run --project src/ESharp.Cli -- test samples/language --target sdl --docker esharp-sdl   # host vs SDL (headless in the image): same ok lines
+dotnet run --project src/ESharp.Cli -- run samples/cards --target sdl --docker esharp-sdl   # no --headless: builds in the image, runs the static binary on this desktop (X11/Wayland); ESHARP_SCALE=n sets the window scale
 ```
 
 `<image>` is `esharp-amiga-toolchain` (all four targets: m68k, os4, morphos, aros) or, for m68k only,
@@ -57,7 +61,7 @@ Requires the .NET 10 SDK (`global.json`). `src/ESharp.Analyzers` stays on `netst
 ## Layout and how the pieces fit
 
 - `src/ESharp.Analyzers`: subset rules (`ES0001`-`ES0010`, `ES0100`, `ES0101`). One analyzer, used by the IDE and by the compiler.
-- `src/ESharp.Compiler`: `EsCompiler.Compile` (parse, C# errors, analyzer, entry point check) then `CEmitter` (C output with `#line`). `Targets.cs` defines the CPU x OS target model.
+- `src/ESharp.Compiler`: `EsCompiler.Compile` (parse, C# errors, analyzer, entry point check) then `CEmitter` (C output with `#line`). `Targets.cs` defines the CPU x OS target model. `CRuntime/es_std.h` (standard C) and `CRuntime/es_sdl.h` (SDL 3) are pasted into the generated C of the sdl target when a `[Native]` extern of `src/ESharp.Platform/Crt.cs` named `es_std_*` / `es_sdl_*` is called.
 - `src/ESharp.Runtime` and `src/ESharp.Platform`: parsed together with user code. They are embedded in the compiler as source, built by dotnet with `HOST` defined, and parsed with `AMIGA` defined for Amiga targets. Target-specific code uses `#if`.
 - `src/ESharp.Assets`: PNG reader/writer, colour reduction, planar packing and the `assets.json` -> `Assets.g.cs` generator (used by `esharp assets`), with an incremental `Sync` (run by `esharp build`/`run`/`test`; commit the `Assets.g.cs` it writes).
 - `src/ESharp.Target.Host`: managed fakes for tests. `src/ESharp.Cli`: `esharp new|build|run`; `esharp new` also writes a host csproj (analyzer wired in) and `.vscode/` tasks, launch and extensions (`ProjectTemplate.cs`, tested in `ProjectTemplateTests`).
@@ -66,7 +70,7 @@ Requires the .NET 10 SDK (`global.json`). `src/ESharp.Analyzers` stays on `netst
 ## Rules
 
 - Minimum system is an Amiga 1200: 68020, AGA, 2 MB chip RAM, Kickstart/AmigaOS 3.1 (v40), installed on a hard disk (Dave's decision). Open libraries with version 39 or higher; 68020 instructions and AGA may be assumed on classic builds; no support for A500/A600, 68000 or Kickstart 1.x/2.x. Planned: PowerPC (AmigaOS 4, MorphOS), RTG cards, AROS.
-- Symbols: `AMIGA` is defined for every Amiga-family target; `M68K`/`PPC` and `AMIGAOS3`/`AMIGAOS4`/`MORPHOS` narrow it. Nothing in the front end or platform contracts may assume a single target. The 68020 A1200 is the performance baseline (the 68000 no longer is).
+- Symbols: `AMIGA` is defined for every Amiga-family target; `M68K`/`PPC` and `AMIGAOS3`/`AMIGAOS4`/`MORPHOS` narrow it. The desktop target `sdl` defines `SDL` (not `AMIGA`); the dotnet test host defines `HOST`. Platform code is `#if AMIGA` / `#elif SDL` / `#else` (host fake); Amiga-only classes (Gui, Asl, Iff, Fonts, Joystick and the raw library bindings) are left out on SDL, and using them is error ES0102. Nothing in the front end or platform contracts may assume a single target. The 68020 A1200 is the performance baseline (the 68000 no longer is).
 - Test the behaviour, not just the text: new emitter features need a test that compiles the generated C and runs it (see `CEmitterTests`).
 - Never commit Kickstart ROMs or other copyrighted Amiga files (`*.rom` is git-ignored). Never copy code from Amiga E (its compiler is GPL); design inspiration only. Avoid GPL/LGPL in anything linked into games.
 - Licence is MIT, copyright Gyrafe Software. The README must keep crediting Wouter van Oortmerssen's Amiga E.

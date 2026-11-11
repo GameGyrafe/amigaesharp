@@ -4,7 +4,8 @@ namespace ESharp.Platform;
 /// Frame timing for game loops: wait for the display's vertical blank, count frames, and know whether the machine
 /// runs 50 Hz (PAL) or 60 Hz (NTSC). On the Amiga <see cref="WaitVBlank"/> is graphics.library WaitTOF, so drawing
 /// syncs to the display; the rate comes from the PAL or NTSC bit of GfxBase.DisplayFlags (set from the chips on classic
-/// machines); when neither bit is set (hosted AROS) it is ExecBase.VBlankFrequency. On the host it is a deterministic fake: each <see cref="WaitVBlank"/> advances the
+/// machines); when neither bit is set (hosted AROS) it is ExecBase.VBlankFrequency. On SDL each <see cref="WaitVBlank"/> shows the
+/// screen and paces the loop to a steady 50 frames per second (vsync is not used). On the host it is a deterministic fake: each <see cref="WaitVBlank"/> advances the
 /// fake <see cref="Clock"/> by one frame (20000 or 16666 microseconds), so tests can drive a game loop.
 /// </summary>
 public static unsafe class Frame
@@ -63,6 +64,16 @@ public static unsafe class Frame
     public static void WaitVBlank()
     {
         Graphics.WaitTOF();
+        _count++;
+    }
+#elif SDL
+    // SDL: a steady 50 frames per second, as on a PAL Amiga, whatever the desktop's refresh rate; each wait shows the screen.
+    private static int Detect() { return 50; }
+
+    /// <summary>Shows the screen and waits for the next 1/50 second, then counts the frame.</summary>
+    public static void WaitVBlank()
+    {
+        Crt.es_sdl_wait_frame(FramesPerSecond);
         _count++;
     }
 #else

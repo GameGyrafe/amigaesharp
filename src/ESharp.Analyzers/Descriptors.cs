@@ -59,6 +59,10 @@ public static class Descriptors
         "ES0101", "Library function is newer than the target's libraries",
         "'{0}' needs library version {1} but this target has version {2}");
 
+    public static readonly DiagnosticDescriptor AmigaOnly = Error(
+        "ES0102", "Amiga-only API",
+        "'{0}' is Amiga-only and does not exist on target '{1}'; put the code in #if AMIGA");
+
     public static readonly DiagnosticDescriptor ReferenceField = Error(
         "ES0010", "Structs cannot hold references",
         "Field '{0}' of struct '{1}' is a reference type; E# structs have value semantics only");

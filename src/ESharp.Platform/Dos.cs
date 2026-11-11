@@ -4,7 +4,7 @@ using System.IO;
 
 namespace ESharp.Platform;
 
-/// <summary>AmigaDOS output. Binds dos.library on the Amiga; writes to a TextWriter on the host.</summary>
+/// <summary>AmigaDOS output. Binds dos.library on the Amiga; standard output on SDL; writes to a TextWriter on the host.</summary>
 public static class Dos
 {
 #if AMIGA
@@ -30,6 +30,13 @@ public static class Dos
     /// <summary>dos.library DateStamp(), LVO -192: fills a struct DateStamp (days since 1978, minute of the day, ticks of the minute). See <see cref="Date.Now"/>.</summary>
     [AmigaLib("dos", -192)]
     public static extern unsafe void* DateStamp(void* date);
+#elif SDL
+    public static int PutStr(string str) { return Crt.es_std_putstr(str); }
+
+    public static void FlushOutput() { Crt.es_std_flush(); }
+
+    /// <summary>Waits for <paramref name="ticks"/> 50ths of a second (the screen, if open, is shown first).</summary>
+    public static void Delay(int ticks) { Crt.es_sdl_delay(ticks); }
 #else
     /// <summary>Where PutStr writes on the host. Tests replace it to capture output.</summary>
     public static TextWriter Out = System.Console.Out;

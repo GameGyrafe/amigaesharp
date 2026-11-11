@@ -20,7 +20,7 @@ internal static unsafe class DosLib
 
 /// <summary>
 /// Whole-file reads and writes: enough to load a sound or a data file into memory. A path is an AmigaDOS path on the Amiga
-/// (<c>"DH0:Sounds/boom.wav"</c>, <c>"RAM:x"</c>) and an ordinary path on the host.
+/// (<c>"DH0:Sounds/boom.wav"</c>, <c>"RAM:x"</c>) and an ordinary path on SDL and on the host.
 /// </summary>
 public static unsafe class Files
 {
@@ -42,6 +42,14 @@ public static unsafe class Files
         int got = DosLib.Read(fh, block, length);
         DosLib.Close(fh);
         if (got != length) { Mem.Free(block); return null; }
+        size = length;
+        return block;
+#elif SDL
+        int length = Crt.es_std_file_size(path);
+        if (length <= 0) return null;
+        byte* block = chip ? Mem.AllocChip((uint)length) : Mem.AllocFast((uint)length);
+        if (block == null) return null;
+        if (Crt.es_std_file_read(path, block, length) != length) { Mem.Free(block); return null; }
         size = length;
         return block;
 #else
@@ -69,6 +77,8 @@ public static unsafe class Files
         }
         DosLib.Close(fh);
         return put == data.Length;
+#elif SDL
+        fixed (byte* p = data) return Crt.es_std_file_write(path, p, data.Length);
 #else
         File.WriteAllBytes(path, data.ToArray());
         return true;
@@ -80,6 +90,8 @@ public static unsafe class Files
     {
 #if AMIGA
         return DosLib.DeleteFile(path) != 0;
+#elif SDL
+        return Crt.es_std_file_delete(path);
 #else
         File.Delete(path);
         return true;

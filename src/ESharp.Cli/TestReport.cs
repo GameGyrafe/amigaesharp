@@ -24,10 +24,10 @@ public sealed class TestReport
     }
 
     /// <summary>
-    /// Differences between host and Amiga: a check that is ok on one and FAIL or missing on the other.
+    /// Differences between host and Amiga (or another target, named by <paramref name="label"/>): a check that is ok on one and FAIL or missing on the other.
     /// A name repeated in a program is matched by occurrence (first with first, and so on).
     /// </summary>
-    public static List<string> Compare(TestReport host, TestReport amiga)
+    public static List<string> Compare(TestReport host, TestReport amiga, string label = "Amiga")
     {
         static Dictionary<string, List<bool>> Index(TestReport r)
         {
@@ -52,7 +52,7 @@ public sealed class TestReport
             {
                 var hs = Describe(hl, i);
                 var asx = Describe(al, i);
-                if (hs != asx) diffs.Add($"{name}: host {hs}, Amiga {asx}");
+                if (hs != asx) diffs.Add($"{name}: host {hs}, {label} {asx}");
             }
         }
         return diffs;
