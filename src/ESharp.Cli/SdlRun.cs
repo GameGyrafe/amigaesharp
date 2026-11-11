@@ -131,8 +131,8 @@ public static class SdlRun
                         throw new FormatException($"bad input step '{raw}'");
                     steps.Add($"{parts[0]} {x},{y}");
                     break;
-                case "press" when parts.Length == 1:
-                    steps.Add("press");
+                case "press" or "close" when parts.Length == 1:
+                    steps.Add(parts[0]);
                     break;
                 case "key" when parts.Length == 2:
                     var codes = parts[1].Split('+').Select(c =>
@@ -145,7 +145,7 @@ public static class SdlRun
                     steps.Add("key " + string.Join("+", codes));
                     break;
                 default:
-                    throw new FormatException($"bad input step '{raw}' (use 'click X,Y', 'rel DX,DY', 'press' or 'key N')");
+                    throw new FormatException($"bad input step '{raw}' (use 'click X,Y', 'rel DX,DY', 'press', 'close' or 'key N')");
             }
         }
         return string.Join(";", steps);

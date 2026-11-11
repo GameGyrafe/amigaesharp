@@ -39,7 +39,7 @@ sdl3`, run under `sh -c`; `--docker` without a name picks `esharp-sdl` for this 
   `asl`, `iff`, `fonts` therefore do not build for sdl.
 - **CLI:** `esharp run --target sdl [--docker [esharp-sdl]] [--headless]`: headless runs the binary inside the image (or on this machine
   without `--docker`) with `SDL_VIDEODRIVER=offscreen SDL_AUDIODRIVER=dummy`; without `--headless` the static binary runs on this desktop.
-  `--input` takes the FS-UAE syntax (`click X,Y;rel DX,DY;press;key N[+M]`, X11 key codes) with X,Y in the game's screen pixels; the CLI
+  `--input` takes the FS-UAE syntax (`click X,Y;rel DX,DY;press;key N[+M]`, plus `close` on this target: a window close request followed by SDL's quit event, which counts as one Esc, X11 key codes) with X,Y in the game's screen pixels; the CLI
   turns the key codes into Amiga raw keys and passes the script in `ESHARP_INPUT`; the program replays one step per poll (with gaps) after
   it prints SHOT. `--screenshot` saves the program's own frame (its screen size, not the scaled window): the program writes a PPM
   (`ESHARP_SCREENSHOT`) once the script has played (or when the screen closes) and the CLI converts it to PNG with the ESharp.Assets writer.

@@ -21,6 +21,9 @@ static bool es_sdl_init(SDL_InitFlags flags)
 {
     if (!es_sdl_quit_hooked) { es_sdl_quit_hooked = true; atexit(es_sdl_atexit); }
     if (SDL_WasInit(flags) == flags) return true;
+    /* A window close is one request (Esc); SDL would also queue SDL_EVENT_QUIT after the last window. Ctrl+C and SIGTERM keep their default meaning. */
+    SDL_SetHint(SDL_HINT_QUIT_ON_LAST_WINDOW_CLOSE, "0");
+    SDL_SetHint(SDL_HINT_NO_SIGNAL_HANDLERS, "1");
     if (!SDL_InitSubSystem(flags)) { fprintf(stderr, "SDL: %s\n", SDL_GetError()); return false; }
     return true;
 }
@@ -339,6 +342,19 @@ static void es_sdl_script_step(void)
         es_sdl_in[1] = es_sdl_clamp(es_sdl_in[1] + (int32_t)b, es_sdl_h);
         es_sdl_script_wait = 10;
     }
+    else if (strcmp(step, "close") == 0)
+    {
+        /* what a window manager close does in SDL 3 with the default hint: a close request, then a quit */
+        SDL_Event ce;
+        SDL_zero(ce);
+        ce.type = SDL_EVENT_WINDOW_CLOSE_REQUESTED;
+        ce.window.windowID = SDL_GetWindowID(es_sdl_win);
+        SDL_PushEvent(&ce);
+        SDL_zero(ce);
+        ce.type = SDL_EVENT_QUIT;
+        SDL_PushEvent(&ce);
+        es_sdl_script_wait = 10;
+    }
     else if (strncmp(step, "key ", 4) == 0)
     {
         const char *p = step + 4;
@@ -367,6 +383,7 @@ static void es_sdl_apply_injected(void);
 static __attribute__((unused)) void es_sdl_poll(void)
 {
     SDL_Event ev;
+    bool closed = false;   /* a close request in this poll: the SDL_EVENT_QUIT that can follow it is the same close */
     while (es_sdl_win != NULL && SDL_PollEvent(&ev))
     {
         switch (ev.type)
@@ -374,6 +391,8 @@ static __attribute__((unused)) void es_sdl_poll(void)
             case SDL_EVENT_QUIT:
             case SDL_EVENT_WINDOW_CLOSE_REQUESTED:
                 /* Closing the window is Esc (the games quit on it); a second close ends the program. */
+                if (closed) break;
+                closed = true;
                 if (++es_sdl_quits > 1) exit(0);
                 es_sdl_in[7] = 0x45;
                 es_sdl_in[8] = 0;

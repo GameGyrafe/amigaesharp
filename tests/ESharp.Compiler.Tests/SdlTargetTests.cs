@@ -251,4 +251,59 @@ public static class P
             try { Directory.Delete(dir, true); } catch (IOException) { } catch (UnauthorizedAccessException) { }
         }
     }
+
+    /// <summary>A window close (SDL 3 queues a close request and then a quit) is one Esc: the program's own quit path runs, and it is not ended at once.</summary>
+    [Fact]
+    public void Closing_the_window_is_one_esc_and_the_program_quits_itself_in_the_image()
+    {
+        if (!HasSdlImage()) return;
+        const string src = @"
+public static class P
+{
+    static void Check(bool ok, string name) { Dos.PutStr(ok ? ""ok "" : ""FAIL ""); Dos.PutStr(name); Dos.PutStr(""\n""); }
+
+    [EntryPoint]
+    public static void Main()
+    {
+        Check(Video.Open(64, 32, 3), ""open"");
+        Dos.PutStr(""SHOT\n"");
+        int escs = 0;
+        for (int i = 0; i < 100; i++)
+        {
+            Input.Poll();
+            if (Input.LastKey == 0x45) escs++;
+            Frame.WaitVBlank();
+        }
+        Check(escs == 1, ""one close is one Esc"");
+        Video.Close();
+        Check(true, ""cleanup ran"");
+    }
+}";
+        var dir = Path.Combine(Path.GetTempPath(), "esharp-sdl-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(dir);
+        try
+        {
+            File.WriteAllText(Path.Combine(dir, "prog.c"), CompileOk(Prelude + src, Targets.Sdl.ToOptions()));
+            var build = new ProcessStartInfo("docker") { RedirectStandardOutput = true, RedirectStandardError = true };
+            foreach (var a in new[] { "run", "--rm", "-v", $"{dir}:/work", "-w", "/work", "esharp-sdl", "sh", "-c",
+                         "gcc -O2 -fwrapv -Wall -Werror -o prog prog.c $(pkg-config --static --cflags --libs sdl3)" })
+                build.ArgumentList.Add(a);
+            using (var b = Process.Start(build)!)
+            {
+                var err = b.StandardError.ReadToEndAsync();
+                b.StandardOutput.ReadToEnd();
+                b.WaitForExit();
+                Assert.True(b.ExitCode == 0, err.Result);
+            }
+            var (exit, output) = SdlRun.Run(Path.Combine(dir, "prog"), true, TimeSpan.FromSeconds(60), "esharp-sdl", null, "close", echo: false);
+            Assert.Equal(0, exit);
+            Assert.DoesNotContain("FAIL", output);
+            Assert.Contains("ok one close is one Esc", output);
+            Assert.Contains("ok cleanup ran", output);
+        }
+        finally
+        {
+            try { Directory.Delete(dir, true); } catch (IOException) { } catch (UnauthorizedAccessException) { }
+        }
+    }
 }
