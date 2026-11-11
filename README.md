@@ -64,6 +64,25 @@ dotnet run --project src/ESharp.Cli -- run samples/hello --docker --headless   #
 `ESHARP_KICKSTART`). Use a ROM you own; ROMs are git-ignored and must never be committed. On macOS
 pass `--fsuae /Applications/FSUAE.app/Contents/MacOS/fs-uae` (or set `ESHARP_FSUAE`).
 
+The same game also builds for a desktop through SDL 3 (`--target sdl`, Linux x86-64 in the `esharp-sdl`
+image, SDL linked statically):
+
+```bash
+docker build -t esharp-sdl docker/sdl
+dotnet run --project src/ESharp.Cli -- run samples/cards --target sdl --docker esharp-sdl   # a window on this desktop
+dotnet run --project src/ESharp.Cli -- test samples/cards --target sdl --docker esharp-sdl  # headless: host and SDL agree
+```
+
+| Target | Symbols | Runs on | Status |
+|---|---|---|---|
+| `m68k` (default) | `AMIGA M68K AMIGAOS3` | A1200 / Kickstart 3.1+ (FS-UAE) | runs |
+| `os4` | `AMIGA PPC AMIGAOS4` | AmigaOS 4 PowerPC | builds only |
+| `morphos` | `AMIGA PPC MORPHOS` | MorphOS PowerPC | builds only |
+| `aros` | `AMIGA X86_64 AROS` | AROS x86-64 (hosted) | runs |
+| `sdl` | `SDL` | Linux desktop through SDL 3 | runs (headless and under Xvfb; macOS/Windows not tried) |
+
+The Amiga-only APIs (GadTools `Gui`, `Asl`, `Iff`, `Fonts`, `Joystick`) do not exist on `sdl` (error ES0102).
+
 ### Editing in VS Code
 
 `esharp new <name>` (or a path such as `games/demo`; the last segment is the project name and must be a valid C# identifier) writes a project you can open in VS Code (with the C# extension): `Program.cs`, a `<name>.csproj`

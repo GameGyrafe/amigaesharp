@@ -10,9 +10,82 @@ The minimum system is now an **Amiga 1200: 68020, AGA, 2 MB chip RAM, Kickstart 
 - **Kept on purpose:** `HasAga()` and `HasRtg()` with their fallbacks. A classic A1200 always has AGA, but PowerPC, RTG-only and AROS targets may not, so the checks stay as the portable way to ask. **Not yet done:** using 68020 instructions deliberately and AROS (a new target, untested).
 - Verified after the change: all 17 samples built with `-m68020` and run on Kickstart 3.1 (A1200) in FS-UAE: 300 `ok` lines, no `FAIL` (the script shows only the last 25 lines of each sample, so long ones are truncated), 136 unit tests pass. Not verified: PowerPC, real hardware, a 68000/Kickstart 2.04 run (no longer supported).
 
-## SDL 3 build image (issue #15, part 1)
+## SDL 3 target `sdl` (issue #15)
 
-`docker/sdl/Dockerfile` builds the image `esharp-sdl`: Debian bookworm-slim pinned by digest, gcc/cmake/pkg-config, and SDL 3.4.20 built from the pinned release tarball (sha256 checked) as a static library with the X11, Wayland, ALSA, PulseAudio, DRM and GL/EGL backends (dlopened at run time). About 877 MB. `docker/sdl/smoke-test.sh` links a C program statically (`pkg-config --static sdl3`) and runs it with the offscreen video and dummy audio drivers: window, renderer, streaming texture, pixel read-back and a played audio stream all pass on the Linux dev host. CI has an `sdl` job that builds the image and runs the smoke test (the CI job itself not yet run on GitHub). **Not done:** the E# `sdl` target itself (compiler target, Platform/Runtime backends, samples). Not verified: running a linked binary on a real desktop (X11/Wayland/audio devices), native macOS or Windows SDL builds, other architectures.
+**The same game builds for the Amiga and for a desktop through SDL 3.** `--target sdl` defines `SDL` only (no `AMIGA`, no CPU or OS
+symbol); the compiler is `gcc -O2 -fwrapv` in the `esharp-sdl` image and SDL 3 is linked statically (`pkg-config --static --cflags --libs
+sdl3`, run under `sh -c`; `--docker` without a name picks `esharp-sdl` for this target). Platform code is now `#if AMIGA` / `#elif SDL`
+/ `#else` (the dotnet host fake); the Amiga and host branches are unchanged.
+
+- **C runtime for non-Amiga targets:** `src/ESharp.Compiler/CRuntime/es_std.h` (stdio/stdlib/time only) and `es_sdl.h` (SDL 3) are
+  embedded in the compiler and pasted into the generated C when a `[Native]` extern of `src/ESharp.Platform/Crt.cs` named `es_std_*` or
+  `es_sdl_*` is called, so a program that only prints needs neither SDL nor any Amiga header (no library bases are opened).
+- **Platform on SDL:** `Dos` (PutStr to stdout, FlushOutput, Delay = SDL_Delay after showing the screen), `Mem`/`Heap`/`Arena`/`Pool`/`Vec`
+  on calloc (no chip RAM; each kind counts against a nominal 256 MB, so `AvailChip`/`AvailFast` move with allocations and an impossible
+  request returns null as on the Amiga), `Files` (stdio), `Date` (C clock and time zone; Split/TryJoin in code), `Strings` (the host's
+  ISO-8859-1 rules), `Clock` (SDL_GetTicksNS, 1 MHz), `Frame` (a steady 50 fps like PAL: each `WaitVBlank` shows the screen and paces with
+  SDL_DelayPrecise; vsync is not used), `Video` (a chunky 8-bit framebuffer and 256-entry palette in C, converted to an ARGB8888
+  streaming texture on present, drawn integer-scaled (`SDL_LOGICAL_PRESENTATION_INTEGER_SCALE`, nearest) into a resizable window as large
+  as fits the desktop, `ESHARP_SCALE=n` to choose; open/close, SetColor/SetColor24 (24 bits only above 5 planes, as on the Amiga),
+  palettes, FillRect, GetPixel, planar Blit/BlitRegion/BlitMasked/BlitMaskedScaled, the built-in `Font`), `Input` (mouse in screen pixels,
+  left button, keys mapped to the Amiga raw codes of the same US positions with the qualifier bits, closing the window is Esc and a second
+  close exits; the `Input.Host*` calls feed the C layer too, so the games' input self-checks run on SDL), `Keys` (the host's US layout),
+  `Sound` (four SDL audio streams on the default device, signed 8-bit mono at 3546895 / period, gain = volume / 64, fed from a callback for
+  cycles and loops), `Trace` (standard error).
+- **Not on SDL (Amiga-only):** `Gui`/GadTools, `Asl`, `Iff`/iffparse, `Fonts`/diskfont, `Joystick`/lowlevel and the raw bindings (`Exec`,
+  `Intuition`, `Graphics`, `CyberGfx`, `Utility`, `Keymap`, `TimerDevice`, `Layout`) are not compiled for SDL: using one is the C# unknown-name
+  error plus **ES0102** "'Gui' is Amiga-only and does not exist on target 'sdl'; put the code in #if AMIGA". `HasAga()` is true (256
+  colours always work), `HasRtg`/`OpenRtg`/`IsRtg` are false (no RTG card: programs take their fallback path). `samples/controls`, `gui`,
+  `asl`, `iff`, `fonts` therefore do not build for sdl.
+- **CLI:** `esharp run --target sdl [--docker [esharp-sdl]] [--headless]`: headless runs the binary inside the image (or on this machine
+  without `--docker`) with `SDL_VIDEODRIVER=offscreen SDL_AUDIODRIVER=dummy`; without `--headless` the static binary runs on this desktop.
+  `--input` takes the FS-UAE syntax (`click X,Y;rel DX,DY;press;key N[+M]`, X11 key codes) with X,Y in the game's screen pixels; the CLI
+  turns the key codes into Amiga raw keys and passes the script in `ESHARP_INPUT`; the program replays one step per poll (with gaps) after
+  it prints SHOT. `--screenshot` saves the program's own frame (its screen size, not the scaled window): the program writes a PPM
+  (`ESHARP_SCREENSHOT`) once the script has played (or when the screen closes) and the CLI converts it to PNG with the ESharp.Assets writer.
+  `esharp test --target sdl --docker esharp-sdl` runs the host and the SDL build (headless) and compares the ok/FAIL lines like the m68k path.
+- **Emitter fix on the way:** `fixed (byte* p = readOnlySpan)` now casts the span's const pointer, which removes the
+  `-Wdiscarded-qualifiers` warnings that every build using the blitter had (also on m68k: `samples/cards` now builds without them).
+
+Verified (Linux dev host, esharp-sdl image with SDL 3.4.20):
+- `esharp test --target sdl --docker esharp-sdl` (host vs SDL headless in the image), host and SDL agree on every check: phase2 32,
+  language 35, collections 20, generics 24, lambdas 16, linq 37, refs 18, inherit 24, operators 20, properties 18, names 12, dates 19,
+  keys 8, timing 10, memory 19, aga 6, assets 17, screen 17, sound 21 (voices busy while playing and free after, through the dummy audio
+  driver), **cards 20** and **rummy 36** (both including their scripted input checks). `rtg` differs on purpose: the host fake has a card,
+  SDL has none, so SDL runs the 5 fallback checks (all ok). `hello` and `trace --trace` print as on the host.
+- **Gate (same game on Amiga and SDL):** `esharp run samples/cards --target sdl --docker esharp-sdl --headless --input "click 60,145;key 9"
+  --screenshot ...`: the self-checks pass, then `click 60 145`, `guess higher: right`, `quit`; the PNG shows the 320x200 table with the
+  history row of four cards, the current card, the deck, both buttons and the streak pips. `samples/rummy` with `--input "click
+  128,80;click 92,154"`: `player discarded`, `bot moved`; the PNG shows the bot's seven backs, stock 35, the pile, the player's seven cards,
+  "YOUR TURN: DRAW FROM THE STOCK OR THE PILE" and "DEADWOOD 47". `samples/screen` screenshot shows its rectangles, the blitted card and
+  the font line.
+- **On a desktop (Xvfb on the dev host, outside docker):** the binary built in the image (dynamically linked to glibc only; SDL is inside)
+  opened a 960x600 window (scale 3) centred on a 1280x1024 Xvfb screen, captured with `xwd`, showing the game. Driven by real X events
+  (XTEST: a click at the Higher button in window pixels, then the Esc key): `click 60 145`, `guess higher: right`, `quit`, so the window
+  scaling and mouse mapping are right. `esharp run --target sdl --docker esharp-sdl` without `--headless` (scripted input and screenshot)
+  also worked there.
+- 281 unit tests pass (new `SdlTargetTests`: target symbols, `#if SDL`, standard-C-only output for a print program, the SDL runtime only
+  when Video is used, ES0102, the standard C runtime (memory, files, dates, keys) compiled with `-Wall -Werror` and run with the host gcc,
+  collections and inherit on sdl with the dotnet output, the `--input` translation, the PPM reader, the "SDL" label in the comparison,
+  and, when the `esharp-sdl` image exists, a program built with static SDL and run headless in it: drawing, a scripted click and Esc, a
+  4-voice sound open, and the screenshot's pixels).
+- Regression (Amiga branches unchanged): on A1200 / Kickstart 3.1 (40.069) in FS-UAE `cards` 15 ok (input: `click 120 120`, `click 80
+  140`, `guess higher: right`, `quit`), `rummy` 28 ok (`click 120 120`, `click 120 80`, `quit`), `screen` 17 ok, `sound` 21 ok, `esharp test
+  samples/language --target m68k`: host and Amiga agree (35 + 35); `cards` built with `--target aros` on hosted AROS (nightly 20261106):
+  16 ok, a scripted click played a guess, the screenshot shows the high resolution table.
+
+Not verified:
+- A real desktop session (a physical X11 or Wayland display, a real sound card): only Xvfb and the dummy audio driver were used, so no
+  sound was heard. Keyboard input from a real keyboard (only XTEST's Esc key and the scripted keys).
+- Native macOS and Windows builds (no toolchain for them here; the C is plain C99 plus SDL 3, and `--docker` builds a Linux binary only),
+  other CPU architectures, a newer or older SDL 3 than 3.4.20.
+- The GitHub CI `sdl` job (builds the image, smoke test, then hello, `esharp test` language and cards, and a cards run with input and a
+  screenshot): not run on GitHub yet.
+- `ES0100` ("slow 64-bit arithmetic on a 68020") is still reported on sdl, where it does not apply.
+
+### SDL 3 build image (part 1)
+
+`docker/sdl/Dockerfile` builds the image `esharp-sdl`: Debian bookworm-slim pinned by digest, gcc/cmake/pkg-config, and SDL 3.4.20 built from the pinned release tarball (sha256 checked) as a static library with the X11, Wayland, ALSA, PulseAudio, DRM and GL/EGL backends (dlopened at run time). About 877 MB. `docker/sdl/smoke-test.sh` links a C program statically (`pkg-config --static sdl3`) and runs it with the offscreen video and dummy audio drivers: window, renderer, streaming texture, pixel read-back and a played audio stream all pass on the Linux dev host. CI has an `sdl` job that builds the image and runs the smoke test (the CI job itself not yet run on GitHub).
 
 ## Clang-clean C
 
@@ -46,7 +119,7 @@ Verified:
 
 Not verified:
 - A failing program through the CLI (exit code 1 on FAIL or a difference): covered by unit tests of the comparison only, not run end to end.
-- Other targets (os4, morphos, aros) are not supported by `test`.
+- Other targets (os4, morphos, aros) are not supported by `test` (`--target sdl` is, see the SDL section).
 
 ## VS Code support (issue #20)
 
