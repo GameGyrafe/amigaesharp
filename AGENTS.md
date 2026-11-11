@@ -41,6 +41,9 @@ dotnet run --project tools/CardArt -- samples/cards/cards.png                   
 dotnet run --project tools/BindGen -- check <sdk include dir> src/ESharp.Platform   # compare our [AmigaLib] vectors/arg counts with an SDK you provide (AROS include dir; not committed)
 dotnet run --project src/ESharp.Cli -- run samples/gui --docker <image> --headless --model A1200 --timeout 60 --input "click 400,300;rel -96,-100;press;rel -72,-63;rel -42,-20;press"   # GadTools window on the Workbench screen: Hello button, then the close gadget (rel moves were found by screenshot; add --screenshot and drop the last press to look)
 AROS_HOSTED=<extracted hosted AROS dir> tools/aros-hosted/aros-hosted.sh gui --shot shot.png --input "click 208,74;click 47,37"   # same sample on hosted AROS (needs a --target aros build)
+ESHARP_OS4_VM=<AmigaOS 4.1 VM dir> dotnet run --project src/ESharp.Cli -- test samples/linq --target os4 --docker esharp-amiga-toolchain   # host vs AmigaOS 4.1 in QEMU pegasos2 (overlay boot, ~15 s; tools/os4vm/README.md)
+ESHARP_OS4_VM=<AmigaOS 4.1 VM dir> dotnet run --project src/ESharp.Cli -- run samples/cards --target os4 --docker esharp-amiga-toolchain --screenshot shot.png   # screendump after SHOT; --trace --serial f for Trace lines; no --input yet
+ESHARP_OS4_VM=<AmigaOS 4.1 VM dir> python3 -I tools/os4vm/os4vm.py check|start|install-hook|remove-hook   # VM helpers: start = VNC 127.0.0.1:5901 on an overlay; the hook is a one-time change to amiga.img (already installed on Dave's VM)
 dotnet run --project tools/BindGen -- compare <aros include dir> <fd dir> lowlevel asl   # AROS headers vs the m68k toolchain's fd files (ndk/lib/fd); fd versions are right for the classic OS
 tools/BindGen/layouts.sh                                  # re-measure struct offsets (tools/BindGen/structs.txt) for m68k and AROS into src/ESharp.Platform/Layout.g.cs (docker)
 tools/hwpack/build.sh <m68k image>                       # build the real-hardware test pack into obj/hwtest (run with Execute RunAll on the Amiga)
@@ -81,7 +84,10 @@ Requires the .NET 10 SDK (`global.json`). `src/ESharp.Analyzers` stays on `netst
 
 `esharp run` uses FS-UAE's built-in AROS ROM replacement unless given a real Kickstart
 (`--kickstart <rom>` or `ESHARP_KICKSTART`; `--fsuae` / `ESHARP_FSUAE` for the executable). FS-UAE
-cannot run the PowerPC builds; that needs QEMU or real hardware (not done yet).
+cannot run the PowerPC builds. `--target os4` runs in an AmigaOS 4.1 QEMU pegasos2 VM instead
+(`ESHARP_OS4_VM`, `tools/os4vm/README.md`): every run is a fresh boot on a throwaway overlay, so never boot `amiga.img`
+by hand while a run is going (one VM at a time; the CLI refuses then). The AmigaOS files stay in Dave's VM dir: never copy
+them into the repo or any output. MorphOS and PowerPC real hardware: not done yet.
 
 ## Dev host (Linux, shared)
 

@@ -14,6 +14,11 @@
   </ItemGroup>
 
   <ItemGroup>
+    <!-- The os4 run harness puts this helper on the test CD (src/ESharp.Cli/Os4Vm.cs, tools/os4vm/README.md). -->
+    <EmbeddedResource Include="..\..\tools\os4vm\estype.c" LogicalName="estype.c" />
+  </ItemGroup>
+
+  <ItemGroup>
     <InternalsVisibleTo Include="ESharp.Compiler.Tests" />
   </ItemGroup>
 </Project>
