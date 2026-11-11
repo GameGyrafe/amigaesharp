@@ -65,6 +65,36 @@ public class HostTargetTests
     }
 
     [Fact]
+    public void Sound_sample_skips_playback_without_audio_hardware()
+    {
+        using var mem = HostMem.Capture();
+        using var console = HostConsole.Capture();
+        ESharp.Platform.Sound.HostReset();
+        ESharp.Platform.Sound.HostHasAudio = false;
+        try
+        {
+            Assert.False(ESharp.Platform.Sound.Available);
+            SoundSample.Program.Main();
+            var report = ESharp.Cli.TestReport.Parse(console.Output);
+            Assert.Equal(0, report.Failed);
+            Assert.Contains("audio.device opens and gives a channel", report.Skips);
+            Assert.Contains("note: no working sound hardware here", console.Output);
+            Assert.Contains("ok samples are freed", console.Output);
+            Assert.Equal(0, mem.LiveBlocks);
+            Assert.Equal(0, ESharp.Platform.Sound.HostPlays);
+            // Host with audio against host without: the skipped checks are not differences.
+            Assert.Empty(ESharp.Cli.TestReport.Compare(ESharp.Cli.TestReport.Parse(SoundExpected.Output), report));
+        }
+        finally
+        {
+            ESharp.Platform.Sound.HostHasAudio = true;
+            ESharp.Platform.Sound.HostReset();
+        }
+        Assert.True(ESharp.Platform.Sound.Available);
+        Assert.Equal(0, ESharp.Platform.Sound.VoiceCount);     // the trial Open was closed again
+    }
+
+    [Fact]
     public void Collections_sample_runs_on_the_host_without_leaks()
     {
         using var mem = HostMem.Capture();

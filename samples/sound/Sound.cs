@@ -7,13 +7,16 @@ namespace SoundSample;
 /// <summary>
 /// Plays generated samples through audio.device and checks that the device accepts them: a voice is busy while a
 /// sample plays and free afterwards, voices are independent, Stop silences them. Prints "ok NAME" or "FAIL NAME".
-/// What it cannot check is how it sounds.
+/// What it cannot check is how it sounds. Where no audio hardware works (<see cref="Sound.Available"/> is false; on a
+/// classic Amiga that is a failure) it prints a note and "skip NAME" for the playback checks.
 /// </summary>
 public static unsafe class Program
 {
+    static bool _skip;
+
     static void Check(bool ok, string name)
     {
-        Dos.PutStr(ok ? "ok " : "FAIL ");
+        Dos.PutStr(_skip ? "skip " : ok ? "ok " : "FAIL ");
         Dos.PutStr(name);
         Dos.PutStr("\n");
         Dos.FlushOutput();      // so a program that hangs in the audio device still shows how far it got
@@ -130,11 +133,17 @@ public static unsafe class Program
         Check(square.Data != null && square.Length == 32 && tri.Length == 32 && noise.Length == 256, "samples are allocated");
         Check((sbyte)square.Data[0] == 127 && (sbyte)square.Data[31] == -127 && (sbyte)tri.Data[0] == -127 && (sbyte)tri.Data[16] == 127, "sample contents");
 
-        if (!Sound.Open())
+        if (!Sound.Available)
         {
-            Check(false, "audio.device opens");
+#if AMIGAOS3
+            Check(false, "audio.device opens");             // Paula and audio.device are always there on a classic Amiga
             return;
+#else
+            Dos.PutStr("note: no working sound hardware here (audio.device did not open), so the playback checks are skipped\n");
+            _skip = true;
+#endif
         }
+        Sound.Open();
         Check(Sound.VoiceCount >= 1, "audio.device opens and gives a channel");
 
         int v = Sound.Play(in square, Sound.PeriodFor(440, 32), 40, 40);
@@ -144,7 +153,7 @@ public static unsafe class Program
 
         int a = Sound.Play(in tri, 300, 64, 0);
         Check(a >= 0 && Sound.Busy(a), "a looping sample keeps playing");
-        if (Sound.VoiceCount >= 2)
+        if (_skip || Sound.VoiceCount >= 2)
         {
             int b = Sound.Play(in noise, 400, 20, 5);
             Check(b >= 0 && b != a && Sound.Busy(a) && Sound.Busy(b), "two voices play together");
@@ -156,6 +165,7 @@ public static unsafe class Program
 
         Sound.Close();
         Check(Sound.VoiceCount == 0 && Sound.Play(in tri, 300, 64, 1) == -1, "Close releases the channels");
+        _skip = false;
         Sound.Free(ref square);
         Sound.Free(ref tri);
         Sound.Free(ref noise);
