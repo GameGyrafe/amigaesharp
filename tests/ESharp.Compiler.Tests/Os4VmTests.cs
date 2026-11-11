@@ -244,6 +244,9 @@ public class Os4VmTests
         Assert.Contains("GetInterface(lib, \"main\", 1, NULL)", c);
         Assert.Contains("DropInterface((struct Interface *)ICyberGfx)", c);
         Assert.Contains("ES_SETBASE_CyberGfxBase(", c);
+        // a failed GetInterface leaves the base null, and Video sees that through Ready()
+        Assert.Contains("== NULL) lib = NULL;", c);
+        Assert.Contains("(es_CyberGfxBase != NULL)", c);
         // every other target takes the #else branch: the plain base variable, as before
         Assert.Contains("#else\n#define ES_SETBASE_CyberGfxBase(l) (es_CyberGfxBase = (__typeof__(es_CyberGfxBase))(l))\n#endif", c.Replace("\r", ""));
     }

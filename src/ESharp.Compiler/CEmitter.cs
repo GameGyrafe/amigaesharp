@@ -306,8 +306,8 @@ internal sealed partial class CEmitter
             result.AppendLine("static void es_setbase_CyberGfxBase(struct Library *lib)");
             result.AppendLine("{");
             result.AppendLine("    if (ICyberGfx != NULL) { DropInterface((struct Interface *)ICyberGfx); ICyberGfx = NULL; }");
+            result.AppendLine("    if (lib != NULL && (ICyberGfx = (struct CyberGfxIFace *)GetInterface(lib, \"main\", 1, NULL)) == NULL) lib = NULL;");
             result.AppendLine("    es_CyberGfxBase = lib;");
-            result.AppendLine("    if (lib != NULL) ICyberGfx = (struct CyberGfxIFace *)GetInterface(lib, \"main\", 1, NULL);");
             result.AppendLine("}");
             result.AppendLine("#define ES_SETBASE_CyberGfxBase(l) es_setbase_CyberGfxBase((struct Library *)(l))");
             result.AppendLine("#else");
@@ -2625,6 +2625,9 @@ internal sealed partial class CEmitter
             var arg = Expr(inv.ArgumentList.Arguments[0].Expression, top: true);
             return m.Name == "StringToPtr" ? $"((uint8_t *)({arg}))" : $"((const char *)({arg}))";
         }
+
+        if (m.Name == "Ready" && m.IsExtern && inv.ArgumentList.Arguments.Count == 0 && UseBase(m.ContainingType) is { } readyBase)
+            return $"({readyBase} != NULL)";
 
         if (m.Name == "SetBase" && m.IsExtern && inv.ArgumentList.Arguments.Count == 1 && UseBase(m.ContainingType) is { } baseVar)
             return baseVar == "es_CyberGfxBase" ? $"ES_SETBASE_CyberGfxBase({Expr(inv.ArgumentList.Arguments[0].Expression, top: true)})" : $"({baseVar} = (__typeof__({baseVar}))({Expr(inv.ArgumentList.Arguments[0].Expression, top: true)}))";

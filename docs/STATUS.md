@@ -609,9 +609,9 @@ Platform samples never run on OS4 before (`esharp run ... --target os4 --screens
   macro to the old plain assignment). On OS4 `Video.HasRtg(320,200)` is true (every OS4 screen is on the graphics system), the
   RTG screen opens and draws, and `Video.Open`'s screen reports `IsRtg()` true too, so the sample skips "the native screen is
   not RTG" there (`#if PPC`, prints a note, the check name stays so the counts agree).
-- memory: the chip address range check (`< 0x200000`) and "free returns the chip RAM" are skipped on PPC (they print `ok`
-  with the same name; AmigaOS 4 and MorphOS have no separate chip range, and `AvailMem(MEMF_CHIP)` is not the pool the
-  allocation came from). m68k and AROS (`!AROS` already skipped the first) still check the second.
+- memory: the chip address range check (`< 0x200000`) and "free returns the chip RAM" are skipped on PPC (each prints a `note:` line and then `ok`
+  with the same name so the counts agree). Observed on OS4 in the VM: the free chip figure did not come back up by 4096 after
+  `FreeMem`; the cause (separate pool or allocator caching) was not determined. MorphOS is not verified (no run). m68k and AROS (`!AROS` already skipped the first) still check the second.
 - generics: the 1.3 GB pool succeeded in the 2 GB VM. `Pool` now refuses a capacity whose block does not fit in 32 bits
   (before, `capacity * itemBytes` wrapped to a small block), and the sample asks for 2,000,000,000 items, which fails on every
   target without allocating.
