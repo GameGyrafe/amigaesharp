@@ -50,8 +50,16 @@ Warm reboots do not work in this VM; each run is a fresh boot (about 10 s to the
    prefix (Trace output, which uses `DebugPrintF` on AmigaOS 4, and kernel messages) go to the `--serial` file.
 
 A crash leaves the Grim Reaper waiting, so the run ends at the timeout with the output so far and the serial tail.
-Not supported yet: `--input` (scripted mouse and keys; the monitor's `sendkey`/`mouse_move` could do it), the program's
-return code (the pipe hides it).
+`--input` works too: after `SHOT` (and the one second wait) the script goes to the monitor, then the screenshot is taken.
+`click X,Y` drives the relative QEMU mouse into the top-left corner (AmigaOS stops the pointer at the screen edge) and then
+moves it X,Y (measured: 1 unit is 1 pixel, no acceleration to speak of); `rel DX,DY`, `press` as on the other targets;
+`key N` takes an **Amiga raw key code** (Esc 69, Return 68, Space 64, A 32; `key 96+32` holds Left Shift while A is
+pressed), mapped to a QEMU `sendkey` name (the other targets use X11 key codes here). X,Y are pixels of the screen the
+pointer is on (the Workbench screen is 1280x1024 here; a 320x200 program screen sits in the corner of the 640x480 mode).
+Examples: `samples/gui` `--input "click 208,101;click 57,45"`; `samples/cards` `--input "click 80,145;click 240,145;key 69"`.
+Not supported yet: the program's return code (the pipe hides it).
+`start`, `install-hook` and `remove-hook` take `/tmp/esharp-os4vm.lock` as the CLI does (flock) and wait for it.
+The unit test that boots the VM runs only with `ESHARP_OS4_VM_TESTS=1` (and `ESHARP_OS4_VM`); a plain `dotnet test` skips it.
 
 ## The hook (one-time change to `amiga.img`)
 

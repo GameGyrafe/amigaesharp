@@ -10,8 +10,9 @@
 The VM directory holds your own AmigaOS files (never copy them into the repo): see README.md for the layout.
 install-hook and remove-hook boot the VM on an overlay, type one command into a Shell through the QEMU monitor, check the
 result on the serial output, and only then merge the overlay into amiga.img (qemu-img commit).
+start, install-hook and remove-hook take /tmp/esharp-os4vm.lock, like esharp run/test --target os4, and wait for it.
 """
-import os, shutil, signal, socket, subprocess, sys, tempfile, time
+import contextlib, fcntl, os, shutil, signal, socket, subprocess, sys, tempfile, time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 DEFAULT_IMAGE = 'esharp-amiga-toolchain'
@@ -31,6 +32,30 @@ for _sig in (signal.SIGTERM, signal.SIGHUP):
 def die(msg):
     print('os4vm: ' + msg, file=sys.stderr)
     sys.exit(1)
+
+
+LOCK_FILE = '/tmp/esharp-os4vm.lock'
+
+
+@contextlib.contextmanager
+def vm_lock():
+    """The lock `esharp run/test --target os4` takes for a run (flock on the same file; the CLI's FileShare.None is a flock
+    too), so start and the hook commands never run while a test run uses the VM, and the other way round."""
+    f = open(LOCK_FILE, 'a+')
+    said = False
+    try:
+        while True:
+            try:
+                fcntl.flock(f, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                break
+            except OSError:
+                if not said:
+                    print('os4vm: waiting for another os4 run to finish...', file=sys.stderr)
+                    said = True
+                time.sleep(2)
+        yield
+    finally:
+        f.close()   # closing drops the flock
 
 
 def vm_dir():
@@ -311,11 +336,14 @@ def main(argv):
     if argv[0] == 'check':
         check()
     elif argv[0] == 'start':
-        start(argv[1:])
+        with vm_lock():
+            start(argv[1:])
     elif argv[0] == 'install-hook':
-        change_startup(INSTALL, ('installed', 'already installed'), image)
+        with vm_lock():
+            change_startup(INSTALL, ('installed', 'already installed'), image)
     elif argv[0] == 'remove-hook':
-        change_startup(REMOVE, ('removed', 'no saved copy'), image)
+        with vm_lock():
+            change_startup(REMOVE, ('removed', 'no saved copy'), image)
     else:
         die(f'unknown command {argv[0]!r} (see --help)')
 

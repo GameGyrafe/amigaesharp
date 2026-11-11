@@ -59,6 +59,11 @@ public static unsafe class Video
         void* cyber = Exec.OpenLibrary("cybergraphics.library", 40);
         if (cyber == null) return CyberGfx.InvalidId;
         CyberGfx.SetBase(cyber);
+        if (!CyberGfx.Ready())
+        {
+            Exec.CloseLibrary(cyber);   // no interface (AmigaOS 4): RTG is unavailable
+            return CyberGfx.InvalidId;
+        }
         nuint[] tags = new nuint[8];      // tag lists are arrays of pointer-sized pairs
         uint id = CyberGfx.InvalidId;
         fixed (nuint* p = tags)
@@ -94,6 +99,11 @@ public static unsafe class Video
         void* cyber = Exec.OpenLibrary("cybergraphics.library", 40);
         if (cyber == null) return false;
         CyberGfx.SetBase(cyber);
+        if (!CyberGfx.Ready())
+        {
+            Exec.CloseLibrary(cyber);
+            return false;
+        }
         bool yes = CyberGfx.IsCyberModeID(Graphics.GetVPModeID(_viewPort)) != 0;
         CyberGfx.SetBase(null);
         Exec.CloseLibrary(cyber);

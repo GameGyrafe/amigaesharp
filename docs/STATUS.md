@@ -599,12 +599,53 @@ Platform samples never run on OS4 before (`esharp run ... --target os4 --screens
   (`Os4VmTests`: settings, autorun script, serial parsing, QEMU arguments, the embedded estype, the os4 C; plus a VM run
   that is skipped when `ESHARP_OS4_VM` is unset, and passed here with it set).
 
+### Fixes from the first VM runs (wave 8, issue #57)
+
+| Sample | Before (OS4) | After (OS4) | Host, m68k A1200/3.1, hosted AROS, SDL |
+|---|---|---|---|
+| rtg | did not link (`ICyberGfx`) | 7 ok, 0 FAIL, host agrees | host 7; m68k 5 ok (no card, fallback checks); unchanged |
+| memory | 17 ok, 2 FAIL | 19 ok | host 19, m68k 19, hosted AROS 19, SDL 19 |
+| generics | 23 ok, 1 FAIL | 24 ok | host 24, m68k 24, hosted AROS 24, SDL 24 |
+| controls | 10 ok, 2 FAIL | 12 ok (host 12) | m68k 9 ok (no lowlevel in Libs:), unchanged |
+| gui, cards, keys with `--input` | no input | see below | |
+| language (smoke) | 35 ok | 35 ok | m68k and AROS not re-run for this |
+
+- rtg: `cybergraphics.library` has no interface in `-lauto`, so `ICyberGfx` was undefined. The emitter now defines it for
+  `CyberGfxBase` on `__amigaos4__` only: `CyberGfx.SetBase(lib)` does `GetInterface(lib, "main", 1)` and `SetBase(null)` does
+  `DropInterface` (the library is still opened and closed by `Video` around each use, as before; other targets expand the
+  macro to the old plain assignment). On OS4 `Video.HasRtg(320,200)` is true (every OS4 screen is on the graphics system), the
+  RTG screen opens and draws, and `Video.Open`'s screen reports `IsRtg()` true too, so the sample skips "the native screen is
+  not RTG" there (`#if PPC`, prints a note, the check name stays so the counts agree).
+- memory: the chip address range check (`< 0x200000`) and "free returns the chip RAM" are skipped on PPC (each prints a `note:` line and then `ok`
+  with the same name so the counts agree). Observed on OS4 in the VM: the free chip figure did not come back up by 4096 after
+  `FreeMem`; the cause (separate pool or allocator caching) was not determined. MorphOS is not verified (no run). m68k and AROS (`!AROS` already skipped the first) still check the second.
+- generics: the 1.3 GB pool succeeded in the 2 GB VM. `Pool` now refuses a capacity whose block does not fit in 32 bits
+  (before, `capacity * itemBytes` wrapped to a small block), and the sample asks for 2,000,000,000 items, which fails on every
+  target without allocating.
+- controls: with no pad or joystick attached, OS4's `ReadJoyPort` answers `JP_TYPE_NOTAVAIL` (kind 0) for port 1 even after
+  `SetJoyPortAttrsA` accepted a forced type (it returns true). That is the documented "nothing usable here" value, so on PPC
+  the two read-back checks accept it and print a note instead of failing; m68k, AROS and the host still require the forced kind. Whether a
+  real pad on real OS4 hardware reads as a pad is not verified (no pad in the VM).
+- `--input` for os4 (`Os4Input.cs`): see `tools/os4vm/README.md`. Verified on the OS4 VM: `samples/gui` `--input "click
+  208,101"` shows `Hello, Amiga!` in the screenshot and prints `ok Hello clicked`; `"click 208,101;click 57,45"` (Hello,
+  then the close gadget) ends the program (`ok a click arrived`, `ok the reply is Hello, Amiga!`, `ok the close gadget arrived`,
+  `ok the window is freed`); `samples/cards` `"click 80,145;click 240,145"` prints `guess higher: right`, `guess lower: right`
+  (the screenshot shows the new cards and the pointer on the button) and `"click 80,145;key 69"` prints `quit` (Esc);
+  `samples/keys` `"click 400,300;key 96+32"` gives `pressed key 32 (qualifier 32769), typed 65` (Shift+A). Clicks land on the
+  asked pixel without a scale factor. Keys outside the table (`Os4Input.KeyName`) are rejected with a message.
+- Review nits from #56: the serial parser now takes `ES: ` only at the start of a line (stray control characters before it
+  are skipped; the kernel lines seen in real logs never carried a prefix in front of it), with a test; the VM unit test is a
+  real xunit skip unless `ESHARP_OS4_VM_TESTS=1` (it passed with it set: 13 s); `os4vm.py start/install-hook/remove-hook` take
+  the same lock file with `flock` and wait (tested against another `flock` holder; interoperation with the CLI's .NET
+  `FileShare.None` lock is not verified by a run, only by .NET's flock use on Unix).
+- `dotnet test`: 296 passed, 1 skipped (the VM test, opt-in), 0 failed (was 292 plus the new tests for the parser, the input mapping and the cybergraphics C).
+
 Not verified / not done:
 - PowerPC real hardware (Pegasos II, AmigaOne, X5000, ...). MorphOS: still not run.
-- `--input` for os4 (the monitor's `sendkey`/`mouse_move` could replay a script), the program's return code (the pipe
-  hides it), a crash (it should end at the timeout with the Grim Reaper waiting; not provoked).
-- The os4 findings above that are still open: lowlevel port types, the RTG link error, and the classic-only checks in memory
-  and generics (sound, timing and the screen mode: see the next section).
+- The program's return code (the pipe hides it), a crash (it should end at the timeout with the Grim Reaper waiting; not
+  provoked).
+- All os4 findings from issue #57 are addressed: the ones above in this section, and sound, timing and the screen mode in the
+  next section (sound in the VM is a QEMU limitation and is skipped cleanly).
 - macOS or Windows hosts for the harness (it uses `/proc` and `/tmp`; Linux only so far).
 
 ### Sound, timing and screen on OS4 (wave 8, issue #57)

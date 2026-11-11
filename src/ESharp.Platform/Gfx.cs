@@ -76,6 +76,9 @@ public static unsafe class CyberGfx
     /// <summary>Emitter intrinsic: sets the library base that the calls below use (the result of OpenLibrary, or null afterwards).</summary>
     public static extern void SetBase(void* library);
 
+    /// <summary>Emitter intrinsic: true if a library base is set. On AmigaOS 4 SetBase leaves it null when the library's "main" interface cannot be obtained, so callers check this after SetBase.</summary>
+    public static extern bool Ready();
+
     [AmigaLib("cybergraphics", -54)] public static extern uint IsCyberModeID(uint displayId);
     [AmigaLib("cybergraphics", -60)] public static extern uint BestCModeIDTagList(void* tags);
 
