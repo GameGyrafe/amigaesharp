@@ -919,16 +919,17 @@ Check(list.Count == 0, ""destroy"");
     [InlineData("exec50", 50)]   // neither display flag set (hosted AROS): ExecBase.VBlankFrequency decides
     [InlineData("exec60", 60)]
     [InlineData("stuck", 50)]   // a WaitTOF that does not wait (AmigaOS 4 in QEMU): timer.device paces the frames (DoIO advances the shim's clock)
+    [InlineData("stuckwork", 50)]   // the same with 0.7 frame of work between waits: the sticky broken-display flag keeps 50 frames at about a second
     public void Frame_timing_runs_natively_against_a_shimmed_timer_and_graphics(string mode, int fps)
     {
         bool pal = fps == 50;
         if (!HasGcc) return;
-        const string body = @"
+        string body = @"
 Clock.Open();
 Dos.PutStr(Frame.FramesPerSecond + "" "" + Frame.FrameMicroseconds + ""\n"");
 Frame.WaitVBlank(); Frame.ResetCount();
 long t0 = Clock.Ticks;
-Frame.Wait(Frame.FramesPerSecond);
+for (int i = 0; i < Frame.FramesPerSecond; i++) { Dos.Delay(WORK); Frame.WaitVBlank(); }
 int ms = Clock.Milliseconds(t0, Clock.Ticks);
 FrameTimer t = new FrameTimer(50, 5);
 t.Begin();
@@ -939,6 +940,7 @@ int stall = t.Update();
 int after = t.Update();
 Dos.PutStr(Frame.Count + "" "" + ms + "" "" + steps + "" "" + stall + "" "" + after + "" "" + Frame.PacedFrames + ""\n"");
 Clock.Close();";
+        body = body.Replace("Dos.Delay(WORK); ", mode == "stuckwork" ? "Dos.Delay(1); " : "");   // in stuckwork Delay(1) is 0.7 frame of simulated work
         var c = CompileOk(Program("", body), Targets.M68k.ToOptions());
         // A shim of timer.device and graphics.library: an E clock at 709379 Hz that Delay and WaitTOF advance by a frame (1/50 or 1/60 s).
         string shim =
@@ -951,12 +953,12 @@ Clock.Close();";
             "static inline int OpenDevice(const char *n, uint32_t u, void *io, uint32_t f) { (void)n; (void)u; (void)io; (void)f; return 0; }\n" +
             "static inline void CloseDevice(void *io) { (void)io; }\n" +
             "static inline uint32_t ReadEClock(void *dest) { uint32_t *p = (uint32_t *)dest; p[0] = (uint32_t)(es_shim_clock >> 32); p[1] = (uint32_t)es_shim_clock; return 709379; }\n" +
-            (mode == "stuck" ? "static inline void WaitTOF(void) { }\n" : "static inline void WaitTOF(void) { es_shim_clock += es_shim_pal ? 709379 / 50 : 709379 / 60; }\n") +
+            (mode.StartsWith("stuck") ? "static inline void WaitTOF(void) { }\n" : "static inline void WaitTOF(void) { es_shim_clock += es_shim_pal ? 709379 / 50 : 709379 / 60; }\n") +
             "static inline void *CreateMsgPort(void) { static int port; return &port; }\n" +
             "static inline void DeleteMsgPort(void *p) { (void)p; }\n" +
             "static inline int DoIO(void *io) { const unsigned char *b = (const unsigned char *)io; uint32_t cmd = *(const uint16_t *)(b + 28), s = *(const uint32_t *)(b + 32), us = *(const uint32_t *)(b + 36);\n" +
             "  if (cmd == 9) { es_shim_clock += ((uint64_t)s * 1000000 + us) * 709379 / 1000000; }\n  return 0;\n}\n" +
-            "static inline void Delay(int32_t t) { es_shim_clock += (uint64_t)t * 709379 / 50; }\n" +
+            "static inline void Delay(int32_t t) { es_shim_clock += " + (mode == "stuckwork" ? "(uint64_t)t * 709379 * 7 / 500" : "(uint64_t)t * 709379 / 50") + "; }\n" +
             "struct Device *TimerBase;\n";
         var headers = new System.Collections.Generic.Dictionary<string, string>
         {
@@ -973,7 +975,8 @@ Clock.Close();";
         Assert.InRange(int.Parse(parts[2]), 8, 10);                      // ten frames owe about ten 1/50 s steps
         Assert.Equal("5", parts[3]);                                     // a one second stall is capped
         Assert.Equal("0", parts[4]);                                     // and the backlog is dropped
-        Assert.Equal(mode == "stuck" ? $"{fps + 10}" : "0", parts[5]);  // every wait after the first was paced by the timer, or none
+        if (mode == "stuckwork") Assert.InRange(int.Parse(parts[5]), fps + 5, fps + 10);   // all but the first few (before the flag sets) were padded
+        else Assert.Equal(mode == "stuck" ? $"{fps + 10}" : "0", parts[5]);  // every wait after the first was paced by the timer, or none
     }
 
     [Fact]

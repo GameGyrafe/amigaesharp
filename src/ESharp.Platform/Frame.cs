@@ -129,22 +129,33 @@ public static unsafe class Frame
         Exec.DeleteMsgPort(_tport);
         _tport = null;
         _haveLast = false;
+        _tofBroken = false;
+        _quick = 0;
     }
 
+    private static bool _tofBroken;
+    private static int _quick;
+
     /// <summary>
-    /// Waits for the top of the next frame (graphics.library WaitTOF) and counts it. If WaitTOF returned less than half a
-    /// frame after the previous WaitVBlank (on a working display consecutive returns are a whole frame or more apart), it
-    /// did not wait, so timer.device waits out the rest of the frame.
+    /// Waits for the top of the next frame (graphics.library WaitTOF) and counts it. The E clock is read around WaitTOF: if
+    /// it returns within a tenth of a frame on three calls in a row, or less than half a frame after the previous
+    /// WaitVBlank, it did not wait. After three quick returns the display is marked broken for good and from then on every
+    /// frame is padded by timer.device to a whole frame from the previous return (so a loop with 0.7 frame of work still
+    /// runs at the display rate). A working display never sets the flag and is not paced.
     /// </summary>
     public static void WaitVBlank()
     {
+        bool timer = OpenTimer();
+        long before = timer ? EClock() : 0;
         Graphics.WaitTOF();
-        if (OpenTimer())
+        if (timer)
         {
             long now = EClock();
             long frame = _efreq / FramesPerSecond;                      // E clock ticks per frame
             long gap = now - _last;
-            if (_haveLast && gap >= 0 && gap < frame / 2)
+            if (now - before >= 0 && now - before < frame / 10) { if (_quick < 3) _quick++; } else _quick = 0;
+            if (_quick >= 3) _tofBroken = true;
+            if (_haveLast && gap >= 0 && (_tofBroken ? gap < frame : gap < frame / 2))
             {
                 long us = (frame - gap) * 1000000 / _efreq;
                 *(ushort*)(_tio + Layout.TrCommand) = (ushort)Layout.TimerAddRequest;
