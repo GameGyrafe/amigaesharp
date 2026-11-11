@@ -10,6 +10,10 @@ The minimum system is now an **Amiga 1200: 68020, AGA, 2 MB chip RAM, Kickstart 
 - **Kept on purpose:** `HasAga()` and `HasRtg()` with their fallbacks. A classic A1200 always has AGA, but PowerPC, RTG-only and AROS targets may not, so the checks stay as the portable way to ask. **Not yet done:** using 68020 instructions deliberately and AROS (a new target, untested).
 - Verified after the change: all 17 samples built with `-m68020` and run on Kickstart 3.1 (A1200) in FS-UAE: 300 `ok` lines, no `FAIL` (the script shows only the last 25 lines of each sample, so long ones are truncated), 136 unit tests pass. Not verified: PowerPC, real hardware, a 68000/Kickstart 2.04 run (no longer supported).
 
+## SDL 3 build image (issue #15, part 1)
+
+`docker/sdl/Dockerfile` builds the image `esharp-sdl`: Debian bookworm-slim pinned by digest, gcc/cmake/pkg-config, and SDL 3.4.20 built from the pinned release tarball (sha256 checked) as a static library with the X11, Wayland, ALSA, PulseAudio, DRM and GL/EGL backends (dlopened at run time). About 877 MB. `docker/sdl/smoke-test.sh` links a C program statically (`pkg-config --static sdl3`) and runs it with the offscreen video and dummy audio drivers: window, renderer, streaming texture, pixel read-back and a played audio stream all pass on the Linux dev host. CI has an `sdl` job that builds the image and runs the smoke test (the CI job itself not yet run on GitHub). **Not done:** the E# `sdl` target itself (compiler target, Platform/Runtime backends, samples). Not verified: running a linked binary on a real desktop (X11/Wayland/audio devices), native macOS or Windows SDL builds, other architectures.
+
 ## Clang-clean C
 
 The generated C builds without warnings under clang `-Wall -Werror` as well as gcc: no doubled parentheses around if/while/for conditions

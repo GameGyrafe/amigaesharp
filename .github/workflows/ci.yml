@@ -50,3 +50,26 @@ jobs:
           sudo apt-get install -y -qq fs-uae xvfb
           dotnet run --project src/ESharp.Cli -- run samples/hello --docker --headless | tee run.log
           grep -qx 'Hello from E#!' run.log
+  sdl:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+      - name: Free runner disk space
+        run: |
+          df -h /
+          sudo rm -rf /usr/local/lib/android /opt/ghc /usr/local/.ghcup /opt/hostedtoolcache/CodeQL /usr/share/swift
+          docker image prune -af >/dev/null
+          df -h /
+      - name: Build the SDL 3 image (gcc plus SDL 3 built from a pinned release)
+        run: |
+          docker build -t esharp-sdl docker/sdl
+          docker builder prune -af
+          df -h /
+      - name: Smoke-test SDL 3 (static link, offscreen video, dummy audio)
+        run: docker/sdl/smoke-test.sh
+      # TODO (sdl target, next step): build and run the samples with
+      #   dotnet run --project src/ESharp.Cli -- build samples/<name> --target sdl --docker esharp-sdl
+      # and run them headless with SDL_VIDEODRIVER=offscreen SDL_AUDIODRIVER=dummy. Add those steps here.

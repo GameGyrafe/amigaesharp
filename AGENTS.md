@@ -45,6 +45,7 @@ dotnet run --project tools/BindGen -- compare <aros include dir> <fd dir> lowlev
 tools/BindGen/layouts.sh                                  # re-measure struct offsets (tools/BindGen/structs.txt) for m68k and AROS into src/ESharp.Platform/Layout.g.cs (docker)
 tools/hwpack/build.sh <m68k image>                       # build the real-hardware test pack into obj/hwtest (run with Execute RunAll on the Amiga)
 docker build -t esharp-amiga-toolchain docker && docker/smoke-test.sh    # combined toolchain image
+docker build -t esharp-sdl docker/sdl && docker/sdl/smoke-test.sh   # gcc + static SDL 3.4.20 (Linux x86-64) for the planned sdl target; offscreen/dummy drivers
 ```
 
 `<image>` is `esharp-amiga-toolchain` (all four targets: m68k, os4, morphos, aros) or, for m68k only,
