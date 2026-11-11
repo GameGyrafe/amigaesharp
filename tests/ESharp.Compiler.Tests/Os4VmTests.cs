@@ -22,6 +22,49 @@ public class Os4VmTests
     }
 
     [Fact]
+    public void Stale_pid_file_reaps_only_a_qemu_that_belongs_to_its_work_dir()
+    {
+        if (!OperatingSystem.IsLinux() || !File.Exists("/bin/bash")) return;
+        var root = Path.Combine(Path.GetTempPath(), "esharp-os4-" + Guid.NewGuid().ToString("N"));
+        var work = Path.Combine(root, "esharp-os4-work");
+        var other = Path.Combine(root, "other");
+        Directory.CreateDirectory(work);
+        Directory.CreateDirectory(other);
+        var pidFile = Path.Combine(root, "pid");
+        // A sleep whose argv[0] is <dir>/qemu-system-ppc, so the command line looks like the real thing.
+        Process Fake(string dir)
+        {
+            var psi = new ProcessStartInfo("/bin/bash") { UseShellExecute = false };
+            foreach (var a in new[] { "-c", "exec -a \"$0\" sleep 300", Path.Combine(dir, "qemu-system-ppc") }) psi.ArgumentList.Add(a);
+            var p = Process.Start(psi)!;
+            Thread.Sleep(300);   // let the exec happen
+            return p;
+        }
+        using var stranger = Fake(other);   // same name, but not in the work dir: a reused pid must be left alone
+        using var ours = Fake(work);
+        try
+        {
+            File.WriteAllText(pidFile, $"{stranger.Id}\n{work}\n");
+            Assert.False(Os4Vm.ReapStale(pidFile));
+            Assert.False(stranger.HasExited);
+            Assert.False(File.Exists(pidFile));
+            Assert.False(Directory.Exists(work));   // the work dir is removed either way
+
+            Directory.CreateDirectory(work);
+            File.WriteAllText(pidFile, $"{ours.Id}\n{work}\n");
+            Assert.True(Os4Vm.ReapStale(pidFile));
+            Assert.True(ours.HasExited);
+            Assert.False(stranger.HasExited);
+        }
+        finally
+        {
+            if (!stranger.HasExited) stranger.Kill();
+            if (!ours.HasExited) ours.Kill();
+            Directory.Delete(root, true);
+        }
+    }
+
+    [Fact]
     public void Vm_dir_must_hold_bboot_kickstart_and_disk()
     {
         var dir = Path.Combine(Path.GetTempPath(), "esharp-os4vm-" + Guid.NewGuid().ToString("N"));

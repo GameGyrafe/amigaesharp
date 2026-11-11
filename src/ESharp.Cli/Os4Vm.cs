@@ -4,6 +4,7 @@ using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Net.Sockets;
+using System.Runtime.InteropServices;
 using System.Text;
 using System.Threading;
 using ESharp.Assets;
@@ -149,6 +150,7 @@ public static class Os4Vm
         // One VM at a time: a lock for esharp runs, and a check for a VM someone started by hand.
         using var lockFile = WaitForLock(timeout);
         if (lockFile == null) return Fail("another esharp os4 run is still using the VM");
+        ReapStale(PidFile);   // a qemu left by an esharp that was killed without cleaning up (it records its pid below)
         var busy = RunningVms(vm);
         if (busy.Count > 0) return Fail($"the VM is running already (qemu pid {string.Join(", ", busy)}); stop it first (one VM at a time)");
 
@@ -158,6 +160,9 @@ public static class Os4Vm
         var serial = Path.Combine(runDir, "serial.log");
         var monitor = Path.Combine(work, "mon.sock");
         Process? qemu = null;
+        Cleanup? cleanup = null;
+        var signals = new List<PosixSignalRegistration>();
+        EventHandler? onExit = null;
         try
         {
             var overlay = Path.Combine(work, "overlay.qcow2");
@@ -169,6 +174,15 @@ public static class Os4Vm
             };
             foreach (var a in QemuArgs(vm, overlay, iso, serial, monitor)) psi.ArgumentList.Add(a);
             qemu = Process.Start(psi)!;
+            // Whatever stops esharp from here on (SIGTERM/SIGHUP/SIGINT from a gate timeout or kill, a normal exit), the QEMU
+            // this run started and its work dir go with it. The pid file lets the next run reap one that still got orphaned.
+            cleanup = new Cleanup(qemu, monitor, work);
+            try { File.WriteAllText(PidFile, $"{qemu.Id}\n{work}\n"); } catch (IOException) { }
+            var c = cleanup;
+            foreach (var sig in new[] { PosixSignal.SIGTERM, PosixSignal.SIGHUP, PosixSignal.SIGINT })
+                signals.Add(PosixSignalRegistration.Create(sig, _ => c.Run(TimeSpan.FromSeconds(3))));
+            onExit = (_, _) => c.Run(TimeSpan.FromSeconds(3));
+            AppDomain.CurrentDomain.ProcessExit += onExit;
             var qemuErr = new StringBuilder();
             qemu.OutputDataReceived += (_, _) => { };
             qemu.ErrorDataReceived += (_, e) => { if (e.Data != null) lock (qemuErr) qemuErr.AppendLine(e.Data); };
@@ -217,17 +231,76 @@ public static class Os4Vm
         }
         finally
         {
-            if (qemu != null)
+            foreach (var r in signals) r.Dispose();
+            if (onExit != null) AppDomain.CurrentDomain.ProcessExit -= onExit;
+            cleanup?.Run(TimeSpan.FromSeconds(10));
+            try { File.Delete(PidFile); } catch (IOException) { }
+            qemu?.Dispose();
+            try { if (Directory.Exists(work)) Directory.Delete(work, recursive: true); } catch (IOException) { }
+        }
+    }
+
+    private static string PidFile => Path.Combine(Directory.Exists("/tmp") ? "/tmp" : Path.GetTempPath(), "esharp-os4vm.pid");
+
+    /// <summary>
+    /// Stops the QEMU that one run started (only that pid) and removes its work dir. Safe to call from a signal handler, the
+    /// exit handler and the finally block: the first call does the work, later ones return.
+    /// </summary>
+    private sealed class Cleanup
+    {
+        private readonly Process qemu;
+        private readonly string monitor, work;
+        private int done;
+        public Cleanup(Process qemu, string monitor, string work) { this.qemu = qemu; this.monitor = monitor; this.work = work; }
+
+        public void Run(TimeSpan grace)
+        {
+            if (Interlocked.Exchange(ref done, 1) != 0) return;
+            try
             {
                 if (!qemu.HasExited)
                 {
-                    try { MonitorCommand(monitor, "quit"); } catch (SocketException) { } catch (IOException) { }
-                    if (!qemu.WaitForExit(10000)) { qemu.Kill(); qemu.WaitForExit(); }
+                    try { MonitorCommand(monitor, "quit"); } catch (Exception e) when (e is SocketException or IOException) { }
+                    if (!qemu.WaitForExit((int)grace.TotalMilliseconds)) { qemu.Kill(); qemu.WaitForExit(); }
                 }
-                qemu.Dispose();
             }
-            try { Directory.Delete(work, recursive: true); } catch (IOException) { }
+            catch (InvalidOperationException) { }
+            try { Directory.Delete(work, recursive: true); } catch (Exception e) when (e is IOException or UnauthorizedAccessException) { }
         }
+    }
+
+    /// <summary>
+    /// The pid file written by a run holds the qemu pid and the work dir. If that qemu is still alive and really is a
+    /// qemu-system-ppc using that work dir (so a reused pid is never touched), a previous esharp was killed without cleaning
+    /// up: kill that one process and remove the work dir. Returns true when something was reaped.
+    /// </summary>
+    public static bool ReapStale(string pidFile)
+    {
+        try
+        {
+            if (!File.Exists(pidFile)) return false;
+            var lines = File.ReadAllLines(pidFile);
+            var reaped = false;
+            if (lines.Length >= 2 && int.TryParse(lines[0], out var pid) && lines[1].Contains("esharp-os4-"))
+            {
+                try
+                {
+                    var args = File.ReadAllText($"/proc/{pid}/cmdline").Split('\0');
+                    if (Path.GetFileName(args[0]) == "qemu-system-ppc" && args.Any(a => a.Contains(lines[1], StringComparison.Ordinal)))
+                    {
+                        using var p = Process.GetProcessById(pid);
+                        p.Kill();
+                        p.WaitForExit(5000);
+                        reaped = true;
+                    }
+                }
+                catch (Exception e) when (e is IOException or ArgumentException or InvalidOperationException or UnauthorizedAccessException) { }
+                try { Directory.Delete(lines[1], recursive: true); } catch (Exception e) when (e is IOException or UnauthorizedAccessException) { }
+            }
+            File.Delete(pidFile);
+            return reaped;
+        }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException) { return false; }
     }
 
     private static (int, string) Fail(string message, string output = "")

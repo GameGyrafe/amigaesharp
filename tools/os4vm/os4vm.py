@@ -11,10 +11,21 @@ The VM directory holds your own AmigaOS files (never copy them into the repo): s
 install-hook and remove-hook boot the VM on an overlay, type one command into a Shell through the QEMU monitor, check the
 result on the serial output, and only then merge the overlay into amiga.img (qemu-img commit).
 """
-import os, shutil, socket, subprocess, sys, tempfile, time
+import os, shutil, signal, socket, subprocess, sys, tempfile, time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 DEFAULT_IMAGE = 'esharp-amiga-toolchain'
+# The marker is printed after the changed files were written; the filesystem and the virtual disk then get this long (the
+# script waits, and so does the host) before the monitor's quit, which is a power-off with no shutdown.
+FLUSH_SECS = 15
+
+
+def _terminate(signum, frame):
+    raise SystemExit(128 + signum)   # so the finally blocks run and no qemu is left behind
+
+
+for _sig in (signal.SIGTERM, signal.SIGHUP):
+    signal.signal(_sig, _terminate)
 
 
 def die(msg):
@@ -157,7 +168,7 @@ INSTALL = ['; Adds the E# test hook to S:User-Startup (the old file is kept as S
            'Copy S:User-Startup S:User-Startup.pre-esharp CLONE',
            'Echo >>S:User-Startup ""'] + \
           [f'Echo >>S:User-Startup "{line}"' for line in HOOK] + \
-          ['ESTEST:estype S:User-Startup', 'ESTEST:estype -t "ESHARP-HOOK installed"']
+          ['ESTEST:estype S:User-Startup', 'Wait %d SECS' % FLUSH_SECS, 'ESTEST:estype -t "ESHARP-HOOK installed"']
 
 REMOVE = ['; Puts back the S:User-Startup that install-hook saved',
           'FailAt 21',
@@ -168,7 +179,63 @@ REMOVE = ['; Puts back the S:User-Startup that install-hook saved',
           'Copy S:User-Startup.pre-esharp S:User-Startup CLONE',
           'Delete >NIL: S:User-Startup.pre-esharp',
           'ESTEST:estype S:User-Startup',
+          'Wait %d SECS' % FLUSH_SECS,
           'ESTEST:estype -t "ESHARP-HOOK removed"']
+
+# After the commit, a boot of the new amiga.img (on a fresh overlay) looks for the hook once more.
+VERIFY = ['FailAt 21',
+          'Search >NIL: S:User-Startup "BEGIN ESHARP-TEST"',
+          'If WARN',
+          '  ESTEST:estype -t "ESHARP-HOOK verify absent"',
+          'Else',
+          '  ESTEST:estype -t "ESHARP-HOOK verify present"',
+          'EndIf']
+
+
+def boot_script(vm, base, script, done_words, image, work, base_format='raw'):
+    """Boots an overlay of `base` with a CD holding `script` (named change), types Execute into Workbench, and waits for an
+    ESHARP-HOOK <word> line. Returns (word or None, serial log, overlay path); a confirmed change stays flushed for
+    FLUSH_SECS before the quit. The overlay is left for the caller (qemu-img commit)."""
+    cd = os.path.join(work, 'cd')
+    shutil.rmtree(cd, ignore_errors=True)
+    os.mkdir(cd)
+    build_estype(work, image)
+    with open(os.path.join(cd, 'change'), 'w') as f:
+        f.write('\n'.join(script) + '\n')
+    iso = os.path.join(work, 'estest.iso')
+    make_iso(cd, iso, image)
+    overlay = os.path.join(work, 'overlay-%d.qcow2' % int(time.time() * 1000))
+    subprocess.run(['qemu-img', 'create', '-q', '-f', 'qcow2', '-b', base, '-F', base_format, overlay], check=True)
+    serial, mon = os.path.join(work, 'serial-%d.log' % int(time.time() * 1000)), os.path.join(work, 'mon.sock')
+    q = subprocess.Popen(qemu_args(vm, overlay, 'qcow2', iso, serial, mon), stdin=subprocess.DEVNULL)
+    result = None
+    try:
+        m = Monitor(mon)
+        print('os4vm: booting (about 30 s to Workbench)...')
+        time.sleep(40)
+        for attempt in range(2):
+            m.cmd('sendkey meta_r-e')   # Workbench: Execute Command
+            time.sleep(2)
+            m.type('Execute ESTEST:change\n')
+            deadline = time.time() + 30 + FLUSH_SECS
+            while time.time() < deadline and result is None:
+                time.sleep(1)
+                text = open(serial, errors='replace').read()
+                for w in done_words:
+                    if 'ESHARP-HOOK ' + w in text:
+                        result = w
+            if result:
+                break
+        if result:
+            time.sleep(FLUSH_SECS)   # the script already waited; this covers the host side of the virtual disk
+        m.cmd('quit')
+    finally:
+        try:
+            q.wait(20)
+        except subprocess.TimeoutExpired:
+            q.kill()
+            q.wait()
+    return result, open(serial, errors='replace').read(), overlay
 
 
 def change_startup(script, done_words, image):
@@ -180,52 +247,24 @@ def change_startup(script, done_words, image):
         die('qemu-img not found')
     work = tempfile.mkdtemp(prefix='esos4-', dir='/tmp')
     try:
-        cd = os.path.join(work, 'cd')
-        os.mkdir(cd)
-        build_estype(work, image)
-        with open(os.path.join(cd, 'change'), 'w') as f:
-            f.write('\n'.join(script) + '\n')
-        iso = os.path.join(work, 'estest.iso')
-        make_iso(cd, iso, image)
-        overlay = os.path.join(work, 'overlay.qcow2')
-        subprocess.run(['qemu-img', 'create', '-q', '-f', 'qcow2', '-b', img, '-F', 'raw', overlay], check=True)
-        serial, mon = os.path.join(work, 'serial.log'), os.path.join(work, 'mon.sock')
-        q = subprocess.Popen(qemu_args(vm, overlay, 'qcow2', iso, serial, mon), stdin=subprocess.DEVNULL)
-        result = None
-        try:
-            m = Monitor(mon)
-            print('os4vm: booting (about 30 s to Workbench)...')
-            time.sleep(40)
-            for attempt in range(2):
-                m.cmd('sendkey meta_r-e')   # Workbench: Execute Command
-                time.sleep(2)
-                m.type('Execute ESTEST:change\n')
-                deadline = time.time() + 30
-                while time.time() < deadline and result is None:
-                    time.sleep(1)
-                    text = open(serial, errors='replace').read()
-                    for w in done_words:
-                        if 'ESHARP-HOOK ' + w in text:
-                            result = w
-                if result:
-                    break
-            m.cmd('quit')
-        finally:
-            try:
-                q.wait(20)
-            except subprocess.TimeoutExpired:
-                q.kill()
-                q.wait()
-        log = open(serial, errors='replace').read()
-        tail = log[log.find('ESHARP-HOOK') - 2000:] if 'ESHARP-HOOK' in log else log[-1500:]
+        result, log, overlay = boot_script(vm, img, script, done_words, image, work)
+        tail = log[max(0, log.find('ESHARP-HOOK') - 2000):] if 'ESHARP-HOOK' in log else log[-1500:]
         print(tail)
         if result is None:
             die('the change was not confirmed on the serial output; amiga.img is unchanged')
-        if result in ('installed', 'removed'):
-            subprocess.run(['qemu-img', 'commit', '-q', overlay], check=True)
-            print(f'os4vm: hook {result}; amiga.img updated')
-        else:
+        if result not in ('installed', 'removed'):
             print('os4vm: nothing to change; amiga.img is unchanged')
+            return
+        backup = img + '.bak-' + time.strftime('%Y%m%d-%H%M%S')
+        subprocess.run(['cp', '--reflink=auto', img, backup], check=True)
+        print(f'os4vm: backup {backup}')
+        subprocess.run(['qemu-img', 'commit', '-q', overlay], check=True)
+        # Boot the committed image once (on a new overlay) and look at S:User-Startup before reporting success.
+        want = 'verify present' if result == 'installed' else 'verify absent'
+        v, vlog, _ = boot_script(vm, img, VERIFY, ('verify present', 'verify absent'), image, work)
+        if v != want:
+            die(f'amiga.img was updated but the check boot saw {v!r}, expected {want!r}; restore {backup} if the disk misbehaves')
+        print(f'os4vm: hook {result}; amiga.img updated and checked by a second boot (backup {backup}; delete it when you are happy)')
     finally:
         shutil.rmtree(work, ignore_errors=True)
 

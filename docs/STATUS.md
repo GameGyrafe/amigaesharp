@@ -528,6 +528,10 @@ Decisions and things found on the way:
   includes the SDK's `dos/obsolete.h` after `proto/dos.h` on `__amigaos4__` (no change for other targets).
 - Warm reboots do not work in this VM; every run is a fresh boot. Only one VM may run at a time: the CLI refuses while a
   `qemu-system-ppc` uses the VM directory, and esharp runs wait for each other (`/tmp/esharp-os4vm.lock`).
+- Cleanup: the QEMU started by a run, and its `/tmp/esharp-os4-<id>` dir, are also removed on SIGTERM/SIGHUP/SIGINT and process
+  exit (not only in the normal path); `/tmp/esharp-os4vm.pid` lets the next run reap a qemu orphaned by SIGKILL (unit test with
+  a fake qemu). `install-hook`/`remove-hook` now wait 15 s + 15 s for the disk before the power-off `quit`, keep
+  `amiga.img.bak-<time>`, and verify with a second boot before reporting success (run 2026-11-11 on a scratch copy of the disk, not the real amiga.img: remove-hook then install-hook, each with backup, commit and a passing check boot; the real disk was not touched. The explicit claim that 30 s is enough for the filesystem to flush is not verified, only that the result survived a reboot).
 
 The hook (installed 2026-11-11 with `python3 -I tools/os4vm/os4vm.py install-hook`, which typed one command through the
 monitor's `sendkey`, checked the result on the serial output and then ran `qemu-img commit` of the overlay; the original

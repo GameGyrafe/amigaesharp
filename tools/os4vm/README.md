@@ -57,8 +57,12 @@ return code (the pipe hides it).
 
 `python3 -I tools/os4vm/os4vm.py install-hook` boots the VM on an overlay with a CD holding a script, opens Workbench's
 Execute Command (Right Amiga+E through the monitor's `sendkey`), types `Execute ESTEST:change`, waits for the script's
-confirmation on the serial output, quits, and only then merges the overlay into `amiga.img` with `qemu-img commit`. The
-script copies `S:User-Startup` to `S:User-Startup.pre-esharp` and appends these lines:
+confirmation on the serial output, and merges the overlay into `amiga.img` with `qemu-img commit`. The monitor's `quit` is a
+power-off with no shutdown, so the change is made safe in steps: the script waits 15 s (`Wait`) before it prints the
+confirmation, the host waits another 15 s before `quit`, `amiga.img` is copied to `amiga.img.bak-<date-time>` (`cp
+--reflink=auto`) before the commit, and after the commit a second boot of the new image (a fresh overlay) searches
+`S:User-Startup` for the hook (install) or its absence (remove); success is reported only if that matches. Delete the backup
+when you are happy. SIGTERM/SIGHUP to the script also stop its QEMU. The script copies `S:User-Startup` to `S:User-Startup.pre-esharp` and appends these lines:
 
 ```
 ;BEGIN ESHARP-TEST (E# os4 test harness hook, see tools/os4vm/README.md in the E# repo)
@@ -75,3 +79,10 @@ Without a volume `ESTEST:` (or without `autorun` on it) nothing happens and Work
 does not open a "please insert volume" requester. To undo: `os4vm.py remove-hook` (copies `S:User-Startup.pre-esharp`
 back), or delete the lines between `;BEGIN ESHARP-TEST` and `;END ESHARP-TEST` by hand. Make a copy of `amiga.img` first
 if you want to be able to go back further.
+
+## Stopping and stray VMs
+
+`esharp run/test --target os4` stops its QEMU (monitor `quit`, then kill of that pid only) and removes `/tmp/esharp-os4-<id>`
+when the run ends, and also on SIGTERM, SIGHUP, SIGINT and process exit. As a backstop for a SIGKILL, each run records the
+qemu pid and work dir in `/tmp/esharp-os4vm.pid`; the next run kills that pid if it is still a qemu-system-ppc using that work
+dir, then goes on. A qemu you started by hand is never touched (the run refuses to start instead).
