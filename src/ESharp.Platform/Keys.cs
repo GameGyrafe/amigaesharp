@@ -24,7 +24,7 @@ public static unsafe class Keymap
 /// keyboard the user has (German, French, ...), not a US layout. Characters are ISO-8859-1 codes (0..255); 0 means the
 /// key does not type a single character (cursor and function keys, which send escape sequences, or a dead key
 /// waiting for the next one). <see cref="Input.LastChar"/> uses this for keys pressed in the <see cref="Video"/> window.
-/// On the host a fixed US layout is used.
+/// On SDL and on the host a fixed US layout is used.
 /// </summary>
 public static unsafe class Keys
 {
@@ -100,6 +100,21 @@ public static unsafe class Keys
             if (Keymap.MapANSI(s, 1, p, 8, null) != 1) return (-1, 0);
             return (p[0], p[1]);
         }
+    }
+#elif SDL
+    // SDL: the same US layout as the host, in the C runtime (es_std_keychar).
+    public static bool Open() { return true; }
+
+    public static void Close() { }
+
+    public static int Char(int rawKey, int qualifier) { return Crt.es_std_keychar(rawKey, qualifier); }
+
+    public static (int Code, int Qualifier) Find(int ch)
+    {
+        if (ch <= 0 || ch > 255) return (-1, 0);
+        for (int k = 0; k < 0x48; k++) if (Char(k, 0) == ch) return (k, 0);
+        for (int k = 0; k < 0x48; k++) if (Char(k, LeftShift) == ch) return (k, LeftShift);
+        return (-1, 0);
     }
 #else
     // Host: a US layout for the keys that type something (index = raw key code).

@@ -301,7 +301,7 @@ public static class Program
         Check(transparent > 0 && Video.GetPixel(CurrentX, CurrentY) == Table, "masked corner shows the table");
         Check(Video.GetPixel(CurrentX + 16, CurrentY + 20) != Table, "card face is drawn");
 
-        // ---- input (the host feeds scripted events; on the Amiga the mouse does) ----
+        // ---- input (the host and SDL feed scripted events; on the Amiga the mouse does) ----
 #if !AMIGA
         HigherLower.Deal(99);
         int before = HigherLower.Next;
@@ -354,10 +354,10 @@ public static class Program
 
         // ---- play until Esc or ten seconds without input ----
         int idle = 0;
-#if AMIGA
+#if AMIGA || SDL
         while (idle < 500)
         {
-            int before = HigherLower.Next;
+            int was = HigherLower.Next;
             if (!Step())
             {
                 Dos.PutStr("quit\n");
@@ -372,7 +372,7 @@ public static class Program
                 Dos.PutStr("\n");
                 Dos.FlushOutput();
             }
-            if (HigherLower.Next != before)
+            if (HigherLower.Next != was)
             {
                 Dos.PutStr(HigherLower.LastGuess > 0 ? "guess higher: " : "guess lower: ");
                 Dos.PutStr(HigherLower.LastResult > 0 ? "right\n" : HigherLower.LastResult == 0 ? "push\n" : "wrong\n");

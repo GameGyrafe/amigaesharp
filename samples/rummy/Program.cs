@@ -425,7 +425,7 @@ public static class Program
         Check(Video.GetPixel(HandX(0) + 16, HandY + 20) != Table && Video.GetPixel(HandX(6) + 16, HandY + 20) != Table, "the hand is drawn");
         Check(Video.GetPixel(HandX(7) + 16, HandY + 20) == Table, "no eighth card yet");
 
-        // ---- input (the host feeds scripted events; on the Amiga the mouse does) ----
+        // ---- input (the host and SDL feed scripted events; on the Amiga the mouse does) ----
 #if !AMIGA
         Input.HostMove(5, 5);
         Input.HostPress();
@@ -471,7 +471,7 @@ public static class Program
 
         // ---- play until Esc or ten seconds without input ----
         int idle = 0;
-#if AMIGA
+#if AMIGA || SDL
         while (idle < 500)
         {
             if (Game.Phase == Phase.BotTurn)

@@ -6,7 +6,7 @@ namespace ESharp.Platform;
 /// Debug tracing to the serial port, for the cases where a screen or a file is not available (a crash, a program that owns
 /// the display). On the Amiga the text goes out through exec's RawPutChar, which writes straight to the serial hardware
 /// (Kickstart 3.1 has it, no debug.lib needed; AROS routes it to its debug output, which is the host terminal when hosted).
-/// On the host it goes to standard error.
+/// On SDL and on the host it goes to standard error.
 /// <para>
 /// The calls exist only when the program is built with <c>esharp build --trace</c> or <c>--debug</c> (which defines
 /// <c>TRACE</c>): otherwise the compiler drops each call statement, arguments included, so a release build pays nothing.
@@ -77,6 +77,24 @@ public static class Trace
         Put('=');
         PutNumber(value);
         Put('\n');
+    }
+#elif SDL
+    /// <summary>Writes the text to standard error.</summary>
+    [Conditional("TRACE")]
+    public static void Write(string text) { Crt.es_std_trace(text); }
+
+    /// <summary>Writes the text and a line feed.</summary>
+    [Conditional("TRACE")]
+    public static void Line(string text) { Crt.es_std_trace(text); Crt.es_std_trace_char('\n'); }
+
+    /// <summary>Writes <c>label=value</c> and a line feed.</summary>
+    [Conditional("TRACE")]
+    public static void Value(string label, int value)
+    {
+        Crt.es_std_trace(label);
+        Crt.es_std_trace_char('=');
+        Crt.es_std_trace_int(value);
+        Crt.es_std_trace_char('\n');
     }
 #else
     /// <summary>Where the host writes trace text. Tests replace it to capture the output.</summary>

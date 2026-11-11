@@ -3,7 +3,8 @@ namespace ESharp.Platform;
 /// <summary>
 /// Mouse and keyboard through the <see cref="Video"/> window (IDCMP messages). Call <see cref="Poll"/> once per frame;
 /// it reads everything that arrived since the last call. Positions are screen pixels, keys are Amiga raw key codes.
-/// On the host nothing arrives by itself: tests feed events with the Host* methods.
+/// On SDL the events come from the window: the mouse in screen pixels (the window is scaled), keys mapped to the Amiga raw codes of the
+/// same keys (US positions), and closing the window counts as Esc. On the host nothing arrives by itself: tests feed events with the Host* methods.
 /// </summary>
 public static unsafe class Input
 {
@@ -58,9 +59,7 @@ public static unsafe class Input
         _lastKey = 0;
         _lastChar = 0;
         _lastQualifier = 0;
-#if !AMIGA
-        Apply();
-#else
+#if AMIGA
         void* window = Video.Window;
         if (window == null) return;
         void* port = *(void**)((byte*)window + Intuition.WindowUserPort);
@@ -90,10 +89,41 @@ public static unsafe class Input
                 else if (code == 0xE8) { _leftDown = false; _leftReleased = true; } // SELECTUP
             }
         }
+#elif SDL
+        // The C layer keeps the state (window events, and the scripted input of esharp run --input); the "since last poll" parts are cleared first.
+        Crt.es_sdl_input_clear();
+        Crt.es_sdl_poll();
+        _mouseX = Crt.es_sdl_input(0);
+        _mouseY = Crt.es_sdl_input(1);
+        _leftDown = Crt.es_sdl_input(2) != 0;
+        _leftPressed = Crt.es_sdl_input(3) != 0;
+        _leftReleased = Crt.es_sdl_input(4) != 0;
+        _pressX = Crt.es_sdl_input(5);
+        _pressY = Crt.es_sdl_input(6);
+        _lastKey = Crt.es_sdl_input(7);
+        _lastQualifier = Crt.es_sdl_input(8);
+        if (_lastKey != 0) _lastChar = Keys.Char(_lastKey, _lastQualifier);
+#else
+        Apply();
 #endif
     }
 
-#if !AMIGA
+#if SDL
+    // SDL: the same Host* calls as the dotnet host, so a program's input self-checks run on SDL too. They feed the C layer as if
+    // the events came from the window: the move at once, the rest at the next Poll.
+
+    public static void HostMove(int x, int y) { _mouseX = x; _mouseY = y; Crt.es_sdl_inject(0, x, y); }
+
+    public static void HostPress() { Crt.es_sdl_inject(1, 0, 0); }
+
+    public static void HostRelease() { Crt.es_sdl_inject(2, 0, 0); }
+
+    public static void HostKey(int code) { Crt.es_sdl_inject(3, code, 0); }
+
+    public static void HostKey(int code, int qualifier) { Crt.es_sdl_inject(3, code, qualifier); }
+#endif
+
+#if !AMIGA && !SDL
     /// <summary>Host: moves the pointer. Takes effect for the next <see cref="Poll"/> readers like any real event.</summary>
     public static void HostMove(int x, int y) { _mouseX = x; _mouseY = y; }
 

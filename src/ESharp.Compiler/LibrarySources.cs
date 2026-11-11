@@ -18,4 +18,13 @@ internal static class LibrarySources
             yield return new SourceFile(name, reader.ReadToEnd());
         }
     }
+
+    /// <summary>A C runtime file (CRuntime/*.h) that the emitter pastes into the generated C.</summary>
+    public static string CRuntime(string fileName)
+    {
+        using var stream = typeof(LibrarySources).Assembly.GetManifestResourceStream("crt/" + fileName)
+            ?? throw new System.InvalidOperationException("missing embedded C runtime " + fileName);
+        using var reader = new StreamReader(stream);
+        return reader.ReadToEnd();
+    }
 }

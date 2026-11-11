@@ -39,8 +39,9 @@ public static class EsCompiler
         var diagnostics = new List<Diagnostic>();
 
         // 1. Ordinary C# errors in user code.
-        diagnostics.AddRange(compilation.GetDiagnostics()
-            .Where(d => d.Severity == DiagnosticSeverity.Error && IsUser(d, userSet)));
+        var csErrors = compilation.GetDiagnostics().Where(d => d.Severity == DiagnosticSeverity.Error && IsUser(d, userSet)).ToList();
+        diagnostics.AddRange(csErrors);
+        if (!options.Defines.Contains("AMIGA")) diagnostics.AddRange(AmigaOnlyHints(csErrors, options.Defines.Contains("SDL") ? "sdl" : "this target"));
 
         // 2. Subset rules.
         var analyzerOptions = new AnalyzerOptions(
@@ -78,6 +79,28 @@ public static class EsCompiler
         return new CompileResult(
             diagnostics.Any(d => d.Severity == DiagnosticSeverity.Error) ? null : c,
             Sorted(diagnostics)) { Chip = chip };
+    }
+
+    /// <summary>
+    /// Platform classes that exist only on Amiga targets (and in the dotnet host fake): on sdl they are not compiled, so using
+    /// one is an unknown name. Such an error gets an ES0102 next to it that says why.
+    /// </summary>
+    public static readonly IReadOnlyList<string> AmigaOnlyTypes = new[]
+    {
+        "Gui", "GtWindow", "GtButton", "GtString", "GtText", "GtGadget", "GuiEvent", "GuiEventKind", "IGuiHandler", "GadTools",
+        "Asl", "AslLib", "Iff", "IffFile", "IffParse", "Fonts", "FontHandle", "DiskFontLib", "Joystick", "LowLevel",
+        "Exec", "Intuition", "Graphics", "CyberGfx", "Utility", "TimerDevice", "Keymap", "Layout", "DosLib",
+    };
+
+    private static IEnumerable<Diagnostic> AmigaOnlyHints(IEnumerable<Diagnostic> errors, string target)
+    {
+        foreach (var d in errors)
+        {
+            if (d.Id is not ("CS0103" or "CS0246" or "CS0234")) continue;
+            var text = d.GetMessage(System.Globalization.CultureInfo.InvariantCulture);
+            var name = AmigaOnlyTypes.FirstOrDefault(n => text.Contains("'" + n + "'", StringComparison.Ordinal));
+            if (name != null) yield return Diagnostic.Create(Descriptors.AmigaOnly, d.Location, name, target);
+        }
     }
 
     private static ImmutableArray<Diagnostic> Sorted(List<Diagnostic> diagnostics) =>

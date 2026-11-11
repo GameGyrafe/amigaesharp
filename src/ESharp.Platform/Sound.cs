@@ -14,7 +14,7 @@ public unsafe struct Sample
 /// <summary>
 /// Sound through audio.device: up to four voices (one per Paula channel, allocated when <see cref="Open"/> runs),
 /// each playing an 8-bit sample at a period and volume. Samples are made in code (<see cref="Square"/>,
-/// <see cref="Triangle"/>, <see cref="Noise"/>) so no sound file is needed. On the host nothing is played: the
+/// <see cref="Triangle"/>, <see cref="Noise"/>) so no sound file is needed. On SDL each voice is an SDL audio stream. On the host nothing is played: the
 /// calls are recorded so tests can check them. Everything is a no-op until <see cref="Open"/> succeeds.
 /// </summary>
 public static unsafe class Sound
@@ -367,6 +367,43 @@ public static unsafe class Sound
         _map = null;
         Exec.DeleteMsgPort(_port);
         _port = null;
+    }
+#elif SDL
+    // SDL: four SDL audio streams on the default output device, each fed the signed 8-bit sample at 3546895 / period
+    // samples per second (the rate Paula would read it at), with the volume as the stream's gain.
+    private static int _open;
+    private static int _next;
+
+    public static bool Open()
+    {
+        if (_open != 0) return true;
+        _open = Crt.es_sdl_sound_open();
+        return _open > 0;
+    }
+
+    public static int VoiceCount { get { return _open; } }
+
+    public static bool Busy(int voice) { return voice >= 0 && voice < _open && Crt.es_sdl_sound_busy(voice); }
+
+    public static int Play(in Sample sample, int period, int volume, int cycles)
+    {
+        if (_open == 0 || sample.Data == null || sample.Length < 4) return -1;
+        int v = -1;
+        for (int i = 0; i < _open; i++) if (!Crt.es_sdl_sound_busy(i)) { v = i; break; }
+        if (v < 0) v = _next % _open;
+        _next = v + 1;
+        int p = period < 124 ? 124 : (period > 65535 ? 65535 : period);
+        Crt.es_sdl_sound_play(v, sample.Data, sample.Length, 3546895 / p, volume < 0 ? 0 : (volume > 64 ? 64 : volume), cycles);
+        return v;
+    }
+
+    public static void Stop() { for (int v = 0; v < _open; v++) Crt.es_sdl_sound_stop(v); }
+
+    public static void Close()
+    {
+        if (_open == 0) return;
+        Crt.es_sdl_sound_close();
+        _open = 0;
     }
 #else
     private static int _open;

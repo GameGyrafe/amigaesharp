@@ -9,7 +9,7 @@ namespace ESharp.Platform;
 /// <summary>
 /// Raw memory with an explicit kind. Chip RAM is what the custom chips can reach (bitmaps, samples,
 /// copper lists); fast RAM is everything else. Blocks are zeroed. Failure is a null return.
-/// On the Amiga this is exec AllocVec/FreeVec; on the host it is a fake with a small chip budget,
+/// On the Amiga this is exec AllocVec/FreeVec; on SDL it is malloc; on the host it is a fake with a small chip budget,
 /// so tests catch overruns and leaks. See docs/MEMORY.md.
 /// </summary>
 public static unsafe class Mem
@@ -37,6 +37,18 @@ public static unsafe class Mem
 
     /// <summary>Free fast RAM in bytes (0 on a machine without any).</summary>
     public static uint AvailFast() => Exec.AvailMem(Exec.MemFast);
+#elif SDL
+    // SDL: there is no chip RAM; both kinds are zeroed malloc blocks. Each kind counts its use against a nominal 256 MB,
+    // so a program can see that Free returned what it allocated, and a larger request fails (null) as it would on an Amiga.
+    public static byte* AllocChip(uint size) => Crt.es_std_alloc(size, true);
+
+    public static byte* AllocFast(uint size) => Crt.es_std_alloc(size, false);
+
+    public static void Free(byte* block) { Crt.es_std_free(block); }
+
+    public static uint AvailChip() => Crt.es_std_avail(true);
+
+    public static uint AvailFast() => Crt.es_std_avail(false);
 #else
     private struct Block
     {
