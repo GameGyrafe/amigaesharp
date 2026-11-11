@@ -289,6 +289,13 @@ internal sealed partial class CEmitter
         // the usual name, so neither libnix nor AROS's autoinit tries to open it.
         foreach (var (name, type) in _bases) { result.AppendLine($"#define {name} es_{name}"); result.AppendLine($"extern {type} *es_{name};"); }
         foreach (var h in _headers) result.AppendLine($"#include <{h}>");
+        if (_headers.Contains("proto/dos.h"))
+        {
+            // AmigaOS 4 renamed some dos.library calls (Flush is FFlush, DeleteFile is Delete); its SDK maps the classic names here.
+            result.AppendLine("#if defined(__amigaos4__)");
+            result.AppendLine("#include <dos/obsolete.h>");
+            result.AppendLine("#endif");
+        }
         foreach (var (name, type) in _bases) result.AppendLine($"{type} *es_{name};");
         result.AppendLine();
         if (_usesBounds)
@@ -455,6 +462,11 @@ internal sealed partial class CEmitter
             result.AppendLine("    register int32_t d0 __asm(\"d0\") = c;");
             result.AppendLine("    __asm volatile(\"jsr -516(%%a6)\" : \"+r\"(d0), \"+r\"(a6) : : \"d1\", \"a0\", \"a1\", \"memory\", \"cc\");");
             result.AppendLine("}");
+            result.AppendLine("#elif defined(__amigaos4__)");
+            result.AppendLine("/* AmigaOS 4 has no RawPutChar in its exec interface: DebugPrintF goes to the kernel debug output (serial with the kernel option \"serial\"). */");
+            result.AppendLine("#include <proto/exec.h>");
+            result.AppendLine("static inline void es_rawioinit(void) { }");
+            result.AppendLine("static inline void es_rawputchar(int32_t c) { char s[2]; s[0] = (char)c; s[1] = 0; (IExec->DebugPrintF)(\"%s\", s); }   /* parenthesised: not the __USE_INLINE__ macro */");
             result.AppendLine("#else");
             result.AppendLine("static inline void es_rawioinit(void) { }");
             result.AppendLine("static inline void es_rawputchar(int32_t c) { (void)c; }   /* no serial trace on this target yet */");

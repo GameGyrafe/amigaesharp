@@ -76,7 +76,7 @@ dotnet run --project src/ESharp.Cli -- test samples/cards --target sdl --docker 
 | Target | Symbols | Runs on | Status |
 |---|---|---|---|
 | `m68k` (default) | `AMIGA M68K AMIGAOS3` | A1200 / Kickstart 3.1+ (FS-UAE) | runs |
-| `os4` | `AMIGA PPC AMIGAOS4` | AmigaOS 4 PowerPC | builds only |
+| `os4` | `AMIGA PPC AMIGAOS4` | AmigaOS 4.1 FE PowerPC (QEMU pegasos2 VM you provide; `tools/os4vm/README.md`) | runs in the VM (`esharp run/test --target os4`); real hardware not tried |
 | `morphos` | `AMIGA PPC MORPHOS` | MorphOS PowerPC | builds only |
 | `aros` | `AMIGA X86_64 AROS` | AROS x86-64 (hosted) | runs |
 | `sdl` | `SDL` | Linux desktop through SDL 3 | runs (headless and under Xvfb; macOS/Windows not tried) |

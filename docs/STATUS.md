@@ -119,7 +119,7 @@ Verified:
 
 Not verified:
 - A failing program through the CLI (exit code 1 on FAIL or a difference): covered by unit tests of the comparison only, not run end to end.
-- Other targets (os4, morphos, aros) are not supported by `test` (`--target sdl` is, see the SDL section).
+- Other targets (morphos, aros) are not supported by `test` (`--target sdl` and `--target os4` are, see their sections).
 
 ## VS Code support (issue #20)
 
@@ -274,7 +274,7 @@ Tried the debugger built into FS-UAE 3.2.35 (A1200, Kickstart 3.1, headless unde
 
 `Trace.Write/Line/Value` (src/ESharp.Platform/Trace.cs) write to the serial port through exec `RawIOInit`/`RawPutChar` (called by vector, LVO -504/-516: they are in no m68k NDK header; the C prelude has the stubs) and to standard error on the host. They are `[Conditional("TRACE")]`: the emitter drops such call statements, and what only they reach, unless the build has `--trace` or `--debug`. `esharp run --serial <file>` (headless) points FS-UAE's `serial_port` at a file and prints it after the run. `esharp addr <exe|dir> <hunk> <hex offset> --docker <image>` maps a hunk-0 offset to the C# file, line and C function using `<name>.o`, which every m68k build now also writes (the same C with `-g -c`, read with `m68k-amigaos-objdump --dwarf=decodedline`).
 Verified: 213 unit tests pass, including the trace sample on the host (stderr text), the C with and without `TRACE` (calls and `Trace` functions gone without it; the sample builds and runs with host gcc both ways), and `esharp addr` on a real m68k build in the docker image (addresses of `Square` and `Main` from the exe's symbols map to lines in those functions, and the first statement of Main to its line). Run in FS-UAE (A1200, Kickstart 3.1 40.069, `--serial`): the nine trace lines arrive in the file in order, and `samples/trace` without `--trace` writes nothing and its exe is 1 KB smaller. Run on hosted AROS (20261106 nightly, x86-64): the nine lines reach the bootstrap output (`aros-hosted.sh trace --log`). A deliberate zero divide on KS 3.1 gives the "Software Failure ... error #80000005" requester with no PC, so no address was taken from a real crash.
-Not verified: real hardware (serial cable, baud rate; the vectors are as I know them from the exec autodocs/fd layout, and they work in FS-UAE with the real 3.1 ROM and on AROS), a hunk offset from a real crash (needs SegTracker/Enforcer, not tried), `esharp addr` for optimised code on a statement boundary, os4 and MorphOS (the trace compiles to a no-op stub there), AROS x86-64 `esharp addr` (m68k only). The platform/runtime code has no `#line`, so an address in it is reported as runtime code without a source line.
+Not verified: real hardware (serial cable, baud rate; the vectors are as I know them from the exec autodocs/fd layout, and they work in FS-UAE with the real 3.1 ROM and on AROS), a hunk offset from a real crash (needs SegTracker/Enforcer, not tried), `esharp addr` for optimised code on a statement boundary, MorphOS (the trace compiles to a no-op stub there; os4 now uses `DebugPrintF`, see "AmigaOS 4.1 VM runs"), AROS x86-64 `esharp addr` (m68k only). The platform/runtime code has no `#line`, so an address in it is reported as runtime code without a source line.
 
 ## GadTools windows (samples/gui, issue #19, first milestone)
 
@@ -383,7 +383,7 @@ Gate: runs in an emulator and on the host.
 | Same run on Dave's Linux dev host (Ubuntu, dotnet 10.0.402, FS-UAE 3.2.35, AROS ROM replacement) | Done: prints `Hello from E#!`, exit 0 |
 | Run in FS-UAE with a real Kickstart | Done on the Linux dev host (FS-UAE 3.2.35, headless): Kickstart 2.04 (37.175) on A500+ and Kickstart 3.1 (40.069) on A1200 both print `Hello from E#!`, exit 0, 5-8 s. Kickstart 1.x is out of scope (floor is 2.04) |
 | Run on real hardware | **Not done** |
-| Run the PowerPC builds (os4, morphos) | **Not done**: needs QEMU or hardware; `run` is m68k only |
+| Run the PowerPC builds (os4, morphos) | os4: **done in a QEMU pegasos2 VM** (AmigaOS 4.1 FE Update 3; `esharp run/test --target os4`, see "AmigaOS 4.1 VM runs"). MorphOS: **not done**. PowerPC real hardware: **not verified** |
 
 ## Phase 2: data types (done on host and both Kickstarts; PPC not run)
 
@@ -406,7 +406,7 @@ must print the same 32 lines everywhere.
 | Implicit user-defined conversions and indexers on structs | Done. `operator implicit` is applied wherever C# applies it (initializer, assignment, argument, return, operand) by calling the conversion function; `Fix` now converts implicitly from `int` (`Fix f = 3; f + 2`). Indexers (`this[int i]`, several indices, overloads, expression-bodied, in generic structs) are accessor functions like properties: `g[3]` is `Grid_get_Item(&g, 3)`, writes, `+=` and `++` are statements calling the setter. Same limits as properties (a write used as a value, or compound on a call-result receiver, is `ES0099`). `samples/operators`: 20 checks on dotnet, host gcc, and m68k on Kickstart 2.04 (A500+) and 3.1 (A1200) |
 | Host: sample runs under dotnet and as generated C with host gcc (`-Wall -Werror -fwrapv`) | Done, in tests |
 | m68k: sample built with m68k-amigaos-gcc 6.5.0b and run in FS-UAE 3.2.35 | Done: 32/32 ok on Kickstart 2.04 (37.175, A500+) and Kickstart 3.1 (40.069, A1200) |
-| os4 / morphos builds and runs of the phase 2 sample | **Not verified** (the PPC image was not built or run this session) |
+| os4 / morphos builds and runs of the phase 2 sample | os4: 32 ok in the AmigaOS 4.1 VM, same as the host. MorphOS: **not verified** |
 | Real hardware | **Not done** |
 
 Notes and limits:
@@ -489,11 +489,112 @@ Screenshot: [images/phase4-cards-a1200.png](images/phase4-cards-a1200.png) (Kick
 ## Next
 
 - Run hello on real hardware, the last open item in the phase 1 gate. The emulator side is done: AROS replacement, Kickstart 2.04 and Kickstart 3.1.
-- Running the PPC builds needs a PPC-capable emulator (QEMU `amigaone`/`sam460ex` for OS4, `pegasos2` for MorphOS) or real hardware.
-- `esharp test` follow-ups: other targets (os4, morphos, aros) and the Amiga program's return code (today only the ok/FAIL lines are compared).
-- Finish phase 2: run the samples on the PPC targets once there is a way to run them.
+- OS4 findings from the first VM runs (see "AmigaOS 4.1 VM runs"): audio.device, WaitTOF timing, lowlevel port types, the RTG link error, the classic-only checks in memory/generics, scripted input for os4 runs.
+- MorphOS runs (QEMU `pegasos2` can boot MorphOS too; not tried) and PowerPC real hardware.
+- `esharp test` follow-ups: other targets (morphos, aros) and the Amiga program's return code (today only the ok/FAIL lines are compared; the os4 pipe hides it).
 - Memory management ([MEMORY.md](MEMORY.md)): step 1 (`Mem.AllocChip`/`AllocFast`/`Free`, `Arena`) is done; step 2 (`Pool<T>`) and most of step 3 (`--debug`: bounds checks, arena and pool poisoning) are done; the chip budget report (step 4) is done for constant sizes.
 - Phase 4 (rest): a bigger card game (rummy-style: melds, bots), a shared card library, timing, dithering and IFF/sample assets.
+
+## AmigaOS 4.1 VM runs (wave 7: `esharp run/test --target os4`)
+
+The os4 target now runs unattended in a QEMU Pegasos II VM with AmigaOS 4.1 Final Edition (Updates 1-3 installed; kernel
+54.57, exec 54.57, dos 54.136), which Dave owns; no AmigaOS file is in the repo. `ESHARP_OS4_VM` names the VM directory
+(`bboot`, `Kickstart.zip`, `amiga.img`, optional `qemu-data/`); unset, the CLI says "set ESHARP_OS4_VM to your AmigaOS 4.1
+VM dir". Details and the exact hook lines: `tools/os4vm/README.md`.
+
+How it works: the program, a script `autorun` and a helper `estype` (`tools/os4vm/estype.c`, embedded in the CLI and
+compiled with `ppc-amigaos-gcc`) go on an ISO labelled `ESTEST` (Rock Ridge mode 755, so the files are executable in OS4).
+QEMU boots a new qcow2 overlay of `amiga.img` (so test runs never write the installed disk) with `-append serial` (BBoot
+passes it to the kernel, which then sends its debug output to the serial port) and `-display none`. A one-time hook at the
+end of `S:User-Startup` executes `ESTEST:autorun` when that volume is present, before `LoadWB`. The script runs
+`program | estype`; estype writes each line with `DebugPrintF`, prefixed `ES: `, between start and end markers that carry
+a per-run nonce. The host polls `obj/os4/run/serial.log`, takes a `screendump` through the monitor socket after `SHOT`
+(PPM -> PNG), and quits QEMU at the end marker or the timeout. Trace output (`--trace`) now uses `DebugPrintF` on
+AmigaOS 4 (it was a no-op stub) and goes to the `--serial` file with the other non-program lines.
+
+Measured: boot to the program about 9 s from the QEMU start; a whole `esharp test --target os4` (host run, os4 build,
+CD, boot, run) 12-16 s per sample. Booting by hand to the Workbench screen takes about 23 s.
+
+Decisions and things found on the way:
+- `SER:` reaches the serial file too, but serial.device dropped characters (a typed script lost parts of most lines);
+  `DebugPrintF` output was complete, so the program's output goes through estype.
+- The AmigaOS 4.1 shell pipe delivers one empty line before the first command's output (`Echo "a" | estype` shows it; a
+  redirect to a file does not): estype drops exactly one leading empty line on standard input (checked: `Echo ""` still
+  gives one empty line).
+- The hook first used `Run` (asynchronous): Workbench and its WBStartup window then came up over the cards sample's
+  screen, so the screenshot showed Workbench. It now executes the script synchronously before `LoadWB`; the GadTools
+  sample still opens its window on the Workbench screen (intuition opens it on demand).
+- AmigaOS 4 renamed `Flush` and `DeleteFile` (`FFlush`, `Delete`): screen, cards and sound did not link. The generated C now
+  includes the SDK's `dos/obsolete.h` after `proto/dos.h` on `__amigaos4__` (no change for other targets).
+- Warm reboots do not work in this VM; every run is a fresh boot. Only one VM may run at a time: the CLI refuses while a
+  `qemu-system-ppc` uses the VM directory, and esharp runs wait for each other (`/tmp/esharp-os4vm.lock`).
+
+The hook (installed 2026-11-11 with `python3 -I tools/os4vm/os4vm.py install-hook`, which typed one command through the
+monitor's `sendkey`, checked the result on the serial output and then ran `qemu-img commit` of the overlay; the original
+file is kept as `S:User-Startup.pre-esharp` and `remove-hook` puts it back; both commands were run once):
+
+```
+;BEGIN ESHARP-TEST (E# os4 test harness hook, see tools/os4vm/README.md in the E# repo)
+Assign >NIL: ESTEST: EXISTS
+If NOT WARN
+  If EXISTS ESTEST:autorun
+    Execute ESTEST:autorun
+  EndIf
+EndIf
+;END ESHARP-TEST
+```
+
+Read-only backup of the disk before any change: `amiga-backup-2026-11-11.img` in the VM directory (not touched).
+
+Verified (`esharp test samples/X --target os4 --docker esharp-amiga-toolchain`, `ESHARP_OS4_VM` set, one VM at a time):
+
+| Sample | Host | OS4 | |
+|---|---|---|---|
+| hello | prints `Hello from E#!` | same | `test` reports FAIL only because hello has no ok lines (as on m68k) |
+| phase2 | 32 ok | 32 ok | agree |
+| language | 35 ok | 35 ok | agree |
+| collections | 20 ok | 20 ok | agree |
+| generics | 24 ok | 23 ok, 1 FAIL | `impossible pool fails cleanly`: `new Pool<Card>(100000000, true)` asks for about 1.3 GB, which the 2 GB VM grants |
+| lambdas | 16 ok | 16 ok | agree |
+| linq | 37 ok | 37 ok | agree |
+| refs | 18 ok | 18 ok | agree |
+| inherit | 24 ok | 24 ok | agree |
+| operators | 20 ok | 20 ok | agree |
+| properties | 18 ok | 18 ok | agree |
+| memory | 19 ok | 17 ok, 2 FAIL | `chip block is in the chip address range` (the check `< 0x200000` assumes classic chip RAM; OS4 has none) and `free returns the chip RAM` (OS4's `AvailMem(MEMF_CHIP)` did not grow back by 4096 after the free) |
+| dates | 19 ok | 19 ok | agree |
+
+Platform samples never run on OS4 before (`esharp run ... --target os4 --screenshot`):
+- screen: 17 ok, screenshot viewed (rectangles, blitted card, font). The 320x200 screen shows in the top-left corner of a
+  640x480 display (mode selection on the RTG system; not scaled).
+- cards: 15 ok, screenshot viewed (table, cards and buttons drawn; it then ends after 10 s without input).
+- sound: 12 ok, 1 FAIL: `audio.device opens` (no audio.device in this install: AmigaOS 4 uses AHI, and the VIA AC97
+  driver reports "soft resume timed out" in QEMU). File loading and the sample checks pass.
+- timing: 8 ok, 1 FAIL: `ten frames owe about ten steps at the frame rate`; "50 WaitVBlank calls took 0 ms", so `WaitTOF`
+  does not wait on the sm501 display in QEMU (the sample's "not real time" note is printed too). The E clock part works.
+- trace (`--trace --serial f`): output `trace sample done, sum 14`, and the serial file has every Trace line
+  (`trace start` ... `trace end`).
+- Also run once: aga 6 ok, asl 3 ok, fonts 10 ok (topaz and a disk font), iff 10 ok, keys 8 ok, names 12 ok, rummy 28 ok,
+  gui 2 ok (the window on the Workbench screen in the screenshot; it then waits for a click, so the run ends at the
+  timeout: no `--input` for os4), assets 15 ok and 1 FAIL (`audio.device opens` again), controls 10 ok and 2 FAIL
+  (lowlevel.library is present, but `port 1 set to a CD32 pad reads as a pad` and `port 1 then reads as a joystick`
+  fail: the port reads kind 0), hwinfo prints exec 54.57, 68020 "yes", AGA "yes" and chip = fast free RAM (OS4 answers
+  the classic questions that way).
+- rtg does not link: `ICyberGfx` is undefined (the cybergraphics interface is not set up for os4).
+- Workbench still boots normally without the test CD (screenshot of the Workbench screen after 35 s, via
+  `os4vm.py start` on an overlay of the hooked disk), and with a CD labelled ESTEST without `autorun` (the remove-hook boot; checked with the first, `Run` form of the hook only).
+- Regression on m68k after the emitter changes: `esharp test samples/language --target m68k` with Kickstart 3.1 on A1200:
+  35 ok on both sides; `samples/trace` with `--trace --serial` prints every Trace line as before. 292 unit tests pass
+  (`Os4VmTests`: settings, autorun script, serial parsing, QEMU arguments, the embedded estype, the os4 C; plus a VM run
+  that is skipped when `ESHARP_OS4_VM` is unset, and passed here with it set).
+
+Not verified / not done:
+- PowerPC real hardware (Pegasos II, AmigaOne, X5000, ...). MorphOS: still not run.
+- `--input` for os4 (the monitor's `sendkey`/`mouse_move` could replay a script), the program's return code (the pipe
+  hides it), a crash (it should end at the timeout with the Grim Reaper waiting; not provoked).
+- The os4 findings above are not fixed here: audio.device, WaitTOF timing, lowlevel port types, the RTG link error, and
+  the classic-only checks in memory and generics.
+- macOS or Windows hosts for the harness (it uses `/proc` and `/tmp`; Linux only so far).
 
 ## Known limits of the emitter
 
