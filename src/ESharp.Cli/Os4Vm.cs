@@ -78,9 +78,13 @@ public static class Os4Vm
                 continue;
             }
             if (line.Trim() == "ESHARP-END " + nonce) { ended = true; break; }
-            var at = line.IndexOf(LinePrefix, StringComparison.Ordinal);
-            if (at < 0) { if (line.Length > 0) other.Append(line).Append('\n'); continue; }
-            var text = line[(at + LinePrefix.Length)..];
+            // The prefix must start the line. The only thing allowed before it is stray control characters (a NUL, a lone CR or
+            // an escape left by the kernel's serial output); a "ES: " in the middle of a kernel or driver line is not ours.
+            var start = 0;
+            while (start < line.Length && line[start] < ' ') start++;
+            if (string.CompareOrdinal(line, start, LinePrefix, 0, LinePrefix.Length) != 0)
+            { if (line.Length > 0) other.Append(line).Append('\n'); continue; }
+            var text = line[(start + LinePrefix.Length)..];
             if (text == "SHOT") shot = true;
             output.Append(text).Append('\n');
         }
@@ -127,8 +131,14 @@ public static class Os4Vm
         return pids;
     }
 
-    public static (int Exit, string Output) Run(string exe, TimeSpan timeout, string? docker, string? screenshot, string? serialOut = null, bool echo = true)
+    public static (int Exit, string Output) Run(string exe, TimeSpan timeout, string? docker, string? screenshot, string? serialOut = null, bool echo = true, string? input = null)
     {
+        List<Os4Input.Step>? inputSteps = null;
+        if (input != null)
+        {
+            try { inputSteps = Os4Input.Translate(input); }
+            catch (FormatException e) { return Fail(e.Message); }
+        }
         var vm = FindVm(Environment.GetEnvironmentVariable("ESHARP_OS4_VM"), out var vmError);
         if (vm == null) return Fail(vmError!);
         foreach (var tool in new[] { "qemu-system-ppc", "qemu-img" })
@@ -190,7 +200,7 @@ public static class Os4Vm
             qemu.BeginErrorReadLine();
 
             var deadline = DateTime.UtcNow + timeout;
-            var shotTaken = screenshot == null;
+            var shotTaken = screenshot == null && inputSteps == null;
             var state = new SerialState(false, false, "", false);
             var printed = 0;
             while (DateTime.UtcNow < deadline && !qemu.HasExited)
@@ -202,12 +212,14 @@ public static class Os4Vm
                 {
                     shotTaken = true;
                     Thread.Sleep(1000);   // let the program draw its frame
-                    if (Screendump(monitor, Path.Combine(runDir, "shot.ppm"), screenshot!)) Console.Error.WriteLine($"Saved screenshot {screenshot}");
+                    if (inputSteps != null && !Os4Input.Send(monitor, inputSteps)) Console.Error.WriteLine("esharp: could not send the input through the QEMU monitor");
+                    if (screenshot == null) { }
+                    else if (Screendump(monitor, Path.Combine(runDir, "shot.ppm"), screenshot!)) Console.Error.WriteLine($"Saved screenshot {screenshot}");
                     else Console.Error.WriteLine("esharp: could not take the screenshot through the QEMU monitor");
                 }
                 if (state.Ended) break;
             }
-            if (!shotTaken) Console.Error.WriteLine("esharp: the program never printed SHOT, so no screenshot was taken");
+            if (!shotTaken) Console.Error.WriteLine("esharp: the program never printed SHOT, so no screenshot was taken and no input was sent");
             if (serialOut != null)
             {
                 // The non-program lines of the run (Trace output through DebugPrintF, kernel and driver messages).

@@ -12,6 +12,18 @@ namespace ESharp.Compiler.Tests;
 /// </summary>
 public class Os4VmTests
 {
+    /// <summary>A real xunit skip unless ESHARP_OS4_VM_TESTS=1 and ESHARP_OS4_VM names a VM: a plain dotnet test never boots the VM.</summary>
+    public sealed class Os4VmFactAttribute : FactAttribute
+    {
+        public Os4VmFactAttribute()
+        {
+            if (Environment.GetEnvironmentVariable("ESHARP_OS4_VM_TESTS") != "1")
+                Skip = "boots the AmigaOS 4.1 VM: set ESHARP_OS4_VM_TESTS=1 and ESHARP_OS4_VM to run it";
+            else if (string.IsNullOrEmpty(Environment.GetEnvironmentVariable("ESHARP_OS4_VM")))
+                Skip = "ESHARP_OS4_VM_TESTS=1 but ESHARP_OS4_VM is not set";
+        }
+    }
+
     [Fact]
     public void Unset_vm_setting_gives_the_clear_error()
     {
@@ -125,6 +137,53 @@ public class Os4VmTests
     }
 
     [Fact]
+    public void Serial_parse_takes_the_prefix_only_at_the_start_of_a_line()
+    {
+        var serial =
+            "ESHARP-BEGIN abc\r\n" +
+            "driver says ES: not ours\r\n" +               // a prefix in the middle of a kernel line
+            "[x] ES: nor this\r\n" +
+            "\0\x1b\rES: ok after control characters\r\n" +  // stray control characters before the prefix are noise
+            "ES: ok value ES: inside\r\n" +                // the program's own text may contain the prefix
+            "ES: \r\n" +
+            "ESHARP-END abc\r\n";
+        var st = Os4Vm.Parse(serial, "abc");
+        Assert.Equal("ok after control characters\nok value ES: inside\n\n", st.Output);
+        Assert.Equal("driver says ES: not ours\n[x] ES: nor this\n", st.Other);
+    }
+
+    [Fact]
+    public void Input_script_becomes_monitor_commands()
+    {
+        var steps = Os4Input.Translate("click 208,101;rel -5,3;press;key 69;key 96+32").Select(x => x.Command).ToList();
+        // click: into the top-left corner, then right/down by X,Y; the chunks add up
+        var moves = steps.TakeWhile(c => c.StartsWith("mouse_move")).Select(c => c.Split(' ')).ToList();
+        Assert.Equal(-4000 + 208, moves.Sum(m => int.Parse(m[1])));
+        Assert.Equal(-4000 + 101, moves.Sum(m => int.Parse(m[2])));
+        Assert.All(moves, m => Assert.InRange(int.Parse(m[1]), -Os4Input.Chunk, Os4Input.Chunk));
+        var rest = steps.Skip(moves.Count).ToList();
+        Assert.Equal(new[] { "mouse_button 1", "mouse_button 0", "mouse_move -5 3", "mouse_button 1", "mouse_button 0", "sendkey esc", "sendkey shift-a" }, rest);
+        Assert.Throws<FormatException>(() => Os4Input.Translate("wiggle 1,2"));
+        Assert.Throws<FormatException>(() => Os4Input.Translate("key 255"));   // no such Amiga raw code
+        Assert.Throws<FormatException>(() => Os4Input.Translate("click 5"));
+    }
+
+    [Fact]
+    public void Amiga_raw_codes_map_to_qemu_key_names()
+    {
+        Assert.Equal("esc", Os4Input.KeyName(0x45));
+        Assert.Equal("a", Os4Input.KeyName(0x20));
+        Assert.Equal("q", Os4Input.KeyName(0x10));
+        Assert.Equal("m", Os4Input.KeyName(0x37));
+        Assert.Equal("1", Os4Input.KeyName(0x01));
+        Assert.Equal("0", Os4Input.KeyName(0x0A));
+        Assert.Equal("f10", Os4Input.KeyName(0x59));
+        Assert.Equal("shift", Os4Input.KeyName(0x60));
+        Assert.Equal("ret", Os4Input.KeyName(0x44));
+        Assert.Null(Os4Input.KeyName(0x7F));
+    }
+
+    [Fact]
     public void Serial_parse_waits_for_markers_and_whole_lines()
     {
         Assert.False(Os4Vm.Parse(Serial, "other").Begun);              // another run's nonce
@@ -178,6 +237,18 @@ public class Os4VmTests
     }
 
     [Fact]
+    public void Os4_gets_the_cybergraphics_interface_through_SetBase_and_drops_it_again()
+    {
+        var c = CompileOk(Program("", "Video.HasRtg(320, 200);"), Targets.Os4.ToOptions());
+        Assert.Contains("struct CyberGfxIFace *ICyberGfx;", c);
+        Assert.Contains("GetInterface(lib, \"main\", 1, NULL)", c);
+        Assert.Contains("DropInterface((struct Interface *)ICyberGfx)", c);
+        Assert.Contains("ES_SETBASE_CyberGfxBase(", c);
+        // every other target takes the #else branch: the plain base variable, as before
+        Assert.Contains("#else\n#define ES_SETBASE_CyberGfxBase(l) (es_CyberGfxBase = (__typeof__(es_CyberGfxBase))(l))\n#endif", c.Replace("\r", ""));
+    }
+
+    [Fact]
     public void Trace_helpers_compile_with_host_gcc_when_not_amigaos4()
     {
         // The os4 branch must not disturb the other branches of the same block: on the host C compiler (neither m68k,
@@ -191,13 +262,11 @@ public class Os4VmTests
         Assert.True(exit == 7, output);
     }
 
-    // ---- in the VM (only when ESHARP_OS4_VM is set; boots AmigaOS 4.1 for about 10 s) ----
+    // ---- in the VM (only when ESHARP_OS4_VM_TESTS=1 and ESHARP_OS4_VM are set; boots AmigaOS 4.1 for about 10 s) ----
 
-    [Fact]
+    [Os4VmFact]
     public void Program_runs_in_the_os4_vm_when_one_is_configured()
     {
-        var vm = Environment.GetEnvironmentVariable("ESHARP_OS4_VM");
-        if (string.IsNullOrEmpty(vm)) return;
         const string src = @"
 public static class P
 {

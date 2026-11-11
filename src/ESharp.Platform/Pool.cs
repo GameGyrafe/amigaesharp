@@ -21,9 +21,11 @@ public unsafe struct Pool<T> where T : unmanaged
     {
         uint itemBytes = (uint)sizeof(T);
         // Layout: free list (padded to 8 bytes so the items are aligned for pointers) | items | flags.
+        // A size that does not fit in 32 bits is refused up front (it would wrap and give a small block), on every target.
+        bool fits = capacity <= (0xFFFFFFFFu - 8) / (itemBytes + 5);
         uint listBytes = (capacity * 4 + 7) & ~7u;
         uint total = listBytes + capacity * itemBytes + capacity;
-        _block = capacity == 0 ? null : (chip ? Mem.AllocChip(total) : Mem.AllocFast(total));
+        _block = capacity == 0 || !fits ? null : (chip ? Mem.AllocChip(total) : Mem.AllocFast(total));
         _free = (uint*)_block;
         _items = (T*)(_block + listBytes);
         _used = _block + listBytes + capacity * itemBytes;

@@ -119,7 +119,7 @@ public static class Program
         Check(*n == 42 && ints.InUse() == 1, "pool of int");
         ints.Destroy();
 
-        var impossible = new Pool<Card>(100000000, true);
+        var impossible = new Pool<Card>(2000000000, true);   // more than the pool can address in 32 bits, on every target
         Check(impossible.Capacity() == 0 && impossible.Alloc() == null, "impossible pool fails cleanly");
     }
 }

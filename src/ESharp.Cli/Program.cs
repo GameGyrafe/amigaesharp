@@ -42,7 +42,8 @@ Run options (build options also apply; run is m68k, os4 or sdl):
   --headless        No window: run on a virtual display, print the program's output, exit
                     (sdl: SDL's offscreen video and dummy audio, inside the --docker image if given)
                     (os4 runs are always unattended: no window; --screenshot uses the QEMU monitor's
-                    screendump, --serial collects the kernel debug lines such as Trace; no --input yet)
+                    screendump, --serial collects the kernel debug lines such as Trace; --input goes through the
+                    QEMU monitor, see below)
   --timeout <sec>   Headless time limit (default 120; AROS needs ~20 s to boot)
   --kickstart <rom> Use a real Kickstart ROM instead of FS-UAE's built-in AROS replacement
                     (or set ESHARP_KICKSTART)
@@ -52,6 +53,8 @@ Run options (build options also apply; run is m68k, os4 or sdl):
   --serial <file>   Headless only: write the program's serial output (Trace) to this file, and print it after the run
   --input <script>  Headless only: after SHOT send mouse/keyboard input to the emulator (before the screenshot):
                     ""click X,Y;key 9;key 50+38"" with display pixels and X11 key codes, + holds keys (needs libXtst)
+                    os4: the QEMU monitor sends it: click X,Y moves the pointer to X,Y of the screen (from the top-left
+                    corner), rel DX,DY moves it, and key N takes an AMIGA RAW key code (Esc is 69, 96+32 is Shift+A)
                     sdl: the same script is replayed by the program itself after SHOT, with X,Y in the program's
                     screen pixels; the screenshot is the program's own frame (both also work without --headless)
 
@@ -507,10 +510,9 @@ Targets:
         }
         if (string.Equals(targetName, "os4", StringComparison.OrdinalIgnoreCase))
         {
-            if (input != null) return Fail("--input is not supported for --target os4 yet (the run is unattended; see tools/os4vm/README.md)");
             var os4Rc = Build(buildArgs.ToArray(), out var os4Exe);
             if (os4Rc != 0 || os4Exe == null) return os4Rc;
-            var (exit, _) = Os4Vm.Run(os4Exe, TimeSpan.FromSeconds(timeout), DockerImage(buildArgs, Targets.Os4), screenshot, serial);
+            var (exit, _) = Os4Vm.Run(os4Exe, TimeSpan.FromSeconds(timeout), DockerImage(buildArgs, Targets.Os4), screenshot, serial, input: input);
             return exit;
         }
         if (targetName != "m68k")
