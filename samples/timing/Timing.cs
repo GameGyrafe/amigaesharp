@@ -7,7 +7,8 @@ namespace TimingSample;
 /// Frame timing: <see cref="Frame.WaitVBlank"/> (graphics WaitTOF), the PAL/NTSC rate, a frame counter, and the
 /// fixed-timestep <see cref="FrameTimer"/>. Prints "ok NAME" or "FAIL NAME". The one-second measurement is checked
 /// against the detected rate with a wide tolerance; if the machine is not running in real time (a slow emulator, a
-/// hosted system that ignores the vertical blank) it prints a "note" with the measurement instead of failing.
+/// hosted system that ignores the vertical blank) it prints a "note" with the measurement and "skip" instead of failing. A display
+/// whose WaitTOF does not wait (AmigaOS 4 in QEMU) is paced by timer.device inside WaitVBlank; the sample then says so in a note.
 /// </summary>
 public static class Program
 {
@@ -36,7 +37,11 @@ public static class Program
         Dos.PutStr($"{fps} WaitVBlank calls took {ms} ms\n");
         Check(Frame.Count == fps, "the frame counter counts each wait");
         if (ms >= 900 && ms <= 1100) Check(true, "a second of frames takes about a second");
-        else Dos.PutStr("note: the machine is not running in real time (expected about 1000 ms), so the timing check is skipped\n");
+        else
+        {
+            Dos.PutStr("note: the machine is not running in real time (expected about 1000 ms), so the timing check is skipped\n");
+            Dos.PutStr("skip a second of frames takes about a second\n");
+        }
 
         // Fixed timestep: 50 logic steps a second, at most 5 owed at once.
         FrameTimer timer = new FrameTimer(50, 5);
@@ -56,6 +61,8 @@ public static class Program
 
         Video.WaitFrames(5);
         Check(Frame.Count == fps + 10 + 5, "Video.WaitFrames waits that many vertical blanks");
+        if (Frame.PacedFrames > 0)
+            Dos.PutStr($"note: the display's WaitTOF did not wait for {Frame.PacedFrames} of the frames, so timer.device paced them\n");
         Clock.Close();
     }
 }

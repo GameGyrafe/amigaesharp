@@ -57,6 +57,10 @@ public static unsafe class Exec
     [AmigaLib("exec", -450)]
     public static extern void CloseDevice(void* ioRequest);
 
+    /// <summary>exec.library DoIO(), LVO -456: sends a request and waits for it; the request's io_Error.</summary>
+    [AmigaLib("exec", -456)]
+    public static extern int DoIO(void* ioRequest);
+
     /// <summary>exec.library CheckIO(), LVO -468: the request if it has completed, else null.</summary>
     [AmigaLib("exec", -468)]
     public static extern void* CheckIO(void* ioRequest);

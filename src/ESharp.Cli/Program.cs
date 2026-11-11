@@ -149,7 +149,7 @@ Targets:
         Console.Write(host.Output);
         var hostReport = TestReport.Parse(host.Output);
         var failed = false;
-        Console.WriteLine($"Host: {hostReport.Ok} ok, {hostReport.Failed} FAIL" + (host.Exit != 0 ? $", exit code {host.Exit} (crash or error)" : ""));
+        Console.WriteLine($"Host: {hostReport.Summary}" + (host.Exit != 0 ? $", exit code {host.Exit} (crash or error)" : ""));
         if (host.Exit != 0 || hostReport.Failed > 0) failed = true;
         if (hostReport.Checks.Count == 0) { Console.Error.WriteLine("esharp: the program printed no ok/FAIL lines"); failed = true; }
 
@@ -173,7 +173,7 @@ Targets:
             Console.Write(captured.ToString());
             if (runRc != 0) return Fail("the Amiga run failed (see above)");
             var amigaReport = TestReport.Parse(captured.ToString());
-            Console.WriteLine($"Amiga: {amigaReport.Ok} ok, {amigaReport.Failed} FAIL");
+            Console.WriteLine($"Amiga: {amigaReport.Summary}");
             if (amigaReport.Failed > 0) failed = true;
             var diffs = TestReport.Compare(hostReport, amigaReport);
             if (diffs.Count == 0) Console.WriteLine("Host and Amiga agree on every check.");
@@ -194,7 +194,7 @@ Targets:
             var (exit, output) = Os4Vm.Run(exe, TimeSpan.FromSeconds(timeout), DockerImage(buildArgs, Targets.Os4), null);
             if (exit != 0) return Fail("the os4 run failed (see above)");
             var os4Report = TestReport.Parse(output);
-            Console.WriteLine($"OS4: {os4Report.Ok} ok, {os4Report.Failed} FAIL");
+            Console.WriteLine($"OS4: {os4Report.Summary}");
             if (os4Report.Failed > 0) failed = true;
             var diffs = TestReport.Compare(hostReport, os4Report, "OS4");
             if (diffs.Count == 0) Console.WriteLine("Host and OS4 agree on every check.");
@@ -214,7 +214,7 @@ Targets:
             if (rc != 0 || exe == null) return Fail("sdl build failed");
             var (exit, output) = SdlRun.Run(exe, true, TimeSpan.FromSeconds(timeout), DockerImage(buildArgs, Targets.Sdl), null, null);
             var sdlReport = TestReport.Parse(output);
-            Console.WriteLine($"SDL: {sdlReport.Ok} ok, {sdlReport.Failed} FAIL" + (exit != 0 ? $", exit code {exit} (crash or error)" : ""));
+            Console.WriteLine($"SDL: {sdlReport.Summary}" + (exit != 0 ? $", exit code {exit} (crash or error)" : ""));
             if (exit != 0 || sdlReport.Failed > 0) failed = true;
             var diffs = TestReport.Compare(hostReport, sdlReport, "SDL");
             if (diffs.Count == 0) Console.WriteLine("Host and SDL agree on every check.");

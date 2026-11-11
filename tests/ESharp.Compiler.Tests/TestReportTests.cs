@@ -30,6 +30,22 @@ public class TestReportTests
     }
 
     [Fact]
+    public void A_skipped_check_is_neither_ok_nor_FAIL_and_never_a_difference()
+    {
+        var host = TestReport.Parse("ok a\nok b\nok c\n");
+        var os4 = TestReport.Parse("ok a\nskip b\nskip c\n");
+        Assert.Equal(1, os4.Ok);
+        Assert.Equal(0, os4.Failed);
+        Assert.Equal(2, os4.Skipped);
+        Assert.Equal("1 ok, 0 FAIL, 2 skipped", os4.Summary);
+        Assert.Equal("3 ok, 0 FAIL", host.Summary);
+        Assert.Empty(TestReport.Compare(host, os4, "OS4"));
+        Assert.Empty(TestReport.Compare(os4, host, "OS4"));
+        // A check that is missing without a skip line is still a difference.
+        Assert.Equal(new[] { "c: host ok, OS4 missing" }, TestReport.Compare(host, TestReport.Parse("ok a\nskip b\n"), "OS4"));
+    }
+
+    [Fact]
     public void Host_project_lists_the_sources_and_defines_HOST()
     {
         var text = HostRun.ProjectText("/repo", new[] { "/p/A.cs" });

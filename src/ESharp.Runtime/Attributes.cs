@@ -67,6 +67,16 @@ public sealed class NativeAttribute : Attribute
 {
 }
 
+/// <summary>
+/// A static, parameterless method the program calls after its entry point returns, when it uses anything else of the
+/// method's class. Library code uses it to give back what it opened on demand (a device, a message port) without asking every
+/// program to close it. Not called when the program ends some other way (exit, a crash).
+/// </summary>
+[AttributeUsage(AttributeTargets.Method)]
+public sealed class AtExitAttribute : Attribute
+{
+}
+
 /// <summary>Marks an interrupt handler.</summary>
 [AttributeUsage(AttributeTargets.Method)]
 public sealed class InterruptAttribute : Attribute

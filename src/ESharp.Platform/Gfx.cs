@@ -58,6 +58,12 @@ public static unsafe class Graphics
     [AmigaLib("graphics", -270)] public static extern void WaitTOF();
     /// <summary>graphics.library GetVPModeID() (v36): the display mode ID of a view port.</summary>
     [AmigaLib("graphics", -792), Since(36)] public static extern uint GetVPModeID(void* viewPort);
+    /// <summary>graphics.library BestModeIDA() (v39): the display mode that best fits the BIDTAG_ tags, or INVALID_ID.</summary>
+    [AmigaLib("graphics", -1050), Since(39)] public static extern uint BestModeIDA(void* tags);
+    /// <summary>graphics.library FindDisplayInfo() (v36): a handle for <see cref="GetDisplayInfoData"/>.</summary>
+    [AmigaLib("graphics", -726), Since(36)] public static extern void* FindDisplayInfo(uint displayId);
+    /// <summary>graphics.library GetDisplayInfoData() (v36): copies the record <paramref name="tagId"/> (DTAG_DIMS, ...) of a mode; the bytes copied, 0 on failure.</summary>
+    [AmigaLib("graphics", -756), Since(36)] public static extern uint GetDisplayInfoData(void* handle, byte* buffer, uint size, uint tagId, uint displayId);
 }
 
 /// <summary>
