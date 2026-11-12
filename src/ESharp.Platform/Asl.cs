@@ -78,26 +78,23 @@ public static unsafe class Asl
         void* req = AslLib.AllocAslRequest(Layout.AslFileRequest, null);
         if (req == null) return null;
         string? result = null;
-        nuint[] tags = new nuint[12];
-        fixed (nuint* t = tags)
+        TagList w = new TagList();
+        w.Add(Layout.AslFrTitleText, Cast.StringToPtr(title));
+        w.Add(Layout.AslFrInitialDrawer, Cast.StringToPtr(drawer));
+        if (Video.IsOpen()) w.Add(Layout.AslFrWindow, Video.Window);
+        nuint* t = w.End();
+        if (t != null && AslLib.AslRequest(req, t) != 0)
         {
-            TagWriter w = new TagWriter(t, 12);
-            w.Add(Layout.AslFrTitleText, Cast.StringToPtr(title));
-            w.Add(Layout.AslFrInitialDrawer, Cast.StringToPtr(drawer));
-            if (Video.IsOpen()) w.Add(Layout.AslFrWindow, Video.Window);
-            if (w.End() && AslLib.AslRequest(req, t) != 0)
+            byte* r = (byte*)req;
+            byte* d = *(byte**)(r + Layout.FrDrawer);
+            byte* f = *(byte**)(r + Layout.FrFile);
+            fixed (byte* p = _path)
             {
-                byte* r = (byte*)req;
-                byte* d = *(byte**)(r + Layout.FrDrawer);
-                byte* f = *(byte**)(r + Layout.FrFile);
-                fixed (byte* p = _path)
-                {
-                    int n = Append(p, 0, d);
-                    if (n > 0 && p[n - 1] != ':' && p[n - 1] != '/' && f != null && f[0] != 0) p[n++] = (byte)'/';
-                    n = Append(p, n, f);
-                    p[n] = 0;
-                    result = Cast.PtrToString(p);
-                }
+                int n = Append(p, 0, d);
+                if (n > 0 && p[n - 1] != ':' && p[n - 1] != '/' && f != null && f[0] != 0) p[n++] = (byte)'/';
+                n = Append(p, n, f);
+                p[n] = 0;
+                result = Cast.PtrToString(p);
             }
         }
         AslLib.FreeAslRequest(req);

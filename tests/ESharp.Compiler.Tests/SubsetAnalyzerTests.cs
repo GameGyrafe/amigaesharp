@@ -100,6 +100,39 @@ public class SubsetAnalyzerTests
         Assert.DoesNotContain("ES0101", ErrorIds(r));
     }
 
+    [Theory]
+    [InlineData("[RequiresLib(\"dos\", 50)] static void Caller() { NewCall(1); }", "")]                          // on the method
+    [InlineData("[RequiresLib(\"dos.library\", 50)] static void Caller() { NewCall(1); }", "")]                  // long name
+    [InlineData("[RequiresLib(\"DOS\", 51)] static void Caller() { NewCall(1); }", "")]                          // higher is fine
+    [InlineData("[RequiresLib(\"dos\", 50)] class Holder { public static void Caller() { NewCall(1); } }", "")]  // on the type
+    [InlineData("static void Caller() { [RequiresLib(\"dos\", 50)] void Local() { } Local(); NewCall(1); }", "ES0101")]   // a local function does not cover its caller
+    [InlineData("[RequiresLib(\"dos\", 45)] static void Caller() { NewCall(1); }", "ES0101")]                    // version too low
+    [InlineData("[RequiresLib(\"graphics\", 50)] static void Caller() { NewCall(1); }", "ES0101")]              // another library
+    [InlineData("static void Caller() { NewCall(1); }", "ES0101")]
+    public void RequiresLib_opts_a_method_or_type_in(string members, string expected)
+    {
+        var r = Compile(Program(NewApi + members, "Caller();"), Targets.M68k.ToOptions());
+        if (members.Contains("class Holder")) r = Compile(Program(NewApi + members, "Holder.Caller();"), Targets.M68k.ToOptions());
+        if (expected == "") Assert.DoesNotContain("ES0101", ErrorIds(r)); else Assert.Contains(expected, ErrorIds(r));
+    }
+
+    [Fact]
+    public void RequiresLib_on_the_assembly_covers_the_program()
+    {
+        var src = Prelude + "[assembly: RequiresLib(\"dos\", 50)]\n" + Program(NewApi, "NewCall(1);").Substring(Prelude.Length);
+        Assert.DoesNotContain("ES0101", ErrorIds(Compile(src, Targets.M68k.ToOptions())));
+    }
+
+    [Fact]
+    public void Library_versions_come_from_one_table()
+    {
+        Assert.Equal(40, ESharp.Analyzers.LibraryVersions.For(Targets.M68k.Defines));
+        Assert.Equal(51, ESharp.Analyzers.LibraryVersions.For(Targets.Aros.Defines));
+        Assert.Null(ESharp.Analyzers.LibraryVersions.For(Targets.Os4.Defines));
+        Assert.Null(ESharp.Analyzers.LibraryVersions.For(Targets.MorphOs.Defines));
+        Assert.Null(ESharp.Analyzers.LibraryVersions.For(Targets.Sdl.Defines));
+    }
+
     [Fact]
     public void Aros_target_accepts_the_newer_call()
     {

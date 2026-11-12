@@ -82,27 +82,21 @@ public static unsafe class Joystick
     public static bool Force(int port, bool gamepad)
     {
         if (_base == null) return false;
-        nuint[] tags = new nuint[4];
-        fixed (nuint* p = tags)
-        {
-            var t = new TagWriter(p, 4);
-            t.Add(Layout.SjaType, gamepad ? Layout.SjaTypeGameCtlr : Layout.SjaTypeJoystk);
-            if (!t.End()) return false;
-            return LowLevel.SetJoyPortAttrsA((uint)port, p) != 0;
-        }
+        TagList t = new TagList();
+        t.Add(Layout.SjaType, gamepad ? Layout.SjaTypeGameCtlr : Layout.SjaTypeJoystk);
+        nuint* p = t.End();
+        if (p == null) return false;
+        return LowLevel.SetJoyPortAttrsA((uint)port, p) != 0;
     }
 
     /// <summary>Gives the ports back to automatic sensing and closes the library.</summary>
     public static void Close()
     {
         if (_base == null) return;
-        nuint[] tags = new nuint[4];
-        fixed (nuint* p = tags)
-        {
-            var t = new TagWriter(p, 4);
-            t.Add(Layout.SjaType, Layout.SjaTypeAuto);
-            if (t.End()) { LowLevel.SetJoyPortAttrsA(0, p); LowLevel.SetJoyPortAttrsA(1, p); }
-        }
+        TagList t = new TagList();
+        t.Add(Layout.SjaType, Layout.SjaTypeAuto);
+        nuint* p = t.End();
+        if (p != null) { LowLevel.SetJoyPortAttrsA(0, p); LowLevel.SetJoyPortAttrsA(1, p); }
         LowLevel.SetBase(null);
         Exec.CloseLibrary(_base);
         _base = null;
