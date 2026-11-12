@@ -33,10 +33,17 @@ public static unsafe class Mem
     }
 
     /// <summary>Free chip RAM in bytes.</summary>
-    public static uint AvailChip() => Exec.AvailMem(Exec.MemChip);
+    public static uint AvailChip() => Saturate(Exec.AvailMem(Exec.MemChip));
 
     /// <summary>Free fast RAM in bytes (0 on a machine without any).</summary>
-    public static uint AvailFast() => Exec.AvailMem(Exec.MemFast);
+    public static uint AvailFast() => Saturate(Exec.AvailMem(Exec.MemFast));
+
+    // AvailMem is pointer-sized on AROS x86-64: more than 4 GB free reads as 4 GB - 1 rather than wrapping.
+    private static uint Saturate(nuint n)
+    {
+        ulong v = n;
+        return v > 0xFFFFFFFFUL ? 0xFFFFFFFFu : (uint)v;
+    }
 #elif SDL
     // SDL: there is no chip RAM; both kinds are zeroed malloc blocks. Each kind counts its use against a nominal 256 MB,
     // so a program can see that Free returned what it allocated, and a larger request fails (null) as it would on an Amiga.
