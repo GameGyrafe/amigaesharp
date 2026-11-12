@@ -658,6 +658,13 @@ internal sealed partial class CEmitter
                     Add(fi.MoveNextMethod);
                     if (fi.CurrentProperty is { } current) { Add(current.GetMethod); _usedSymbols.Add(current); }
                 }
+                if (n is PatternSyntax pat)
+                    foreach (var pm in PatternMembers(model, pat))   // Deconstruct, Length/Count and indexers that patterns call
+                        switch (pm)
+                        {
+                            case IMethodSymbol dm: Add(dm); break;
+                            case IPropertySymbol pp: Add(pp.GetMethod); _usedSymbols.Add(pp); break;
+                        }
                 if (n is not ExpressionSyntax e) continue;
                 var info = model.GetSymbolInfo(e);
                 switch (info.Symbol)
@@ -1802,6 +1809,12 @@ internal sealed partial class CEmitter
 
     private void EmitSwitch(SwitchStatementSyntax sw)
     {
+        if (sw.Sections.SelectMany(s => s.Labels).Any(l => l is CasePatternSwitchLabelSyntax ||
+                l is CaseSwitchLabelSyntax c && Model(c).GetSymbolInfo(c.Value).Symbol is INamedTypeSymbol))
+        {
+            EmitPatternSwitch(sw);   // CEmitter.Patterns.cs
+            return;
+        }
         if (Model(sw).GetTypeInfo(sw.Expression).Type?.SpecialType == SpecialType.System_String)
         {
             EmitStringSwitch(sw);
@@ -2756,7 +2769,7 @@ internal sealed partial class CEmitter
     {
         var type = Model(ip).GetTypeInfo(ip.Expression).Type;
         if (type == null) return Unsupported(ip, "pattern on an expression without a type");
-        if (IsPure(ip.Expression))
+        if (UsePatternSubjectInPlace(ip.Expression, type))
             return $"({PatternTest(ip.Pattern, Expr(ip.Expression), type)})";
         var tmp = "es_p" + _patternTemp++;
         return $"({{ {Decl(type, tmp, ip)} = {Expr(ip.Expression, top: true)}; {PatternTest(ip.Pattern, tmp, type)}; }})";
@@ -2770,10 +2783,14 @@ internal sealed partial class CEmitter
         var id = _patternTemp++;
         string subject = "es_sw" + id, value = "es_sv" + id;
         var sb = new StringBuilder();
-        sb.Append($"({{ {Decl(type, subject, sw)} = {Expr(sw.GoverningExpression, top: true)}; {Decl(result, value, sw)}; ");
+        if (type is IArrayTypeSymbol && UsePatternSubjectInPlace(sw.GoverningExpression, type)) sb.Append("({ "); // a C array: used in place
+        else sb.Append($"({{ {Decl(type, subject, sw)} = {Expr(sw.GoverningExpression, top: true)}; ");
+        if (type is IArrayTypeSymbol && UsePatternSubjectInPlace(sw.GoverningExpression, type)) subject = Expr(sw.GoverningExpression);
+        sb.Append($"{Decl(result, value, sw)}; ");
         var first = true;
-        foreach (var d in sw.Arms.SelectMany(a => a.Pattern.DescendantNodesAndSelf()).OfType<SingleVariableDesignationSyntax>())
-            if (Model(d).GetDeclaredSymbol(d) is ILocalSymbol dl) sb.Append(Decl(dl.Type, dl.Name, d) + "; ");
+        // Pattern variables (one declaration per name, also for the arms' when clauses).
+        foreach (var d in PatternLocalDecls(sw.Arms.SelectMany(a => a.WhenClause != null ? new SyntaxNode[] { a.Pattern, a.WhenClause } : new SyntaxNode[] { a.Pattern })))
+            sb.Append(d + " ");
         foreach (var arm in sw.Arms)
         {
             var test = PatternTest(arm.Pattern, subject, type);
@@ -2794,19 +2811,8 @@ internal sealed partial class CEmitter
                 return PatternTest(p.Pattern, subject, type);
             case DiscardPatternSyntax:
                 return "1";
-            case ConstantPatternSyntax { Expression: var typeName } tp when Model(tp).GetSymbolInfo(typeName).Symbol is INamedTypeSymbol tpType:
-                // 'not Rect' and similar: the parser reads a type name there as a constant.
-                if (SymbolEqualityComparer.Default.Equals(tpType, type)) return "1";
-                if (type is INamedTypeSymbol tpFrom && IsHeapClass(tpType) && IsHeapClass(tpFrom)) return $"({ClassIs(subject, tpFrom, tpType, tp)})";
-                return Unsupported(tp, "type test");
             case ConstantPatternSyntax c:
-                if (c.Expression is LiteralExpressionSyntax nullLit && nullLit.IsKind(SyntaxKind.NullLiteralExpression))
-                    return IsInterfaceType(type) ? $"({subject}.obj == NULL)" : $"({subject} == NULL)";
-                if (type.SpecialType == SpecialType.System_String)
-                    return IsNullConstant(c.Expression) ? $"({subject} == NULL)" : StrEq(subject, Expr(c.Expression, top: true));   // "x" matches by the characters
-                if (Model(c.Expression).GetTypeInfo(c.Expression).Type?.SpecialType == SpecialType.System_String)
-                    return Unsupported(c, "a string constant pattern on a value that is not typed string");
-                return $"({subject} == {Expr(c.Expression)})";
+                return ConstantTest(c.Expression, c, subject, type);
             case RelationalPatternSyntax r:
                 return $"({subject} {r.OperatorToken.Text} {Expr(r.Expression)})";
             case BinaryPatternSyntax b:
@@ -2814,57 +2820,26 @@ internal sealed partial class CEmitter
             case UnaryPatternSyntax u when u.IsKind(SyntaxKind.NotPattern):
                 return $"(!{PatternTest(u.Pattern, subject, type)})";
             case VarPatternSyntax v:
-                return Bind(v.Designation, subject, v);
+                return BindDesignation(v.Designation, subject, type, v);
             case DeclarationPatternSyntax d:
             {
                 if (Model(d).GetTypeInfo(d.Type).Type is INamedTypeSymbol dt && type is INamedTypeSymbol df && IsHeapClass(dt) && IsHeapClass(df)
                     && !SymbolEqualityComparer.Default.Equals(dt, df))
                     return $"({ClassIs(subject, df, dt, d)} && {Bind(d.Designation, $"(({TypeName(dt)} *){subject})", d)})";
-                return Bind(d.Designation, subject, d);
+                // 'x is T t' with x already a T: still false for null.
+                return NotNullTest(subject, type) is { } dn ? $"({dn} && {Bind(d.Designation, subject, d)})" : Bind(d.Designation, subject, d);
             }
             case TypePatternSyntax t:
             {
                 var tt = Model(t).GetTypeInfo(t.Type).Type;
-                if (tt != null && SymbolEqualityComparer.Default.Equals(tt, type)) return "1";
+                if (tt != null && SymbolEqualityComparer.Default.Equals(tt, type)) return NotNullTest(subject, type) ?? "1";
                 if (tt is INamedTypeSymbol tc && type is INamedTypeSymbol tf && IsHeapClass(tc) && IsHeapClass(tf)) return $"({ClassIs(subject, tf, tc, t)})";
                 return Unsupported(t, "type test");
             }
             case RecursivePatternSyntax rec:
-            {
-                if (rec.PositionalPatternClause != null) return Unsupported(rec, "positional pattern");
-                var parts = new List<string>();
-                if (rec.Type != null && !(Model(rec).GetTypeInfo(rec.Type).Type is { } rt && SymbolEqualityComparer.Default.Equals(rt, type)))
-                {
-                    if (Model(rec).GetTypeInfo(rec.Type).Type is INamedTypeSymbol rc && type is INamedTypeSymbol rf && IsHeapClass(rc) && IsHeapClass(rf))
-                    {
-                        // A class test followed by tests on the object seen as the derived class.
-                        var seen = $"(({TypeName(rc)} *){subject})";
-                        var narrowed = new List<string> { ClassIs(subject, rf, rc, rec) };
-                        if (rec.PropertyPatternClause != null)
-                            foreach (var sub in rec.PropertyPatternClause.Subpatterns)
-                            {
-                                if (sub.NameColon == null || Model(sub).GetSymbolInfo(sub.NameColon.Name).Symbol is not IFieldSymbol sf)
-                                    return Unsupported(sub, "property pattern on anything but a field");
-                                narrowed.Add(PatternTest(sub.Pattern, $"{seen}->{MemberPath(rc, sf.ContainingType, sf.Name)}", sf.Type));
-                            }
-                        if (rec.Designation != null) narrowed.Add(Bind(rec.Designation, seen, rec));
-                        return "(" + string.Join(" && ", narrowed) + ")";
-                    }
-                    return Unsupported(rec, "type test");
-                }
-                if (rec.PropertyPatternClause != null)
-                {
-                    foreach (var sub in rec.PropertyPatternClause.Subpatterns)
-                    {
-                        if (sub.NameColon == null || Model(sub).GetSymbolInfo(sub.NameColon.Name).Symbol is not IFieldSymbol field)
-                            return Unsupported(sub, "property pattern on anything but a field");
-                        var access = type.TypeKind == TypeKind.Pointer || IsHeapClass(type) ? $"{subject}->{MemberPath(type, field.ContainingType, field.Name)}" : $"({subject}).{field.Name}";
-                        parts.Add(PatternTest(sub.Pattern, access, field.Type));
-                    }
-                }
-                if (rec.Designation != null) parts.Add(Bind(rec.Designation, subject, rec));
-                return parts.Count == 0 ? "1" : "(" + string.Join(" && ", parts) + ")";
-            }
+                return RecursivePatternTest(rec, subject, type);
+            case ListPatternSyntax lp:
+                return ListPatternTest(lp, subject, type);
         }
         return Unsupported(pattern, pattern.Kind().ToString());
     }
