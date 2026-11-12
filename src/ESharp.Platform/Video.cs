@@ -64,16 +64,13 @@ public static unsafe class Video
             Exec.CloseLibrary(cyber);   // no interface (AmigaOS 4): RTG is unavailable
             return CyberGfx.InvalidId;
         }
-        nuint[] tags = new nuint[8];      // tag lists are arrays of pointer-sized pairs
         uint id = CyberGfx.InvalidId;
-        fixed (nuint* p = tags)
-        {
-            var t = new TagWriter(p, 8);
-            t.Add(CyberGfx.CYBRBIDTG_Depth, 8);
-            t.Add(CyberGfx.CYBRBIDTG_NominalWidth, width);
-            t.Add(CyberGfx.CYBRBIDTG_NominalHeight, height);
-            if (t.End()) id = CyberGfx.BestCModeIDTagList(p);
-        }
+        TagList t = new TagList();
+        t.Add(CyberGfx.CYBRBIDTG_Depth, 8);
+        t.Add(CyberGfx.CYBRBIDTG_NominalWidth, width);
+        t.Add(CyberGfx.CYBRBIDTG_NominalHeight, height);
+        nuint* p = t.End();
+        if (p != null) id = CyberGfx.BestCModeIDTagList(p);
         CyberGfx.SetBase(null);
         Exec.CloseLibrary(cyber);
         return id;
@@ -121,15 +118,12 @@ public static unsafe class Video
         modeWidth = width;
         modeHeight = height;
         uint id = Layout.InvalidModeId;
-        nuint[] tags = new nuint[8];
-        fixed (nuint* p = tags)
-        {
-            var t = new TagWriter(p, 8);
-            t.Add(Layout.BidNominalWidth, width);
-            t.Add(Layout.BidNominalHeight, height);
-            t.Add(Layout.BidDepth, depth);
-            if (t.End()) id = Graphics.BestModeIDA(p);
-        }
+        TagList t = new TagList();
+        t.Add(Layout.BidNominalWidth, width);
+        t.Add(Layout.BidNominalHeight, height);
+        t.Add(Layout.BidDepth, depth);
+        nuint* p = t.End();
+        if (p != null) id = Graphics.BestModeIDA(p);
         if (id == Layout.InvalidModeId) return 0;
         byte* dims = Mem.AllocFast(Layout.DimInfoSize);
         if (dims == null) return id;
@@ -153,38 +147,32 @@ public static unsafe class Video
 #if AMIGAOS4
         if (displayId == 0) displayId = NearestMode(width, height, depth, out screenWidth, out screenHeight);
 #endif
-        nuint[] tags = new nuint[24];
-        fixed (nuint* p = tags)
-        {
-            var t = new TagWriter(p, 24);
-            t.Add(Intuition.SA_Width, screenWidth);
-            t.Add(Intuition.SA_Height, screenHeight);
-            t.Add(Intuition.SA_Depth, depth);
-            t.Add(Intuition.SA_Quiet, true);
-            t.Add(Intuition.SA_Type, Intuition.CustomScreen);
-            if (displayId != 0) t.Add(Intuition.SA_DisplayID, displayId);   // native: let the system choose
-            if (t.End()) _screen = Intuition.OpenScreenTagList(null, p);
-        }
+        TagList t = new TagList();
+        t.Add(Intuition.SA_Width, screenWidth);
+        t.Add(Intuition.SA_Height, screenHeight);
+        t.Add(Intuition.SA_Depth, depth);
+        t.Add(Intuition.SA_Quiet, true);
+        t.Add(Intuition.SA_Type, Intuition.CustomScreen);
+        if (displayId != 0) t.Add(Intuition.SA_DisplayID, displayId);   // native: let the system choose
+        nuint* p = t.End();
+        if (p != null) _screen = Intuition.OpenScreenTagList(null, p);
         if (_screen == null) return false;
 
-        nuint[] wtags = new nuint[26];
-        fixed (nuint* wp = wtags)
-        {
-            var w = new TagWriter(wp, 26);
-            w.Add(Intuition.WA_CustomScreen, _screen);
-            w.Add(Intuition.WA_Left, (screenWidth - width) / 2);      // centred when the mode is larger (AmigaOS 4); else 0
-            w.Add(Intuition.WA_Top, (screenHeight - height) / 2);
-            w.Add(Intuition.WA_Width, width);
-            w.Add(Intuition.WA_Height, height);
-            w.Add(Intuition.WA_Borderless, true);
-            w.Add(Intuition.WA_Backdrop, true);
-            w.Add(Intuition.WA_Activate, true);
-            w.Add(Intuition.WA_RMBTrap, true);
-            w.Add(Intuition.WA_NoCareRefresh, true);
-            w.Add(Intuition.WA_IDCMP, Intuition.IDCMP_MOUSEBUTTONS | Intuition.IDCMP_MOUSEMOVE | Intuition.IDCMP_RAWKEY);
-            w.Add(Intuition.WA_ReportMouse, true);
-            if (w.End()) _window = Intuition.OpenWindowTagList(null, wp);
-        }
+        TagList w = new TagList();
+        w.Add(Intuition.WA_CustomScreen, _screen);
+        w.Add(Intuition.WA_Left, (screenWidth - width) / 2);      // centred when the mode is larger (AmigaOS 4); else 0
+        w.Add(Intuition.WA_Top, (screenHeight - height) / 2);
+        w.Add(Intuition.WA_Width, width);
+        w.Add(Intuition.WA_Height, height);
+        w.Add(Intuition.WA_Borderless, true);
+        w.Add(Intuition.WA_Backdrop, true);
+        w.Add(Intuition.WA_Activate, true);
+        w.Add(Intuition.WA_RMBTrap, true);
+        w.Add(Intuition.WA_NoCareRefresh, true);
+        w.Add(Intuition.WA_IDCMP, Intuition.IDCMP_MOUSEBUTTONS | Intuition.IDCMP_MOUSEMOVE | Intuition.IDCMP_RAWKEY);
+        w.Add(Intuition.WA_ReportMouse, true);
+        nuint* wp = w.End();
+        if (wp != null) _window = Intuition.OpenWindowTagList(null, wp);
         if (_window == null)
         {
             Intuition.CloseScreen(_screen);

@@ -105,6 +105,10 @@ sound 21 ok, no FAIL (same as before); on hosted AROS (nightly 20261106) cards 1
 FAIL; 142 unit tests pass. Not done: typed tag names (tags are still `uint` constants, so a wrong value type for a
 tag is not caught), tags for other libraries, generating the tag constants from an SDK.
 
+## Update: `[RequiresLib]` and `TagList`
+
+The ES0101 versions live in `ESharp.Analyzers.LibraryVersions` (m68k 40, AROS 51, others unchecked), and `[RequiresLib("lib", version)]` on a method, type or assembly lets code call a newer binding on purpose (the program must open the library at that version itself). `TagList` is a tag list with built-in storage for 15 pairs (no array, no `fixed`); `End()` gives the pointer, or null on overflow. Details and what was run: docs/STATUS.md, "Library versions and tag lists".
+
 ## Update: which libraries next, and where the facts come from
 
 **Where each library lives on the minimum system.** I listed the resident modules of the Kickstart 3.1 (40.069)

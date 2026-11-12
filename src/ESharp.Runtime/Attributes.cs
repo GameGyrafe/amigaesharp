@@ -36,6 +36,23 @@ public sealed class SinceAttribute : Attribute
 }
 
 /// <summary>
+/// Opts code in to library functions newer than the target's baseline (ES0101 otherwise). On a method, a type or
+/// (as <c>[assembly: ...]</c>) the whole program it says: "this code runs only where library
+/// <paramref name="library"/> (short name such as <c>"graphics"</c>, or <c>"graphics.library"</c>) is at least
+/// <paramref name="version"/>". The program must make that true itself, for example by opening the library with
+/// <c>Exec.OpenLibrary("graphics.library", version)</c> and returning early on null; the attribute only silences
+/// the compile-time check for calls whose <see cref="SinceAttribute"/> is at most <paramref name="version"/>.
+/// </summary>
+[AttributeUsage(AttributeTargets.Assembly | AttributeTargets.Class | AttributeTargets.Struct | AttributeTargets.Method, AllowMultiple = true)]
+public sealed class RequiresLibAttribute : Attribute
+{
+    public RequiresLibAttribute(string library, int version) { Library = library; Version = version; }
+
+    public string Library { get; }
+    public int Version { get; }
+}
+
+/// <summary>
 /// The [AmigaLib] calls in this class go through a library base that the program opens itself (a library on disk
 /// that may be missing, or a device), not one the startup code opens. <c>SetBase(void*)</c> in the class is an
 /// emitter intrinsic that stores the base; it must be set before any call. <paramref name="baseName"/> is the

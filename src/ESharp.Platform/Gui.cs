@@ -122,13 +122,10 @@ public unsafe class GtGadget
         {
             if (fresh == null) fresh = GuiText.Dup("");
             if (fresh == null) return;
-            nuint[] tags = new nuint[4];
-            fixed (nuint* t = tags)
-            {
-                TagWriter w = new TagWriter(t, 4);
-                w.Add(KindId == 1 ? Layout.GtstString : Layout.GttxText, fresh);
-                if (w.End()) GadTools.GT_SetGadgetAttrsA(Handle, WindowHandle, null, t);
-            }
+            TagList w = new TagList();
+            w.Add(KindId == 1 ? Layout.GtstString : Layout.GttxText, fresh);
+            nuint* t = w.End();
+            if (t != null) GadTools.GT_SetGadgetAttrsA(Handle, WindowHandle, null, t);
         }
 #endif
         TextCopy = fresh;
@@ -340,7 +337,6 @@ public unsafe class GtWindow
         void* list = null;
         void* previous = GadTools.CreateContext(&list);
         _gadgetList = list;
-        nuint[] tags = new nuint[12];
         int id = 1;
         bool ok = previous != null;
         for (GtGadget? g = _first; g != null && ok; g = g.Next)
@@ -356,31 +352,29 @@ public unsafe class GtWindow
             *(uint*)(ng + Layout.NgFlags) = g.KindId == 0 ? 0u : Layout.PlaceTextLeft;
             *(void**)(ng + Layout.NgVisualInfo) = _visualInfo;
             uint kind = Layout.KindButton;
-            fixed (nuint* t = tags)
+            TagList w = new TagList();
+            if (g.KindId == 1)
             {
-                TagWriter w = new TagWriter(t, 12);
-                if (g.KindId == 1)
+                kind = Layout.KindString;
+                if (g.TextCopy != null) w.Add(Layout.GtstString, g.TextCopy);
+                w.Add(Layout.GtstMaxChars, ((GtString)g).MaxChars);
+            }
+            else if (g.KindId == 2)
+            {
+                kind = Layout.KindText;
+                if (g.TextCopy != null)
                 {
-                    kind = Layout.KindString;
-                    if (g.TextCopy != null) w.Add(Layout.GtstString, g.TextCopy);
-                    w.Add(Layout.GtstMaxChars, ((GtString)g).MaxChars);
+                    w.Add(Layout.GttxText, g.TextCopy);
+                    w.Add(Layout.GttxCopyText, true);
                 }
-                else if (g.KindId == 2)
-                {
-                    kind = Layout.KindText;
-                    if (g.TextCopy != null)
-                    {
-                        w.Add(Layout.GttxText, g.TextCopy);
-                        w.Add(Layout.GttxCopyText, true);
-                    }
-                    w.Add(Layout.GttxBorder, true);
-                }
-                ok = w.End();
-                if (ok)
-                {
-                    previous = GadTools.CreateGadgetA(kind, previous, ng, t);
-                    ok = previous != null;
-                }
+                w.Add(Layout.GttxBorder, true);
+            }
+            nuint* t = w.End();
+            ok = t != null;
+            if (ok)
+            {
+                previous = GadTools.CreateGadgetA(kind, previous, ng, t);
+                ok = previous != null;
             }
             g.Handle = previous;
             top += rowHeight + gap;
@@ -390,24 +384,21 @@ public unsafe class GtWindow
         if (ok)
         {
             _titleCopy = GuiText.Dup(Title);
-            nuint[] wt = new nuint[32];
-            fixed (nuint* t = wt)
-            {
-                TagWriter w = new TagWriter(t, 32);
-                w.Add(Intuition.WA_Left, 40);
-                w.Add(Intuition.WA_Top, 30);
-                w.Add(Layout.WaInnerWidth, Width);
-                w.Add(Layout.WaInnerHeight, innerHeight);
-                if (_titleCopy != null) w.Add(Layout.WaTitle, _titleCopy);
-                w.Add(Layout.WaGadgets, _gadgetList);
-                w.Add(Layout.WaPubScreen, _screen);
-                w.Add(Intuition.WA_IDCMP, Layout.IdcmpGadgetUp | Layout.IdcmpCloseWindow | Layout.IdcmpRefreshWindow);
-                w.Add(Layout.WaDragBar, true);
-                w.Add(Layout.WaDepthGadget, true);
-                w.Add(Layout.WaCloseGadget, true);
-                w.Add(Intuition.WA_Activate, true);
-                if (w.End()) _window = Intuition.OpenWindowTagList(null, t);
-            }
+            TagList w = new TagList();
+            w.Add(Intuition.WA_Left, 40);
+            w.Add(Intuition.WA_Top, 30);
+            w.Add(Layout.WaInnerWidth, Width);
+            w.Add(Layout.WaInnerHeight, innerHeight);
+            if (_titleCopy != null) w.Add(Layout.WaTitle, _titleCopy);
+            w.Add(Layout.WaGadgets, _gadgetList);
+            w.Add(Layout.WaPubScreen, _screen);
+            w.Add(Intuition.WA_IDCMP, Layout.IdcmpGadgetUp | Layout.IdcmpCloseWindow | Layout.IdcmpRefreshWindow);
+            w.Add(Layout.WaDragBar, true);
+            w.Add(Layout.WaDepthGadget, true);
+            w.Add(Layout.WaCloseGadget, true);
+            w.Add(Intuition.WA_Activate, true);
+            nuint* t = w.End();
+            if (t != null) _window = Intuition.OpenWindowTagList(null, t);
         }
         if (_window == null) { FreeOwnedStrings(); Teardown(); return false; }
         GadTools.GT_RefreshWindow(_window, null);

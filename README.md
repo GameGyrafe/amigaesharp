@@ -89,7 +89,7 @@ The Amiga-only APIs (GadTools `Gui`, `Asl`, `Iff`, `Fonts`, `Joystick`) do not e
 that builds the same source under .NET against the E# runtime and loads the subset analyzer, and a `.vscode/` folder
 with `tasks.json` (build for m68k, run in FS-UAE, run on the host, check the subset), `launch.json` (debug the host run
 with the coreclr debugger, so logic can be stepped through; the Amiga build cannot be debugged yet) and
-`extensions.json`. The ES0001-ES0010 subset errors show as you type and in `dotnet build`. The csproj and the tasks
+`extensions.json`. The ES0001-ES0010 subset errors show as you type and in `dotnet build`. ES0101 (a library call newer than the target's libraries; opt in with `[RequiresLib("lib", version)]`) is reported only by `esharp build`/`run`/`test` for the m68k and aros targets, not in the IDE or the host build. The csproj and the tasks
 point at the E# checkout the CLI was built from (found from the CLI's location, or `ESHARP_ROOT`); edit `ESharpRoot`
 in the csproj if you move it.
 

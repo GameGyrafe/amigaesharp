@@ -1351,6 +1351,34 @@ fixed (nuint* q = b)
     }
 
     [Fact]
+    public void Tag_list_has_its_own_storage_ends_with_tag_done_and_refuses_overflow()
+    {
+        if (!HasGcc) return;
+        const string members = @"
+static unsafe int Dump(nuint* p, int slots) { int sum = 0; for (int i = 0; i < slots; i++) { Dos.PutStr("" ""); Dos.PutInt((int)(uint)p[i]); } Dos.PutStr(""\n""); return sum; }
+";
+        const string body = @"
+TagList t = new TagList();
+t.Add(0x80000023u, 320); t.Add(0x80000038u, true); t.Add(5u, -1);
+nuint* p = t.End();
+Dos.PutStr(p != null ? ""ok "" : ""no ""); Dos.PutInt(t.Count);
+Dump(p, 7);
+TagList u = new TagList();
+for (int i = 0; i < TagList.MaxPairs; i++) u.Add(1u, i);
+nuint* q = u.End();
+Dos.PutStr(q != null ? ""full ok "" : ""full no ""); Dos.PutInt(u.Count); Dos.PutStr("" ""); Dos.PutInt((int)(uint)q[2 * TagList.MaxPairs]); Dos.PutStr(""\n"");
+u.Add(1u, 99);
+Dos.PutStr(u.End() == null ? ""over null\n"" : ""over ok\n"");
+TagList v = new TagList();
+v.Add(7u, 8);
+Dos.PutInt((int)(uint)v.End()[0]); Dos.PutStr("" ""); Dos.PutInt((int)(uint)v.End()[1]); Dos.PutStr("" ""); Dos.PutInt((int)(uint)v.End()[2]); Dos.PutStr(""\n"");";
+        var src = Program(members, body).Replace("public static void Main()", "public static unsafe void Main()");
+        var (code, output) = RunWithHostGcc(CompileOk(src, Targets.M68k.ToOptions()));
+        Assert.Equal(0, code);
+        Assert.Equal("ok 3 -2147483613 320 -2147483592 1 5 -1 0\nfull ok 15 0\nover null\n7 8 0\n", output);
+    }
+
+    [Fact]
     public void Debug_define_poisons_arena_on_reset()
     {
         if (!HasGcc) return;

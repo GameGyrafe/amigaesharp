@@ -260,29 +260,43 @@ public sealed class SubsetAnalyzer : DiagnosticAnalyzer
             c.ReportDiagnostic(Diagnostic.Create(Descriptors.Generics, c.Node.GetLocation(), method.Name));
     }
 
-    /// <summary>
-    /// Library version of the target's system libraries, from the conditional symbols the source is parsed with:
-    /// classic AmigaOS 3.x is Kickstart 3.1 (v40); AROS is checked against the highest version in its 9.1
-    /// headers (51). Other targets are not checked (the version is not known or not verified).
-    /// </summary>
-    private static int? TargetLibraryVersion(SyntaxTree tree)
-    {
-        var symbols = tree.Options.PreprocessorSymbolNames;
-        if (symbols.Contains("AROS")) return 51;
-        if (symbols.Contains("M68K") && symbols.Contains("AMIGAOS3")) return 40;
-        return null;
-    }
-
     private static void CheckSince(SyntaxNodeAnalysisContext c, IMethodSymbol method)
     {
-        foreach (var a in method.OriginalDefinition.GetAttributes())
+        var def = method.OriginalDefinition;
+        var have = LibraryVersions.For(c.Node.SyntaxTree.Options.PreprocessorSymbolNames);
+        if (have == null) return;
+        string? library = null;
+        int? since = null;
+        foreach (var a in def.GetAttributes())
         {
-            if (a.AttributeClass is not { Name: "SinceAttribute", ContainingNamespace: { Name: "ESharp" } } ||
-                a.ConstructorArguments.Length != 1 || a.ConstructorArguments[0].Value is not int since)
-                continue;
-            if (TargetLibraryVersion(c.Node.SyntaxTree) is int have && since > have)
-                c.ReportDiagnostic(Diagnostic.Create(Descriptors.LibraryTooOld, c.Node.GetLocation(), method.Name, since, have));
+            if (a.AttributeClass is { Name: "SinceAttribute", ContainingNamespace: { Name: "ESharp" } } &&
+                a.ConstructorArguments.Length == 1 && a.ConstructorArguments[0].Value is int v)
+                since = v;
+            else if (a.AttributeClass is { Name: "AmigaLibAttribute", ContainingNamespace: { Name: "ESharp" } } &&
+                     a.ConstructorArguments.Length >= 1 && a.ConstructorArguments[0].Value is string l)
+                library = l;
         }
+        if (since is not int need || need <= have) return;
+        if (OptedIn(c, library, need)) return;
+        c.ReportDiagnostic(Diagnostic.Create(Descriptors.LibraryTooOld, c.Node.GetLocation(), method.Name, need, have));
+    }
+
+    /// <summary>True if the call sits in code marked [RequiresLib] (method, type or assembly) for this library at this version or higher.</summary>
+    private static bool OptedIn(SyntaxNodeAnalysisContext c, string? library, int need)
+    {
+        bool Matches(System.Collections.Immutable.ImmutableArray<AttributeData> attrs)
+        {
+            foreach (var a in attrs)
+                if (a.AttributeClass is { Name: "RequiresLibAttribute", ContainingNamespace: { Name: "ESharp" } } &&
+                    a.ConstructorArguments.Length == 2 && a.ConstructorArguments[0].Value is string name &&
+                    a.ConstructorArguments[1].Value is int version && version >= need &&
+                    (library == null || LibraryVersions.SameLibrary(name, library)))
+                    return true;
+            return false;
+        }
+        for (ISymbol? s = c.SemanticModel.GetEnclosingSymbol(c.Node.SpanStart, c.CancellationToken); s != null; s = s.ContainingSymbol)
+            if (Matches(s.GetAttributes())) return true;
+        return Matches(c.Compilation.Assembly.GetAttributes());
     }
 
     private static void CheckTypeSyntax(SyntaxNodeAnalysisContext c)
