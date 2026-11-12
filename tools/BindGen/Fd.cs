@@ -24,6 +24,16 @@ internal static class Fd
         return ParseText(File.ReadAllText(path, Encoding.Latin1));
     }
 
+    /// <summary>The library base name from the <c>##base _Name</c> line ("LowLevelBase"), or null.</summary>
+    public static string? BaseName(string text)
+    {
+        var m = Regex.Match(text, @"^\s*##base\s+_?(\w+)", RegexOptions.Multiline);
+        return m.Success ? m.Groups[1].Value : null;
+    }
+
+    public static string? BaseNameOf(string dir, string lib) =>
+        File.Exists(FilePath(dir, lib)) ? BaseName(File.ReadAllText(FilePath(dir, lib), Encoding.Latin1)) : null;
+
     public static List<Func> ParseText(string text)
     {
         var list = new List<Func>();

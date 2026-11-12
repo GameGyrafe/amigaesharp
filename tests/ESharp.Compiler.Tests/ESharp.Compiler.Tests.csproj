@@ -72,6 +72,11 @@
     <Compile Include="..\..\samples\trace\TraceDemo.cs" Link="Samples\TraceDemo.cs" />
     <Compile Include="..\..\tools\BindGen\Model.cs" Link="BindGen\Model.cs" />
     <Compile Include="..\..\tools\BindGen\Fd.cs" Link="BindGen\Fd.cs" />
+    <Compile Include="..\..\tools\BindGen\Protos.cs" Link="BindGen\Protos.cs" />
+    <Compile Include="..\..\tools\BindGen\BindTypes.cs" Link="BindGen\BindTypes.cs" />
+    <Compile Include="..\..\tools\BindGen\BindingWriter.cs" Link="BindGen\BindingWriter.cs" />
+    <Compile Include="..\..\tools\BindGen\PlatformCheck.cs" Link="BindGen\PlatformCheck.cs" />
+    <Compile Include="..\..\tools\BindGen\LayoutWriter.cs" Link="BindGen\LayoutWriter.cs" />
   </ItemGroup>
 
 

@@ -29,9 +29,9 @@ public static unsafe class Exec
     [AmigaLib("exec", -378)]
     public static extern void ReplyMsg(void* message);
 
-    /// <summary>exec.library AvailMem(), LVO -216.</summary>
+    /// <summary>exec.library AvailMem(), LVO -216. Pointer-sized: 64-bit on AROS x86-64 (IPTR there, ULONG in the NDK).</summary>
     [AmigaLib("exec", -216)]
-    public static extern uint AvailMem(uint requirements);
+    public static extern nuint AvailMem(uint requirements);
 
     /// <summary>exec.library OpenLibrary(), LVO -552: the library base, or null if it is missing or older than <paramref name="version"/>.</summary>
     [AmigaLib("exec", -552)]
@@ -71,7 +71,7 @@ public static unsafe class Exec
 
     /// <summary>exec.library AbortIO(), LVO -480.</summary>
     [AmigaLib("exec", -480)]
-    public static extern int AbortIO(void* ioRequest);
+    public static extern void AbortIO(void* ioRequest);
 
     /// <summary>exec.library AddIntServer(), LVO -168: adds an interrupt server (a struct Interrupt in public memory) to a chain such as INTB_VERTB.</summary>
     [AmigaLib("exec", -168)]
