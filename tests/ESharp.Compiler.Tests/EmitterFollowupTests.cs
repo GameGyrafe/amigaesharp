@@ -58,6 +58,26 @@ Dos.PutStr(ok == 6 ? ""equals ok\n"" : ""wrong\n"");";
     }
 
     [Fact]
+    public void Unqualified_Equals_in_an_instance_method_and_object_Equals_on_strings()
+    {
+        const string members = @"
+class T { public bool Same(T o) { return Equals(o); } public bool Self() { return Equals(this); } }";
+        const string body = @"
+var t = new T(); var u = new T();
+string s1 = ""ab""; string h = ""a""; string s2 = h + ""b""; string n = null;
+int ok = 0;
+if (t.Same(t) && !t.Same(u) && t.Self()) ok++;
+if (object.Equals(s1, s2)) ok++;
+if (!object.Equals(s1, ""x"") && object.Equals(n, n)) ok++;
+Dos.PutStr(ok == 3 ? ""eq ok\n"" : ""wrong\n"");";
+        var c = CompileOk(Program(members, body));
+        if (!HasGcc) return;
+        var (code, output) = RunWithHostGcc(c);
+        Assert.Equal(0, code);
+        Assert.Equal("eq ok\n", output);
+    }
+
+    [Fact]
     public void Equals_that_cannot_be_mapped_is_ES0099_not_undeclared_C()
     {
         var structEquals = Compile(Program("struct S { public int N; }", "var s = new S(); var t = new S(); bool b = s.Equals(t);"));

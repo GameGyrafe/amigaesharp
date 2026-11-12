@@ -1988,13 +1988,7 @@ internal sealed partial class CEmitter
             case BaseExpressionSyntax when _thisIsClass && _this == ThisKind.Pointer:
                 return $"(({TypeName(BaseClass(_thisType!)!)} *){ThisName})";
             case ThisExpressionSyntax:
-                if (_thisIsClass && _this == ThisKind.Pointer) return ThisName;   // a class 'this' is the pointer itself
-                return _this switch
-                {
-                    ThisKind.Pointer => $"(*{ThisName})",
-                    ThisKind.Value => ThisName,
-                    _ => Unsupported(e, "'this' outside a struct method"),
-                };
+                return ThisValue(e);
 
             case InvocationExpressionSyntax inv:
             {

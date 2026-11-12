@@ -848,7 +848,7 @@ internal static class LanguageExpected
         "interpolated string", "concatenation and escaped braces",
         "lambdas with two parameters", "method group and delegate variable",
         "string == compares characters", "string null rules", "switch on a string", "string patterns",
-        "null-forgiving operator", "base and derived references", "?? and ??=",
+        "null-forgiving operator", "base and derived references", "?? and ??=", "Equals is reference equality", "unqualified Equals in a method", "object.Equals on strings compares characters", "constant string compare in a static initializer",
     };
 }
 

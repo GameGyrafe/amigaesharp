@@ -57,6 +57,18 @@ internal sealed partial class CEmitter
         }
     }
 
+    /// <summary>The C for 'this' at <paramref name="at"/>: the pointer itself for a class, (*_this) or _this for a struct.</summary>
+    private string ThisValue(SyntaxNode at)
+    {
+        if (_thisIsClass && _this == ThisKind.Pointer) return ThisName;   // a class 'this' is the pointer itself
+        return _this switch
+        {
+            ThisKind.Pointer => $"(*{ThisName})",
+            ThisKind.Value => ThisName,
+            _ => Unsupported(at, "'this' outside a struct method"),
+        };
+    }
+
     /// <summary>True when some class of the program declares its own Equals(object): then a call of Equals on a class reference may run user code.</summary>
     private bool AnyUserEqualsOverride() =>
         _compilation.SyntaxTrees.Where(_user.Contains).Any(tree => tree.GetRoot().DescendantNodes().OfType<MethodDeclarationSyntax>()
@@ -75,16 +87,24 @@ internal sealed partial class CEmitter
         else if (!m.IsStatic && args.Count == 1) { a = null; b = args[0].Expression; }   // Equals(x) inside an instance method: this
         else return Unsupported(inv, $"this form of {m.Name}");
 
-        bool IsRef(ExpressionSyntax x) => IsNullConstant(x) || Model(x).GetTypeInfo(x).Type is INamedTypeSymbol t && IsHeapClass(t);
+        bool IsRef(ExpressionSyntax x) => IsNullConstant(x) || Model(x).GetTypeInfo(x).Type is INamedTypeSymbol t && IsHeapClass(t) && t.SpecialType != SpecialType.System_String;
+        bool IsStr(ExpressionSyntax x) => Model(x).GetTypeInfo(x).Type?.SpecialType == SpecialType.System_String;
         if (a != null && Model(a).GetTypeInfo(a).Type is { IsValueType: true })
             return Unsupported(inv, "Equals on a struct or enum (ValueType.Equals compares the fields by reflection); compare the fields or write ==");
         if (m.ContainingType.SpecialType != SpecialType.System_Object)
             return Unsupported(inv, $"a call of a user-defined {m.Name}(object); E# has no object type: write an Equals that takes your own class, or compare with ==");
         if (m.Name == "Equals" && AnyUserEqualsOverride())
             return Unsupported(inv, "object.Equals in a program where a class declares Equals(object) (E# has no object type to pass it); compare with ==");
+        if (a != null && (IsStr(a) || IsStr(b)))
+        {
+            // strings compare by the characters (virtual string.Equals), never by address
+            if (m.IsStatic && IsStr(a) && IsStr(b) && !IsNullConstant(a) && !IsNullConstant(b))
+                return StrEq(Expr(a, top: true), Expr(b, top: true));
+            return Unsupported(inv, $"{m.Name} with a string and another type; use string.Equals(a, b) or ==");
+        }
         if ((a != null && !IsRef(a)) || !IsRef(b))
             return Unsupported(inv, $"{m.Name} with a value that is not a class reference (boxing)");
-        var left = a == null ? "this" : Expr(a, top: true);
+        var left = a == null ? ThisValue(inv) : Expr(a, top: true);
         return $"((const void *)({left}) == (const void *)({Expr(b, top: true)}))";
     }
 }
