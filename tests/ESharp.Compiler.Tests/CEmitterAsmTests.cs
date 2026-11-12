@@ -101,6 +101,40 @@ public static unsafe class P
 }}";
 
     [Fact]
+    public void Volatile_pointer_field_qualifies_the_pointer_not_the_pointee()
+    {
+        var c = CompileOk(Prelude + @"
+public static unsafe class P
+{
+    static volatile int* Ptr;
+    static volatile int Plain;
+    [EntryPoint] public static void Main() { Plain = 1; int x = 0; Ptr = &x; while (Ptr == null) { } }
+}", M68k);
+        Assert.Contains("int32_t *volatile Es_P_Ptr;", c);
+        Assert.DoesNotContain("volatile int32_t *Es_P_Ptr", c);
+        Assert.Contains("static volatile int32_t Es_P_Plain;", c);
+    }
+
+    [Fact]
+    public void Fatal_runtime_errors_run_AtExit_methods_before_exit()
+    {
+        if (!HasGcc) return;
+        var (code, output) = RunWithHostGcc(CompileOk(Prelude + @"
+public static class Res
+{
+    [AtExit] static void Bye() { Dos.PutStr(""bye\n""); }
+    public static void Use() { Dos.PutStr(""use\n""); }
+}
+public static class P
+{
+    [EntryPoint] public static void Main() { Res.Use(); int[] a = new int[2]; int i = 5; a[i] = 1; Dos.PutStr(a[0] == 0 ? ""not reached\n"" : ""x""); }
+}", new CompileOptions { BoundsChecks = true }));
+        Assert.Equal(20, code);
+        Assert.StartsWith("use\nbye\n", output);
+        Assert.DoesNotContain("not reached", output);
+    }
+
+    [Fact]
     public void Interrupt_on_m68k_gets_an_exec_server_entry()
     {
         var c = CompileOk(InterruptProgram(), M68k);

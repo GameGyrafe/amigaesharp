@@ -215,7 +215,7 @@ blank interrupt to test with). C# `volatile` on a static field is now `volatile`
 
 **`Interrupts` (platform).** `Interrupts.AddVBlank(&M, data)` puts up to 4 servers on exec's INTB_VERTB chain (AddIntServer, nodes of
 `struct Interrupt` in one MEMF_PUBLIC|MEMF_CLEAR block, NT_INTERRUPT, priority 0, name "E# VBlank"); `RemoveVBlank(id)` takes one off;
-an `[AtExit]` method takes the rest off and frees the block after Main returns (not on exit() or a crash: then the server stays on the
+an `[AtExit]` method takes the rest off and frees the block after Main returns (also after an index-out-of-range or out-of-memory exit, which runs the [AtExit] methods first; not after a crash: then the server stays on the
 chain pointing at freed code). On the dotnet host each `Frame.WaitVBlank` runs the servers once. Amiga-only on sdl (`ES0102`). The
 offsets come from `tools/BindGen/structs.txt` (re-measured with `layouts.sh`: m68k node 22 bytes, AROS 48).
 

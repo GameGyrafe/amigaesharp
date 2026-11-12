@@ -6,7 +6,7 @@ namespace ESharp.Platform;
 /// Vertical blank interrupt servers: an <see cref="InterruptAttribute">[Interrupt]</see> method that exec calls once per
 /// frame, for example to count frames or step music while the main program draws. <see cref="AddVBlank"/> puts the server
 /// on exec's INTB_VERTB chain (AddIntServer) with its node in public memory; <see cref="RemoveVBlank"/> takes it off, and
-/// whatever is still on when the program's Main returns is taken off then ([AtExit]). A program that ends another way
+/// whatever is still on when the program's Main returns is taken off then ([AtExit]). The runtime's own fatal errors (bounds, out of memory) run the [AtExit] methods before exit(20); a program that ends another way
 /// (exit, a crash) leaves its server on the chain, pointing at freed code, so return from Main. The server runs in
 /// interrupt context: keep it short, allocate nothing, call no library that may wait, and mark the fields it shares with
 /// the main program <c>volatile</c>. On m68k and AROS; on PowerPC [Interrupt] is not supported yet (ES0099), and on the
