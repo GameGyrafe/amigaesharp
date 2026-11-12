@@ -36,6 +36,7 @@ dotnet run --project src/ESharp.Cli -- addr samples/trace 0 e4 --docker <image> 
 dotnet run --project src/ESharp.Cli -- run samples/lambdas --docker <image> --headless --model A1200   # capturing lambdas and delegates
 dotnet run --project src/ESharp.Cli -- run samples/linq --docker <image> --headless --model A1200   # LINQ over arrays, turned into loops
 dotnet run --project src/ESharp.Cli -- run samples/refs --docker <image> --headless --model A1200   # ref locals and returns, foreach over Vec and struct enumerators
+dotnet run --project src/ESharp.Cli -- test samples/patterns --target m68k --docker <image> --model A1200 --kickstart <rom>   # positional, property and list patterns, pattern switch statements
 dotnet run --project src/ESharp.Cli -- run samples/gui --target os4 --docker esharp-amiga-toolchain --input "click 208,101;click 57,45"   # os4 (QEMU VM, ESHARP_OS4_VM): --input through the QEMU monitor; key N is an Amiga raw code there (docs/STATUS.md)
 dotnet run --project src/ESharp.Cli -- test samples/controls                                # run on the host (ok/FAIL lines, non-zero exit on FAIL); add --target m68k --docker <image> [--kickstart <rom>] [--model A1200] to also run in FS-UAE and compare
 dotnet run --project tools/CardArt -- samples/cards/cards.png                               # redraw the card sprite sheet
