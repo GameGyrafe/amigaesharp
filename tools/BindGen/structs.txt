@@ -3,6 +3,8 @@
 # Measured with the target's own C compiler: tools/BindGen offsets (see docs/BINDINGS_SPIKE.md).
 include exec/io.h
 include exec/execbase.h
+include exec/interrupts.h
+include hardware/intbits.h
 include intuition/intuition.h
 include intuition/screens.h
 include graphics/gfx.h
@@ -203,3 +205,13 @@ WaCloseGadget = value WA_CloseGadget
 IdcmpGadgetUp = value IDCMP_GADGETUP
 IdcmpCloseWindow = value IDCMP_CLOSEWINDOW
 IdcmpRefreshWindow = value IDCMP_REFRESHWINDOW
+
+# exec interrupt servers (src/ESharp.Platform/Interrupts.cs)
+InterruptSize = sizeof Interrupt
+IntType = Interrupt.is_Node.ln_Type
+IntPri = Interrupt.is_Node.ln_Pri
+IntName = Interrupt.is_Node.ln_Name
+IntData = Interrupt.is_Data
+IntCode = Interrupt.is_Code
+NtInterrupt = value NT_INTERRUPT
+IntbVertb = value INTB_VERTB

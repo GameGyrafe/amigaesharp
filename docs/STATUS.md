@@ -180,6 +180,28 @@ Not verified:
 - A different locale (`locale.library` with a non-English language).
 - Real hardware, AmigaOS 4 and MorphOS.
 
+## Positional and list patterns (samples/patterns, issue #12)
+
+**Positional patterns.** `(p1, p2)` on a value tuple tests `Item1`, `Item2`, ...; on a struct or class it calls the type's instance `void Deconstruct(out ..)` once, into temporaries (a struct is copied first, as its methods take the receiver by address), then tests each part. They nest with constant, type, relational, `and`/`or`/`not`, `var`, discard, property and list subpatterns, take a type (`Rook(0, var r)` after a class test) and a designation, and `var (a, b)` deconstructs the same way. `switch (x, y) { case (0, _): ... }` makes the tuple once.
+
+**Property patterns** now read properties with a getter as well as fields and auto-properties (the getter runs once per test, into a temporary), the extended form `{ A.B: p }` (A tested for null on the way, as C# does), `Length` of arrays, spans and strings. A reference-typed subject never matches `{ }`, `T { ... }`, `T x` or `T` when it is null (before this change `obj is { }` and `obj is T t` with `obj` already a `T` were always true in the C).
+
+**List patterns** over arrays, `Span`/`ReadOnlySpan`, strings and any type with `Length` or `Count` and an `int` indexer that returns a value (so `Vec<T>`): `[a, b]`, `[first, ..]`, `[.., last]`, `[_, .. var middle, _]`. The length is read once; elements before the slice are indexed from the start, those after it from the end (no bounds check needed: the length test comes first). A slice with a subpattern is a view `{ ptr + before, length - before - after }` on spans only; over an array or a string it would copy, and is `ES0099` (`.. _` and a bare `..` work on all of them).
+
+**`switch` statements with pattern labels** (any `case` with a pattern or `when`, or a type name): the subject goes into a temporary once (an array is used in place), the labels are tried in source order (the default last), and a C `switch` on the number of the label that matched keeps `break` and the sections as they were. Pattern variables of all sections (and of switch expression arms, including their `when` clauses) are declared once per name before the test; the same name with two different types in one switch is `ES0099` (rename one).
+
+**Subjects evaluated once:** an `is` subject is used in place only when it is a local, a parameter, a field or an array/span element; a call, a getter or an indexer goes into a temporary first.
+
+Still `ES0099`: an extension `Deconstruct`, a positional pattern on `ITuple` or an interface, a `Deconstruct` with ref/in parameters, `var (a, b)` on a type with two `Deconstruct` overloads of the same arity, type tests against interfaces and structs, list patterns on interfaces or on types whose indexer takes `Index` or returns by ref, a slice with a subpattern over anything but a span, an extended property pattern through a property with a getter in the middle (`{ Getter.X: 1 }`; write `{ Getter: { X: 1 } }`), and records (all of them).
+
+Verified:
+- 312 unit tests (311 pass, 1 skipped: the OS4 VM test, no VM configured in the test run). New in `CEmitterPatternTests`: host-gcc compile-and-run tests for positional patterns (tuples, struct and class `Deconstruct`, nested, `var (a, b)`, subject evaluated once; 10 checks), property patterns (getters read once, extended names, null; 8 checks), list patterns (arrays, spans with a slice, strings, `Vec`; 8 checks), switch statements with pattern labels (5 checks), `samples/patterns` as host-gcc C (23 ok), and `ES0099` for slice captures over an array and a string.
+- `esharp test samples/patterns`: host (dotnet) 23 ok; m68k on A1200 / Kickstart 3.1 (40.069) in FS-UAE 23 ok, 0 FAIL, host and Amiga agree; `--target sdl --docker esharp-sdl` 23 ok, host and SDL agree.
+- Hosted AROS x86-64 (nightly 20261106), `--target aros` build: `samples/patterns` prints 23 ok, no FAIL, no traps.
+- Regression on the A1200 / 3.1 after the change: `samples/language` 35 ok, `samples/inherit` 24 ok, host and Amiga agree.
+
+Not verified: real hardware, AmigaOS 4 (the change is not PPC-specific; not run in the VM) and MorphOS.
+
 ## Ref locals, ref returns and foreach over enumerators (samples/refs, issue #12)
 
 **ref locals and ref returns.** `ref T x = ref place;` is a C pointer `T *x = &place;` and every use of `x` reads or writes through it; `x = ref other;` points it somewhere else. The place can be a local, a field, a static, an array or span element, a `ref`/`out`/`in` parameter, another ref local, a ref-returning call or `c ? ref a : ref b`. A method declared `ref T F(...)` or `ref readonly T F(...)` returns `T *`; a call used as a value is `(*F(...))`, so `F(a, i) = 5`, `F(a, i) += 1`, `F().X = 3`, `F().Method()` and `G(ref F())` work. `foreach (ref var x in span)` and `foreach (ref readonly var x in readOnlySpan)` give a pointer to each element. `ref readonly` is C#'s check only; in C it is the same plain pointer. Still `ES0099`: ref returns from properties, indexers, lambdas, delegates, interface methods and virtual, abstract or override methods; ref locals of an array type or declared in a `for` header; ref fields (tested: they give `ES0099`, as do ref-field uses and `h.R = ref x`). `c ? ref a : ref b` also works as a value, an assignment target and an `in` argument (host-gcc tested; `ref (c ? ref a : ref b)` as a ref argument is still `ES0099`).
@@ -193,6 +215,48 @@ Verified:
 - Regression on the A1200 / 3.1 after the change: collections 20, linq 37, inherit 24 ok, no FAIL. The hardware pack builds with `refs` (22 programs).
 
 Not verified: real hardware, AmigaOS 4 and MorphOS.
+## Inline assembly and interrupt servers (samples/interrupts, issue #12)
+
+**`[InlineAsm]`.** A static method with a C# body and `[InlineAsm("68020 code", Ppc = "PowerPC code")]` becomes one GCC extended asm
+statement on a target with code for its CPU (m68k: the constructor argument; os4/morphos: `Ppc`), under `#if defined(__mc68000__)` /
+`#if defined(__PPC__)` with the C# body in the `#else` branch. Everywhere else (host, sdl, AROS x86-64, PowerPC without `Ppc`) the C#
+body is the method, so it is required (an `extern` one is `ES0099`). Operands, kept minimal: the result is `%[result]` (`%0`), an
+early-clobber output register; each parameter is `%[name]` (`%1`, ...), an input register the code must not change. Integers up to 32
+bits, chars and enums go in data registers (`d` / `r`), pointers in address registers (`a` / `b`). `cc` and `memory` are always
+clobbered, the statement is `volatile`; extra registers are named in `Clobbers` (m68k) or `PpcClobbers`. `ES0099` for: instance or
+generic methods, ref parameters, 64-bit, float, bool, struct or class operands, a parameter named `result`, `[InlineAsm]` together with
+`[Interrupt]`.
+
+**`[Interrupt]`.** A static method `void M(void* data)` (or no parameter, or an `int`/`uint` result) is emitted as usual plus
+`M_isr(void *data)`, a C function returning an int32 (0 for a void method). `&M` (a C# function pointer, only allowed for `[Interrupt]`
+methods; any other `&Method` is `ES0099`) is the server address: on m68k a small assembly entry at the end of the file that pushes
+is_Data from a1, calls `M_isr` and does `tst.l d0` so the Z flag matches d0 (a void server returns 0 and the chain goes on); the C
+function keeps d2-d7/a2-a6 as exec wants. On AROS the address is `M_isr` itself (AROS calls servers as C functions with is_Data first).
+PowerPC (AmigaOS 4, MorphOS) and sdl give `ES0099` with a message (OS4 servers take other arguments and the QEMU sm501 has no vertical
+blank interrupt to test with). C# `volatile` on a static field is now `volatile` in C.
+
+**`Interrupts` (platform).** `Interrupts.AddVBlank(&M, data)` puts up to 4 servers on exec's INTB_VERTB chain (AddIntServer, nodes of
+`struct Interrupt` in one MEMF_PUBLIC|MEMF_CLEAR block, NT_INTERRUPT, priority 0, name "E# VBlank"); `RemoveVBlank(id)` takes one off;
+an `[AtExit]` method takes the rest off and frees the block after Main returns (also after an index-out-of-range or out-of-memory exit, which runs the [AtExit] methods first; not after a crash: then the server stays on the
+chain pointing at freed code). On the dotnet host each `Frame.WaitVBlank` runs the servers once. Amiga-only on sdl (`ES0102`). The
+offsets come from `tools/BindGen/structs.txt` (re-measured with `layouts.sh`: m68k node 22 bytes, AROS 48).
+
+Verified:
+- Unit tests: `CEmitterAsmTests` (19): the m68k and PowerPC asm text and constraints, the C# fallback compiled with host gcc and run
+  (the asm is under `#if defined(__mc68000__)`, so the host takes the `#else`), no asm on AROS, the `ES0099` cases, the m68k server entry
+  text, and the server functions called through their address with host gcc as AROS would (is_Data passed, 0 returned for void).
+- A1200, Kickstart 3.1 (40.069) in FS-UAE, `esharp test samples/interrupts --target m68k` (amigadev m68k image): host 14 ok, Amiga 14 ok,
+  "Host and Amiga agree on every check"; both servers counted 25 in 25 frames, a removed server stopped, the program exits cleanly with
+  the second server removed by `[AtExit]`. The disassembly shows the `swap` and the entry (`move.l a1,-(sp)`, `jsr`, `tst.l d0`, `rts`).
+- Hosted AROS x86-64 (nightly 20261106): the same 14 ok (25 and 25), no traps.
+- AmigaOS 4.1 in the QEMU VM (`run --target os4`): the 6 inline asm checks pass with the PowerPC code (`rotlwi`, `add`/`stw` seen in the
+  disassembly); the interrupt part is compiled out there (`#if !SDL && !PPC`).
+- sdl (`run --target sdl --headless`): the 6 checks pass with the C# bodies. MorphOS: builds, not run.
+
+Not verified: real hardware, MorphOS runs, `[Interrupt]` with other chains than INTB_VERTB (only `&M` and exec's AddIntServer are
+needed for them, but nothing was run), the server's stack use on a busy system, and the old-Kickstart rule that a VERTB server must
+leave a0 = $dff000 (not needed from Kickstart 3.1; not done).
+
 ## C names of E# types (samples/names, issues #39 and #12)
 
 Every E# class, struct, interface and enum, in user code and in the embedded Runtime/Platform sources, is named in C
@@ -460,7 +524,7 @@ Found by comparing what a real card game needs (heavy use of collections, tuples
 |---|---|
 | `ref`, `out`, `in` parameters (passed as C pointers); `out var x`, `out int x`, `out _`, `in` with a temporary | Done. Arguments must be variables, fields or array elements (not properties). Constructors with ref parameters are still `ES0099` |
 | Value tuples: return values, parameters, locals, `Item1`/named elements, `(a, b) = (b, a)`, `var (x, y) = f()`, discards | Done: each tuple type is a C struct (`ES_Tuple_int_int`). A tuple as a struct field, tuple equality and nested deconstruction are not supported |
-| Patterns: constant, relational, `and`/`or`/`not`, `var`, declaration, property patterns on fields, `when`; `is` and `switch` expressions | Done (GNU statement expressions in the C; gcc only, which is all we target). No match in a switch expression traps instead of throwing. Positional/list patterns, type tests and property patterns on real properties are `ES0099`. The `switch` *statement* takes constant labels only (on strings too, matched by characters since issue #49) |
+| Patterns: constant, relational, `and`/`or`/`not`, `var`, declaration, property (fields and properties, `A.B:`), positional, list, `when`; `is`, `switch` expressions and `switch` statements | Done (GNU statement expressions in the C; gcc only, which is all we target). No match in a switch expression traps instead of throwing. Positional and list patterns and pattern `case` labels since issue #12 (see "Positional and list patterns"). Type tests are class tests only (interface or struct targets are `ES0099`) |
 | Local functions (no capture) | Done: a local function that uses a local, parameter or `this` of the method around it is `ES0099` |
 | Static constructors, `: this(...)` constructor initializers (structs) | Done. **Static constructors run once at start-up in type order**, not lazily like in C#. Before this fix a static constructor was silently ignored |
 | `Vec<T>` (`ESharp.Platform`, named so as not to clash with `System.Collections.Generic.List<T>`): growable list of an unmanaged `T` | Done: `Add`, `Insert`, `RemoveAt`, `SwapRemoveAt`, `Clear`, indexer, `Count`, `Capacity`, `AsSpan`, `Destroy`; no exceptions (false / zero value). Counted in the chip budget by its initial capacity only |
@@ -695,7 +759,7 @@ with the AGENTS.md input: 15 ok, `guess higher: right`. Hosted AROS (nightly 202
 
 ## Known limits of the emitter
 
-Reported as `ES0099` rather than miscompiled: capturing lambdas that would outlive their method, delegates in struct fields, `is`/`as` against an interface or struct, ref returns from properties, indexers, delegates and virtual or interface members, `foreach` over anything but arrays, spans and struct/class GetEnumerator types (interface enumerators, `Dispose`, ref `Current`), positional/list patterns, records, `==` on tuples, `??` on nullable value types, `[InlineAsm]`/`[Interrupt]` bodies.
+Reported as `ES0099` rather than miscompiled: capturing lambdas that would outlive their method, delegates in struct fields, `is`/`as` against an interface or struct, ref returns from properties, indexers, delegates and virtual or interface members, `foreach` over anything but arrays, spans and struct/class GetEnumerator types (interface enumerators, `Dispose`, ref `Current`), the pattern forms listed under "Positional and list patterns" (extension `Deconstruct`, `ITuple`, a slice capture that would copy), records, `==` on tuples, `??` on nullable value types; `[InlineAsm]` and `[Interrupt]` (done, see their section) still give it for: operands that are not 32-bit-or-smaller integers or pointers, instance methods, `[Interrupt]` on PowerPC and sdl, and `&Method` of anything but an `[Interrupt]` method.
 
 Two types whose C names meet after joining with `_` (namespace `A_B` class `C` and namespace `A` class `B_C`) are reported
 (ES0099); rename one.
@@ -710,7 +774,7 @@ CPU and OS are separate axes. `AMIGA` is defined for every Amiga-family target; 
 | `os4` | `ppc-amigaos-gcc` 11.5.0 | AMIGA PPC AMIGAOS4 |
 | `morphos` | `ppc-morphos-gcc` 15.2.0 | AMIGA PPC MORPHOS |
 
-PowerPC notes: both PPC targets are big-endian, so asset formats need no change. `[ChipRam]` is a no-op on PPC (chip memory is allocated at run time there). `[InlineAsm]` will be 68k-only, so shared code needs an `#if M68K` fallback. `[AmigaLib]` offsets are 68k library vectors; the PPC targets call through the same `proto/*.h` names, so the emitter output is identical. Not yet covered: WarpOS/PowerUP (no prebuilt toolchain found) and AROS.
+PowerPC notes: both PPC targets are big-endian, so asset formats need no change. `[ChipRam]` is a no-op on PPC (chip memory is allocated at run time there). `[InlineAsm]` takes PowerPC code in `Ppc`; without it the PPC targets run the method's C# body. `[AmigaLib]` offsets are 68k library vectors; the PPC targets call through the same `proto/*.h` names, so the emitter output is identical. Not yet covered: WarpOS/PowerUP (no prebuilt toolchain found) and AROS.
 
 ## Asset dithering, ILBM and sound assets (samples/assets, issue #13)
 

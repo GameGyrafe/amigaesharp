@@ -24,7 +24,7 @@ Supported: static classes and methods, structs (with methods, constructors, prop
 Also supported, added after the first phases: monomorphised generics (structs, static methods, `Pool<T>`, `Vec<T>`, Dictionary/HashSet), heap classes (`new`, no garbage collector: `Heap.Free`), single inheritance with `virtual`/`abstract`/`override` and `is`/`as` against classes, interfaces (generic constraints and dynamic dispatch), delegates, lambdas (capturing ones live on the stack) and LINQ over arrays as fused loops.
 Slow/opt-in: long/ulong (software 64-bit), float/double (off by default, no FPU).
 Not supported: exceptions, async, reflection, dynamic, closures that outlive their method, `is`/`as` against interfaces, inheritance from generic or library classes, `ToArray`/`ToList`.
-Attributes: `[EntryPoint]`, `[AmigaLib("dos", offset)]`, `[ChipRam]`, `[Interrupt]`, `[InlineAsm("...")]` (the last two are not emitted yet and report ES0099).
+Attributes: `[EntryPoint]`, `[AmigaLib("dos", offset)]`, `[ChipRam]`, `[Interrupt]` (an exec interrupt server; `&M` is its address for `Interrupts.AddVBlank` or AddIntServer; m68k and AROS, ES0099 on PowerPC and sdl), `[InlineAsm("68020 code", Ppc = "...")]` (GCC inline asm with the parameters and result as named register operands; the C# body is the fallback on other targets). See docs/STATUS.md.
 Anything the emitter cannot do is reported as `ES0099`, never miscompiled.
 
 ## Platform layer

@@ -167,6 +167,14 @@ public static class Layout
     public const uint IdcmpGadgetUp = 64u;
     public const uint IdcmpCloseWindow = 512u;
     public const uint IdcmpRefreshWindow = 4u;
+    public const int InterruptSize = 48;
+    public const int IntType = 16;
+    public const int IntPri = 17;
+    public const int IntName = 24;
+    public const int IntData = 32;
+    public const int IntCode = 40;
+    public const uint NtInterrupt = 2u;
+    public const uint IntbVertb = 5u;
 #else
     public const int WindowRPort = 50;
     public const int WindowUserPort = 86;
@@ -328,6 +336,14 @@ public static class Layout
     public const uint IdcmpGadgetUp = 64u;
     public const uint IdcmpCloseWindow = 512u;
     public const uint IdcmpRefreshWindow = 4u;
+    public const int InterruptSize = 22;
+    public const int IntType = 8;
+    public const int IntPri = 9;
+    public const int IntName = 10;
+    public const int IntData = 14;
+    public const int IntCode = 18;
+    public const uint NtInterrupt = 2u;
+    public const uint IntbVertb = 5u;
 #endif
 }
 #endif

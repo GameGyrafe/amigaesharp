@@ -265,6 +265,8 @@ internal sealed partial class CEmitter
             if (m.MethodKind == MethodKind.Constructor && IsHeapClass(m.ContainingType)) Line(InitPrototype(m) + ";");
         }
         if (methods.Count > 0) Line("");
+        CheckBodilessAsm(reachable);
+        EmitInterruptDeclarations(methods);
         foreach (var c in heapClasses.Where(IsPoly)) EmitVtInstance(c, reachable);
         foreach (var c in heapClasses)
             foreach (var i in interfaces.Where(i => c.AllInterfaces.Contains(i, SymbolEqualityComparer.Default)))
@@ -273,6 +275,7 @@ internal sealed partial class CEmitter
         foreach (var m in methods) EmitMethod(m);
 
         EmitMain();
+        EmitInterruptEntries();
 
         body.Append(typeText);
         foreach (var span in _spans.Values) body.Append(span);
@@ -320,12 +323,13 @@ internal sealed partial class CEmitter
         {
             result.AppendLine("#include <stdio.h>");
             result.AppendLine("#include <stdlib.h>");
+            AppendFatalHelper(result);
             result.AppendLine("static inline int32_t es_idx(int32_t i, int32_t n, const char *file, int line)");
             result.AppendLine("{");
             result.AppendLine("    if ((uint32_t)i >= (uint32_t)n)");
             result.AppendLine("    {");
             result.AppendLine("        fprintf(stderr, \"%s(%d): index %ld out of range 0..%ld\\n\", file, line, (long)i, (long)n - 1);");
-            result.AppendLine("        exit(20);");
+            result.AppendLine("        es_fatal();");
             result.AppendLine("    }");
             result.AppendLine("    return i;");
             result.AppendLine("}");
@@ -413,10 +417,11 @@ internal sealed partial class CEmitter
         {
             result.AppendLine("#include <stdio.h>");
             result.AppendLine("#include <stdlib.h>");
+            if (!_usesBounds) AppendFatalHelper(result);
             result.AppendLine("static void *es_new(size_t n)");
             result.AppendLine("{");
             result.AppendLine("    void *p = calloc(1, n);");
-            result.AppendLine("    if (p == NULL) { fputs(\"out of memory\\n\", stderr); exit(20); }");
+            result.AppendLine("    if (p == NULL) { fputs(\"out of memory\\n\", stderr); es_fatal(); }");
             result.AppendLine("    return p;");
             result.AppendLine("}");
             result.AppendLine("#define ES_NEW(T) ((T *)es_new(sizeof(T)))");
@@ -659,6 +664,13 @@ internal sealed partial class CEmitter
                     Add(fi.MoveNextMethod);
                     if (fi.CurrentProperty is { } current) { Add(current.GetMethod); _usedSymbols.Add(current); }
                 }
+                if (n is PatternSyntax pat)
+                    foreach (var pm in PatternMembers(model, pat))   // Deconstruct, Length/Count and indexers that patterns call
+                        switch (pm)
+                        {
+                            case IMethodSymbol dm: Add(dm); break;
+                            case IPropertySymbol pp: Add(pp.GetMethod); _usedSymbols.Add(pp); break;
+                        }
                 if (n is not ExpressionSyntax e) continue;
                 var info = model.GetSymbolInfo(e);
                 switch (info.Symbol)
@@ -806,6 +818,8 @@ internal sealed partial class CEmitter
 
         switch (t)
         {
+            case IFunctionPointerTypeSymbol:
+                return "void *";   // only ever the address of an [Interrupt] server, handed to exec
             case IPointerTypeSymbol p:
                 var inner = CType(p.PointedAtType, at);
                 return inner.EndsWith("*") ? inner + "*" : inner + " *";
@@ -1186,9 +1200,17 @@ internal sealed partial class CEmitter
             : Decl(f.Type, FieldName(f), decl);
         // Chip RAM is a 68k-only concept in the C dialect: PowerPC systems allocate chip memory
         // at run time instead, so the attribute is a no-op there.
+        if (f.IsVolatile) text = f.Type is IArrayTypeSymbol ? "volatile " + text : VolatileDecl(f, decl);   // shared with an interrupt server
         if (HasAttribute(f, "ChipRamAttribute") && IsDefined("M68K"))
             text = "__chip " + text;
         Line(f.Type is IArrayTypeSymbol || init == null ? $"static {text};" : $"static {text} = {Expr(init, top: true)};");
+    }
+
+    // volatile on a pointer or reference field must qualify the pointer itself ("T * volatile x"), not what it points at.
+    private string VolatileDecl(IFieldSymbol f, SyntaxNode decl)
+    {
+        var type = CType(f.Type, decl);
+        return type.EndsWith("*") ? type + "volatile " + FieldName(f) : "volatile " + type + " " + FieldName(f);
     }
 
     private void EmitStaticProperty(IPropertySymbol p)
@@ -1272,8 +1294,6 @@ internal sealed partial class CEmitter
     {
         var decl = m.DeclaringSyntaxReferences.First().GetSyntax();
         var (block, arrow) = BodyOf(decl);
-        if (HasAttribute(m, "InlineAsmAttribute") || HasAttribute(m, "InterruptAttribute"))
-            Unsupported(decl, "[InlineAsm]/[Interrupt] methods");
 
         LineDirective(decl is MethodDeclarationSyntax md ? md.Identifier.GetLocation() : decl.GetLocation());
         var isCtor = m.MethodKind == MethodKind.Constructor;
@@ -1328,6 +1348,7 @@ internal sealed partial class CEmitter
             }
             else if (initializer == null && ImplicitBaseInit(m.ContainingType, ThisName) is { } implicitBase) Line(implicitBase);
         }
+        var asmOpened = BeginSpecialMethod(m, decl);   // [InlineAsm]: the assembly, then the C# body under #else
         if (block != null)
         {
             foreach (var st in block.Statements) Statement(st);
@@ -1340,6 +1361,7 @@ internal sealed partial class CEmitter
             var e = Expr(body, top: true);
             Line(m.ReturnsVoid ? e + ";" : "return " + e + ";");
         }
+        EndSpecialMethod(asmOpened);
         if (isCtor && !isClassCtor) Line($"return {ThisName};");
         _this = ThisKind.None;
         _thisIsClass = false;
@@ -1349,6 +1371,22 @@ internal sealed partial class CEmitter
         Line("}");
         Line("");
         _lastLineFile = null;
+        EmitInterruptServer(m, decl);
+    }
+
+    // The runtime's own fatal errors (index out of range, out of memory) end with exit(20), which skips the code after
+    // the entry point; es_fatal first runs the [AtExit] methods through a hook that main installs (once), so
+    // for example interrupt servers come off exec's chain before their code is unloaded.
+    private static void AppendFatalHelper(StringBuilder result)
+    {
+        result.AppendLine("static void (*es_exit_hook)(void);");
+        result.AppendLine("static void es_fatal(void)");
+        result.AppendLine("{");
+        result.AppendLine("    void (*h)(void) = es_exit_hook;");
+        result.AppendLine("    es_exit_hook = NULL;");
+        result.AppendLine("    if (h != NULL) h();");
+        result.AppendLine("    exit(20);");
+        result.AppendLine("}");
     }
 
     private void EmitMain()
@@ -1358,9 +1396,18 @@ internal sealed partial class CEmitter
         if (entry.Parameters.Length != 0)
             Unsupported(entry.DeclaringSyntaxReferences.First().GetSyntax(), "entry point parameters");
 
+        if ((_usesBounds || _usesAlloc) && _atExit.Count > 0)
+        {
+            Line("static void es_run_atexit(void)");
+            Line("{");
+            foreach (var m in _atExit) Line("    " + FuncName(m) + "();");
+            Line("}");
+            Line("");
+        }
         Line("int main(void)");
         Line("{");
         _indent++;
+        if ((_usesBounds || _usesAlloc) && _atExit.Count > 0) Line("es_exit_hook = es_run_atexit;");
         // Static constructors run once at start-up, in the order the types appear (C# runs them lazily).
         foreach (var cctor in _staticConstructors) Line(FuncName(cctor) + "();");
         // [AtExit] methods of the classes the program used run after the entry point returns, in the order they were reached.
@@ -1454,6 +1501,9 @@ internal sealed partial class CEmitter
         foreach (var node in roots.SelectMany(r => r.DescendantNodesAndSelf()))
         {
             if (node is DeclarationExpressionSyntax { Designation: ParenthesizedVariableDesignationSyntax }) continue;
+            // out variables in a when clause are declared by PatternLocalDecls
+            if (node is DeclarationExpressionSyntax de0 && de0.Ancestors().OfType<WhenClauseSyntax>().Any()) continue;
+            if (node is IdentifierNameSyntax { Identifier.Text: "_" } id0 && id0.Ancestors().OfType<WhenClauseSyntax>().Any()) continue;
             if (node is DeclarationExpressionSyntax decl)
             {
                 if (decl.Designation is SingleVariableDesignationSyntax single &&
@@ -1803,6 +1853,12 @@ internal sealed partial class CEmitter
 
     private void EmitSwitch(SwitchStatementSyntax sw)
     {
+        if (sw.Sections.SelectMany(s => s.Labels).Any(l => l is CasePatternSwitchLabelSyntax ||
+                l is CaseSwitchLabelSyntax c && Model(c).GetSymbolInfo(c.Value).Symbol is INamedTypeSymbol))
+        {
+            EmitPatternSwitch(sw);   // CEmitter.Patterns.cs
+            return;
+        }
         if (Model(sw).GetTypeInfo(sw.Expression).Type?.SpecialType == SpecialType.System_String)
         {
             EmitStringSwitch(sw);
@@ -2088,6 +2144,7 @@ internal sealed partial class CEmitter
 
     private string Prefix(PrefixUnaryExpressionSyntax u)
     {
+        if (FunctionAddress(u) is { } address) return address;   // &M of an [Interrupt] method
         var op = u.OperatorToken.Text;
         if ((u.IsKind(SyntaxKind.PreIncrementExpression) || u.IsKind(SyntaxKind.PreDecrementExpression)) &&
             WrittenProperty(u.Operand) is { } pp)
@@ -2758,7 +2815,7 @@ internal sealed partial class CEmitter
     {
         var type = Model(ip).GetTypeInfo(ip.Expression).Type;
         if (type == null) return Unsupported(ip, "pattern on an expression without a type");
-        if (IsPure(ip.Expression))
+        if (UsePatternSubjectInPlace(ip.Expression, type))
             return $"({PatternTest(ip.Pattern, Expr(ip.Expression), type)})";
         var tmp = "es_p" + _patternTemp++;
         return $"({{ {Decl(type, tmp, ip)} = {Expr(ip.Expression, top: true)}; {PatternTest(ip.Pattern, tmp, type)}; }})";
@@ -2772,10 +2829,14 @@ internal sealed partial class CEmitter
         var id = _patternTemp++;
         string subject = "es_sw" + id, value = "es_sv" + id;
         var sb = new StringBuilder();
-        sb.Append($"({{ {Decl(type, subject, sw)} = {Expr(sw.GoverningExpression, top: true)}; {Decl(result, value, sw)}; ");
+        if (type is IArrayTypeSymbol && UsePatternSubjectInPlace(sw.GoverningExpression, type)) sb.Append("({ "); // a C array: used in place
+        else sb.Append($"({{ {Decl(type, subject, sw)} = {Expr(sw.GoverningExpression, top: true)}; ");
+        if (type is IArrayTypeSymbol && UsePatternSubjectInPlace(sw.GoverningExpression, type)) subject = Expr(sw.GoverningExpression);
+        sb.Append($"{Decl(result, value, sw)}; ");
         var first = true;
-        foreach (var d in sw.Arms.SelectMany(a => a.Pattern.DescendantNodesAndSelf()).OfType<SingleVariableDesignationSyntax>())
-            if (Model(d).GetDeclaredSymbol(d) is ILocalSymbol dl) sb.Append(Decl(dl.Type, dl.Name, d) + "; ");
+        // Pattern variables (one declaration per name, also for the arms' when clauses).
+        foreach (var d in PatternLocalDecls(sw.Arms.SelectMany(a => a.WhenClause != null ? new SyntaxNode[] { a.Pattern, a.WhenClause } : new SyntaxNode[] { a.Pattern })))
+            sb.Append(d + " ");
         foreach (var arm in sw.Arms)
         {
             var test = PatternTest(arm.Pattern, subject, type);
@@ -2796,19 +2857,8 @@ internal sealed partial class CEmitter
                 return PatternTest(p.Pattern, subject, type);
             case DiscardPatternSyntax:
                 return "1";
-            case ConstantPatternSyntax { Expression: var typeName } tp when Model(tp).GetSymbolInfo(typeName).Symbol is INamedTypeSymbol tpType:
-                // 'not Rect' and similar: the parser reads a type name there as a constant.
-                if (SymbolEqualityComparer.Default.Equals(tpType, type)) return "1";
-                if (type is INamedTypeSymbol tpFrom && IsHeapClass(tpType) && IsHeapClass(tpFrom)) return $"({ClassIs(subject, tpFrom, tpType, tp)})";
-                return Unsupported(tp, "type test");
             case ConstantPatternSyntax c:
-                if (c.Expression is LiteralExpressionSyntax nullLit && nullLit.IsKind(SyntaxKind.NullLiteralExpression))
-                    return IsInterfaceType(type) ? $"({subject}.obj == NULL)" : $"({subject} == NULL)";
-                if (type.SpecialType == SpecialType.System_String)
-                    return IsNullConstant(c.Expression) ? $"({subject} == NULL)" : StrEq(subject, Expr(c.Expression, top: true));   // "x" matches by the characters
-                if (Model(c.Expression).GetTypeInfo(c.Expression).Type?.SpecialType == SpecialType.System_String)
-                    return Unsupported(c, "a string constant pattern on a value that is not typed string");
-                return $"({subject} == {Expr(c.Expression)})";
+                return ConstantTest(c.Expression, c, subject, type);
             case RelationalPatternSyntax r:
                 return $"({subject} {r.OperatorToken.Text} {Expr(r.Expression)})";
             case BinaryPatternSyntax b:
@@ -2816,57 +2866,26 @@ internal sealed partial class CEmitter
             case UnaryPatternSyntax u when u.IsKind(SyntaxKind.NotPattern):
                 return $"(!{PatternTest(u.Pattern, subject, type)})";
             case VarPatternSyntax v:
-                return Bind(v.Designation, subject, v);
+                return BindDesignation(v.Designation, subject, type, v);
             case DeclarationPatternSyntax d:
             {
                 if (Model(d).GetTypeInfo(d.Type).Type is INamedTypeSymbol dt && type is INamedTypeSymbol df && IsHeapClass(dt) && IsHeapClass(df)
                     && !SymbolEqualityComparer.Default.Equals(dt, df))
                     return $"({ClassIs(subject, df, dt, d)} && {Bind(d.Designation, $"(({TypeName(dt)} *){subject})", d)})";
-                return Bind(d.Designation, subject, d);
+                // 'x is T t' with x already a T: still false for null.
+                return NotNullTest(subject, type) is { } dn ? $"({dn} && {Bind(d.Designation, subject, d)})" : Bind(d.Designation, subject, d);
             }
             case TypePatternSyntax t:
             {
                 var tt = Model(t).GetTypeInfo(t.Type).Type;
-                if (tt != null && SymbolEqualityComparer.Default.Equals(tt, type)) return "1";
+                if (tt != null && SymbolEqualityComparer.Default.Equals(tt, type)) return NotNullTest(subject, type) ?? "1";
                 if (tt is INamedTypeSymbol tc && type is INamedTypeSymbol tf && IsHeapClass(tc) && IsHeapClass(tf)) return $"({ClassIs(subject, tf, tc, t)})";
                 return Unsupported(t, "type test");
             }
             case RecursivePatternSyntax rec:
-            {
-                if (rec.PositionalPatternClause != null) return Unsupported(rec, "positional pattern");
-                var parts = new List<string>();
-                if (rec.Type != null && !(Model(rec).GetTypeInfo(rec.Type).Type is { } rt && SymbolEqualityComparer.Default.Equals(rt, type)))
-                {
-                    if (Model(rec).GetTypeInfo(rec.Type).Type is INamedTypeSymbol rc && type is INamedTypeSymbol rf && IsHeapClass(rc) && IsHeapClass(rf))
-                    {
-                        // A class test followed by tests on the object seen as the derived class.
-                        var seen = $"(({TypeName(rc)} *){subject})";
-                        var narrowed = new List<string> { ClassIs(subject, rf, rc, rec) };
-                        if (rec.PropertyPatternClause != null)
-                            foreach (var sub in rec.PropertyPatternClause.Subpatterns)
-                            {
-                                if (sub.NameColon == null || Model(sub).GetSymbolInfo(sub.NameColon.Name).Symbol is not IFieldSymbol sf)
-                                    return Unsupported(sub, "property pattern on anything but a field");
-                                narrowed.Add(PatternTest(sub.Pattern, $"{seen}->{MemberPath(rc, sf.ContainingType, sf.Name)}", sf.Type));
-                            }
-                        if (rec.Designation != null) narrowed.Add(Bind(rec.Designation, seen, rec));
-                        return "(" + string.Join(" && ", narrowed) + ")";
-                    }
-                    return Unsupported(rec, "type test");
-                }
-                if (rec.PropertyPatternClause != null)
-                {
-                    foreach (var sub in rec.PropertyPatternClause.Subpatterns)
-                    {
-                        if (sub.NameColon == null || Model(sub).GetSymbolInfo(sub.NameColon.Name).Symbol is not IFieldSymbol field)
-                            return Unsupported(sub, "property pattern on anything but a field");
-                        var access = type.TypeKind == TypeKind.Pointer || IsHeapClass(type) ? $"{subject}->{MemberPath(type, field.ContainingType, field.Name)}" : $"({subject}).{field.Name}";
-                        parts.Add(PatternTest(sub.Pattern, access, field.Type));
-                    }
-                }
-                if (rec.Designation != null) parts.Add(Bind(rec.Designation, subject, rec));
-                return parts.Count == 0 ? "1" : "(" + string.Join(" && ", parts) + ")";
-            }
+                return RecursivePatternTest(rec, subject, type);
+            case ListPatternSyntax lp:
+                return ListPatternTest(lp, subject, type);
         }
         return Unsupported(pattern, pattern.Kind().ToString());
     }

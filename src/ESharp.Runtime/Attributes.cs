@@ -77,17 +77,45 @@ public sealed class AtExitAttribute : Attribute
 {
 }
 
-/// <summary>Marks an interrupt handler.</summary>
+/// <summary>
+/// An exec interrupt server: a static method <c>void M(void* data)</c> (or <c>int</c>/<c>uint</c> returning, or with no
+/// parameter). Its address <c>&amp;M</c> (a <c>delegate*&lt;void*, void&gt;</c>, or the type of its own signature) is what
+/// <c>Interrupts.AddVBlank</c> and exec's AddIntServer take. On m68k the emitter adds an entry that follows exec's
+/// convention (is_Data in a1, the result in d0 with the Z flag set from it: a void method returns 0, so the next server
+/// in the chain runs); on AROS the method is called as a plain C function. PowerPC (AmigaOS 4, MorphOS) and sdl report
+/// ES0099. The body runs in interrupt context: keep it short, do not allocate, call no library that may wait, and make
+/// fields it shares with the main program <c>volatile</c>.
+/// </summary>
 [AttributeUsage(AttributeTargets.Method)]
 public sealed class InterruptAttribute : Attribute
 {
 }
 
-/// <summary>Escape hatch: the method body is hand-written 68000 assembly.</summary>
+/// <summary>
+/// Escape hatch: on m68k (and on PowerPC when <see cref="Ppc"/> is given) the static method's body is the given GCC
+/// inline assembly instead of its C# body; the C# body still runs on the host, sdl, AROS and any target without assembly
+/// for its CPU, so it is required. Operands: the result (a non-void method) is <c>%[result]</c> (also <c>%0</c>), an
+/// output register the assembly must set; each parameter is <c>%[name]</c> (also <c>%1</c>, <c>%2</c>, ... after the
+/// result), an input register that must not be changed. Integers up to 32 bits, chars and enums go in data registers
+/// (m68k <c>d</c>, PowerPC <c>r</c>), pointers in address registers (m68k <c>a</c>, PowerPC <c>b</c>); use the size suffix
+/// of the C# type (<c>.b</c>, <c>.w</c>, <c>.l</c>). Condition codes and memory are always taken as changed; name any
+/// other register the code changes in <see cref="Clobbers"/> (m68k) or <see cref="PpcClobbers"/>. A literal <c>%</c> is
+/// written <c>%%</c>; lines are separated by newlines.
+/// </summary>
 [AttributeUsage(AttributeTargets.Method)]
 public sealed class InlineAsmAttribute : Attribute
 {
     public InlineAsmAttribute(string code) => Code = code;
 
+    /// <summary>The 68020 assembly (Motorola syntax as the m68k-amigaos assembler takes it).</summary>
     public string Code { get; }
+
+    /// <summary>PowerPC assembly for AmigaOS 4 and MorphOS; without it those targets run the C# body.</summary>
+    public string? Ppc { get; set; }
+
+    /// <summary>Registers the m68k code changes besides its operands, comma separated (for example <c>"d1,a0"</c>).</summary>
+    public string? Clobbers { get; set; }
+
+    /// <summary>Registers the PowerPC code changes besides its operands, comma separated (for example <c>"r0,r11"</c>).</summary>
+    public string? PpcClobbers { get; set; }
 }
