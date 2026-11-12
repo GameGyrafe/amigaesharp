@@ -186,3 +186,8 @@ The three disk libraries that need `[LibraryBase]` (all in `Libs:` on the Workbe
 Everything on the Amiga side beyond the `SetChipRev` runs in the emulator (A1200, Kickstart 3.1) above; the
 parser was checked by counting prototypes, not by compiling the generated declarations; the type map and the
 `Since` attribute are design, not code; 3.2 and AmigaOS 4 differences were not looked at.
+
+## Update: the generator (issue #17)
+
+`bindgen gen <fd dir> <lib...> --include <prototype include dir>` writes the declarations in the platform's style, and `--check src/ESharp.Platform` diffs them against the hand-written ones (names, vectors, argument counts, `Since`, types; problems against notes). `bindgen layout` writes Layout.g.cs from measured numbers. See STATUS.md, "Binding generator", for the type map, the four binding fixes it found (three `VOID` functions declared `int`, `AvailMem` being an `IPTR` on AROS) and the runs. Still open: struct declarations and typed tags.
+

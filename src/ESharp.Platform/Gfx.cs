@@ -42,9 +42,9 @@ public static unsafe class Graphics
     /// </summary>
     [AmigaLib("graphics", -888), Since(39)] public static extern uint SetChipRev(uint want);
     [AmigaLib("graphics", -342)] public static extern void SetAPen(void* rastPort, int pen);
-    [AmigaLib("graphics", -306)] public static extern int RectFill(void* rastPort, int xMin, int yMin, int xMax, int yMax);
+    [AmigaLib("graphics", -306)] public static extern void RectFill(void* rastPort, int xMin, int yMin, int xMax, int yMax);
     [AmigaLib("graphics", -318)] public static extern int ReadPixel(void* rastPort, int x, int y);
-    [AmigaLib("graphics", -606)] public static extern int BltBitMapRastPort(void* srcBitMap, int xSrc, int ySrc,
+    [AmigaLib("graphics", -606)] public static extern void BltBitMapRastPort(void* srcBitMap, int xSrc, int ySrc,
         void* destRastPort, int xDest, int yDest, int xSize, int ySize, int minterm);
     [AmigaLib("graphics", -636)] public static extern void BltMaskBitMapRastPort(void* srcBitMap, int xSrc, int ySrc,
         void* destRastPort, int xDest, int yDest, int xSize, int ySize, uint minterm, void* bltMask);

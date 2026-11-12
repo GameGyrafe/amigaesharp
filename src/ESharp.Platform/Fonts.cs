@@ -14,7 +14,7 @@ public static unsafe class DiskFontLib
     public static extern void SetBase(void* library);
 
     /// <summary>Opens a font from the FONTS: drawer (or one already in memory). Close it with graphics CloseFont.</summary>
-    [AmigaLib("diskfont", -30), Since(34)] public static extern void* OpenDiskFont(void* textAttr);
+    [AmigaLib("diskfont", -30)] public static extern void* OpenDiskFont(void* textAttr);
 }
 #endif
 
