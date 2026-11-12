@@ -264,6 +264,8 @@ internal sealed partial class CEmitter
             if (m.MethodKind == MethodKind.Constructor && IsHeapClass(m.ContainingType)) Line(InitPrototype(m) + ";");
         }
         if (methods.Count > 0) Line("");
+        CheckBodilessAsm(reachable);
+        EmitInterruptDeclarations(methods);
         foreach (var c in heapClasses.Where(IsPoly)) EmitVtInstance(c, reachable);
         foreach (var c in heapClasses)
             foreach (var i in interfaces.Where(i => c.AllInterfaces.Contains(i, SymbolEqualityComparer.Default)))
@@ -272,6 +274,7 @@ internal sealed partial class CEmitter
         foreach (var m in methods) EmitMethod(m);
 
         EmitMain();
+        EmitInterruptEntries();
 
         body.Append(typeText);
         foreach (var span in _spans.Values) body.Append(span);
@@ -319,12 +322,13 @@ internal sealed partial class CEmitter
         {
             result.AppendLine("#include <stdio.h>");
             result.AppendLine("#include <stdlib.h>");
+            AppendFatalHelper(result);
             result.AppendLine("static inline int32_t es_idx(int32_t i, int32_t n, const char *file, int line)");
             result.AppendLine("{");
             result.AppendLine("    if ((uint32_t)i >= (uint32_t)n)");
             result.AppendLine("    {");
             result.AppendLine("        fprintf(stderr, \"%s(%d): index %ld out of range 0..%ld\\n\", file, line, (long)i, (long)n - 1);");
-            result.AppendLine("        exit(20);");
+            result.AppendLine("        es_fatal();");
             result.AppendLine("    }");
             result.AppendLine("    return i;");
             result.AppendLine("}");
@@ -412,10 +416,11 @@ internal sealed partial class CEmitter
         {
             result.AppendLine("#include <stdio.h>");
             result.AppendLine("#include <stdlib.h>");
+            if (!_usesBounds) AppendFatalHelper(result);
             result.AppendLine("static void *es_new(size_t n)");
             result.AppendLine("{");
             result.AppendLine("    void *p = calloc(1, n);");
-            result.AppendLine("    if (p == NULL) { fputs(\"out of memory\\n\", stderr); exit(20); }");
+            result.AppendLine("    if (p == NULL) { fputs(\"out of memory\\n\", stderr); es_fatal(); }");
             result.AppendLine("    return p;");
             result.AppendLine("}");
             result.AppendLine("#define ES_NEW(T) ((T *)es_new(sizeof(T)))");
@@ -812,6 +817,8 @@ internal sealed partial class CEmitter
 
         switch (t)
         {
+            case IFunctionPointerTypeSymbol:
+                return "void *";   // only ever the address of an [Interrupt] server, handed to exec
             case IPointerTypeSymbol p:
                 var inner = CType(p.PointedAtType, at);
                 return inner.EndsWith("*") ? inner + "*" : inner + " *";
@@ -1192,9 +1199,17 @@ internal sealed partial class CEmitter
             : Decl(f.Type, FieldName(f), decl);
         // Chip RAM is a 68k-only concept in the C dialect: PowerPC systems allocate chip memory
         // at run time instead, so the attribute is a no-op there.
+        if (f.IsVolatile) text = f.Type is IArrayTypeSymbol ? "volatile " + text : VolatileDecl(f, decl);   // shared with an interrupt server
         if (HasAttribute(f, "ChipRamAttribute") && IsDefined("M68K"))
             text = "__chip " + text;
         Line(f.Type is IArrayTypeSymbol || init == null ? $"static {text};" : $"static {text} = {Expr(init, top: true)};");
+    }
+
+    // volatile on a pointer or reference field must qualify the pointer itself ("T * volatile x"), not what it points at.
+    private string VolatileDecl(IFieldSymbol f, SyntaxNode decl)
+    {
+        var type = CType(f.Type, decl);
+        return type.EndsWith("*") ? type + "volatile " + FieldName(f) : "volatile " + type + " " + FieldName(f);
     }
 
     private void EmitStaticProperty(IPropertySymbol p)
@@ -1278,8 +1293,6 @@ internal sealed partial class CEmitter
     {
         var decl = m.DeclaringSyntaxReferences.First().GetSyntax();
         var (block, arrow) = BodyOf(decl);
-        if (HasAttribute(m, "InlineAsmAttribute") || HasAttribute(m, "InterruptAttribute"))
-            Unsupported(decl, "[InlineAsm]/[Interrupt] methods");
 
         LineDirective(decl is MethodDeclarationSyntax md ? md.Identifier.GetLocation() : decl.GetLocation());
         var isCtor = m.MethodKind == MethodKind.Constructor;
@@ -1334,6 +1347,7 @@ internal sealed partial class CEmitter
             }
             else if (initializer == null && ImplicitBaseInit(m.ContainingType, ThisName) is { } implicitBase) Line(implicitBase);
         }
+        var asmOpened = BeginSpecialMethod(m, decl);   // [InlineAsm]: the assembly, then the C# body under #else
         if (block != null)
         {
             foreach (var st in block.Statements) Statement(st);
@@ -1346,6 +1360,7 @@ internal sealed partial class CEmitter
             var e = Expr(body, top: true);
             Line(m.ReturnsVoid ? e + ";" : "return " + e + ";");
         }
+        EndSpecialMethod(asmOpened);
         if (isCtor && !isClassCtor) Line($"return {ThisName};");
         _this = ThisKind.None;
         _thisIsClass = false;
@@ -1355,6 +1370,22 @@ internal sealed partial class CEmitter
         Line("}");
         Line("");
         _lastLineFile = null;
+        EmitInterruptServer(m, decl);
+    }
+
+    // The runtime's own fatal errors (index out of range, out of memory) end with exit(20), which skips the code after
+    // the entry point; es_fatal first runs the [AtExit] methods through a hook that main installs (once), so
+    // for example interrupt servers come off exec's chain before their code is unloaded.
+    private static void AppendFatalHelper(StringBuilder result)
+    {
+        result.AppendLine("static void (*es_exit_hook)(void);");
+        result.AppendLine("static void es_fatal(void)");
+        result.AppendLine("{");
+        result.AppendLine("    void (*h)(void) = es_exit_hook;");
+        result.AppendLine("    es_exit_hook = NULL;");
+        result.AppendLine("    if (h != NULL) h();");
+        result.AppendLine("    exit(20);");
+        result.AppendLine("}");
     }
 
     private void EmitMain()
@@ -1364,9 +1395,18 @@ internal sealed partial class CEmitter
         if (entry.Parameters.Length != 0)
             Unsupported(entry.DeclaringSyntaxReferences.First().GetSyntax(), "entry point parameters");
 
+        if ((_usesBounds || _usesAlloc) && _atExit.Count > 0)
+        {
+            Line("static void es_run_atexit(void)");
+            Line("{");
+            foreach (var m in _atExit) Line("    " + FuncName(m) + "();");
+            Line("}");
+            Line("");
+        }
         Line("int main(void)");
         Line("{");
         _indent++;
+        if ((_usesBounds || _usesAlloc) && _atExit.Count > 0) Line("es_exit_hook = es_run_atexit;");
         // Static constructors run once at start-up, in the order the types appear (C# runs them lazily).
         foreach (var cctor in _staticConstructors) Line(FuncName(cctor) + "();");
         // [AtExit] methods of the classes the program used run after the entry point returns, in the order they were reached.
@@ -2109,6 +2149,7 @@ internal sealed partial class CEmitter
 
     private string Prefix(PrefixUnaryExpressionSyntax u)
     {
+        if (FunctionAddress(u) is { } address) return address;   // &M of an [Interrupt] method
         var op = u.OperatorToken.Text;
         if ((u.IsKind(SyntaxKind.PreIncrementExpression) || u.IsKind(SyntaxKind.PreDecrementExpression)) &&
             WrittenProperty(u.Operand) is { } pp)

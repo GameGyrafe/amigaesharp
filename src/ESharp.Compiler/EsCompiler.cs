@@ -88,7 +88,7 @@ public static class EsCompiler
     public static readonly IReadOnlyList<string> AmigaOnlyTypes = new[]
     {
         "Gui", "GtWindow", "GtButton", "GtString", "GtText", "GtGadget", "GuiEvent", "GuiEventKind", "IGuiHandler", "GadTools",
-        "Asl", "AslLib", "Iff", "IffFile", "IffParse", "Fonts", "FontHandle", "DiskFontLib", "Joystick", "LowLevel",
+        "Asl", "AslLib", "Interrupts", "Iff", "IffFile", "IffParse", "Fonts", "FontHandle", "DiskFontLib", "Joystick", "LowLevel",
         "Exec", "Intuition", "Graphics", "CyberGfx", "Utility", "TimerDevice", "Keymap", "Layout", "DosLib",
     };
 

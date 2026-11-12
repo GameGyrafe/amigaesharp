@@ -186,10 +186,11 @@ public static unsafe class Frame
 
     private static int Detect() { return HostPal ? 50 : 60; }
 
-    /// <summary>Host: advances the fake clock by one frame and counts it.</summary>
+    /// <summary>Host: advances the fake clock by one frame, runs the vertical blank servers of <see cref="Interrupts"/> and counts it.</summary>
     public static void WaitVBlank()
     {
         Clock.HostAdvance(FrameMicroseconds);
+        Interrupts.HostVBlank();
         _count++;
     }
 #endif
