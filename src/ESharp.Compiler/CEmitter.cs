@@ -199,6 +199,7 @@ internal sealed partial class CEmitter
             foreach (var dup in group.Skip(1))
                 Unsupported(dup.DeclaringSyntaxReferences.First().GetSyntax(),
                     $"C name '{group.Key}' of '{dup.ToDisplayString()}' is already used by '{group.First().ToDisplayString()}'; rename one of them");
+        CheckMemberNameCollisions(types);
         var structs = SortStructs(types.OfType<INamedTypeSymbol>().Where(t => t.TypeKind == TypeKind.Struct));
         var heapClasses = types.Where(IsHeapClass).Select(t => (INamedTypeSymbol)t).OrderBy(Depth).ToList();
         foreach (var c in heapClasses)
@@ -2139,6 +2140,7 @@ internal sealed partial class CEmitter
         if (isEquality && leftType?.SpecialType == SpecialType.System_String && rightType?.SpecialType == SpecialType.System_String
             && !IsNullConstant(b.Left) && !IsNullConstant(b.Right))
         {
+            if (Model(b).GetConstantValue(b) is { HasValue: true, Value: bool folded }) return folded ? "true" : "false";   // constant: also valid in a static initializer
             var eq = StrEq(Expr(b.Left, top: true), Expr(b.Right, top: true));
             return b.IsKind(SyntaxKind.EqualsExpression) ? eq : $"(!{eq})";
         }
@@ -2250,7 +2252,9 @@ internal sealed partial class CEmitter
             left = $"({CType(type, b)})({Expr(b.Left, top: true)})";
             right = $"({CType(type, b)})({Expr(b.Right, top: true)})";
         }
-        else return Unsupported(b, "?? on a nullable value type");
+        else return Unsupported(b, leftType is INamedTypeSymbol { OriginalDefinition.SpecialType: SpecialType.System_Nullable_T }
+            ? "?? on a nullable value type"
+            : $"?? on '{leftType.ToDisplayString()}' (supported: classes, strings, interface values and delegates; both sides the same kind)");
         return $"({{ {Decl(type, tmp, b)} = {left}; {test} ? {tmp} : {right}; }})";
     }
 
@@ -2623,6 +2627,10 @@ internal sealed partial class CEmitter
                 return StrEq(Expr(eq.Expression, top: true), Expr(eargs[0].Expression, top: true));
             return Unsupported(inv, "this form of string.Equals (only string.Equals(a, b) and a.Equals(b) on two strings)");
         }
+
+        if (m.Name is "Equals" or "ReferenceEquals" && m.Parameters.All(p => p.Type.SpecialType == SpecialType.System_Object)
+            && (m.ContainingType.SpecialType is SpecialType.System_Object or SpecialType.System_ValueType || m.IsOverride || m.ContainingType.Locations.Any(l => l.IsInSource)))
+            return ObjectEquals(inv, m);
 
         if ((m.ReturnsByRef || m.ReturnsByRefReadonly) &&
             (m.MethodKind is not (MethodKind.Ordinary or MethodKind.LocalFunction) || m.IsVirtual || m.IsAbstract || m.IsOverride || IsInterfaceType(m.ContainingType)))

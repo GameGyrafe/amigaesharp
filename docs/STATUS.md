@@ -81,7 +81,7 @@ Not verified:
   other CPU architectures, a newer or older SDL 3 than 3.4.20.
 - The GitHub CI `sdl` job (builds the image, smoke test, then hello, `esharp test` language and cards, and a cards run with input and a
   screenshot): not run on GitHub yet.
-- `ES0100` ("slow 64-bit arithmetic on a 68020") is still reported on sdl, where it does not apply.
+- `ES0100` ("slow 64-bit arithmetic on a 68020") is no longer reported when compiling for sdl (the compiler drops it; an IDE analyzer cannot know the target, so the squiggle stays there).
 
 ### SDL 3 build image (part 1)
 
@@ -728,3 +728,12 @@ Verified:
 - The hwpack script was edited to include `assets` but it was not built or run.
 
 Not verified: sound was not audible (no OpenAL device in the emulator; only Busy/Stop was checked), a malformed-ILBM size above 4096x4096 pixels is rejected (unit-tested only), ILBM files written by real paint programs (only files written by our own writer in tests, so odd real-world files such as 4-bit CMAPs are untested), dithered output of photographic images beyond the generated gradient, 8SVX with several octaves, real hardware.
+
+## Emitter and SDL follow-ups (issue #12)
+
+- A constant string compare (`const string K = "x"; static bool B = K == "x";`) is folded to `true`/`false` in C, so it is valid in a static initializer (it emitted an `es_streq` call).
+- The `??` ES0099 names the case: "nullable value type" only for `T?`; other left types say what is supported.
+- `a.Equals(b)`, `object.Equals(a, b)` and `object.ReferenceEquals(a, b)` on class references are reference equality, in a program where no class declares `Equals(object)`. ES0099 (with the reason) for: `Equals` on a struct or enum (`ValueType.Equals`), a user `Equals(object)` called or declared in the program (E# has no `object` type, so a virtual call of it is not supported), and boxed arguments. Not done: a virtual call of a user override.
+- Member-level C name collisions (class `A_B` member `C` against class `A` member `B_C`: static fields, static properties, enum members, methods, constructors) are reported as ES0099 on the later declaration. They are not mangled apart.
+- SDL: `es_sdl_blit` gets the data lengths and stops the program with a message when the planar data (depth planes) or the mask is too short, like the host fake's exception; ES0102 also explains CS0117 for a member that exists only in the Amiga build of a class sdl has (`Video.Window`, `Dos.DateStamp`); the key map has the keypad, Help (0x5F), and F11/F12 as 0x4B/0x6F (no classic Amiga keys; the codes USB keyboard drivers use: not checked against hardware).
+- Checked: `dotnet test` (unit tests with gcc), `esharp test samples/language` host vs m68k (A1200, Kickstart 3.1) and host vs sdl (37 ok each), `samples/names` host vs m68k (12 ok), `samples/cards` on sdl headless with input. Not verified: the new keypad/F11/F12/Help keys on a real SDL window or with XTEST; the blit-length stop on SDL was only checked in the generated text, not run with a short buffer; hosted AROS and OS4 were not run (no target-specific change).

@@ -413,7 +413,7 @@ public static unsafe class Video
         {
             fixed (byte* m = mask)
             {
-                Crt.es_sdl_blit(data, mask.Length == 0 ? null : m, width, height, depth, sx, sy, w, h, x, y);
+                Crt.es_sdl_blit(data, mask.Length == 0 ? null : m, width, height, depth, sx, sy, w, h, x, y, planar.Length, mask.Length);
             }
         }
     }

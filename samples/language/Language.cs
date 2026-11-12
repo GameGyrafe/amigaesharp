@@ -70,6 +70,10 @@ public static class Table
 /// </summary>
 public static class Program
 {
+    const string FoldKey = "key";
+    static bool FoldedA = FoldKey == "key";
+    static bool FoldedB = FoldKey != "key";
+
     static void Check(bool ok, string name)
     {
         Dos.PutStr(ok ? "ok " : "FAIL ");
@@ -244,5 +248,10 @@ public static class Program
         Check(face == ace && ace == face && none != ace && (none ?? face) == ace, "base and derived references");
         none ??= ace;
         Check(none == face && (noText ?? "empty") == "empty", "?? and ??=");
+
+        // Equals on classes without an override is reference equality; a constant string compare folds (also in a static initializer).
+        Card other = new Card();
+        Check(face.Equals(ace) && !face.Equals(other) && object.Equals(ace, face) && !object.Equals(ace, other) && object.ReferenceEquals(face, ace), "Equals is reference equality");
+        Check(FoldedA && !FoldedB, "constant string compare in a static initializer");
     }
 }
