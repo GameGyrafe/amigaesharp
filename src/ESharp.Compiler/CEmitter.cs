@@ -264,6 +264,8 @@ internal sealed partial class CEmitter
             if (m.MethodKind == MethodKind.Constructor && IsHeapClass(m.ContainingType)) Line(InitPrototype(m) + ";");
         }
         if (methods.Count > 0) Line("");
+        CheckBodilessAsm(reachable);
+        EmitInterruptDeclarations(methods);
         foreach (var c in heapClasses.Where(IsPoly)) EmitVtInstance(c, reachable);
         foreach (var c in heapClasses)
             foreach (var i in interfaces.Where(i => c.AllInterfaces.Contains(i, SymbolEqualityComparer.Default)))
@@ -272,6 +274,7 @@ internal sealed partial class CEmitter
         foreach (var m in methods) EmitMethod(m);
 
         EmitMain();
+        EmitInterruptEntries();
 
         body.Append(typeText);
         foreach (var span in _spans.Values) body.Append(span);
@@ -805,6 +808,8 @@ internal sealed partial class CEmitter
 
         switch (t)
         {
+            case IFunctionPointerTypeSymbol:
+                return "void *";   // only ever the address of an [Interrupt] server, handed to exec
             case IPointerTypeSymbol p:
                 var inner = CType(p.PointedAtType, at);
                 return inner.EndsWith("*") ? inner + "*" : inner + " *";
@@ -1185,6 +1190,7 @@ internal sealed partial class CEmitter
             : Decl(f.Type, FieldName(f), decl);
         // Chip RAM is a 68k-only concept in the C dialect: PowerPC systems allocate chip memory
         // at run time instead, so the attribute is a no-op there.
+        if (f.IsVolatile) text = "volatile " + text;   // shared with an interrupt server
         if (HasAttribute(f, "ChipRamAttribute") && IsDefined("M68K"))
             text = "__chip " + text;
         Line(f.Type is IArrayTypeSymbol || init == null ? $"static {text};" : $"static {text} = {Expr(init, top: true)};");
@@ -1271,8 +1277,6 @@ internal sealed partial class CEmitter
     {
         var decl = m.DeclaringSyntaxReferences.First().GetSyntax();
         var (block, arrow) = BodyOf(decl);
-        if (HasAttribute(m, "InlineAsmAttribute") || HasAttribute(m, "InterruptAttribute"))
-            Unsupported(decl, "[InlineAsm]/[Interrupt] methods");
 
         LineDirective(decl is MethodDeclarationSyntax md ? md.Identifier.GetLocation() : decl.GetLocation());
         var isCtor = m.MethodKind == MethodKind.Constructor;
@@ -1327,6 +1331,7 @@ internal sealed partial class CEmitter
             }
             else if (initializer == null && ImplicitBaseInit(m.ContainingType, ThisName) is { } implicitBase) Line(implicitBase);
         }
+        var asmOpened = BeginSpecialMethod(m, decl);   // [InlineAsm]: the assembly, then the C# body under #else
         if (block != null)
         {
             foreach (var st in block.Statements) Statement(st);
@@ -1339,6 +1344,7 @@ internal sealed partial class CEmitter
             var e = Expr(body, top: true);
             Line(m.ReturnsVoid ? e + ";" : "return " + e + ";");
         }
+        EndSpecialMethod(asmOpened);
         if (isCtor && !isClassCtor) Line($"return {ThisName};");
         _this = ThisKind.None;
         _thisIsClass = false;
@@ -1348,6 +1354,7 @@ internal sealed partial class CEmitter
         Line("}");
         Line("");
         _lastLineFile = null;
+        EmitInterruptServer(m, decl);
     }
 
     private void EmitMain()
@@ -2093,6 +2100,7 @@ internal sealed partial class CEmitter
 
     private string Prefix(PrefixUnaryExpressionSyntax u)
     {
+        if (FunctionAddress(u) is { } address) return address;   // &M of an [Interrupt] method
         var op = u.OperatorToken.Text;
         if ((u.IsKind(SyntaxKind.PreIncrementExpression) || u.IsKind(SyntaxKind.PreDecrementExpression)) &&
             WrittenProperty(u.Operand) is { } pp)

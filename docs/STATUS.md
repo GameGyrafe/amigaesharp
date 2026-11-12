@@ -193,6 +193,48 @@ Verified:
 - Regression on the A1200 / 3.1 after the change: collections 20, linq 37, inherit 24 ok, no FAIL. The hardware pack builds with `refs` (22 programs).
 
 Not verified: real hardware, AmigaOS 4 and MorphOS.
+## Inline assembly and interrupt servers (samples/interrupts, issue #12)
+
+**`[InlineAsm]`.** A static method with a C# body and `[InlineAsm("68020 code", Ppc = "PowerPC code")]` becomes one GCC extended asm
+statement on a target with code for its CPU (m68k: the constructor argument; os4/morphos: `Ppc`), under `#if defined(__mc68000__)` /
+`#if defined(__PPC__)` with the C# body in the `#else` branch. Everywhere else (host, sdl, AROS x86-64, PowerPC without `Ppc`) the C#
+body is the method, so it is required (an `extern` one is `ES0099`). Operands, kept minimal: the result is `%[result]` (`%0`), an
+early-clobber output register; each parameter is `%[name]` (`%1`, ...), an input register the code must not change. Integers up to 32
+bits, chars and enums go in data registers (`d` / `r`), pointers in address registers (`a` / `b`). `cc` and `memory` are always
+clobbered, the statement is `volatile`; extra registers are named in `Clobbers` (m68k) or `PpcClobbers`. `ES0099` for: instance or
+generic methods, ref parameters, 64-bit, float, bool, struct or class operands, a parameter named `result`, `[InlineAsm]` together with
+`[Interrupt]`.
+
+**`[Interrupt]`.** A static method `void M(void* data)` (or no parameter, or an `int`/`uint` result) is emitted as usual plus
+`M_isr(void *data)`, a C function returning an int32 (0 for a void method). `&M` (a C# function pointer, only allowed for `[Interrupt]`
+methods; any other `&Method` is `ES0099`) is the server address: on m68k a small assembly entry at the end of the file that pushes
+is_Data from a1, calls `M_isr` and does `tst.l d0` so the Z flag matches d0 (a void server returns 0 and the chain goes on); the C
+function keeps d2-d7/a2-a6 as exec wants. On AROS the address is `M_isr` itself (AROS calls servers as C functions with is_Data first).
+PowerPC (AmigaOS 4, MorphOS) and sdl give `ES0099` with a message (OS4 servers take other arguments and the QEMU sm501 has no vertical
+blank interrupt to test with). C# `volatile` on a static field is now `volatile` in C.
+
+**`Interrupts` (platform).** `Interrupts.AddVBlank(&M, data)` puts up to 4 servers on exec's INTB_VERTB chain (AddIntServer, nodes of
+`struct Interrupt` in one MEMF_PUBLIC|MEMF_CLEAR block, NT_INTERRUPT, priority 0, name "E# VBlank"); `RemoveVBlank(id)` takes one off;
+an `[AtExit]` method takes the rest off and frees the block after Main returns (not on exit() or a crash: then the server stays on the
+chain pointing at freed code). On the dotnet host each `Frame.WaitVBlank` runs the servers once. Amiga-only on sdl (`ES0102`). The
+offsets come from `tools/BindGen/structs.txt` (re-measured with `layouts.sh`: m68k node 22 bytes, AROS 48).
+
+Verified:
+- Unit tests: `CEmitterAsmTests` (19): the m68k and PowerPC asm text and constraints, the C# fallback compiled with host gcc and run
+  (the asm is under `#if defined(__mc68000__)`, so the host takes the `#else`), no asm on AROS, the `ES0099` cases, the m68k server entry
+  text, and the server functions called through their address with host gcc as AROS would (is_Data passed, 0 returned for void).
+- A1200, Kickstart 3.1 (40.069) in FS-UAE, `esharp test samples/interrupts --target m68k` (amigadev m68k image): host 14 ok, Amiga 14 ok,
+  "Host and Amiga agree on every check"; both servers counted 25 in 25 frames, a removed server stopped, the program exits cleanly with
+  the second server removed by `[AtExit]`. The disassembly shows the `swap` and the entry (`move.l a1,-(sp)`, `jsr`, `tst.l d0`, `rts`).
+- Hosted AROS x86-64 (nightly 20261106): the same 14 ok (25 and 25), no traps.
+- AmigaOS 4.1 in the QEMU VM (`run --target os4`): the 6 inline asm checks pass with the PowerPC code (`rotlwi`, `add`/`stw` seen in the
+  disassembly); the interrupt part is compiled out there (`#if !SDL && !PPC`).
+- sdl (`run --target sdl --headless`): the 6 checks pass with the C# bodies. MorphOS: builds, not run.
+
+Not verified: real hardware, MorphOS runs, `[Interrupt]` with other chains than INTB_VERTB (only `&M` and exec's AddIntServer are
+needed for them, but nothing was run), the server's stack use on a busy system, and the old-Kickstart rule that a VERTB server must
+leave a0 = $dff000 (not needed from Kickstart 3.1; not done).
+
 ## C names of E# types (samples/names, issues #39 and #12)
 
 Every E# class, struct, interface and enum, in user code and in the embedded Runtime/Platform sources, is named in C
@@ -695,7 +737,7 @@ with the AGENTS.md input: 15 ok, `guess higher: right`. Hosted AROS (nightly 202
 
 ## Known limits of the emitter
 
-Reported as `ES0099` rather than miscompiled: capturing lambdas that would outlive their method, delegates in struct fields, `is`/`as` against an interface or struct, ref returns from properties, indexers, delegates and virtual or interface members, `foreach` over anything but arrays, spans and struct/class GetEnumerator types (interface enumerators, `Dispose`, ref `Current`), positional/list patterns, records, `==` on tuples, `??` on nullable value types, `[InlineAsm]`/`[Interrupt]` bodies.
+Reported as `ES0099` rather than miscompiled: capturing lambdas that would outlive their method, delegates in struct fields, `is`/`as` against an interface or struct, ref returns from properties, indexers, delegates and virtual or interface members, `foreach` over anything but arrays, spans and struct/class GetEnumerator types (interface enumerators, `Dispose`, ref `Current`), positional/list patterns, records, `==` on tuples, `??` on nullable value types; `[InlineAsm]` and `[Interrupt]` (done, see their section) still give it for: operands that are not 32-bit-or-smaller integers or pointers, instance methods, `[Interrupt]` on PowerPC and sdl, and `&Method` of anything but an `[Interrupt]` method.
 
 Two types whose C names meet after joining with `_` (namespace `A_B` class `C` and namespace `A` class `B_C`) are reported
 (ES0099); rename one.
@@ -710,7 +752,7 @@ CPU and OS are separate axes. `AMIGA` is defined for every Amiga-family target; 
 | `os4` | `ppc-amigaos-gcc` 11.5.0 | AMIGA PPC AMIGAOS4 |
 | `morphos` | `ppc-morphos-gcc` 15.2.0 | AMIGA PPC MORPHOS |
 
-PowerPC notes: both PPC targets are big-endian, so asset formats need no change. `[ChipRam]` is a no-op on PPC (chip memory is allocated at run time there). `[InlineAsm]` will be 68k-only, so shared code needs an `#if M68K` fallback. `[AmigaLib]` offsets are 68k library vectors; the PPC targets call through the same `proto/*.h` names, so the emitter output is identical. Not yet covered: WarpOS/PowerUP (no prebuilt toolchain found) and AROS.
+PowerPC notes: both PPC targets are big-endian, so asset formats need no change. `[ChipRam]` is a no-op on PPC (chip memory is allocated at run time there). `[InlineAsm]` takes PowerPC code in `Ppc`; without it the PPC targets run the method's C# body. `[AmigaLib]` offsets are 68k library vectors; the PPC targets call through the same `proto/*.h` names, so the emitter output is identical. Not yet covered: WarpOS/PowerUP (no prebuilt toolchain found) and AROS.
 
 ## Asset dithering, ILBM and sound assets (samples/assets, issue #13)
 

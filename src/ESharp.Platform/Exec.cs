@@ -73,6 +73,14 @@ public static unsafe class Exec
     [AmigaLib("exec", -480)]
     public static extern int AbortIO(void* ioRequest);
 
+    /// <summary>exec.library AddIntServer(), LVO -168: adds an interrupt server (a struct Interrupt in public memory) to a chain such as INTB_VERTB.</summary>
+    [AmigaLib("exec", -168)]
+    public static extern void AddIntServer(int intNumber, void* interrupt);
+
+    /// <summary>exec.library RemIntServer(), LVO -174.</summary>
+    [AmigaLib("exec", -174)]
+    public static extern void RemIntServer(int intNumber, void* interrupt);
+
     /// <summary>amiga.lib BeginIO(): starts a request without clearing its flags (SendIO would clear audio's ADIOF_PERVOL).</summary>
     [AmigaLib("alib", 0)]
     public static extern void BeginIO(void* ioRequest);
