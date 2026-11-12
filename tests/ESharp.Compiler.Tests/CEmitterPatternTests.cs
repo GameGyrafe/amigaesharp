@@ -224,6 +224,35 @@ Check(w == ""mid"", ""relational case labels"");
     }
 
     [Fact]
+    public void Out_variables_in_when_clauses_are_declared()
+    {
+        const string members = @"
+static bool TryHalf(int v, out int h) { h = v / 2; return v % 2 == 0; }
+static int Stmt(int x)
+{
+    switch (x)
+    {
+        case > 0 when TryHalf(x, out var n): return n;
+        case > 0 when TryHalf(x + 1, out var n): return 100 + n;
+        case var _ when TryHalf(x, out _): return -1;
+        default: return -2;
+    }
+}
+static int Expr(int x) => x switch
+{
+    > 0 when TryHalf(x, out var n) => n,
+    > 0 when TryHalf(x + 1, out int m) => 100 + m,
+    _ => -2,
+};
+";
+        const string body = @"
+Check(Stmt(8) == 4 && Stmt(7) == 104 && Stmt(0) == -1 && Stmt(-3) == -2, ""out var in a switch statement when clause"");
+Check(Expr(8) == 4 && Expr(7) == 104 && Expr(-3) == -2, ""out var in a switch expression when clause"");
+";
+        RunAllOk(members, body, 2);
+    }
+
+    [Fact]
     public void Patterns_sample_compiles_and_runs_natively()
     {
         if (!HasGcc) return;

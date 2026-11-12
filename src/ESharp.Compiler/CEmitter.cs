@@ -1460,6 +1460,9 @@ internal sealed partial class CEmitter
         foreach (var node in roots.SelectMany(r => r.DescendantNodesAndSelf()))
         {
             if (node is DeclarationExpressionSyntax { Designation: ParenthesizedVariableDesignationSyntax }) continue;
+            // out variables in a when clause are declared by PatternLocalDecls
+            if (node is DeclarationExpressionSyntax de0 && de0.Ancestors().OfType<WhenClauseSyntax>().Any()) continue;
+            if (node is IdentifierNameSyntax { Identifier.Text: "_" } id0 && id0.Ancestors().OfType<WhenClauseSyntax>().Any()) continue;
             if (node is DeclarationExpressionSyntax decl)
             {
                 if (decl.Designation is SingleVariableDesignationSyntax single &&

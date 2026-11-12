@@ -316,6 +316,38 @@ internal sealed partial class CEmitter
         var seen = new Dictionary<string, string>();
         var lines = new List<string>();
         foreach (var root in roots)
+        {
+            // `out var n` / `out T n` / `out _` inside a when clause: declared like the pattern variables.
+            foreach (var de in root.DescendantNodesAndSelf().OfType<DeclarationExpressionSyntax>())
+            {
+                if (!de.Ancestors().OfType<WhenClauseSyntax>().Any()) continue;
+                if (de.Ancestors().TakeWhile(a => a != root).Any(a => a is SwitchExpressionArmSyntax or LambdaExpressionSyntax or SwitchExpressionSyntax)) continue;
+                if (de.Designation is ParenthesizedVariableDesignationSyntax) { Unsupported(de, "a deconstructing out declaration in a when clause"); continue; }
+                string name, decl;
+                if (de.Designation is SingleVariableDesignationSyntax single && Model(de).GetDeclaredSymbol(single) is ILocalSymbol ol)
+                { name = ol.Name; decl = Decl(ol.Type, ol.Name, de); }
+                else if (Model(de).GetTypeInfo(de).Type is { } dt)
+                { name = DiscardName(de); decl = Decl(dt, name, de); }
+                else continue;
+                if (seen.TryGetValue(name, out var prev))
+                {
+                    if (prev != decl) Unsupported(de, $"out variable '{name}' declared again with another type in the same switch; rename one");
+                    continue;
+                }
+                seen[name] = decl;
+                lines.Add(Unused + decl + ";");
+            }
+            foreach (var id in root.DescendantNodesAndSelf().OfType<IdentifierNameSyntax>())
+            {
+                if (id.Identifier.Text != "_" || id.Parent is not ArgumentSyntax { Parent: ArgumentListSyntax { Parent: InvocationExpressionSyntax } }) continue;
+                if (!id.Ancestors().OfType<WhenClauseSyntax>().Any()) continue;
+                if (id.Ancestors().TakeWhile(a => a != root).Any(a => a is SwitchExpressionArmSyntax or LambdaExpressionSyntax or SwitchExpressionSyntax)) continue;
+                if (Model(id).GetSymbolInfo(id).Symbol is not IDiscardSymbol discard) continue;
+                var dn = DiscardName(id);
+                if (seen.ContainsKey(dn)) continue;
+                seen[dn] = "";
+                lines.Add(Unused + Decl(discard.Type, dn, id) + ";");
+            }
             foreach (var d in root.DescendantNodesAndSelf().OfType<SingleVariableDesignationSyntax>())
             {
                 if (d.Parent is DeclarationExpressionSyntax) continue;
@@ -330,6 +362,7 @@ internal sealed partial class CEmitter
                 seen[local.Name] = decl;
                 lines.Add(Unused + decl + ";");
             }
+        }
         return lines;
     }
 
