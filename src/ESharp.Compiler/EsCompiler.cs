@@ -50,7 +50,8 @@ public static class EsCompiler
         var withAnalyzers = compilation.WithAnalyzers(
             ImmutableArray.Create<DiagnosticAnalyzer>(new SubsetAnalyzer()), analyzerOptions);
         diagnostics.AddRange(withAnalyzers.GetAnalyzerDiagnosticsAsync().GetAwaiter().GetResult()
-            .Where(d => IsUser(d, userSet)));
+            // ES0100 (software 64-bit maths on a 68020) is about the 68020: sdl runs on a desktop CPU. (The IDE analyzer cannot know the target.)
+            .Where(d => IsUser(d, userSet) && !(d.Id == "ES0100" && options.Defines.Contains("SDL"))));
 
         // 3. Entry point rules.
         CheckEntryPoint(compilation, userSet, diagnostics);
@@ -94,13 +95,47 @@ public static class EsCompiler
 
     private static IEnumerable<Diagnostic> AmigaOnlyHints(IEnumerable<Diagnostic> errors, string target)
     {
+        HashSet<string>? amigaMembers = null;   // "Type.Member" of the platform sources as an Amiga target sees them (read only if needed)
         foreach (var d in errors)
         {
-            if (d.Id is not ("CS0103" or "CS0246" or "CS0234")) continue;
             var text = d.GetMessage(System.Globalization.CultureInfo.InvariantCulture);
+            if (d.Id == "CS0117")
+            {
+                // 'Video' does not contain a definition for 'Window': a member that exists only in the Amiga build of a class that sdl has too.
+                var m = System.Text.RegularExpressions.Regex.Match(text, @"'(?:[\w.]*\.)?(\w+)' does not contain a definition for '(\w+)'");
+                if (!m.Success) continue;
+                amigaMembers ??= AmigaPlatformMembers();
+                var key = m.Groups[1].Value + "." + m.Groups[2].Value;
+                if (amigaMembers.Contains(key)) yield return Diagnostic.Create(Descriptors.AmigaOnly, d.Location, key, target);
+                continue;
+            }
+            if (d.Id is not ("CS0103" or "CS0246" or "CS0234")) continue;
             var name = AmigaOnlyTypes.FirstOrDefault(n => text.Contains("'" + n + "'", StringComparison.Ordinal));
             if (name != null) yield return Diagnostic.Create(Descriptors.AmigaOnly, d.Location, name, target);
         }
+    }
+
+    private static HashSet<string> AmigaPlatformMembers()
+    {
+        var parse = new CSharpParseOptions(LanguageVersion.Latest, preprocessorSymbols: new[] { "AMIGA", "M68K", "AMIGAOS3" });
+        var result = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var src in LibrarySources.Load())
+        {
+            var root = CSharpSyntaxTree.ParseText(src.Text, parse, path: src.Path).GetRoot();
+            foreach (var type in root.DescendantNodes().OfType<Microsoft.CodeAnalysis.CSharp.Syntax.TypeDeclarationSyntax>())
+                foreach (var member in type.Members)
+                {
+                    switch (member)
+                    {
+                        case Microsoft.CodeAnalysis.CSharp.Syntax.MethodDeclarationSyntax md: result.Add(type.Identifier.Text + "." + md.Identifier.Text); break;
+                        case Microsoft.CodeAnalysis.CSharp.Syntax.PropertyDeclarationSyntax pd: result.Add(type.Identifier.Text + "." + pd.Identifier.Text); break;
+                        case Microsoft.CodeAnalysis.CSharp.Syntax.FieldDeclarationSyntax fd:
+                            foreach (var v in fd.Declaration.Variables) result.Add(type.Identifier.Text + "." + v.Identifier.Text);
+                            break;
+                    }
+                }
+        }
+        return result;
     }
 
     private static ImmutableArray<Diagnostic> Sorted(List<Diagnostic> diagnostics) =>

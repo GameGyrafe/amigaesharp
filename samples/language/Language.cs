@@ -34,6 +34,8 @@ public class ListNode
 
 public class Card { public int Rank; }
 
+public class SelfCard : Card { public bool Same(SelfCard o) { return Equals(o); } public bool Itself() { return Equals(this); } }
+
 public class Ace : Card { public Ace() { Rank = 14; } }
 
 public interface IScorer
@@ -70,6 +72,10 @@ public static class Table
 /// </summary>
 public static class Program
 {
+    const string FoldKey = "key";
+    static bool FoldedA = FoldKey == "key";
+    static bool FoldedB = FoldKey != "key";
+
     static void Check(bool ok, string name)
     {
         Dos.PutStr(ok ? "ok " : "FAIL ");
@@ -244,5 +250,14 @@ public static class Program
         Check(face == ace && ace == face && none != ace && (none ?? face) == ace, "base and derived references");
         none ??= ace;
         Check(none == face && (noText ?? "empty") == "empty", "?? and ??=");
+
+        // Equals on classes without an override is reference equality; a constant string compare folds (also in a static initializer).
+        Card other = new Card();
+        Check(face.Equals(ace) && !face.Equals(other) && object.Equals(ace, face) && !object.Equals(ace, other) && object.ReferenceEquals(face, ace), "Equals is reference equality");
+        SelfCard sc = new SelfCard(); SelfCard sd = new SelfCard();
+        string partA = "ab"; string joined = partA + "c"; string lead = "a"; string joined2 = lead + "bc";
+        Check(sc.Same(sc) && !sc.Same(sd) && sc.Itself(), "unqualified Equals in a method");
+        Check(object.Equals(joined, joined2) && !object.Equals(joined, partA), "object.Equals on strings compares characters");
+        Check(FoldedA && !FoldedB, "constant string compare in a static initializer");
     }
 }

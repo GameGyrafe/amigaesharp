@@ -176,11 +176,19 @@ static __attribute__((unused)) int32_t es_sdl_get_pixel(int32_t x, int32_t y)
 /* A planar image (plane after plane, rows padded to 16 pixels) or a region of it, optionally through a one-plane mask.
    Planes the image does not have are zero, as with the Amiga blit (every plane of the screen is written). */
 static __attribute__((unused)) void es_sdl_blit(const uint8_t *planar, const uint8_t *mask, int32_t width, int32_t height, int32_t depth,
-    int32_t sx, int32_t sy, int32_t w, int32_t h, int32_t x, int32_t y)
+    int32_t sx, int32_t sy, int32_t w, int32_t h, int32_t x, int32_t y, int32_t planarLen, int32_t maskLen)
 {
     if (es_sdl_fb == NULL || planar == NULL || w <= 0 || h <= 0) return;
+    if (width <= 0 || height <= 0 || depth < 0) return;
     int32_t bpr = (width + 15) / 16 * 2;
     int32_t plane = bpr * height;
+    /* The data must hold depth planes (and the mask one) of width x height: a mismatch stops the program, as the host's exception does. */
+    if ((int64_t)planarLen < (int64_t)plane * depth || (mask != NULL && maskLen < plane))
+    {
+        fprintf(stderr, "esharp: blit data too short for %dx%dx%d (%d bytes%s)\n", (int)width, (int)height, (int)depth, (int)planarLen,
+            mask != NULL && maskLen < plane ? ", mask too short" : "");
+        exit(1);
+    }
     for (int32_t row = 0; row < h; row++)
     {
         int32_t srcY = sy + row, py = y + row;
@@ -242,8 +250,20 @@ static int32_t es_sdl_rawkey(SDL_Scancode s)
     if (s >= SDL_SCANCODE_A && s <= SDL_SCANCODE_Z) return letters[s - SDL_SCANCODE_A];
     if (s >= SDL_SCANCODE_1 && s <= SDL_SCANCODE_0) return 0x01 + (s - SDL_SCANCODE_1);
     if (s >= SDL_SCANCODE_F1 && s <= SDL_SCANCODE_F10) return 0x50 + (s - SDL_SCANCODE_F1);
+    if (s >= SDL_SCANCODE_KP_1 && s <= SDL_SCANCODE_KP_3) return 0x1D + (s - SDL_SCANCODE_KP_1);
+    if (s >= SDL_SCANCODE_KP_4 && s <= SDL_SCANCODE_KP_6) return 0x2D + (s - SDL_SCANCODE_KP_4);
+    if (s >= SDL_SCANCODE_KP_7 && s <= SDL_SCANCODE_KP_9) return 0x3D + (s - SDL_SCANCODE_KP_7);
     switch (s)
     {
+        case SDL_SCANCODE_KP_0: return 0x0F;
+        case SDL_SCANCODE_KP_PERIOD: return 0x3C;
+        case SDL_SCANCODE_KP_MINUS: return 0x4A;
+        case SDL_SCANCODE_KP_PLUS: return 0x5E;
+        case SDL_SCANCODE_KP_DIVIDE: return 0x5C;
+        case SDL_SCANCODE_KP_MULTIPLY: return 0x5D;
+        case SDL_SCANCODE_HELP: return 0x5F;
+        case SDL_SCANCODE_F11: return 0x4B;   /* no classic Amiga key: the codes USB keyboard drivers use */
+        case SDL_SCANCODE_F12: return 0x6F;
         case SDL_SCANCODE_RETURN: return 0x44;
         case SDL_SCANCODE_ESCAPE: return 0x45;
         case SDL_SCANCODE_BACKSPACE: return 0x41;
