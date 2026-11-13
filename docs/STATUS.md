@@ -49,7 +49,7 @@ compiled with the host gcc and run) and the new `samples/objects` (21 checks), `
   from; when that is a base class of the target, the object's own type id decides. `switch` patterns, property patterns and bindings work.
   Interface-to-interface tests and struct targets are still ES0099.
 - **Text speed:** `Font.Draw` drew one `RectFill` per run of glyph pixels, about a second for a screen of text on the A1200. A line is now one
-  graphics.library `BltTemplate` from a one-plane strip in chip RAM that the CPU fills (new bindings `BltTemplate`, `SetDrMd`); `DrawChar` and
+  graphics.library `BltTemplate` from a one-plane strip in chip RAM that the CPU fills (new bindings `BltTemplate`, `SetDrMd`, `WaitBlit`; `Video.Template` calls `WaitBlit` after each `BltTemplate` so the CPU does not refill the strip while the blitter still reads it; the emulator cannot show that race, so this is not verified on hardware); `DrawChar` and
   `DrawInt` use it too, scales above 4 and text left of or above the screen fall back to rectangles; the host and SDL draw the same pixels as before.
   Measured with `samples/textspeed` on the emulated A1200 (Kickstart 3.1, chip RAM only): 30 lines of 30 characters take 171-173 ms with
   `Font.Draw`, 2737-2896 ms drawn the old way. The pixels are checked: `samples/screen` compares every printable character at scale 1 and five at
