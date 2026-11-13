@@ -28,7 +28,7 @@ public class Os4VmTests
     public void Unset_vm_setting_gives_the_clear_error()
     {
         Assert.Null(Os4Vm.FindVm(null, out var error));
-        Assert.Equal("set ESHARP_OS4_VM to your AmigaOS 4.1 VM dir (see tools/os4vm/README.md)", error);
+        Assert.Equal("set ESHARP_OS4_VM to your AmigaOS 4.1 VM dir (see os4vm/README.md next to esharp.dll, tools/os4vm/README.md in the repository)", error);
         Assert.Null(Os4Vm.FindVm("  ", out error));
         Assert.StartsWith("set ESHARP_OS4_VM", error);
     }

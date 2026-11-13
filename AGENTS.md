@@ -61,6 +61,8 @@ docker build -t esharp-sdl docker/sdl && docker/sdl/smoke-test.sh   # gcc + stat
 dotnet run --project src/ESharp.Cli -- run samples/cards --target sdl --docker esharp-sdl --headless --input "click 60,145;key 9" --screenshot shot.png   # sdl, headless in the image: --input X,Y are the game's screen pixels (keys are X11 codes, as for FS-UAE), replayed after SHOT; the shot is the game's own frame
 dotnet run --project src/ESharp.Cli -- test samples/language --target sdl --docker esharp-sdl   # host vs SDL (headless in the image): same ok lines
 dotnet run --project src/ESharp.Cli -- run samples/cards --target sdl --docker esharp-sdl   # no --headless: builds in the image, runs the static binary on this desktop (X11/Wayland); ESHARP_SCALE=n sets the window scale
+dotnet pack ESharp.sln -c Release -o artifacts/packages -p:Version=0.1.0-local.1   # AmigaESharp.Tool + AmigaESharp.Sdk (one version, Directory.Build.props); never push them anywhere
+tools/package-smoke.sh artifacts/packages 0.1.0-local.1 <m68k image>   # install from that folder feed into a temp tool path, esharp new, build/run/test, ES0001 from the packaged analyzer, m68k build
 ```
 
 `<image>` is `esharp-amiga-toolchain` (all four targets: m68k, os4, morphos, aros) or, for m68k only,
@@ -76,7 +78,9 @@ Requires the .NET 10 SDK (`global.json`). `src/ESharp.Analyzers` stays on `netst
 - `src/ESharp.Compiler`: `EsCompiler.Compile` (parse, C# errors, analyzer, entry point check) then `CEmitter` (C output with `#line`). `Targets.cs` defines the CPU x OS target model. `CRuntime/es_std.h` (standard C) and `CRuntime/es_sdl.h` (SDL 3) are pasted into the generated C of the sdl target when a `[Native]` extern of `src/ESharp.Platform/Crt.cs` named `es_std_*` / `es_sdl_*` is called.
 - `src/ESharp.Runtime` and `src/ESharp.Platform`: parsed together with user code. They are embedded in the compiler as source, built by dotnet with `HOST` defined, and parsed with `AMIGA` defined for Amiga targets. Target-specific code uses `#if`.
 - `src/ESharp.Assets`: PNG reader/writer, colour reduction, planar packing and the `assets.json` -> `Assets.g.cs` generator (used by `esharp assets`), with an incremental `Sync` (run by `esharp build`/`run`/`test`; commit the `Assets.g.cs` it writes).
-- `src/ESharp.Target.Host`: managed fakes for tests. `src/ESharp.Cli`: `esharp new|build|run`; `esharp new` also writes a host csproj (analyzer wired in) and `.vscode/` tasks, launch and extensions (`ProjectTemplate.cs`, tested in `ProjectTemplateTests`).
+- `src/ESharp.Target.Host`: managed fakes for tests. Its assemblies (with Runtime and Platform) are copied to `host/` next to `esharp.dll`, which `esharp test` uses when no checkout is named (`ESHARP_ROOT`).
+- Packages (not published yet; `docs/STATUS.md` "NuGet packages"): `src/ESharp.Cli` packs the dotnet tool **AmigaESharp.Tool** (command `esharp`, with `host/` and `os4vm/`), `src/ESharp.Sdk` packs **AmigaESharp.Sdk** (Runtime, Platform, Target.Host in `lib/net10.0`, the analyzer in `analyzers/dotnet/cs`). `.github/workflows/release.yml` publishes both on a `v*` tag on main through nuget.org trusted publishing (GitHub OIDC, `vars.NUGET_USER`, no stored API key); only Dave pushes release tags. Anything the CLI needs at run time must ship in the tool package, not be read from the repo layout.
+- `src/ESharp.Cli`: `esharp new|build|run|test|assets|addr|os4vm`; `esharp new` also writes a host csproj (a PackageReference to AmigaESharp.Sdk at the tool's version, or ProjectReferences when the CLI runs from a checkout or with `--source`; analyzer wired in either way) and `.vscode/` tasks, launch and extensions (`ProjectTemplate.cs`, tested in `ProjectTemplateTests`).
 - Emitter gaps are reported as `ES0099`, never miscompiled. Prefer adding the feature over silencing the diagnostic.
 
 ## Rules

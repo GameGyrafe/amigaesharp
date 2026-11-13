@@ -1,0 +1,46 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    Packaging only: AmigaESharp.Sdk, the package a game's host project references (esharp new writes the PackageReference).
+      lib/net10.0:          ESharp.Runtime, ESharp.Platform, ESharp.Target.Host (built with HOST)
+      analyzers/dotnet/cs:  ESharp.Analyzers (the subset rules, ES0001-ES0010), loaded by the compiler, not referenced
+    The project has no code of its own and its own assembly is not packed. The package has no dependencies: the analyzer
+    runs on the compiler's Roslyn, and the host assemblies only need the framework.
+  -->
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <IsPackable>true</IsPackable>
+    <PackageId>AmigaESharp.Sdk</PackageId>
+    <Title>E# (Amiga E#) host libraries and subset analyzer</Title>
+    <Description>Reference this from the host project of an E# game: the E# runtime and Amiga platform contracts with their managed host fakes (built with HOST), so the same source builds, runs and is unit tested under plain dotnet, and the E# subset analyzer (ES0001-ES0010) for the editor and dotnet build. Use with the esharp tool (AmigaESharp.Tool).</Description>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
+    <IncludeBuildOutput>false</IncludeBuildOutput>
+    <IncludeSymbols>false</IncludeSymbols>
+    <NoWarn>$(NoWarn);NU5128</NoWarn>
+    <TargetsForTfmSpecificContentInPackage>$(TargetsForTfmSpecificContentInPackage);EsPackHostLibs</TargetsForTfmSpecificContentInPackage>
+    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\ESharp.Target.Host\ESharp.Target.Host.csproj" PrivateAssets="all" />
+    <ProjectReference Include="..\ESharp.Analyzers\ESharp.Analyzers.csproj" ReferenceOutputAssembly="false" PrivateAssets="all" />
+    <None Include="..\PackageReadme.md" Pack="true" PackagePath="README.md" />
+  </ItemGroup>
+
+  <Target Name="EsPackHostLibs" DependsOnTargets="ResolveProjectReferences">
+    <MSBuild Projects="..\ESharp.Target.Host\ESharp.Target.Host.csproj" Targets="GetTargetPath" RemoveProperties="TargetFramework;RuntimeIdentifier;SelfContained">
+      <Output TaskParameter="TargetOutputs" ItemName="_EsHostTarget" />
+    </MSBuild>
+    <MSBuild Projects="..\ESharp.Analyzers\ESharp.Analyzers.csproj" Targets="GetTargetPath" RemoveProperties="TargetFramework;RuntimeIdentifier;SelfContained">
+      <Output TaskParameter="TargetOutputs" ItemName="_EsAnalyzer" />
+    </MSBuild>
+    <PropertyGroup>
+      <_EsHostDir>@(_EsHostTarget->'%(RootDir)%(Directory)')</_EsHostDir>
+    </PropertyGroup>
+    <ItemGroup>
+      <TfmSpecificPackageFile Include="$(_EsHostDir)ESharp.Runtime.dll;$(_EsHostDir)ESharp.Platform.dll;$(_EsHostDir)ESharp.Target.Host.dll" PackagePath="lib/$(TargetFramework)" />
+      <TfmSpecificPackageFile Include="@(_EsAnalyzer)" PackagePath="analyzers/dotnet/cs" />
+    </ItemGroup>
+  </Target>
+
+</Project>

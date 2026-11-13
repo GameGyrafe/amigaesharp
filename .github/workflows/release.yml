@@ -1,0 +1,69 @@
+name: Release
+
+# Pushing a tag vX.Y.Z (or vX.Y.Z-suffix) tests, packs and publishes AmigaESharp.Tool and AmigaESharp.Sdk to nuget.org,
+# both with version X.Y.Z. Publishing uses nuget.org trusted publishing (GitHub OIDC), so no long-lived API key is stored:
+# nuget.org needs a trusted publishing policy for GameGyrafe/amigaesharp and this workflow file (release.yml), and the
+# repository variable NUGET_USER holds the nuget.org account name that owns the policy. The tag must be on main.
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: read
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: The tag must be on main
+        run: |
+          git fetch -q origin main
+          git merge-base --is-ancestor "$GITHUB_SHA" origin/main || { echo "tag $GITHUB_REF_NAME is not on main"; exit 1; }
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+      - name: Version from the tag
+        id: version
+        run: |
+          v="${GITHUB_REF_NAME#v}"
+          if ! [[ "$v" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]; then
+            echo "tag $GITHUB_REF_NAME is not vMAJOR.MINOR.PATCH[-suffix]"; exit 1
+          fi
+          echo "version=$v" >> "$GITHUB_OUTPUT"
+      - name: Test
+        run: dotnet test --configuration Release
+      - name: Pack
+        run: dotnet pack ESharp.sln --configuration Release --output artifacts/packages -p:Version=${{ steps.version.outputs.version }}
+      - name: Smoke-test the packages from a local feed
+        run: tools/package-smoke.sh artifacts/packages ${{ steps.version.outputs.version }} amigadev/crosstools:m68k-amigaos@sha256:32ec76dac03a642203f0f09f0416480d6c25de1092ed7ed472db870304a64859
+      - uses: actions/upload-artifact@v4
+        with:
+          name: packages-${{ steps.version.outputs.version }}
+          path: artifacts/packages/*.nupkg
+
+  # Only this job can request a GitHub OIDC token, and it runs no project code: it pushes the tested packages.
+  publish:
+    needs: release
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: packages-${{ needs.release.outputs.version }}
+          path: artifacts/packages
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+      - name: nuget.org login (trusted publishing, short-lived key)
+        id: login
+        uses: NuGet/login@v1
+        with:
+          user: ${{ vars.NUGET_USER }}
+      - name: Push to nuget.org
+        run: dotnet nuget push "artifacts/packages/*.nupkg" --api-key "${{ steps.login.outputs.NUGET_API_KEY }}" --source https://api.nuget.org/v3/index.json --skip-duplicate

@@ -53,4 +53,22 @@ public class TestReportTests
         Assert.Contains("/p/A.cs", text);
         Assert.Contains("ESharp.Target.Host.csproj", text);
     }
+
+    [Fact]
+    public void Host_project_references_the_packed_host_assemblies_without_a_checkout()
+    {
+        var libs = Path.Combine(Path.GetTempPath(), "esharp-hostlibs-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(libs);
+        try
+        {
+            File.WriteAllText(Path.Combine(libs, "ESharp.Target.Host.dll"), "");
+            var text = HostRun.ProjectText(libs, new[] { "/p/A.cs" });
+            var doc = System.Xml.Linq.XDocument.Parse(text);
+            Assert.Empty(doc.Descendants("ProjectReference"));
+            var hints = doc.Descendants("HintPath").Select(h => Path.GetFileName(h.Value)).ToList();
+            Assert.Equal(new[] { "ESharp.Runtime.dll", "ESharp.Platform.dll", "ESharp.Target.Host.dll" }, hints);
+            Assert.Contains("HOST", text);
+        }
+        finally { Directory.Delete(libs, true); }
+    }
 }

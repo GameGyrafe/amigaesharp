@@ -13,7 +13,10 @@ internal static class Program
     private static readonly string Usage = @"esharp - C# for the Amiga
 
 Usage:
-  esharp new <name>                 Create a new hello-world project
+  esharp new <name> [--source [dir] | --package [version]]
+                                    Create a new hello-world project. Its csproj references the AmigaESharp.Sdk package
+                                    at this tool's version (--package), or, with --source or when this esharp runs from an
+                                    E# checkout, that checkout's projects (for contributors; ESHARP_ROOT names one)
   esharp build [path] [options]     Check the subset, emit C, and run the target C compiler
   esharp run [path] [options]       Build for m68k and run it in FS-UAE (or --target sdl: run it through SDL;
                                     --target os4: run it in the AmigaOS 4.1 QEMU VM named by ESHARP_OS4_VM)
@@ -25,6 +28,10 @@ Usage:
   esharp test [path] [options]      Run the project on the host; with --target m68k --docker also on the Amiga (or
                                     --target os4 --docker also in the AmigaOS 4.1 VM, or --target sdl --docker also
                                     through SDL, headless), and compare
+  esharp os4vm check|start|install-hook|remove-hook [options]
+                                    Helpers for the AmigaOS 4.1 QEMU VM in ESHARP_OS4_VM (python3; see the README.md
+                                    in the os4vm folder next to esharp.dll)
+  esharp --version                  Print the version
 
 Build options:
   --target <name>   m68k (default), os4, morphos, aros or sdl (desktop, SDL 3)
@@ -77,6 +84,11 @@ Targets:
             Console.Out.Write(Usage);
             return args.Length == 0 ? 1 : 0;
         }
+        if (args[0] is "--version" or "version")
+        {
+            Console.WriteLine(SourceTree.ToolVersion);
+            return 0;
+        }
 
         return args[0] switch
         {
@@ -86,6 +98,7 @@ Targets:
             "addr" => Addr.Run(args.Skip(1).ToArray()),
             "assets" => Assets(args.Skip(1).ToArray()),
             "test" => Test(args.Skip(1).ToArray()),
+            "os4vm" => Os4VmHelper(args.Skip(1).ToArray()),
             _ => Fail($"unknown command '{args[0]}'"),
         };
     }
@@ -143,8 +156,8 @@ Targets:
         if (!amiga && amigaOnly.Count > 0)
             Console.Error.WriteLine($"esharp: warning: {string.Join(", ", amigaOnly.Distinct())} ignored, because " +
                 (sdl || os4 ? "they only matter for --target m68k" : "the test only runs on the host; add --target m68k to also run in FS-UAE"));
-        var repo = SourceTree.Find();
-        if (repo == null) return Fail("cannot find the E# source tree (src/ESharp.Target.Host); set ESHARP_ROOT");
+        var repo = SourceTree.HostSide();
+        if (repo == null) return Fail("cannot find the E# host libraries (the host folder next to esharp.dll) or an E# source tree; reinstall AmigaESharp.Tool or set ESHARP_ROOT to a checkout");
         var baseDir = Directory.Exists(path) ? path : Path.GetDirectoryName(Path.GetFullPath(path)) ?? ".";
 
         Console.WriteLine("Host:");
@@ -236,20 +249,76 @@ Targets:
 
     private static int New(string[] args)
     {
-        if (args.Length != 1) return Fail("usage: esharp new <name or path>   (the last path segment is the project name)");
-        var dir = args[0];
+        const string usage = "usage: esharp new <name or path> [--source [E# checkout] | --package [version]]   (the last path segment is the project name)";
+        string? dir = null, source = null, version = null;
+        bool wantSource = false, wantPackage = false;
+        for (var i = 0; i < args.Length; i++)
+        {
+            switch (args[i])
+            {
+                case "--source":
+                    wantSource = true;
+                    if (i + 1 < args.Length && !args[i + 1].StartsWith("-") && dir != null) source = args[++i];
+                    break;
+                case "--package":
+                    wantPackage = true;
+                    if (i + 1 < args.Length && !args[i + 1].StartsWith("-") && dir != null) version = args[++i];
+                    break;
+                default:
+                    if (args[i].StartsWith("-") || dir != null) return Fail(usage);
+                    dir = args[i];
+                    break;
+            }
+        }
+        if (dir == null || (wantSource && wantPackage)) return Fail(usage);
         var name = ProjectTemplate.ProjectName(dir);
         var problem = ProjectTemplate.NameProblem(name);
         if (problem != null) return Fail($"'{name}' cannot be a project name: {problem}. It becomes the C# namespace and the csproj name, so use letters, digits and underscores, e.g. {ProjectTemplate.Suggest(name)}");
         if (Directory.Exists(dir)) return Fail($"'{dir}' already exists");
 
+        // A checkout: the one named, else ESHARP_ROOT or the checkout this esharp was built in (not the current directory,
+        // so an installed tool run inside some checkout still writes a package reference unless asked).
+        string? root = null;
+        if (source != null)
+        {
+            if (!SourceTree.IsRoot(source)) return Fail($"'{source}' is not an E# checkout (no src/ESharp.Target.Host and src/ESharp.Analyzers)");
+            root = Path.GetFullPath(source);
+        }
+        else if (!wantPackage)
+        {
+            root = SourceTree.Find(AppContext.BaseDirectory);
+            if (wantSource && root == null) return Fail("--source: cannot find an E# checkout; give its path or set ESHARP_ROOT");
+        }
+
         Directory.CreateDirectory(dir);
-        var root = SourceTree.Find();
-        ProjectTemplate.Write(dir, name, root, Path.Combine(AppContext.BaseDirectory, "esharp.dll"));
+        version ??= SourceTree.ToolVersion;
+        ProjectTemplate.Write(dir, name, root, Path.Combine(AppContext.BaseDirectory, "esharp.dll"), version);
         Console.WriteLine($"Created {dir}/ (Program.cs, {name}.csproj, .vscode/). Build it with: esharp build {dir}");
-        if (root == null)
-            Console.Error.WriteLine($"esharp: could not find the E# source tree; set ESHARP_ROOT, or ESharpRoot in {Path.Combine(dir, name + ".csproj")}, before using dotnet build or the editor");
+        Console.WriteLine(root != null
+            ? $"The csproj references the E# checkout at {root} (ESharpRoot)."
+            : $"The csproj references the {SourceTree.SdkPackage} package, version {version}.");
         return 0;
+    }
+
+    /// <summary>`esharp os4vm ...`: the VM helper script shipped next to the CLI (tools/os4vm/os4vm.py in the repository).</summary>
+    private static int Os4VmHelper(string[] args)
+    {
+        var script = Path.Combine(AppContext.BaseDirectory, "os4vm", "os4vm.py");
+        if (!File.Exists(script)) return Fail($"missing {script}; reinstall AmigaESharp.Tool");
+        var psi = new ProcessStartInfo("python3") { UseShellExecute = false };
+        psi.ArgumentList.Add("-I");
+        psi.ArgumentList.Add(script);
+        foreach (var a in args) psi.ArgumentList.Add(a);
+        try
+        {
+            using var p = Process.Start(psi)!;
+            p.WaitForExit();
+            return p.ExitCode;
+        }
+        catch (System.ComponentModel.Win32Exception)
+        {
+            return Fail("python3 not found; esharp os4vm needs Python 3");
+        }
     }
 
     private static long? ParseSize(string text)
@@ -387,6 +456,9 @@ Targets:
             {
                 using var proc = Process.Start(psi)!;
                 proc.WaitForExit();
+                // 125: docker itself failed, usually an image that is not there (esharp-amiga-toolchain and esharp-sdl are built locally).
+                if (proc.ExitCode == 125 && docker != null)
+                    return Fail($"docker could not run image '{docker}' (exit code 125). esharp-amiga-toolchain and esharp-sdl are built from docker/ and docker/sdl in the E# repository (https://github.com/GameGyrafe/amigaesharp); for m68k you can also pass --docker {ProjectTemplate.DefaultImage}");
                 if (proc.ExitCode != 0) return Fail($"{cc} failed with exit code {proc.ExitCode}");
             }
             catch (System.ComponentModel.Win32Exception)
