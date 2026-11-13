@@ -202,6 +202,7 @@ internal sealed partial class CEmitter
         CheckMemberNameCollisions(types);
         var structs = SortStructs(types.OfType<INamedTypeSymbol>().Where(t => t.TypeKind == TypeKind.Struct));
         var heapClasses = types.Where(IsHeapClass).Select(t => (INamedTypeSymbol)t).OrderBy(Depth).ToList();
+        _heapClasses = heapClasses;
         foreach (var c in heapClasses)
             if (BaseClass(c) != null || c.GetMembers().OfType<IMethodSymbol>().Any(IsDynamic)) _polyRoots.Add(RootClass(c));
         var enums = types.Where(t => t.TypeKind == TypeKind.Enum).ToList();
@@ -229,6 +230,10 @@ internal sealed partial class CEmitter
         }
         foreach (var s in structs) EmitStruct(s);
         foreach (var c in heapClasses) EmitClass(c);
+        var typeText = _out.ToString();
+        _out.Clear();
+        // The tables of virtual and interface functions come after the span, tuple and delegate typedefs, which their parameters may
+        // use (a method taking a ReadOnlySpan of a struct); those typedefs only need the structs and the forward declarations above.
         foreach (var c in heapClasses.Where(IsPoly)) EmitCvt(c);
         foreach (var c in heapClasses.Where(IsPoly))
         {
@@ -237,7 +242,7 @@ internal sealed partial class CEmitter
             Line($"static __attribute__((unused)) {TypeName(c)} *{TypeName(c)}_alloc(void) {{ {TypeName(c)} *o = ES_NEW({TypeName(c)}); o->{VtPath(c)} = (const struct {CvtName(RootClass(c))} *)&{TypeName(c)}_vt; return o; }}");
         }
         foreach (var i in interfaces) EmitInterface(i);
-        var typeText = _out.ToString();
+        var interfaceText = _out.ToString();
         _out.Clear();
 
         var fields = statics.SelectMany(t => t.GetMembers().OfType<IFieldSymbol>()).Where(f => f.IsStatic && !f.IsConst && f.AssociatedSymbol == null && usedStatics.Contains(f)).ToList();
@@ -264,7 +269,8 @@ internal sealed partial class CEmitter
             Line(Prototype(m) + ";");
             if (m.MethodKind == MethodKind.Constructor && IsHeapClass(m.ContainingType)) Line(InitPrototype(m) + ";");
         }
-        if (methods.Count > 0) Line("");
+        foreach (var c in _fieldInitClasses) Line($"static void {FieldInitName(c)}({TypeName(c)} *{ThisName});");
+        if (methods.Count > 0 || _fieldInitClasses.Count > 0) Line("");
         CheckBodilessAsm(reachable);
         EmitInterruptDeclarations(methods);
         foreach (var c in heapClasses.Where(IsPoly)) EmitVtInstance(c, reachable);
@@ -272,6 +278,7 @@ internal sealed partial class CEmitter
             foreach (var i in interfaces.Where(i => c.AllInterfaces.Contains(i, SymbolEqualityComparer.Default)))
                 EmitVtable(i, c);
 
+        foreach (var c in _fieldInitClasses) EmitFieldInit(c);
         foreach (var m in methods) EmitMethod(m);
 
         EmitMain();
@@ -280,6 +287,7 @@ internal sealed partial class CEmitter
         body.Append(typeText);
         foreach (var span in _spans.Values) body.Append(span);
         if (_spans.Count > 0) body.Append('\n');
+        body.Append(interfaceText);
         body.Append(_out);
         _out.Clear();
 
@@ -343,6 +351,20 @@ internal sealed partial class CEmitter
                 "static char es_fmt_buf[8][128];",
                 "static int es_fmt_index;",
                 "static char *es_fmt_begin(void) { char *b = es_fmt_buf[es_fmt_index]; es_fmt_index = (es_fmt_index + 1) & 7; return b; }",
+                // s.Substring(start[, count]) copies into the same ring as interpolation; out-of-range arguments are clamped (no exceptions).
+                "static __attribute__((unused)) const char *es_substr(const char *s, int32_t start, int32_t count)",
+                "{",
+                "    char *b = es_fmt_begin();",
+                "    int32_t len = 0, n = 0;",
+                "    if (s == NULL) s = \"\";",
+                "    while (s[len]) len++;",
+                "    if (start < 0) start = 0;",
+                "    if (start > len) start = len;",
+                "    if (count < 0 || count > len - start) count = len - start;",
+                "    while (n < count && n < 127) { b[n] = s[start + n]; n++; }",
+                "    b[n] = 0;",
+                "    return b;",
+                "}",
                 "static __attribute__((unused)) int es_put_pad(char *b, int n, const char *s, int len, int width)",
                 "{",
                 "    int pad = (width < 0 ? -width : width) - len;",
@@ -948,7 +970,7 @@ internal sealed partial class CEmitter
     /// A C array declaration for a fixed-size E# array: <c>T name[N] = {...}</c>. Arrays live in
     /// the frame or in static storage; there is no heap array.
     /// </summary>
-    private string ArrayDeclarator(IArrayTypeSymbol t, string name, ExpressionSyntax? init, SyntaxNode at)
+    private string ArrayDeclarator(IArrayTypeSymbol t, string name, ExpressionSyntax? init, SyntaxNode at, bool withItems = true)
     {
         if (t.Rank != 1)
         {
@@ -986,6 +1008,7 @@ internal sealed partial class CEmitter
 
         var elem = CType(t.ElementType, at);
         var text = (elem.EndsWith("*") ? elem : elem + " ") + $"{name}[{length}]";
+        if (!withItems) return text;
         if (items == null) return text + " = {0}";
         var elements = items.Expressions.Select(e => Expr(e, top: true)).ToList();
         if (elements.Count == 0) elements.Add("0");
@@ -1022,6 +1045,7 @@ internal sealed partial class CEmitter
         {
             var isStatic = member.ChildTokens().Any(t => t.IsKind(SyntaxKind.StaticKeyword));
             var supported = member is FieldDeclarationSyntax or EnumDeclarationSyntax or StructDeclarationSyntax
+                or ClassDeclarationSyntax or InterfaceDeclarationSyntax
                 or MethodDeclarationSyntax or OperatorDeclarationSyntax or ConversionOperatorDeclarationSyntax
                 or PropertyDeclarationSyntax or IndexerDeclarationSyntax
                 || member is ConstructorDeclarationSyntax { Initializer: null or { RawKind: (int)SyntaxKind.ThisConstructorInitializer } };
@@ -1069,8 +1093,10 @@ internal sealed partial class CEmitter
         if (m.ReturnsByRef || m.ReturnsByRefReadonly) Unsupported(at, "ref return from an interface method");
         for (var k = 0; k < m.Parameters.Length; k++)
         {
-            if (m.Parameters[k].RefKind != RefKind.None) Unsupported(at, "ref/out parameter in an interface method");
-            parts.Add(named ? Decl(m.Parameters[k].Type, "a" + k, at) : CType(m.Parameters[k].Type, at));
+            // ref, out and in parameters are pointers, as in an ordinary function: the slot passes the caller's address on.
+            var byRef = m.Parameters[k].RefKind != RefKind.None;
+            parts.Add(named ? Decl(m.Parameters[k].Type, (byRef ? "*a" : "a") + k, at)
+                : byRef ? Decl(m.Parameters[k].Type, "*", at) : CType(m.Parameters[k].Type, at));
         }
         return string.Join(", ", parts);
     }
@@ -1159,14 +1185,14 @@ internal sealed partial class CEmitter
         var decl = (ClassDeclarationSyntax)c.DeclaringSyntaxReferences.First().GetSyntax();
         foreach (var member in decl.Members)
         {
+            // Nested types are emitted on their own (their C name includes the outer class: Es_Outer_Inner).
             var supported = member is FieldDeclarationSyntax or EnumDeclarationSyntax or StructDeclarationSyntax
+                or ClassDeclarationSyntax or InterfaceDeclarationSyntax
                 or MethodDeclarationSyntax or OperatorDeclarationSyntax or ConversionOperatorDeclarationSyntax
                 or PropertyDeclarationSyntax or IndexerDeclarationSyntax or ConstructorDeclarationSyntax;
             if (!supported) Unsupported(member, $"{member.Kind()} in a class");
-            if (member is FieldDeclarationSyntax f && !f.Modifiers.Any(m => m.IsKind(SyntaxKind.StaticKeyword) || m.IsKind(SyntaxKind.ConstKeyword)))
-                foreach (var v in f.Declaration.Variables.Where(v => v.Initializer != null))
-                    Unsupported(v.Initializer!, "initializer on an instance field of a class (assign it in the constructor)");
         }
+        if (FieldInits(c).Count > 0) _fieldInitClasses.Add(c);
 
         var name = TypeName(c);
         Line($"struct {name}");
@@ -1177,13 +1203,15 @@ internal sealed partial class CEmitter
         else if (IsPoly(c)) Line($"const struct {CvtName(c)} *vt;");
         foreach (var field in c.GetMembers().OfType<IFieldSymbol>().Where(f => !f.IsStatic && !f.IsConst && f.AssociatedSymbol == null))
             if (field.RefKind != RefKind.None) Unsupported(field.DeclaringSyntaxReferences.First().GetSyntax(), "ref field");
+            else if (field.Type is IArrayTypeSymbol arr)
+            {
+                // A fixed-size array inside the object (new T[N] or an initializer list; the elements are set by the field initializer function).
+                var fieldDecl = field.DeclaringSyntaxReferences.First().GetSyntax();
+                Line(ArrayDeclarator(arr, field.Name, (fieldDecl as VariableDeclaratorSyntax)?.Initializer?.Value, fieldDecl, withItems: false) + ";");
+            }
             else Line(Decl(field.Type, field.Name, decl) + ";");
         foreach (var p in c.GetMembers().OfType<IPropertySymbol>().Where(p => !p.IsStatic && IsAutoProperty(p)))
-        {
-            if (p.DeclaringSyntaxReferences.First().GetSyntax() is PropertyDeclarationSyntax { Initializer: not null } pd)
-                Unsupported(pd, "initializer on an instance property");
             Line(Decl(p.Type, p.Name, decl) + ";");
-        }
         if (baseClass == null && !IsPoly(c) && !c.GetMembers().Any(m => m is IFieldSymbol { IsStatic: false, IsConst: false, AssociatedSymbol: null } || m is IPropertySymbol { IsStatic: false } pp && IsAutoProperty(pp)))
             Line("char ES_empty;");   // C has no empty structs
         _indent--;
@@ -1191,19 +1219,154 @@ internal sealed partial class CEmitter
         Line("");
     }
 
+    /// <summary>Classes with instance field (or auto-property) initializers that need code: they get a <c>NAME_finit(self)</c> function.</summary>
+    private readonly List<INamedTypeSymbol> _fieldInitClasses = new();
+
+    /// <summary>
+    /// The instance field and auto-property initializers declared in class <paramref name="c"/> (not its bases) that take code: an array
+    /// with an element list, or any other value. <c>new T[N]</c> takes none, because a new object is all zeros.
+    /// </summary>
+    private static List<(ISymbol Member, string Name, ExpressionSyntax Init)> FieldInits(INamedTypeSymbol c)
+    {
+        var result = new List<(ISymbol, string, ExpressionSyntax)>();
+        foreach (var member in c.GetMembers())
+        {
+            if (member is IFieldSymbol { IsStatic: false, IsConst: false, AssociatedSymbol: null } f &&
+                f.DeclaringSyntaxReferences.FirstOrDefault()?.GetSyntax() is VariableDeclaratorSyntax { Initializer: { } fi })
+            {
+                if (f.Type is IArrayTypeSymbol && ArrayItems(fi.Value) == null) continue;
+                result.Add((f, f.Name, fi.Value));
+            }
+            else if (member is IPropertySymbol { IsStatic: false } p && IsAutoProperty(p) &&
+                     p.DeclaringSyntaxReferences.FirstOrDefault()?.GetSyntax() is PropertyDeclarationSyntax { Initializer: { } pi })
+                result.Add((p, p.Name, pi.Value));
+        }
+        return result;
+    }
+
+    private static string FieldInitName(INamedTypeSymbol c) => TypeName(c) + "_finit";
+
+    private void EmitFieldInit(INamedTypeSymbol c)
+    {
+        Line($"static void {FieldInitName(c)}({TypeName(c)} *{ThisName})");
+        Line("{");
+        _indent++;
+        _this = ThisKind.Pointer;
+        _thisType = c;
+        _thisIsClass = true;
+        foreach (var (member, name, init) in FieldInits(c))
+        {
+            var place = $"{ThisName}->{MemberPath(c, c, name)}";
+            if (member is IFieldSymbol { Type: IArrayTypeSymbol } && ArrayItems(init) is { } items)
+            {
+                for (var i = 0; i < items.Expressions.Count; i++) Line($"{place}[{i}] = {Expr(items.Expressions[i], top: true)};");
+            }
+            else Line($"{place} = {Expr(init, top: true)};");
+        }
+        _this = ThisKind.None;
+        _thisType = null;
+        _thisIsClass = false;
+        _indent--;
+        Line("}");
+        Line("");
+    }
+
+    /// <summary>
+    /// What creating an object of <paramref name="c"/> runs when no explicit constructor of <paramref name="c"/> does it: the field initializers
+    /// of <paramref name="c"/> (if <paramref name="includeSelf"/>), then those of each base class without constructors, up to the nearest
+    /// base with explicit constructors, whose parameterless one runs (it runs its own initializers and the rest of the chain).
+    /// </summary>
+    private string ImplicitInits(INamedTypeSymbol c, string self, bool includeSelf)
+    {
+        var sb = new StringBuilder();
+        if (includeSelf && _fieldInitClasses.Contains(c, SymbolEqualityComparer.Default)) sb.Append($"{FieldInitName(c)}(({TypeName(c)} *){self}); ");
+        for (var b = BaseClass(c); b != null; b = BaseClass(b))
+        {
+            var explicitCtors = b.InstanceConstructors.Where(k => !k.IsImplicitlyDeclared).ToList();
+            if (explicitCtors.Count > 0)
+            {
+                var none = explicitCtors.FirstOrDefault(k => k.Parameters.Length == 0);
+                if (none != null) sb.Append($"{FuncName(none)}_init(({TypeName(b)} *){self}); ");
+                break;
+            }
+            if (_fieldInitClasses.Contains(b, SymbolEqualityComparer.Default)) sb.Append($"{FieldInitName(b)}(({TypeName(b)} *){self}); ");
+        }
+        return sb.ToString().TrimEnd();
+    }
+
     private void EmitStaticField(IFieldSymbol f)
     {
         var decl = f.DeclaringSyntaxReferences.First().GetSyntax();
         var init = (decl as VariableDeclaratorSyntax)?.Initializer?.Value;
+        // An initializer that is not a C constant (a call, new of a class, another field's value) runs at start-up instead.
+        var arrayItems = f.Type is IArrayTypeSymbol ? ArrayItems(init) : null;
+        var deferred = f.Type is IArrayTypeSymbol ? arrayItems != null && !arrayItems.Expressions.All(IsCConstant) : init != null && !IsCConstant(init);
         var text = f.Type is IArrayTypeSymbol arr
-            ? ArrayDeclarator(arr, FieldName(f), init, decl)
+            ? (deferred ? ArrayDeclarator(arr, FieldName(f), init, decl, withItems: false) + " = {0}" : ArrayDeclarator(arr, FieldName(f), init, decl))
             : Decl(f.Type, FieldName(f), decl);
         // Chip RAM is a 68k-only concept in the C dialect: PowerPC systems allocate chip memory
         // at run time instead, so the attribute is a no-op there.
         if (f.IsVolatile) text = f.Type is IArrayTypeSymbol ? "volatile " + text : VolatileDecl(f, decl);   // shared with an interrupt server
         if (HasAttribute(f, "ChipRamAttribute") && IsDefined("M68K"))
             text = "__chip " + text;
-        Line(f.Type is IArrayTypeSymbol || init == null ? $"static {text};" : $"static {text} = {Expr(init, top: true)};");
+        if (deferred) _deferredStatics.Add((f, FieldName(f), init!));
+        Line(f.Type is IArrayTypeSymbol || init == null || deferred ? $"static {text};" : $"static {text} = {Expr(init, top: true)};");
+    }
+
+    /// <summary>The element list of an array creation (<c>new T[] { ... }</c>, <c>{ ... }</c>), or null for <c>new T[N]</c>.</summary>
+    private static InitializerExpressionSyntax? ArrayItems(ExpressionSyntax? init) => init switch
+    {
+        ArrayCreationExpressionSyntax ac => ac.Initializer,
+        ImplicitArrayCreationExpressionSyntax iac => iac.Initializer,
+        InitializerExpressionSyntax ie => ie,
+        _ => null,
+    };
+
+    /// <summary>Static fields and properties whose initializer is not a C constant: assigned at start-up, before the static constructors.</summary>
+    private readonly List<(ISymbol Symbol, string Target, ExpressionSyntax Init)> _deferredStatics = new();
+
+    /// <summary>True when the C of <paramref name="e"/> is a constant expression that may initialize a C static (literals, constants, null, default, a struct with constant fields).</summary>
+    private bool IsCConstant(ExpressionSyntax e)
+    {
+        if (Model(e).GetConstantValue(e).HasValue) return true;
+        var info = Model(e).GetTypeInfo(e);
+        if (Model(e).GetConversion(e).IsUserDefined) return false;
+        if (IsInterfaceType(info.ConvertedType) && !IsInterfaceType(info.Type))
+            return e is LiteralExpressionSyntax { RawKind: (int)SyntaxKind.NullLiteralExpression };
+        switch (e)
+        {
+            case ParenthesizedExpressionSyntax p: return IsCConstant(p.Expression);
+            case CastExpressionSyntax c: return IsCConstant(c.Expression) && Model(c).GetSymbolInfo(c).Symbol is not IMethodSymbol;
+            case LiteralExpressionSyntax l: return l.IsKind(SyntaxKind.NullLiteralExpression) || l.IsKind(SyntaxKind.DefaultLiteralExpression);
+            case DefaultExpressionSyntax: return true;
+            case BaseObjectCreationExpressionSyntax oc:
+                var type = Model(oc).GetTypeInfo(oc).Type;
+                if (type is not INamedTypeSymbol { TypeKind: TypeKind.Struct } || IsSpan(type)) return false;
+                if (Model(oc).GetSymbolInfo(oc).Symbol is IMethodSymbol { IsImplicitlyDeclared: false }) return false;   // a constructor is a call
+                if ((oc.ArgumentList?.Arguments.Count ?? 0) > 0) return false;
+                return oc.Initializer == null || oc.Initializer.Expressions.All(x => x is AssignmentExpressionSyntax a && IsCConstant(a.Right));
+        }
+        return false;
+    }
+
+    /// <summary>The start-up assignments of <see cref="_deferredStatics"/>: declaration order, except that a field another one reads is set first.</summary>
+    private void EmitDeferredStatics()
+    {
+        var done = new HashSet<ISymbol>(SymbolEqualityComparer.Default);
+        var byField = new Dictionary<ISymbol, (ISymbol Symbol, string Target, ExpressionSyntax Init)>(SymbolEqualityComparer.Default);
+        foreach (var d in _deferredStatics) byField[d.Symbol] = d;
+        void Emit((ISymbol Symbol, string Target, ExpressionSyntax Init) d)
+        {
+            if (!done.Add(d.Symbol)) return;
+            foreach (var n in d.Init.DescendantNodesAndSelf().OfType<IdentifierNameSyntax>())
+                if (Model(n).GetSymbolInfo(n).Symbol is { } used && byField.TryGetValue(used, out var dep)) Emit(dep);
+            if (d.Symbol is IFieldSymbol { Type: IArrayTypeSymbol } && ArrayItems(d.Init) is { } items)
+            {
+                for (var i = 0; i < items.Expressions.Count; i++) Line($"{d.Target}[{i}] = {Expr(items.Expressions[i], top: true)};");
+            }
+            else Line($"{d.Target} = {Expr(d.Init, top: true)};");
+        }
+        foreach (var d in _deferredStatics) Emit(d);
     }
 
     // volatile on a pointer or reference field must qualify the pointer itself ("T * volatile x"), not what it points at.
@@ -1218,6 +1381,12 @@ internal sealed partial class CEmitter
         var decl = (PropertyDeclarationSyntax)p.DeclaringSyntaxReferences.First().GetSyntax();
         var name = $"{TypeName(p.ContainingType)}_{p.Name}";
         var text = Decl(p.Type, name, decl);
+        if (decl.Initializer != null && !IsCConstant(decl.Initializer.Value))
+        {
+            _deferredStatics.Add((p, name, decl.Initializer.Value));
+            Line($"static {text};");
+            return;
+        }
         Line(decl.Initializer == null ? $"static {text};" : $"static {text} = {Expr(decl.Initializer.Value, top: true)};");
     }
 
@@ -1255,19 +1424,6 @@ internal sealed partial class CEmitter
         var parts = new List<string> { $"{TypeName(m.ContainingType)} *{ThisName}" };
         parts.AddRange(m.Parameters.Select(p => p.RefKind == RefKind.None ? Decl(p.Type, p.Name, node) : Decl(p.Type, "*" + p.Name, node)));
         return $"void {FuncName(m)}_init({string.Join(", ", parts)})";
-    }
-
-    /// <summary>The call that runs the nearest explicit parameterless constructor above <paramref name="c"/>, or null if there is none.</summary>
-    private static string? ImplicitBaseInit(INamedTypeSymbol c, string self)
-    {
-        for (var b = BaseClass(c); b != null; b = BaseClass(b))
-        {
-            var explicitCtors = b.InstanceConstructors.Where(k => !k.IsImplicitlyDeclared).ToList();
-            if (explicitCtors.Count == 0) continue;
-            var none = explicitCtors.FirstOrDefault(k => k.Parameters.Length == 0);
-            return none == null ? null : $"{FuncName(none)}_init(({TypeName(b)} *){self});";
-        }
-        return null;
     }
 
     /// <summary>The C call of an instance method: virtual members go through the object's function table.</summary>
@@ -1341,12 +1497,16 @@ internal sealed partial class CEmitter
         {
             // this(...) and base(...) run the other constructor's body on this object; without an initializer the nearest explicit base() runs.
             var initializer = (decl as ConstructorDeclarationSyntax)?.Initializer;
+            // C# order: this class's field initializers, then the base constructor, then the body (this(...) leaves them to the other constructor).
+            if (initializer is not { RawKind: (int)SyntaxKind.ThisConstructorInitializer } && _fieldInitClasses.Contains(m.ContainingType, SymbolEqualityComparer.Default))
+                Line($"{FieldInitName(m.ContainingType)}({ThisName});");
             if (initializer != null && Model(initializer).GetSymbolInfo(initializer).Symbol is IMethodSymbol { IsImplicitlyDeclared: false } other)
             {
                 var chainedArgs = initializer.ArgumentList.Arguments.Select(a => Argument(a, other)).Prepend($"({TypeName(other.ContainingType)} *){ThisName}");
                 Line($"{FuncName(other)}_init({string.Join(", ", chainedArgs)});");
             }
-            else if (initializer == null && ImplicitBaseInit(m.ContainingType, ThisName) is { } implicitBase) Line(implicitBase);
+            // No initializer, or base() naming a base class that has no constructor of its own: the implicit chain.
+            else if ((initializer == null || initializer.IsKind(SyntaxKind.BaseConstructorInitializer)) && ImplicitInits(m.ContainingType, ThisName, includeSelf: false) is { Length: > 0 } implicitBase) Line(implicitBase);
         }
         var asmOpened = BeginSpecialMethod(m, decl);   // [InlineAsm]: the assembly, then the C# body under #else
         if (block != null)
@@ -1408,7 +1568,9 @@ internal sealed partial class CEmitter
         Line("{");
         _indent++;
         if ((_usesBounds || _usesAlloc) && _atExit.Count > 0) Line("es_exit_hook = es_run_atexit;");
-        // Static constructors run once at start-up, in the order the types appear (C# runs them lazily).
+        // Static field initializers that are not C constants, then the static constructors, run once at start-up, in the order the types
+        // appear (C# runs them lazily, before a type is first used).
+        EmitDeferredStatics();
         foreach (var cctor in _staticConstructors) Line(FuncName(cctor) + "();");
         // [AtExit] methods of the classes the program used run after the entry point returns, in the order they were reached.
         if (entry.ReturnsVoid)
@@ -2170,13 +2332,13 @@ internal sealed partial class CEmitter
                 return NamedConstantIs(b);
             var from = Model(b).GetTypeInfo(b.Left).Type as INamedTypeSymbol;
             var target = Model(b).GetTypeInfo(b.Right).Type as INamedTypeSymbol;
-            if (from == null || target == null || !IsHeapClass(from) || !IsHeapClass(target))
-                return Unsupported(b, b.Kind() + " (only between classes)");
+            if (from == null || target == null || !CanTypeTest(from, target))
+                return Unsupported(b, b.Kind() + " (only to a class, from a class or an interface)");
             var tmp = "es_t" + _patternTemp++;
-            var isTest = ClassIs(tmp, from, target, b);
+            var isTest = TypeIs(tmp, from, target, b);
             return b.IsKind(SyntaxKind.IsExpression)
-                ? $"({{ {TypeName(from)} *{tmp} = {Expr(b.Left, top: true)}; {isTest}; }})"
-                : $"({{ {TypeName(from)} *{tmp} = {Expr(b.Left, top: true)}; ({isTest}) ? ({TypeName(target)} *){tmp} : ({TypeName(target)} *)NULL; }})";
+                ? $"({{ {CType(from, b)} {tmp} = {Expr(b.Left, top: true)}; {isTest}; }})"
+                : $"({{ {CType(from, b)} {tmp} = {Expr(b.Left, top: true)}; ({isTest}) ? {TypeAs(tmp, from, target)} : ({TypeName(target)} *)NULL; }})";
         }
 
         if (b.IsKind(SyntaxKind.CoalesceExpression)) return Coalesce(b);
@@ -2488,8 +2650,8 @@ internal sealed partial class CEmitter
             {
                 var cls = (INamedTypeSymbol)type;
                 var alloc = IsPoly(cls) ? $"{TypeName(cls)}_alloc()" : $"ES_NEW({TypeName(cls)})";
-                var baseInit = ImplicitBaseInit(cls, "ES_n");
-                create = baseInit == null ? alloc : $"({{ {TypeName(cls)} *ES_n = {alloc}; {baseInit} ES_n; }})";
+                var implicitInits = ImplicitInits(cls, "ES_n", includeSelf: true);
+                create = implicitInits.Length == 0 ? alloc : $"({{ {TypeName(cls)} *ES_n = {alloc}; {implicitInits} ES_n; }})";
             }
             if (oc.Initializer == null) return create;
             var temp = $"ES_o{_objectTemps++}";
@@ -2592,6 +2754,11 @@ internal sealed partial class CEmitter
                 return $"es_strlen({Expr(ma.Expression)})";
             }
         }
+        if (sym is IPropertySymbol spanProp && IsSpan(spanProp.ContainingType))
+        {
+            if (spanProp is { IsStatic: true, Name: "Empty" }) return $"(({SpanType(spanProp.ContainingType, ma)}){{ NULL, 0 }})";
+            if (spanProp is { IsStatic: false, Name: "IsEmpty" }) return $"({Expr(ma.Expression)}.length == 0)";
+        }
         if (sym is IMethodSymbol { IsStatic: true, MethodKind: MethodKind.Ordinary } group)
             return MethodGroup(group, ma);   // a method group converted to a delegate
         if (sym is IPropertySymbol prop)
@@ -2649,9 +2816,17 @@ internal sealed partial class CEmitter
     private string SpanSlice(InvocationExpressionSyntax inv, MemberAccessExpressionSyntax recvAccess, IMethodSymbol m)
     {
         var args = inv.ArgumentList.Arguments;
-        if (args.Count is < 1 or > 2 || !RequireSimple(recvAccess.Expression, "Slice")) return "0";
-        var recv = Expr(recvAccess.Expression);
+        if (args.Count is < 1 or > 2) return Unsupported(inv, "Slice with these arguments");
         var type = SpanType((INamedTypeSymbol)m.ContainingType, inv);
+        if (!IsSimple(recvAccess.Expression) || !IsPure(args[0].Expression))
+        {
+            // list.AsSpan().Slice(a, b), s.Slice(F()): the span and the start are evaluated once, into temporaries.
+            var n = ++_temp;
+            var tStart = Expr(args[0].Expression, top: true);
+            var tLength = args.Count == 2 ? Expr(args[1].Expression, top: true) : $"_sl{n}.length - _ss{n}";
+            return $"({{ {type} _sl{n} = {Expr(recvAccess.Expression, top: true)}; int32_t _ss{n} = {tStart}; ({type}){{ _sl{n}.ptr + _ss{n}, {tLength} }}; }})";
+        }
+        var recv = Expr(recvAccess.Expression);
         var start = Expr(args[0].Expression);
         var length = args.Count == 2 ? Expr(args[1].Expression, top: true) : $"{recv}.length - {start}";
         return $"(({type}){{ {recv}.ptr + {start}, {length} }})";
@@ -2728,16 +2903,34 @@ internal sealed partial class CEmitter
             return $"{d}.fn({string.Join(", ", dargs)})";
         }
 
+        if (m.ContainingType?.SpecialType == SpecialType.System_String && m.Name == "Substring" && !m.IsStatic
+            && inv.Expression is MemberAccessExpressionSyntax subAccess && inv.ArgumentList.Arguments.Count is 1 or 2)
+        {
+            _usesFmt = true;
+            var subArgs = inv.ArgumentList.Arguments;
+            return $"es_substr({Expr(subAccess.Expression, top: true)}, {Expr(subArgs[0].Expression, top: true)}, {(subArgs.Count == 2 ? Expr(subArgs[1].Expression, top: true) : "-1")})";
+        }
+
         if (IsSpan(m.ContainingType) && m.Name == "Slice" && inv.Expression is MemberAccessExpressionSyntax sliceAccess)
             return SpanSlice(inv, sliceAccess, m);
 
         if (IsInterfaceType(m.ContainingType) && inv.Expression is MemberAccessExpressionSyntax ifaceAccess)
         {
-            if (!RequireSimple(ifaceAccess.Expression, "call through an interface")) return "0";
+            if (!IsSimple(ifaceAccess.Expression))
+            {
+                // Pick().M(x): the interface value is evaluated once, into a temporary of a statement expression.
+                var it = $"_i{++_temp}";
+                var itArgs = inv.ArgumentList.Arguments.Select(a => Argument(a, m)).Prepend($"{it}.obj");
+                return $"({{ {CType(Model(ifaceAccess.Expression).GetTypeInfo(ifaceAccess.Expression).Type!, inv)} {it} = {Expr(ifaceAccess.Expression, top: true)}; {it}.vt->{SlotName(m)}({string.Join(", ", itArgs)}); }})";
+            }
             var target = Expr(ifaceAccess.Expression);
             var callArgs = inv.ArgumentList.Arguments.Select(a => Argument(a, m)).Prepend($"{target}.obj");
             return $"{target}.vt->{SlotName(m)}({string.Join(", ", callArgs)})";
         }
+
+        // A method of the .NET library that nothing above maps: E# has no code for it, so it would be an undefined symbol at link time.
+        if (!m.OriginalDefinition.Locations.Any(l => l.IsInSource) && !HasAttribute(m, "AmigaLibAttribute") && !HasAttribute(m, "NativeAttribute"))
+            return Unsupported(inv, $"call of {m.ContainingType?.ToDisplayString()}.{m.Name} (a .NET library method E# has no code for)");
 
         string? receiver = null;
         if (!m.IsStatic && m.MethodKind != MethodKind.LocalFunction)
@@ -2869,9 +3062,8 @@ internal sealed partial class CEmitter
                 return BindDesignation(v.Designation, subject, type, v);
             case DeclarationPatternSyntax d:
             {
-                if (Model(d).GetTypeInfo(d.Type).Type is INamedTypeSymbol dt && type is INamedTypeSymbol df && IsHeapClass(dt) && IsHeapClass(df)
-                    && !SymbolEqualityComparer.Default.Equals(dt, df))
-                    return $"({ClassIs(subject, df, dt, d)} && {Bind(d.Designation, $"(({TypeName(dt)} *){subject})", d)})";
+                if (Model(d).GetTypeInfo(d.Type).Type is INamedTypeSymbol dt && CanTypeTest(type, dt) && !SymbolEqualityComparer.Default.Equals(dt, type))
+                    return $"({TypeIs(subject, type, dt, d)} && {Bind(d.Designation, TypeAs(subject, type, dt), d)})";
                 // 'x is T t' with x already a T: still false for null.
                 return NotNullTest(subject, type) is { } dn ? $"({dn} && {Bind(d.Designation, subject, d)})" : Bind(d.Designation, subject, d);
             }
@@ -2879,7 +3071,7 @@ internal sealed partial class CEmitter
             {
                 var tt = Model(t).GetTypeInfo(t.Type).Type;
                 if (tt != null && SymbolEqualityComparer.Default.Equals(tt, type)) return NotNullTest(subject, type) ?? "1";
-                if (tt is INamedTypeSymbol tc && type is INamedTypeSymbol tf && IsHeapClass(tc) && IsHeapClass(tf)) return $"({ClassIs(subject, tf, tc, t)})";
+                if (tt is INamedTypeSymbol tc && CanTypeTest(type, tc)) return $"({TypeIs(subject, type, tc, t)})";
                 return Unsupported(t, "type test");
             }
             case RecursivePatternSyntax rec:
@@ -3135,6 +3327,15 @@ internal sealed partial class CEmitter
             Model(at).GetSymbolInfo(core).Symbol is not IMethodSymbol && !(Model(at).GetSymbolInfo(core).Symbol is IPropertySymbol cp && !IsAutoProperty(cp)))
             return "&" + Expr(core);
         if (core is InvocationExpressionSyntax refCall && ReturnsRef(refCall)) return Invocation(refCall);   // F().M(): the returned pointer
+        // span[i].M(): the element itself (a Span indexer returns a reference, so M may change it in place).
+        if (core is ElementAccessExpressionSyntax spanElem && Model(at).GetSymbolInfo(spanElem).Symbol is IPropertySymbol { IsIndexer: true, ContainingType.Name: "Span" } si && IsSpan(si.ContainingType))
+            return "&" + Expr(spanElem);
+
+        // A value with no place of its own (Make().M(), list[i].M(), a ReadOnlySpan element): C# works on a copy, and so does C, in a
+        // compound literal that lives until the end of the enclosing block.
+        var tempType = Model(at).GetTypeInfo(recv).Type;
+        if (tempType is INamedTypeSymbol { TypeKind: TypeKind.Struct } && !IsSpan(tempType))
+            return $"&(({CType(tempType, recv)}[1]){{ {Expr(recv, top: true)} }})[0]";
 
         return Unsupported(recv, $"use of '{name}' on a temporary value; assign it to a local first");
     }
@@ -3165,6 +3366,8 @@ internal sealed partial class CEmitter
         }
         if (p.ReturnsByRef || p.ReturnsByRefReadonly) return Unsupported(at, $"ref-returning property or indexer '{p.Name}'");
         if (p.GetMethod == null) return Unsupported(at, $"property '{p.Name}' without a getter");
+        if (!p.OriginalDefinition.Locations.Any(l => l.IsInSource))
+            return Unsupported(at, $"property {p.ContainingType.ToDisplayString()}.{p.Name} (a .NET library member E# has no code for)");
         if (p.IsStatic) return $"{FuncName(p.GetMethod)}()";
         var receiver = ReceiverOf(recv, at, p.Name, "instance property access");
         if (receiver == null) return "0";

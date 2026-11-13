@@ -256,8 +256,16 @@ public sealed class SubsetAnalyzer : DiagnosticAnalyzer
 
         CheckSince(c, method);
 
-        if (method.IsGenericMethod && !linqSubset && !method.OriginalDefinition.Locations.Any(l => l.IsInSource))
+        // E#'s own library is source in esharp build but a referenced assembly in a host project (esharp new): its generic
+        // methods (Heap.Free<T>) are monomorphised like the program's own, so they are not "library generics".
+        if (method.IsGenericMethod && !linqSubset && !method.OriginalDefinition.Locations.Any(l => l.IsInSource) && !IsESharpLibrary(method))
             c.ReportDiagnostic(Diagnostic.Create(Descriptors.Generics, c.Node.GetLocation(), method.Name));
+    }
+
+    private static bool IsESharpLibrary(IMethodSymbol method)
+    {
+        var assembly = method.OriginalDefinition.ContainingAssembly?.Name;
+        return assembly == "ESharp.Platform" || assembly == "ESharp.Runtime";
     }
 
     private static void CheckSince(SyntaxNodeAnalysisContext c, IMethodSymbol method)

@@ -1284,12 +1284,13 @@ public static unsafe class P
     }
 
     [Fact]
-    public void Calls_on_temporaries_report_ES0099()
+    public void Calls_on_temporaries_work_on_a_copy()
     {
+        // Was ES0099; the value is now copied into a C compound literal (see ClassFeatureTests for more cases).
         var r = Compile(Program(
             "struct S { public int V; public int Get() { return V; } } static S Make() { return default; }",
             "Make().Get();"));
-        Assert.Contains("ES0099", ErrorIds(r));
+        Assert.True(r.Success, string.Join("\n", r.Diagnostics));
     }
 
     [Fact]
