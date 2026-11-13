@@ -1,15 +1,29 @@
 name: Release
 
-# Pushing a tag vX.Y.Z (or vX.Y.Z-suffix) tests, packs and publishes AmigaESharp.Tool and AmigaESharp.Sdk to nuget.org,
-# both with version X.Y.Z. Publishing uses nuget.org trusted publishing (GitHub OIDC), so no long-lived API key is stored:
-# nuget.org needs a trusted publishing policy for GameGyrafe/amigaesharp and this workflow file (release.yml), and the
-# repository variable NUGET_USER holds the nuget.org account name that owns the policy. The tag must be on main.
+# On every push to main (and on demand), tests, packs and publishes AmigaESharp.Tool and AmigaESharp.Sdk to nuget.org
+# as VERSION_PREFIX.<run number>, then tags the commit vX.Y.Z and creates a GitHub release with the packages attached.
+# RELEASE_SUFFIX is empty for a stable version; set it to a suffix such as '-preview' to publish a prerelease.
+# Publishing uses nuget.org trusted publishing (GitHub OIDC), so no long-lived API key is stored: nuget.org needs a
+# trusted publishing policy for GameGyrafe/amigaesharp, this workflow file (release.yml) and the environment nuget,
+# whose secret NUGET_USER holds the nuget.org account name that owns the policy.
 on:
   push:
-    tags: ['v*']
+    branches: [main]
+    paths-ignore:
+      - '**.md'
+      - '.github/workflows/**'
+  workflow_dispatch:
 
 permissions:
   contents: read
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+env:
+  VERSION_PREFIX: '0.1'
+  RELEASE_SUFFIX: ''
 
 jobs:
   release:
@@ -18,23 +32,15 @@ jobs:
       version: ${{ steps.version.outputs.version }}
     steps:
       - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-      - name: The tag must be on main
-        run: |
-          git fetch -q origin main
-          git merge-base --is-ancestor "$GITHUB_SHA" origin/main || { echo "tag $GITHUB_REF_NAME is not on main"; exit 1; }
       - uses: actions/setup-dotnet@v4
         with:
           dotnet-version: 10.0.x
-      - name: Version from the tag
+      - name: Version
         id: version
         run: |
-          v="${GITHUB_REF_NAME#v}"
-          if ! [[ "$v" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]; then
-            echo "tag $GITHUB_REF_NAME is not vMAJOR.MINOR.PATCH[-suffix]"; exit 1
-          fi
+          v="$VERSION_PREFIX.${{ github.run_number }}$RELEASE_SUFFIX"
           echo "version=$v" >> "$GITHUB_OUTPUT"
+          echo "Version: $v"
       - name: Test
         run: dotnet test --configuration Release
       - name: Pack
@@ -50,6 +56,7 @@ jobs:
   publish:
     needs: release
     runs-on: ubuntu-latest
+    environment: nuget
     permissions:
       id-token: write
     steps:
@@ -64,6 +71,29 @@ jobs:
         id: login
         uses: NuGet/login@v1
         with:
-          user: ${{ vars.NUGET_USER }}
+          user: ${{ secrets.NUGET_USER }}
       - name: Push to nuget.org
         run: dotnet nuget push "artifacts/packages/*.nupkg" --api-key "${{ steps.login.outputs.NUGET_API_KEY }}" --source https://api.nuget.org/v3/index.json --skip-duplicate
+
+  # Tag and GitHub release only after the packages are on nuget.org.
+  github-release:
+    needs: [release, publish]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: packages-${{ needs.release.outputs.version }}
+          path: artifacts/packages
+      - name: Tag and GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.release.outputs.version }}
+        run: |
+          gh release create "v$VERSION" artifacts/packages/*.nupkg \
+            --repo "$GITHUB_REPOSITORY" \
+            --target "$GITHUB_SHA" \
+            --title "$VERSION" \
+            --generate-notes \
+            ${RELEASE_SUFFIX:+--prerelease}
