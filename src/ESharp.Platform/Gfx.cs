@@ -48,6 +48,8 @@ public static unsafe class Graphics
     [AmigaLib("graphics", -354)] public static extern void SetDrMd(void* rastPort, int drawMode);
     /// <summary>graphics.library BltTemplate(): draws a one-plane template (word aligned, chip RAM) in the rast port's pen and draw mode.</summary>
     [AmigaLib("graphics", -36)] public static extern void BltTemplate(byte* source, int xSrc, int srcModulo, void* destRastPort, int xDest, int yDest, int xSize, int ySize);
+    /// <summary>graphics.library WaitBlit(): returns when the blitter is idle (blitter calls can return while the blit still runs).</summary>
+    [AmigaLib("graphics", -228)] public static extern void WaitBlit();
     [AmigaLib("graphics", -606)] public static extern void BltBitMapRastPort(void* srcBitMap, int xSrc, int ySrc,
         void* destRastPort, int xDest, int yDest, int xSize, int ySize, int minterm);
     [AmigaLib("graphics", -636)] public static extern void BltMaskBitMapRastPort(void* srcBitMap, int xSrc, int ySrc,

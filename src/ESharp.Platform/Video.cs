@@ -289,6 +289,7 @@ public static unsafe class Video
         Graphics.SetAPen(_rastPort, color);
         Graphics.SetDrMd(_rastPort, 0);           // JAM1: only the set bits
         Graphics.BltTemplate(bits, 0, bytesPerRow, _rastPort, x, y, width, height);
+        Graphics.WaitBlit();                      // the blit may still be reading the strip: the CPU refills it next
         Graphics.SetDrMd(_rastPort, 1);           // back to JAM2, a new window's mode
     }
 
