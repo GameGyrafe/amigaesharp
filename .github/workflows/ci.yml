@@ -19,6 +19,23 @@ jobs:
           sudo apt-get update -qq
           sudo apt-get install -y -qq clang
           ESHARP_TEST_CC=clang dotnet test --configuration Release
+  packages:
+    # Pack AmigaESharp.Tool and AmigaESharp.Sdk as release.yml does, install them from a local folder feed and use them
+    # away from the checkout (tools/package-smoke.sh). Nothing is published.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+      - name: Pack
+        run: dotnet pack ESharp.sln --configuration Release --output artifacts/packages -p:Version=0.0.0-ci.${{ github.run_number }}
+      - name: Install from a local feed, esharp new, build, test, emit C and build for m68k
+        run: tools/package-smoke.sh artifacts/packages 0.0.0-ci.${{ github.run_number }} amigadev/crosstools:m68k-amigaos@sha256:32ec76dac03a642203f0f09f0416480d6c25de1092ed7ed472db870304a64859
+      - uses: actions/upload-artifact@v4
+        with:
+          name: packages
+          path: artifacts/packages/*.nupkg
   toolchain:
     runs-on: ubuntu-latest
     steps:

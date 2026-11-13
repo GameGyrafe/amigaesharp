@@ -1,0 +1,23 @@
+<Project>
+  <!--
+    One version for every E# package (AmigaESharp.Tool, AmigaESharp.Sdk). A local build or pack is 0.1.0-dev; the release
+    workflow (.github/workflows/release.yml) passes -p:Version=X.Y.Z from the pushed tag vX.Y.Z.
+    Projects are not packable unless they say so (src/ESharp.Cli and src/ESharp.Sdk do).
+  -->
+  <PropertyGroup>
+    <VersionPrefix>0.1.0</VersionPrefix>
+    <VersionSuffix Condition="'$(VersionSuffix)' == ''">dev</VersionSuffix>
+    <IsPackable>false</IsPackable>
+
+    <Authors>Gyrafe Software</Authors>
+    <Company>Gyrafe Software</Company>
+    <Copyright>Copyright (c) Gyrafe Software</Copyright>
+    <PackageLicenseExpression>MIT</PackageLicenseExpression>
+    <PackageProjectUrl>https://github.com/GameGyrafe/amigaesharp</PackageProjectUrl>
+    <RepositoryUrl>https://github.com/GameGyrafe/amigaesharp</RepositoryUrl>
+    <RepositoryType>git</RepositoryType>
+    <PackageTags>amiga;amigaos;m68k;retro;gamedev;compiler;csharp-to-c</PackageTags>
+    <!-- The version the CLI reports (and writes into new projects) is the plain package version, without +commit. -->
+    <IncludeSourceRevisionInInformationalVersion>false</IncludeSourceRevisionInInformationalVersion>
+  </PropertyGroup>
+</Project>

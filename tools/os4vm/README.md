@@ -3,7 +3,7 @@
 `esharp run --target os4` and `esharp test --target os4` boot an AmigaOS 4.1 Final Edition (Pegasos II) VM in QEMU,
 run the program unattended and read its output back. This directory has the pieces that are not in the CLI itself:
 
-- `os4vm.py` (run with `python3 -I`, standard library only): `check`, `start` (boot the VM by hand, on a throwaway
+- `os4vm.py` (run with `python3 -I`, standard library only; the installed tool ships it too: `esharp os4vm check|start|install-hook|remove-hook`): `check`, `start` (boot the VM by hand, on a throwaway
   overlay unless `--write`), `install-hook` and `remove-hook` (the one-time change below).
 - `estype.c`: a tiny AmigaOS 4 command that copies text to the kernel debug output. The CLI embeds this source and
   compiles it with `ppc-amigaos-gcc` (on the host, or in the `--docker` image) for each test CD.

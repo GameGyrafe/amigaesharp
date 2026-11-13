@@ -38,6 +38,30 @@ design inspiration only.
 Phases 1 to 3 and most of phase 4 (a card demo) pass on the emulator; nothing has run on real hardware yet. See [docs/STATUS.md](docs/STATUS.md) for what works today and
 [docs/PROJECT_CONTEXT.md](docs/PROJECT_CONTEXT.md) for the design and roadmap.
 
+## Installing (not published yet)
+
+E# will be installable from nuget.org as a .NET tool. **The packages are not published yet**; once the first release
+is out:
+
+```bash
+dotnet tool install -g AmigaESharp.Tool      # the esharp command
+esharp new mygame && cd mygame
+dotnet run                                   # on the PC: Hello from E#!
+esharp test                                  # the ok/FAIL checks on the PC
+esharp build --target m68k --docker amigadev/crosstools:m68k-amigaos@sha256:32ec76dac03a642203f0f09f0416480d6c25de1092ed7ed472db870304a64859
+```
+
+`esharp new` writes a csproj that references **AmigaESharp.Sdk** (the runtime, the platform contracts with their host
+fakes, and the subset analyzer) at the tool's own version. The installed tool needs no checkout for `new`, `build`,
+`run`, `test`, `assets`, `addr` and `os4vm`. A checkout is still needed to build the `esharp-amiga-toolchain` and
+`esharp-sdl` images (the pinned m68k image above works without one), and for the scripts in `tools/` other than the
+os4 VM helper. Until the release, pack and try it from a local folder feed:
+
+```bash
+dotnet pack ESharp.sln -c Release -o artifacts/packages -p:Version=0.1.0-local.1
+tools/package-smoke.sh artifacts/packages 0.1.0-local.1      # installs into a temporary tool path and tests a new project
+```
+
 ## Building
 
 Requires the .NET 10 SDK.
@@ -89,9 +113,11 @@ The Amiga-only APIs (GadTools `Gui`, `Asl`, `Iff`, `Fonts`, `Joystick`) do not e
 that builds the same source under .NET against the E# runtime and loads the subset analyzer, and a `.vscode/` folder
 with `tasks.json` (build for m68k, run in FS-UAE, run on the host, check the subset), `launch.json` (debug the host run
 with the coreclr debugger, so logic can be stepped through; the Amiga build cannot be debugged yet) and
-`extensions.json`. The ES0001-ES0010 subset errors show as you type and in `dotnet build`. ES0101 (a library call newer than the target's libraries; opt in with `[RequiresLib("lib", version)]`) is reported only by `esharp build`/`run`/`test` for the m68k and aros targets, not in the IDE or the host build. The csproj and the tasks
-point at the E# checkout the CLI was built from (found from the CLI's location, or `ESHARP_ROOT`); edit `ESharpRoot`
-in the csproj if you move it.
+`extensions.json`. The ES0001-ES0010 subset errors show as you type and in `dotnet build`. ES0101 (a library call newer than the target's libraries; opt in with `[RequiresLib("lib", version)]`) is reported only by `esharp build`/`run`/`test` for the m68k and aros targets, not in the IDE or the host build. With the installed tool
+the csproj references the AmigaESharp.Sdk package and the tasks call `esharp`. When the CLI runs from a checkout
+(`dotnet run --project src/ESharp.Cli -- new ...`), or with `esharp new <name> --source [dir]`, the csproj and the tasks
+point at that checkout instead (found from the CLI's location, or `ESHARP_ROOT`; edit `ESharpRoot` in the csproj if you
+move it); `--package [version]` forces the package reference.
 
 Without Docker, install the compiler yourself and drop `--docker` (`--cc` and `--cflags` override it).
 
@@ -105,6 +131,7 @@ src/
   ESharp.Runtime/      attributes and intrinsics
   ESharp.Platform/     Video, Audio, Input, Storage, Timing, Dos contracts
   ESharp.Target.Host/  managed fakes for tests
+  ESharp.Sdk/          packs AmigaESharp.Sdk (host assemblies + analyzer); ESharp.Cli packs AmigaESharp.Tool
 docker/                pinned Amiga toolchain image and smoke test
 samples/               hello, ...
 tests/

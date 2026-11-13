@@ -61,6 +61,61 @@ public class ProjectTemplateTests : IDisposable
     }
 
     [Fact]
+    public void New_program_prints_the_greeting_and_an_ok_check_when_compiled_to_C()
+    {
+        if (!TestHelpers.HasGcc) return;
+        var c = TestHelpers.CompileOk(ProjectTemplate.ProgramText("Demo"));
+        var (code, output) = TestHelpers.RunWithHostGcc(c);
+        Assert.Equal(0, code);
+        Assert.Equal("Hello from E#!\nok sum of 1 to 10\n", output);
+        Assert.Equal("1 ok, 0 FAIL", TestReport.Parse(output).Summary);
+    }
+
+    [Fact]
+    public void Without_a_checkout_the_csproj_references_the_Sdk_package_and_the_tasks_call_esharp()
+    {
+        ProjectTemplate.Write(_dir, "Demo", null, "/somewhere/esharp.dll", "1.2.3");
+        var csproj = File.ReadAllText(Path.Combine(_dir, "Demo.csproj"));
+        var doc = System.Xml.Linq.XDocument.Parse(csproj);
+        var pkg = doc.Descendants("PackageReference").Single();
+        Assert.Equal("AmigaESharp.Sdk", pkg.Attribute("Include")!.Value);
+        Assert.Equal("1.2.3", pkg.Attribute("Version")!.Value);
+        Assert.Empty(doc.Descendants("ProjectReference"));
+        Assert.Contains("$(DefineConstants);HOST", csproj);
+
+        var tasks = Json(".vscode/tasks.json").RootElement.GetProperty("tasks").EnumerateArray().ToList();
+        var build = tasks.Single(t => t.GetProperty("label").GetString() == "E#: build (m68k)");
+        Assert.Equal("esharp", build.GetProperty("command").GetString());
+        Assert.Equal("build ${workspaceFolder} --target m68k --docker ${input:dockerImage}",
+            string.Join(" ", build.GetProperty("args").EnumerateArray().Select(a => a.GetString())));
+        var host = tasks.Single(t => t.GetProperty("label").GetString() == "E#: run on the host");
+        Assert.Equal("dotnet", host.GetProperty("command").GetString());
+        Assert.DoesNotContain("/somewhere", File.ReadAllText(Path.Combine(_dir, ".vscode", "tasks.json")));
+    }
+
+    [Fact]
+    public void Package_csproj_uses_the_tool_version_by_default()
+    {
+        ProjectTemplate.Write(_dir, "Demo", null, "esharp.dll");
+        var pkg = System.Xml.Linq.XDocument.Parse(File.ReadAllText(Path.Combine(_dir, "Demo.csproj"))).Descendants("PackageReference").Single();
+        Assert.Equal(SourceTree.ToolVersion, pkg.Attribute("Version")!.Value);
+        Assert.DoesNotContain("+", SourceTree.ToolVersion);
+        Assert.Matches(@"^\d+\.\d+\.\d+(-[0-9A-Za-z.-]+)?$", SourceTree.ToolVersion);
+    }
+
+    [Fact]
+    public void The_cli_carries_the_host_libraries_and_the_os4vm_helper()
+    {
+        // The installed tool has no checkout: esharp test builds against host/, esharp os4vm runs os4vm/os4vm.py.
+        var host = SourceTree.BundledHostLibs(AppContext.BaseDirectory);
+        Assert.NotNull(host);
+        foreach (var a in new[] { "ESharp.Runtime.dll", "ESharp.Platform.dll", "ESharp.Target.Host.dll" })
+            Assert.True(File.Exists(Path.Combine(host!, a)), a);
+        Assert.True(File.Exists(Path.Combine(AppContext.BaseDirectory, "os4vm", "os4vm.py")));
+        Assert.True(File.Exists(Path.Combine(AppContext.BaseDirectory, "os4vm", "estype.c")));
+    }
+
+    [Fact]
     public void SourceTree_walks_up_and_honours_ESHARP_ROOT()
     {
         foreach (var p in new[] { "ESharp.Target.Host", "ESharp.Analyzers" })
@@ -146,6 +201,38 @@ public class ProjectTemplateTests : IDisposable
         Assert.True(File.Exists(Path.Combine(_dir, "sub", "dir", "dir.csproj")));
         Assert.Contains("namespace dir;", File.ReadAllText(Path.Combine(_dir, "sub", "dir", "Program.cs")));
         Assert.True(File.Exists(Path.Combine(_dir, "sub", "dir", ".vscode", "tasks.json")));
+    }
+
+    [Fact]
+    public void Esharp_new_from_a_checkout_references_it_and_package_forces_the_package()
+    {
+        // The test's esharp.dll lives in this checkout, so the default is the checkout (contributors).
+        Assert.Equal(0, Cli(_dir, "new", "fromsrc").Exit);
+        var src = File.ReadAllText(Path.Combine(_dir, "fromsrc", "fromsrc.csproj"));
+        Assert.Contains("ESharp.Target.Host.csproj", src);
+        Assert.DoesNotContain("PackageReference", src);
+
+        Assert.Equal(0, Cli(_dir, "new", "frompkg", "--package", "9.8.7").Exit);
+        var pkg = File.ReadAllText(Path.Combine(_dir, "frompkg", "frompkg.csproj"));
+        Assert.Contains("<PackageReference Include=\"AmigaESharp.Sdk\" Version=\"9.8.7\" />", pkg);
+        Assert.DoesNotContain("ProjectReference", pkg);
+
+        var (exit, err) = Cli(_dir, "new", "bad", "--source", _dir);
+        Assert.Equal(1, exit);
+        Assert.Contains("is not an E# checkout", err);
+    }
+
+    [Fact]
+    public void Esharp_version_prints_the_tool_version()
+    {
+        var psi = new System.Diagnostics.ProcessStartInfo("dotnet") { RedirectStandardOutput = true };
+        psi.ArgumentList.Add(Path.Combine(AppContext.BaseDirectory, "esharp.dll"));
+        psi.ArgumentList.Add("--version");
+        using var p = System.Diagnostics.Process.Start(psi)!;
+        var text = p.StandardOutput.ReadToEnd().Trim();
+        p.WaitForExit();
+        Assert.Equal(0, p.ExitCode);
+        Assert.Equal(SourceTree.ToolVersion, text);
     }
 
     [Fact]

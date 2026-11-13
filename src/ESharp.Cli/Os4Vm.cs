@@ -30,7 +30,7 @@ public static class Os4Vm
         error = null;
         if (string.IsNullOrWhiteSpace(setting))
         {
-            error = "set ESHARP_OS4_VM to your AmigaOS 4.1 VM dir (see tools/os4vm/README.md)";
+            error = "set ESHARP_OS4_VM to your AmigaOS 4.1 VM dir (see os4vm/README.md next to esharp.dll, tools/os4vm/README.md in the repository)";
             return null;
         }
         var dir = Path.GetFullPath(setting.StartsWith("~")
@@ -39,7 +39,7 @@ public static class Os4Vm
         var missing = new[] { "bboot", "Kickstart.zip", "amiga.img" }.Where(f => !File.Exists(Path.Combine(dir, f))).ToList();
         if (missing.Count > 0)
         {
-            error = $"ESHARP_OS4_VM ({dir}) lacks {string.Join(", ", missing)} (see tools/os4vm/README.md)";
+            error = $"ESHARP_OS4_VM ({dir}) lacks {string.Join(", ", missing)} (see os4vm/README.md next to esharp.dll, tools/os4vm/README.md in the repository)";
             return null;
         }
         return dir;
@@ -236,7 +236,7 @@ public static class Os4Vm
                 foreach (var l in tail) Console.Error.WriteLine(l);
                 return Fail(state.Begun
                     ? $"program did not finish within {timeout.TotalSeconds:0}s (a crash leaves the Grim Reaper waiting; see {serial})"
-                    : $"the program never started within {timeout.TotalSeconds:0}s: is the test hook installed (tools/os4vm/os4vm.py install-hook)? See {serial}",
+                    : $"the program never started within {timeout.TotalSeconds:0}s: is the test hook installed (esharp os4vm install-hook)? See {serial}",
                     state.Output);
             }
             return (0, state.Output);

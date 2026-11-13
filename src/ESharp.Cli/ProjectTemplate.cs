@@ -34,10 +34,29 @@ public static class ProjectTemplate
         return NameProblem(s) == null ? s : "_" + s;
     }
 
-    /// <summary>Writes the project into <paramref name="dir"/> (which must exist). <paramref name="cliDll"/> is the esharp.dll the tasks call.</summary>
-    public static void Write(string dir, string name, string? root, string cliDll)
+    /// <summary>
+    /// Writes the project into <paramref name="dir"/> (which must exist). With <paramref name="root"/> (an E# checkout) the
+    /// csproj references its projects and the tasks run <paramref name="cliDll"/> through dotnet (for contributors); without
+    /// it the csproj references the AmigaESharp.Sdk package at <paramref name="packageVersion"/> and the tasks run the
+    /// installed esharp command.
+    /// </summary>
+    public static void Write(string dir, string name, string? root, string cliDll, string? packageVersion = null)
     {
-        File.WriteAllText(Path.Combine(dir, "Program.cs"), $@"using ESharp;
+        File.WriteAllText(Path.Combine(dir, "Program.cs"), ProgramText(name));
+        File.WriteAllText(Path.Combine(dir, name + ".csproj"), root != null ? Csproj(root) : PackageCsproj(packageVersion ?? SourceTree.ToolVersion));
+        File.WriteAllText(Path.Combine(dir, ".gitignore"), "bin/\nobj/\n");
+        var vs = Path.Combine(dir, ".vscode");
+        Directory.CreateDirectory(vs);
+        File.WriteAllText(Path.Combine(vs, "tasks.json"), root != null ? TasksJson(cliDll) : TasksJson("esharp", Array.Empty<string>()));
+        File.WriteAllText(Path.Combine(vs, "launch.json"), LaunchJson(name));
+        File.WriteAllText(Path.Combine(vs, "extensions.json"), ExtensionsJson);
+    }
+
+    /// <summary>
+    /// The program: a greeting and one check. `esharp test` runs it on the host (and with --target m68k also on the Amiga)
+    /// and compares the lines that start with ok or FAIL.
+    /// </summary>
+    public static string ProgramText(string name) => $@"using ESharp;
 using ESharp.Platform;
 
 namespace {name};
@@ -48,21 +67,44 @@ public static class Program
     public static void Main()
     {{
         Dos.PutStr(""Hello from E#!\n"");
+
+        // esharp test runs this on the PC and on the Amiga and compares the lines that start with ok or FAIL.
+        int sum = 0;
+        for (int i = 1; i <= 10; i++) sum += i;
+        Dos.PutStr(sum == 55 ? ""ok sum of 1 to 10\n"" : ""FAIL sum of 1 to 10\n"");
     }}
 }}
-");
-        File.WriteAllText(Path.Combine(dir, name + ".csproj"), Csproj(root));
-        File.WriteAllText(Path.Combine(dir, ".gitignore"), "bin/\nobj/\n");
-        var vs = Path.Combine(dir, ".vscode");
-        Directory.CreateDirectory(vs);
-        File.WriteAllText(Path.Combine(vs, "tasks.json"), TasksJson(cliDll));
-        File.WriteAllText(Path.Combine(vs, "launch.json"), LaunchJson(name));
-        File.WriteAllText(Path.Combine(vs, "extensions.json"), ExtensionsJson);
-    }
+";
 
     /// <summary>
-    /// The host project: it compiles the same Program.cs under dotnet against the E# runtime and platform (with HOST defined),
-    /// and loads the subset analyzer, so ES0001-ES0010 show up in the editor and in `dotnet build`.
+    /// The host project for a game using the published packages: AmigaESharp.Sdk holds the runtime, platform contracts and
+    /// host fakes (built with HOST) and the subset analyzer, so ES0001-ES0010 show up in the editor and in `dotnet build`.
+    /// </summary>
+    public static string PackageCsproj(string version) => $@"<Project Sdk=""Microsoft.NET.Sdk"">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <!-- The same symbol the esharp test host build defines, so #if HOST code behaves alike. -->
+    <DefineConstants>$(DefineConstants);HOST</DefineConstants>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- E# runtime, platform contracts and host fakes, plus the subset analyzer. Keep the version equal to the esharp
+         tool's (esharp version): the Amiga build compiles the sources embedded in the tool. -->
+    <PackageReference Include=""{SourceTree.SdkPackage}"" Version=""{version}"" />
+  </ItemGroup>
+
+</Project>
+";
+
+    /// <summary>
+    /// The host project for contributors, against an E# checkout: it compiles the same Program.cs under dotnet against the
+    /// E# runtime and platform (with HOST defined), and loads the subset analyzer, so ES0001-ES0010 show up in the editor
+    /// and in `dotnet build`.
     /// </summary>
     public static string Csproj(string? root)
     {
@@ -95,28 +137,33 @@ public static class Program
 
     private static string Q(string s) => JsonSerializer.Serialize(s);
 
-    public static string TasksJson(string cliDll)
+    /// <summary>Tasks that run the esharp CLI through dotnet (a checkout's esharp.dll), so nothing needs to be on PATH.</summary>
+    public static string TasksJson(string cliDll) => TasksJson("dotnet", new[] { cliDll });
+
+    /// <summary>Tasks that run the CLI as <paramref name="command"/> <paramref name="prefix"/> (e.g. the installed esharp tool).</summary>
+    public static string TasksJson(string command, string[] prefix)
     {
-        // Every task runs the esharp CLI through dotnet, so nothing needs to be on PATH.
-        string Task(string label, string group, params string[] args) =>
+        string Task(string label, string group, params string[] args) => TaskWith("dotnet", label, group, args);
+        string CliTask(string label, string group, params string[] args) => TaskWith(command, label, group, args);
+        string TaskWith(string cmd, string label, string group, string[] args) =>
             $@"    {{
       ""label"": {Q(label)},
       ""type"": ""process"",
-      ""command"": ""dotnet"",
+      ""command"": {Q(cmd)},
       ""args"": [{string.Join(", ", Array.ConvertAll(args, Q))}],
       ""options"": {{ ""cwd"": ""${{workspaceFolder}}"" }},
       ""problemMatcher"": ""$msCompile""{group}
     }}";
-        string[] Cli(params string[] more) { var l = new List<string> { cliDll }; l.AddRange(more); return l.ToArray(); }
+        string[] Cli(params string[] more) { var l = new List<string>(prefix); l.AddRange(more); return l.ToArray(); }
         var image = "${input:dockerImage}";
         var folder = "${workspaceFolder}";
         return $@"{{
   ""version"": ""2.0.0"",
   ""tasks"": [
-{Task("E#: build (m68k)", ",\n      \"group\": { \"kind\": \"build\", \"isDefault\": true }", Cli("build", folder, "--target", "m68k", "--docker", image))},
-{Task("E#: run in FS-UAE", "", Cli("run", folder, "--docker", image))},
-{Task("E#: run in FS-UAE (headless)", "", Cli("run", folder, "--docker", image, "--headless"))},
-{Task("E#: check subset and emit C", "", Cli("build", folder, "--emit-only"))},
+{CliTask("E#: build (m68k)", ",\n      \"group\": { \"kind\": \"build\", \"isDefault\": true }", Cli("build", folder, "--target", "m68k", "--docker", image))},
+{CliTask("E#: run in FS-UAE", "", Cli("run", folder, "--docker", image))},
+{CliTask("E#: run in FS-UAE (headless)", "", Cli("run", folder, "--docker", image, "--headless"))},
+{CliTask("E#: check subset and emit C", "", Cli("build", folder, "--emit-only"))},
 {Task("E#: run on the host", "", "run", "--project", folder)},
 {Task("E#: build for the host", "", "build", folder)}
   ],

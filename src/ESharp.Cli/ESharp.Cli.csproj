@@ -6,17 +6,48 @@
     <Nullable>enable</Nullable>
     <AssemblyName>esharp</AssemblyName>
     <RootNamespace>ESharp.Cli</RootNamespace>
+
+    <!-- dotnet tool install -g AmigaESharp.Tool gives the esharp command. -->
+    <IsPackable>true</IsPackable>
+    <PackAsTool>true</PackAsTool>
+    <ToolCommandName>esharp</ToolCommandName>
+    <PackageId>AmigaESharp.Tool</PackageId>
+    <Title>E# (Amiga E#) command line</Title>
+    <Description>The esharp command: compiles a restricted subset of C# to C and builds it into native Amiga programs (68020+ AmigaOS 3.1, AmigaOS 4 and MorphOS PowerPC, AROS) or an SDL 3 desktop build; runs them in FS-UAE, and runs the same source on the PC as a test host.</Description>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
   </PropertyGroup>
 
   <ItemGroup>
     <ProjectReference Include="..\ESharp.Compiler\ESharp.Compiler.csproj" />
     <ProjectReference Include="..\ESharp.Assets\ESharp.Assets.csproj" />
+    <!-- Built first, not referenced: its assemblies are copied to host/ (below) for `esharp test`, so an installed tool
+         runs the host side without an E# checkout. The CLI itself does not use their types. -->
+    <ProjectReference Include="..\ESharp.Target.Host\ESharp.Target.Host.csproj" ReferenceOutputAssembly="false" Private="false" />
   </ItemGroup>
 
   <ItemGroup>
     <!-- The os4 run harness puts this helper on the test CD (src/ESharp.Cli/Os4Vm.cs, tools/os4vm/README.md). -->
     <EmbeddedResource Include="..\..\tools\os4vm\estype.c" LogicalName="estype.c" />
+    <!-- `esharp os4vm` runs the VM helper script from the tool's own folder (it finds estype.c next to it). -->
+    <None Include="..\..\tools\os4vm\os4vm.py;..\..\tools\os4vm\estype.c;..\..\tools\os4vm\README.md" Link="os4vm\%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+    <None Include="..\PackageReadme.md" Pack="true" PackagePath="README.md" />
   </ItemGroup>
+
+  <!-- ESharp.Runtime, ESharp.Platform and ESharp.Target.Host (built with HOST) go to host/ in the output and in the tool
+       package: HostRun references them from there when no E# checkout is used. -->
+  <Target Name="EsAddHostLibs" BeforeTargets="AssignTargetPaths" DependsOnTargets="ResolveProjectReferences">
+    <MSBuild Projects="..\ESharp.Target.Host\ESharp.Target.Host.csproj" Targets="GetTargetPath" RemoveProperties="TargetFramework;RuntimeIdentifier;SelfContained">
+      <Output TaskParameter="TargetOutputs" ItemName="_EsHostTarget" />
+    </MSBuild>
+    <PropertyGroup>
+      <_EsHostDir>@(_EsHostTarget->'%(RootDir)%(Directory)')</_EsHostDir>
+    </PropertyGroup>
+    <ItemGroup>
+      <_EsHostLib Include="$(_EsHostDir)ESharp.Runtime.dll;$(_EsHostDir)ESharp.Platform.dll;$(_EsHostDir)ESharp.Target.Host.dll" />
+      <None Include="@(_EsHostLib)" Link="host\%(_EsHostLib.Filename)%(_EsHostLib.Extension)" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+    </ItemGroup>
+    <Error Condition="!Exists('$(_EsHostDir)ESharp.Target.Host.dll')" Text="ESharp.Target.Host was not built at $(_EsHostDir)" />
+  </Target>
 
   <ItemGroup>
     <InternalsVisibleTo Include="ESharp.Compiler.Tests" />
