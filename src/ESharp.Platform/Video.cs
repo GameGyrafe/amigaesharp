@@ -491,7 +491,12 @@ public static unsafe class Video
     public static bool Open(int width, int height, int depth)
     {
         if (_open || width <= 0 || height <= 0 || depth < 1 || depth > 8) return false;
-        if (depth > 5 && !HostAga) return depth <= 8 && OpenRtg(width, height, depth);   // as on an Amiga without AGA: RTG if there is a card
+        if (depth > 5 && !HostAga) return OpenRtg(width, height, depth);   // as on an Amiga without AGA: RTG if there is a card
+        return OpenFrame(width, height, depth);
+    }
+
+    private static bool OpenFrame(int width, int height, int depth)
+    {
         _pixels = new byte[width * height];
         _palette = new ushort[1 << depth];
         _palette24 = new uint[1 << depth];
@@ -512,7 +517,7 @@ public static unsafe class Video
     public static bool OpenRtg(int width, int height, int depth)
     {
         if (_open || depth < 1 || depth > 8 || !HasRtg(width, height)) return false;
-        if (!Open(width, height, 8)) return false;
+        if (!OpenFrame(width, height, 8)) return false;
         _rtgScreen = true;
         return true;
     }
