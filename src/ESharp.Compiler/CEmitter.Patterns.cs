@@ -17,6 +17,39 @@ namespace ESharp.Compiler;
 /// </summary>
 internal sealed partial class CEmitter
 {
+    private List<INamedTypeSymbol> _heapClasses = new();
+
+    /// <summary>True when <c>x is T</c> with x of type <paramref name="from"/> is a test E# can make: class to class, or interface to class.</summary>
+    private static bool CanTypeTest(ITypeSymbol? from, ITypeSymbol? target) =>
+        target is INamedTypeSymbol t && IsHeapClass(t) && from is INamedTypeSymbol f && (IsHeapClass(f) || IsInterfaceType(f));
+
+    /// <summary>The C condition of <c>x is T</c> (see <see cref="CanTypeTest"/>); <paramref name="subject"/> is a simple C expression.</summary>
+    private string TypeIs(string subject, ITypeSymbol from, INamedTypeSymbol target, SyntaxNode at) =>
+        IsInterfaceType(from) ? IfaceIs(subject, (INamedTypeSymbol)from, target) : ClassIs(subject, (INamedTypeSymbol)from, target, at);
+
+    /// <summary>The subject seen as the class <paramref name="target"/>, once <see cref="TypeIs"/> has held.</summary>
+    private static string TypeAs(string subject, ITypeSymbol from, INamedTypeSymbol target) =>
+        IsInterfaceType(from) ? $"(({TypeName(target)} *){subject}.obj)" : $"(({TypeName(target)} *){subject})";
+
+    /// <summary>
+    /// <c>x is T</c> for an interface value x and a class T. An interface value is the object and the function table of the class it was
+    /// converted from, and every class has its own table, so the table says the class: x is a T when its table is the one of T or of a class
+    /// derived from T. When the table is of a base class of T (the object was converted while typed as the base), the object's own type id
+    /// decides, which such a class has because it has a subclass. A null value has no table and is never a T.
+    /// </summary>
+    private string IfaceIs(string subject, INamedTypeSymbol iface, INamedTypeSymbol target)
+    {
+        var tests = new List<string>();
+        foreach (var c in _heapClasses.Where(c => c.AllInterfaces.Contains(iface, SymbolEqualityComparer.Default)))
+        {
+            var table = $"{subject}.vt == &{VtableName(iface, c)}";
+            if (IsBaseOrSame(c, target)) tests.Add(table);
+            else if (IsBaseOrSame(target, c) && IsPoly(target))
+                tests.Add($"({table} && es_is((const struct ES_Type *)(({TypeName(c)} *){subject}.obj)->{VtPath(c)}, {TypeIdOf(target)}))");
+        }
+        return tests.Count == 0 ? "0" : "(" + string.Join(" || ", tests) + ")";
+    }
+
     /// <summary>A C condition that a reference-typed subject is not null, or null for a value type (nothing to test).</summary>
     private static string? NotNullTest(string subject, ITypeSymbol type)
     {
@@ -33,7 +66,7 @@ internal sealed partial class CEmitter
         {
             // 'not Rect' and 'case Rect:': the parser reads a type name there as a constant.
             if (SymbolEqualityComparer.Default.Equals(tpType, type)) return NotNullTest(subject, type) ?? "1";
-            if (type is INamedTypeSymbol tpFrom && IsHeapClass(tpType) && IsHeapClass(tpFrom)) return $"({ClassIs(subject, tpFrom, tpType, at)})";
+            if (CanTypeTest(type, tpType)) return $"({TypeIs(subject, type, tpType, at)})";
             return Unsupported(at, "type test");
         }
         if (value is LiteralExpressionSyntax nullLit && nullLit.IsKind(SyntaxKind.NullLiteralExpression))
@@ -54,11 +87,11 @@ internal sealed partial class CEmitter
         var rt = rec.Type != null ? Model(rec).GetTypeInfo(rec.Type).Type : null;
         if (rt != null && !SymbolEqualityComparer.Default.Equals(rt, type))
         {
-            if (rt is INamedTypeSymbol rc && type is INamedTypeSymbol rf && IsHeapClass(rc) && IsHeapClass(rf))
+            if (CanTypeTest(type, rt) && rt is INamedTypeSymbol rc)
             {
                 // A class test, then the tests on the object seen as the derived class.
-                parts.Add(ClassIs(subject, rf, rc, rec));
-                subj = $"(({TypeName(rc)} *){subject})";
+                parts.Add(TypeIs(subject, type, rc, rec));
+                subj = TypeAs(subject, type, rc);
                 st = rc;
             }
             else return Unsupported(rec, "type test");

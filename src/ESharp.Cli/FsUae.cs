@@ -11,7 +11,7 @@ namespace ESharp.Cli;
 /// </summary>
 internal static class FsUae
 {
-    public static int Run(string exe, bool headless, TimeSpan timeout, string? kickstart, string model = "A1200", string? fsuaePath = null, string? screenshot = null, string? input = null, string? serial = null)
+    public static int Run(string exe, bool headless, TimeSpan timeout, string? kickstart, string model = "A1200", string? fsuaePath = null, string? screenshot = null, string? input = null, string? serial = null, string? programArgs = null)
     {
         var name = Path.GetFileName(exe);
         var runDir = Path.Combine(Path.GetDirectoryName(Path.GetFullPath(exe))!, "run");
@@ -23,9 +23,11 @@ internal static class FsUae
 
         // Headless runs redirect the program's output to a file and then write a marker, so the
         // host can tell when the program has finished without scraping the screen.
+        // AmigaDOS wants the redirection right after the command name, before the program's own arguments.
+        var line = string.IsNullOrWhiteSpace(programArgs) ? "" : " " + programArgs.Trim();
         File.WriteAllText(Path.Combine(dh0, "S", "Startup-sequence"), headless
-            ? $"dh0:{name} >dh0:out.txt\necho done >dh0:done\n"
-            : $"dh0:{name}\n");
+            ? $"dh0:{name} >dh0:out.txt{line}\necho done >dh0:done\n"
+            : $"dh0:{name}{line}\n");
 
         var config = Path.Combine(runDir, "run.fs-uae");
         File.WriteAllText(config,

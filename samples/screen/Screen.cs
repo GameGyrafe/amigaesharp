@@ -80,10 +80,47 @@ public static class Program
         int w = Font.DrawInt(-305, 100, 170, 9, 1);
         Check(w == 23 && Video.GetPixel(100, 173) == 9, "font: numbers");
 
+        // Every printable character, two lines (one Draw call each on the Amiga), against the glyph table pixel for pixel.
+        const string all = " !\"#$%&'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[\\]^_`abcdefghijklmnopqrstuvwxyz{|}~";
+        Font.Draw(all.Substring(0, 33) + "\n" + all.Substring(33, 33) + "\n" + all.Substring(66), 0, 112, 9, 1);
+        Check(GlyphsWrong(all, 33, 0, 112, 1) == 0, "font: all characters match the glyphs pixel for pixel");
+        Font.Draw("Az09?", 0, 150, 9, 2);
+        Check(GlyphsWrong("Az09?", 5, 0, 150, 2) == 0, "font: scale 2 matches pixel for pixel");
+
         Dos.PutStr("SHOT\n");
         Dos.FlushOutput();
         Video.WaitFrames(150);
         Video.Close();
         Check(!Video.IsOpen(), "screen closes");
+
+        // A screen 640 wide is hires on the chipset (not a lores screen twice as wide as the display).
+        Check(Video.Open(640, 256, 4), "a 640 x 256 screen opens");
+        Check(Video.IsHires(), "it is hires");
+        Video.SetColor(0, 0, 0, 0);
+        Video.SetColor(3, 15, 15, 15);
+        Video.FillRect(0, 0, 640, 256, 0);
+        Video.FillRect(600, 240, 20, 10, 3);
+        Font.Draw("right edge", 560, 20, 3, 1);
+        Check(Video.GetPixel(610, 245) == 3 && Video.GetPixel(599, 245) == 0 && Video.GetPixel(639, 255) == 0, "hires pixels");
+        Check(Video.GetPixel(560, 20) == (Font.Pixel('r', 0, 0) ? 3 : 0) && Video.GetPixel(560, 22) == 3 && Font.Pixel('r', 0, 2), "text near the right edge");
+        Video.Close();
+    }
+
+    /// <summary>Pixels of <paramref name="text"/> drawn in colour 9 on colour 11 at (x, y) that differ from the glyphs (perLine characters per line).</summary>
+    static int GlyphsWrong(string text, int perLine, int x, int y, int scale)
+    {
+        int wrong = 0;
+        for (int k = 0; k < text.Length; k++)
+        {
+            int left = x + (k % perLine) * Font.Advance * scale;
+            int top = y + (k / perLine) * Font.LineHeight * scale;
+            for (int row = 0; row < Font.GlyphHeight * scale; row++)
+                for (int col = 0; col < Font.Advance * scale; col++)
+                {
+                    int want = Font.Pixel(text[k], col / scale, row / scale) ? 9 : 11;
+                    if (Video.GetPixel(left + col, top + row) != want) wrong++;
+                }
+        }
+        return wrong;
     }
 }

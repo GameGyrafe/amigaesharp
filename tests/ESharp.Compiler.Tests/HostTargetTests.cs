@@ -137,7 +137,17 @@ public class HostTargetTests
         ESharp.Platform.Video.HostAga = false;
         try { AgaSample.Program.Main(); }
         finally { ESharp.Platform.Video.HostAga = true; }
-        Assert.Equal("no AGA chipset\nok an 8-bitplane screen is refused without AGA\nok the 32-colour fallback opens\nok SetColor24 falls back to the 4-bit palette\n", console.Output);
+        Assert.Equal("no AGA chipset\nok an 8-bitplane screen opens only on RTG without AGA\nok the 32-colour fallback opens\nok SetColor24 falls back to the 4-bit palette\n", console.Output);
+    }
+
+    [Fact]
+    public void Objects_sample_runs_on_the_host()
+    {
+        using var console = HostConsole.Capture();
+        ESharp.Platform.Args.HostSet();
+        ObjectsSample.Program.Main();
+        Assert.DoesNotContain("FAIL", console.Output);
+        Assert.Equal(21, console.Output.Split('\n').Count(l => l.StartsWith("ok ")));
     }
 
     [Fact]
@@ -476,10 +486,10 @@ public class HostTargetTests
         using var console = HostConsole.Capture();
         ScreenSample.Program.Main();
         Assert.Equal(ScreenExpected.Output, console.Output);
-        // The card was drawn from the planar data: its centre pixel is not the background.
+        // The framebuffer stays after Close: it is the 640 x 256 screen with its white block.
         Assert.False(ESharp.Platform.Video.IsOpen());
-        Assert.Equal(320 * 200, ESharp.Platform.Video.HostPixels.Length);
-        Assert.Equal(11, ESharp.Platform.Video.HostPixels[2 * 320 + 2]);
+        Assert.Equal(640 * 256, ESharp.Platform.Video.HostPixels.Length);   // the last screen: the hires one
+        Assert.Equal(3, ESharp.Platform.Video.HostPixels[245 * 640 + 610]);
     }
 
     [Fact]
@@ -760,7 +770,8 @@ internal static class OperatorsExpected
 /// <summary>What samples/screen prints.</summary>
 internal static class ScreenExpected
 {
-    public static string Output => string.Concat(Names.Select(n => "ok " + n + "\n")) + "SHOT\nok screen closes\n";
+    public static string Output => string.Concat(Names.Select(n => "ok " + n + "\n")) + "SHOT\nok screen closes\n" +
+        "ok a 640 x 256 screen opens\nok it is hires\nok hires pixels\nok text near the right edge\n";
 
     private static readonly string[] Names =
     {
@@ -780,6 +791,8 @@ internal static class ScreenExpected
         "font: scale 2 doubles pixels",
         "font: strings, newline and width",
         "font: numbers",
+        "font: all characters match the glyphs pixel for pixel",
+        "font: scale 2 matches pixel for pixel",
     };
 }
 

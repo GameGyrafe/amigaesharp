@@ -64,6 +64,8 @@ public static unsafe class Mem
     }
 
     private static readonly System.Collections.Generic.Dictionary<ulong, Block> Live = new();
+    // Tests run in parallel (xunit): every use of the table and the counters holds this lock.
+    private static readonly object Gate = new();
     private static uint _chipUsed;
     private static uint _fastUsed;
 
@@ -75,20 +77,28 @@ public static unsafe class Mem
 
     public static uint ChipUsed => _chipUsed;
     public static uint FastUsed => _fastUsed;
-    public static int LiveBlocks => Live.Count;
+    public static int LiveBlocks { get { lock (Gate) return Live.Count; } }
 
     /// <summary>Frees every live block and sets the budgets. Used by tests.</summary>
     public static void HostReset(uint chipBudget = 2048 * 1024, uint fastBudget = 0)
     {
-        foreach (var address in Live.Keys) NativeMemory.AlignedFree((void*)address);
-        Live.Clear();
-        _chipUsed = 0;
-        _fastUsed = 0;
-        ChipBudget = chipBudget;
-        FastBudget = fastBudget;
+        lock (Gate)
+        {
+            foreach (var address in Live.Keys) NativeMemory.AlignedFree((void*)address);
+            Live.Clear();
+            _chipUsed = 0;
+            _fastUsed = 0;
+            ChipBudget = chipBudget;
+            FastBudget = fastBudget;
+        }
     }
 
     private static byte* Take(uint size, bool chip)
+    {
+        lock (Gate) return TakeLocked(size, chip);
+    }
+
+    private static byte* TakeLocked(uint size, bool chip)
     {
         var used = chip ? _chipUsed : _fastUsed;
         var budget = chip ? ChipBudget : FastBudget;
@@ -102,19 +112,25 @@ public static unsafe class Mem
 
     public static byte* AllocChip(uint size) => Take(size, chip: true);
 
-    public static byte* AllocFast(uint size) => Take(size, chip: false) is var p && p != null ? p : Take(size, chip: true);
+    public static byte* AllocFast(uint size)
+    {
+        lock (Gate) return TakeLocked(size, chip: false) is var p && p != null ? p : TakeLocked(size, chip: true);
+    }
 
     public static void Free(byte* block)
     {
         if (block == null) return;
-        if (!Live.Remove((ulong)block, out var info))
-            throw new InvalidOperationException("Mem.Free: block was not allocated by Mem, or was already freed");
-        if (info.Chip) _chipUsed -= info.Size; else _fastUsed -= info.Size;
-        NativeMemory.AlignedFree(block);
+        lock (Gate)
+        {
+            if (!Live.Remove((ulong)block, out var info))
+                throw new InvalidOperationException("Mem.Free: block was not allocated by Mem, or was already freed");
+            if (info.Chip) _chipUsed -= info.Size; else _fastUsed -= info.Size;
+            NativeMemory.AlignedFree(block);
+        }
     }
 
-    public static uint AvailChip() => ChipBudget - Math.Min(_chipUsed, ChipBudget);
+    public static uint AvailChip() { lock (Gate) return ChipBudget - Math.Min(_chipUsed, ChipBudget); }
 
-    public static uint AvailFast() => FastBudget - Math.Min(_fastUsed, FastBudget);
+    public static uint AvailFast() { lock (Gate) return FastBudget - Math.Min(_fastUsed, FastBudget); }
 #endif
 }

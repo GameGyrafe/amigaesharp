@@ -21,6 +21,27 @@ internal static class Xtest
     [DllImport("libXtst.so.6")] private static extern int XTestFakeButtonEvent(IntPtr display, uint button, int isPress, ulong delay);
     [DllImport("libXtst.so.6")] private static extern int XTestFakeKeyEvent(IntPtr display, uint keycode, int isPress, ulong delay);
 
+    /// <summary>
+    /// A relative move of (<paramref name="dx"/>, <paramref name="dy"/>) as steps of at most 4 pixels on the longer axis. Each step is
+    /// where the line should be after it minus where the steps so far went, so the steps add up to exactly (dx, dy) and the shorter
+    /// axis is spread over the move (integer division per step dropped it: 'rel 76,-320' did not move sideways at all).
+    /// </summary>
+    internal static List<(int Dx, int Dy)> RelSteps(int dx, int dy)
+    {
+        var steps = Math.Max(Math.Max(Math.Abs(dx), Math.Abs(dy)) / 4, 1);
+        var result = new List<(int, int)>(steps);
+        int doneX = 0, doneY = 0;
+        for (var i = 1; i <= steps; i++)
+        {
+            var x = (int)((long)dx * i / steps);
+            var y = (int)((long)dy * i / steps);
+            result.Add((x - doneX, y - doneY));
+            doneX = x;
+            doneY = y;
+        }
+        return result;
+    }
+
     public static bool Run(string? displayName, string script)
     {
         IntPtr display;
@@ -49,10 +70,9 @@ internal static class Xtest
                     var xy = parts[1].Split(',');
                     var dx = int.Parse(xy[0], CultureInfo.InvariantCulture);
                     var dy = int.Parse(xy[1], CultureInfo.InvariantCulture);
-                    var steps = Math.Max(Math.Max(Math.Abs(dx), Math.Abs(dy)) / 4, 1);
-                    for (var i = 0; i < steps; i++)
+                    foreach (var (sx, sy) in RelSteps(dx, dy))
                     {
-                        XTestFakeRelativeMotionEvent(display, dx / steps, dy / steps, 0); XFlush(display); Thread.Sleep(15);
+                        XTestFakeRelativeMotionEvent(display, sx, sy, 0); XFlush(display); Thread.Sleep(15);
                     }
                     Thread.Sleep(300);
                 }

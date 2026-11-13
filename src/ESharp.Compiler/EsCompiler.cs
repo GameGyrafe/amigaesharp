@@ -74,6 +74,9 @@ public static class EsCompiler
         if (diagnostics.Any(d => d.Severity == DiagnosticSeverity.Error))
             return new CompileResult(null, Sorted(diagnostics)) { Chip = chip };
 
+        // C keywords and predefined macros used as C# names (a parameter called 'auto') get a C name of their own.
+        (compilation, userSet) = CKeywords.Apply(compilation, userSet);
+
         // 5. Emit C.
         var emitter = new CEmitter(compilation, userSet, diagnostics, options.BoundsChecks);
         var c = emitter.Emit();
