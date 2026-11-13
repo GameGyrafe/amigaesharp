@@ -23,7 +23,9 @@ public static class Program
         if (!Video.HasAga())
         {
             Dos.PutStr("no AGA chipset\n");
-            Check(!Video.Open(320, 256, 8), "an 8-bitplane screen is refused without AGA");
+            // Without AGA an 8-bitplane screen is only possible on a graphics card (RTG), and Open then picks that.
+            Check(Video.Open(320, 256, 8) == Video.HasRtg(320, 256), "an 8-bitplane screen opens only on RTG without AGA");
+            Video.Close();
             Check(Video.Open(320, 256, 5), "the 32-colour fallback opens");
             Video.SetColor24(1, 255, 0, 0);
             Video.FillRect(0, 0, 10, 10, 1);

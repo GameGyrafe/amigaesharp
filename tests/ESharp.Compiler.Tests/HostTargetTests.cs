@@ -137,7 +137,7 @@ public class HostTargetTests
         ESharp.Platform.Video.HostAga = false;
         try { AgaSample.Program.Main(); }
         finally { ESharp.Platform.Video.HostAga = true; }
-        Assert.Equal("no AGA chipset\nok an 8-bitplane screen is refused without AGA\nok the 32-colour fallback opens\nok SetColor24 falls back to the 4-bit palette\n", console.Output);
+        Assert.Equal("no AGA chipset\nok an 8-bitplane screen opens only on RTG without AGA\nok the 32-colour fallback opens\nok SetColor24 falls back to the 4-bit palette\n", console.Output);
     }
 
     [Fact]
@@ -760,7 +760,8 @@ internal static class OperatorsExpected
 /// <summary>What samples/screen prints.</summary>
 internal static class ScreenExpected
 {
-    public static string Output => string.Concat(Names.Select(n => "ok " + n + "\n")) + "SHOT\nok screen closes\n";
+    public static string Output => string.Concat(Names.Select(n => "ok " + n + "\n")) + "SHOT\nok screen closes\n" +
+        "ok a 640 x 256 screen opens\nok it is hires\nok hires pixels\nok text near the right edge\n";
 
     private static readonly string[] Names =
     {
@@ -780,6 +781,8 @@ internal static class ScreenExpected
         "font: scale 2 doubles pixels",
         "font: strings, newline and width",
         "font: numbers",
+        "font: all characters match the glyphs pixel for pixel",
+        "font: scale 2 matches pixel for pixel",
     };
 }
 

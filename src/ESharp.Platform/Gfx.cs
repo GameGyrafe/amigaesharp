@@ -44,6 +44,10 @@ public static unsafe class Graphics
     [AmigaLib("graphics", -342)] public static extern void SetAPen(void* rastPort, int pen);
     [AmigaLib("graphics", -306)] public static extern void RectFill(void* rastPort, int xMin, int yMin, int xMax, int yMax);
     [AmigaLib("graphics", -318)] public static extern int ReadPixel(void* rastPort, int x, int y);
+    /// <summary>graphics.library SetDrMd(): JAM1 (0) draws only the set bits of a template or text in the A pen, JAM2 (1) also the others in the B pen.</summary>
+    [AmigaLib("graphics", -354)] public static extern void SetDrMd(void* rastPort, int drawMode);
+    /// <summary>graphics.library BltTemplate(): draws a one-plane template (word aligned, chip RAM) in the rast port's pen and draw mode.</summary>
+    [AmigaLib("graphics", -36)] public static extern void BltTemplate(byte* source, int xSrc, int srcModulo, void* destRastPort, int xDest, int yDest, int xSize, int ySize);
     [AmigaLib("graphics", -606)] public static extern void BltBitMapRastPort(void* srcBitMap, int xSrc, int ySrc,
         void* destRastPort, int xDest, int yDest, int xSize, int ySize, int minterm);
     [AmigaLib("graphics", -636)] public static extern void BltMaskBitMapRastPort(void* srcBitMap, int xSrc, int ySrc,

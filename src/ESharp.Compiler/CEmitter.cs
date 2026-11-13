@@ -469,6 +469,14 @@ internal sealed partial class CEmitter
             result.AppendLine("    return *a == *b;");
             result.AppendLine("}");
         }
+        if (UsesArgs)
+        {
+            // Args: main keeps argc/argv (a Workbench start has argc 0); argument 0 is the program name, so Args counts from 1.
+            result.AppendLine("static int es_argc;");
+            result.AppendLine("static char **es_argv;");
+            result.AppendLine("static __attribute__((unused)) int32_t es_args_count(void) { return es_argc > 1 ? (int32_t)es_argc - 1 : 0; }");
+            result.AppendLine("static __attribute__((unused)) const char *es_args_get(int32_t i) { return i >= 0 && i < es_args_count() ? es_argv[i + 1] : NULL; }");
+        }
         if (_natives.Contains("es_fixdiv"))
         {
             result.AppendLine("static inline int32_t es_fixdiv(int32_t a, int32_t b)");
@@ -537,6 +545,8 @@ internal sealed partial class CEmitter
     }
 
     private readonly HashSet<string> _natives = new();
+
+    private bool UsesArgs => _natives.Contains("es_args_count") || _natives.Contains("es_args_get");
 
     private bool IsDefined(string symbol) =>
         _compilation.SyntaxTrees.FirstOrDefault(_user.Contains)?.Options.PreprocessorSymbolNames.Contains(symbol) ?? false;
@@ -1564,9 +1574,10 @@ internal sealed partial class CEmitter
             Line("}");
             Line("");
         }
-        Line("int main(void)");
+        Line(UsesArgs ? "int main(int argc, char **argv)" : "int main(void)");
         Line("{");
         _indent++;
+        if (UsesArgs) Line("es_argc = argc; es_argv = argv;");
         if ((_usesBounds || _usesAlloc) && _atExit.Count > 0) Line("es_exit_hook = es_run_atexit;");
         // Static field initializers that are not C constants, then the static constructors, run once at start-up, in the order the types
         // appear (C# runs them lazily, before a type is first used).

@@ -51,6 +51,7 @@ Run options (build options also apply; run is m68k, os4 or sdl):
   --fsuae <path>    FS-UAE executable (or set ESHARP_FSUAE)
   --screenshot <png> Headless only: when the program prints SHOT, save the emulator screen to a PNG (needs xwd)
   --serial <file>   Headless only: write the program's serial output (Trace) to this file, and print it after the run
+  --args <line>     Arguments for the program (Args.Count, Args.Get, Args.Value): ""SEED 42 AUTO"" (m68k and sdl)
   --input <script>  Headless only: after SHOT send mouse/keyboard input to the emulator (before the screenshot):
                     ""click X,Y;key 9;key 50+38"" with display pixels and X11 key codes, + holds keys (needs libXtst)
                     os4: the QEMU monitor sends it: click X,Y moves the pointer to X,Y of the screen (from the top-left
@@ -480,12 +481,14 @@ Targets:
         string? screenshot = null;
         string? input = null;
         string? serial = null;
+        string? programArgs = null;
         var buildArgs = new List<string>();
         for (var i = 0; i < args.Length; i++)
         {
             switch (args[i])
             {
                 case "--headless": headless = true; break;
+                case "--args" when i + 1 < args.Length: programArgs = args[++i]; break;
                 case "--timeout" when i + 1 < args.Length && int.TryParse(args[i + 1], out timeout): i++; break;
                 case "--kickstart" when i + 1 < args.Length: kickstart = args[++i]; break;
                 case "--model" when i + 1 < args.Length: model = args[++i]; break;
@@ -504,12 +507,14 @@ Targets:
         {
             var sdlRc = Build(buildArgs.ToArray(), out var sdlExe);
             if (sdlRc != 0 || sdlExe == null) return sdlRc;
-            var (exit, _) = SdlRun.Run(sdlExe, headless, TimeSpan.FromSeconds(timeout), DockerImage(buildArgs, Targets.Sdl), screenshot, input);
+            var (exit, _) = SdlRun.Run(sdlExe, headless, TimeSpan.FromSeconds(timeout), DockerImage(buildArgs, Targets.Sdl), screenshot, input,
+                programArgs: programArgs?.Split(' ', StringSplitOptions.RemoveEmptyEntries));
             if (exit != 0) Console.Error.WriteLine($"esharp: the program exited with code {exit}");
             return exit;
         }
         if (string.Equals(targetName, "os4", StringComparison.OrdinalIgnoreCase))
         {
+            if (programArgs != null) return Fail("--args is not passed to the os4 VM yet (m68k and sdl only)");
             var os4Rc = Build(buildArgs.ToArray(), out var os4Exe);
             if (os4Rc != 0 || os4Exe == null) return os4Rc;
             var (exit, _) = Os4Vm.Run(os4Exe, TimeSpan.FromSeconds(timeout), DockerImage(buildArgs, Targets.Os4), screenshot, serial, input: input);
@@ -526,7 +531,8 @@ Targets:
 
         var rc = Build(buildArgs.ToArray(), out var exe);
         if (rc != 0 || exe == null) return rc;
-        return FsUae.Run(exe, headless, TimeSpan.FromSeconds(timeout), kickstart, model, fsuae, screenshot, input, serial);
+        if (programArgs != null && programArgs.IndexOfAny(new[] { '\n', '\r', '>', '<', ';' }) >= 0) return Fail("--args: no newlines, redirections or ';' in the line");
+        return FsUae.Run(exe, headless, TimeSpan.FromSeconds(timeout), kickstart, model, fsuae, screenshot, input, serial, programArgs);
     }
 
     /// <summary>The image a build's <c>--docker [image]</c> option names, or null without the option.</summary>

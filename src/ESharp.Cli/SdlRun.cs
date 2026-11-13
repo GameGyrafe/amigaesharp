@@ -18,7 +18,7 @@ namespace ESharp.Cli;
 /// </summary>
 public static class SdlRun
 {
-    public static (int Exit, string Output) Run(string exe, bool headless, TimeSpan timeout, string? docker, string? screenshot, string? input, bool echo = true)
+    public static (int Exit, string Output) Run(string exe, bool headless, TimeSpan timeout, string? docker, string? screenshot, string? input, bool echo = true, IReadOnlyList<string>? programArgs = null)
     {
         string? script = null;
         if (input != null)
@@ -47,10 +47,12 @@ public static class SdlRun
             foreach (var (k, v) in env) { psi.ArgumentList.Add("-e"); psi.ArgumentList.Add($"{k}={v}"); }
             psi.ArgumentList.Add(docker!);
             psi.ArgumentList.Add("./" + name);
+            foreach (var a in programArgs ?? Array.Empty<string>()) psi.ArgumentList.Add(a);
         }
         else
         {
             psi = new ProcessStartInfo(Path.GetFullPath(exe)) { UseShellExecute = false, WorkingDirectory = dir };
+            foreach (var a in programArgs ?? Array.Empty<string>()) psi.ArgumentList.Add(a);
             foreach (var (k, v) in env) psi.Environment[k] = v;
         }
         psi.RedirectStandardOutput = true;

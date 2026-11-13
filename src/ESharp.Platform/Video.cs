@@ -36,13 +36,42 @@ public static unsafe class Video
     /// <summary>
     /// Opens a screen of <paramref name="width"/> x <paramref name="height"/> with <paramref name="depth"/> bitplanes (1..5 on OCS/ECS,
     /// up to 8 on AGA: check <see cref="HasAga"/> first or fall back when this returns false). False on failure.
+    /// <para>
+    /// The display mode follows the size on the classic chipset: wider than 400 pixels is hires (640 x 256 is a hires PAL screen with
+    /// square-ish pixels, not a lores screen that scrolls), wider than 800 super-hires, and taller than 300 lines interlaced. Without AGA
+    /// (hosted AROS, a graphics card system) a depth above 5 opens an 8-bit RTG screen instead when there is one (see <see cref="OpenRtg"/>).
+    /// </para>
     /// </summary>
     public static bool Open(int width, int height, int depth)
     {
         if (_screen != null) return false;
         // Kickstart 2.x opens a screen with more bitplanes than the chips have and then misbehaves: refuse it here.
-        if (depth > 5 && !HasAga()) return false;
-        return OpenMode(width, height, depth, 0);
+        if (depth > 5 && !HasAga()) return depth <= 8 && HasRtg(width, height) && OpenRtg(width, height, depth);
+        return OpenMode(width, height, depth, NativeMode(width, height));
+    }
+
+    /// <summary>The classic display mode for a size (graphics/modeid.h keys on the default monitor), or 0 to let the system choose.</summary>
+    private static uint NativeMode(int width, int height)
+    {
+#if AMIGAOS3
+        uint mode = 0;
+        if (width > 800) mode |= 0x8020;          // SUPER_KEY (super-hires, 1280 wide)
+        else if (width > 400) mode |= 0x8000;     // HIRES_KEY
+        if (height > 300) mode |= 0x0004;         // LORESLACE_KEY / HIRESLACE_KEY: interlaced
+        return mode == 0 ? 0u : mode;
+#else
+        return 0;
+#endif
+    }
+
+    /// <summary>True when the open screen has hires (or finer) pixels: a native hires mode, or any screen 640 or more pixels wide on RTG and other systems.</summary>
+    public static bool IsHires()
+    {
+        if (_screen == null) return false;
+#if AMIGAOS3
+        if (!IsRtg()) return (Graphics.GetVPModeID(_viewPort) & 0x8000) != 0;
+#endif
+        return _width >= 640;
     }
 
     /// <summary>
@@ -251,6 +280,19 @@ public static unsafe class Video
     }
 
     /// <summary>
+    /// Draws the set bits of a one-plane template (<paramref name="bytesPerRow"/> bytes per row, word aligned, chip RAM) in
+    /// <paramref name="color"/>, leaving the other pixels alone: one graphics call (BltTemplate), used by <see cref="Font"/>.
+    /// </summary>
+    internal static void Template(byte* bits, int bytesPerRow, int width, int height, int x, int y, int color)
+    {
+        if (_rastPort == null || width <= 0 || height <= 0) return;
+        Graphics.SetAPen(_rastPort, color);
+        Graphics.SetDrMd(_rastPort, 0);           // JAM1: only the set bits
+        Graphics.BltTemplate(bits, 0, bytesPerRow, _rastPort, x, y, width, height);
+        Graphics.SetDrMd(_rastPort, 1);           // back to JAM2, a new window's mode
+    }
+
+    /// <summary>
     /// Copies a planar image (plane after plane, each row padded to 16 pixels, as <c>esharp assets</c>
     /// writes it) to the screen with the blitter. The data must be in chip RAM.
     /// </summary>
@@ -332,7 +374,18 @@ public static unsafe class Video
     /// <summary>SDL shows 256 colours on any desktop, so the AGA depths (6 to 8 bitplanes) are always available.</summary>
     public static bool HasAga() { return true; }
 
-    public static bool Open(int width, int height, int depth) { return Crt.es_sdl_video_open(width, height, depth); }
+    private static int _sdlWidth;
+
+    /// <summary>Any size works on SDL (a 640 x 256 screen is shown at its own size, as hires is on an Amiga).</summary>
+    public static bool Open(int width, int height, int depth)
+    {
+        if (!Crt.es_sdl_video_open(width, height, depth)) return false;
+        _sdlWidth = width;
+        return true;
+    }
+
+    /// <summary>True when the screen is 640 or more pixels wide (hires on an Amiga).</summary>
+    public static bool IsHires() { return Crt.es_sdl_video_is_open() && _sdlWidth >= 640; }
 
     /// <summary>There is no RTG card on SDL: false. Use <see cref="Open"/>, which takes up to 8 bitplanes (256 colours).</summary>
     public static bool HasRtg(int width, int height) { return false; }
@@ -438,8 +491,8 @@ public static unsafe class Video
     public static bool Open(int width, int height, int depth)
     {
         if (_open || width <= 0 || height <= 0 || depth < 1 || depth > 8) return false;
+        if (depth > 5 && !HostAga) return depth <= 8 && OpenRtg(width, height, depth);   // as on an Amiga without AGA: RTG if there is a card
         _pixels = new byte[width * height];
-        if (depth > 5 && !HostAga) return false;      // as on an OCS machine
         _palette = new ushort[1 << depth];
         _palette24 = new uint[1 << depth];
         _depthBits = depth;
@@ -467,6 +520,9 @@ public static unsafe class Video
     public static bool IsRtg() { return _open && _rtgScreen; }
 
     public static bool IsOpen() { return _open; }
+
+    /// <summary>True when the screen is 640 or more pixels wide (hires on an Amiga).</summary>
+    public static bool IsHires() { return _open && _width >= 640; }
 
     public static void Close() { _open = false; _rtgScreen = false; }
 

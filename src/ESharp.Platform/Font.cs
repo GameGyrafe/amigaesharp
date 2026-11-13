@@ -1,12 +1,21 @@
+using System;
+
 namespace ESharp.Platform;
 
 /// <summary>
 /// A built-in 5x7 bitmap font (printable ASCII, 6 pixels per character with the gap) drawn on the
-/// <see cref="Video"/> screen with filled rectangles, so it works on every target and every depth.
+/// <see cref="Video"/> screen, so it works on every target and every depth.
 /// <c>scale</c> multiplies the size (2 gives 12x14 per character). The glyphs are drawn in one colour
 /// with a transparent background; fill a rectangle first for a label.
+/// <para>
+/// On the Amiga a line of text is one graphics call: the CPU sets the glyphs' pixels in a one-plane strip in chip RAM and
+/// graphics.library BltTemplate draws the strip in the colour (up to 106 characters at scale 1, 640 pixels, per call; longer
+/// lines take more calls, and scales above 4 fall back to one filled rectangle per run of pixels). Every graphics call through the
+/// window's layers costs a fraction of a millisecond on a 68020, so this matters: drawing a rectangle per run of pixels took about a
+/// second for a screen of text. The host and SDL fill the same pixels directly.
+/// </para>
 /// </summary>
-public static class Font
+public static unsafe class Font
 {
     public const int GlyphWidth = 5, GlyphHeight = 7, Advance = 6, LineHeight = 9;
 
@@ -39,6 +48,21 @@ public static class Font
         0x04,0x04,0x04,0x04,0x04,0x04,0x04, 0x08,0x04,0x04,0x02,0x04,0x04,0x08, 0x00,0x00,0x08,0x15,0x02,0x00,0x00,
     };
 
+#if AMIGA
+    // The strip that BltTemplate draws from: 640 pixels (80 bytes) by 28 rows (scale 4), word aligned, in chip RAM for the blitter.
+    private const int StripBytesPerRow = 80, StripRows = 28;
+    [ChipRam] private static ushort[] Strip = new ushort[StripBytesPerRow / 2 * StripRows];
+#endif
+
+    /// <summary>True when pixel (<paramref name="x"/>, <paramref name="y"/>) of the glyph of <paramref name="c"/> is set (0..4, 0..6; '?' for characters outside 32..126).</summary>
+    public static bool Pixel(char c, int x, int y)
+    {
+        if (x < 0 || x >= GlyphWidth || y < 0 || y >= GlyphHeight) return false;
+        int code = c;
+        if (code < 32 || code > 126) code = 63;
+        return (Glyphs[(code - 32) * GlyphHeight + y] & (0x10 >> x)) != 0;
+    }
+
     /// <summary>Width in pixels of <paramref name="text"/> at <paramref name="scale"/> (the trailing gap is not counted).</summary>
     public static int Width(string text, int scale)
     {
@@ -48,6 +72,17 @@ public static class Font
 
     /// <summary>Draws one character with its top-left corner at (x, y). Characters outside 32..126 draw as '?'.</summary>
     public static void DrawChar(char c, int x, int y, int color, int scale)
+    {
+#if AMIGA
+        byte[] one = new byte[1];
+        one[0] = (byte)c;
+        if (DrawCodes(one, 1, x, y, color, scale)) return;
+#endif
+        DrawCharRects(c, x, y, color, scale);
+    }
+
+    // One filled rectangle per run of set pixels in a glyph row.
+    private static void DrawCharRects(char c, int x, int y, int color, int scale)
     {
         int code = c;
         if (code < 32 || code > 126) code = 63;
@@ -71,14 +106,95 @@ public static class Font
     {
         int cx = x;
         int cy = y;
+#if AMIGA
+        // Each line (up to a newline) goes in pieces of at most 106 characters, one BltTemplate each.
+        byte[] codes = new byte[106];
+        int n = 0;
+        int start = cx;
+        for (int i = 0; i <= text.Length; i++)
+        {
+            bool end = i == text.Length || text[i] == '\n';
+            if (!end) { codes[n] = (byte)text[i]; n++; cx += Advance * scale; }
+            if (end || n == codes.Length || (n + 1) * Advance * scale > StripBytesPerRow * 8)
+            {
+                if (n > 0 && !DrawCodes(codes, n, start, cy, color, scale))
+                    for (int k = 0; k < n; k++) DrawCharRects((char)codes[k], start + k * Advance * scale, cy, color, scale);
+                n = 0;
+                start = cx;
+            }
+            if (end) { cx = x; start = x; cy += LineHeight * scale; }
+        }
+#else
         for (int i = 0; i < text.Length; i++)
         {
             char c = text[i];
             if (c == '\n') { cx = x; cy += LineHeight * scale; continue; }
-            DrawChar(c, cx, cy, color, scale);
+            DrawCharRects(c, cx, cy, color, scale);
             cx += Advance * scale;
         }
+#endif
     }
+
+#if AMIGA
+    /// <summary>
+    /// Draws <paramref name="count"/> character codes in one BltTemplate: false (nothing drawn) when they do not fit the strip
+    /// or would start left of or above the screen, so the caller draws them with rectangles instead.
+    /// </summary>
+    private static bool DrawCodes(ReadOnlySpan<byte> codes, int count, int x, int y, int color, int scale)
+    {
+        if (scale < 1 || count <= 0) return true;
+        int width = count * Advance * scale;
+        int rows = GlyphHeight * scale;
+        if (rows > StripRows || width > StripBytesPerRow * 8 || x < 0 || y < 0) return false;
+        int bytesPerRow = (width + 15) / 16 * 2;
+        fixed (ushort* words = Strip)
+        {
+            byte* strip = (byte*)words;
+            for (int i = 0; i < bytesPerRow * rows; i++) strip[i] = 0;
+            for (int k = 0; k < count; k++)
+            {
+                int code = codes[k];
+                if (code < 32 || code > 126) code = 63;
+                int glyph = (code - 32) * GlyphHeight;
+                int left = k * Advance * scale;
+                if (scale == 1)
+                {
+                    // Each glyph row is 5 bits: shift them to the pixel's place in a 16-bit window and OR two bytes.
+                    byte* at = strip + (left >> 3);
+                    int shift = 11 - (left & 7);
+                    for (int row = 0; row < GlyphHeight; row++)
+                    {
+                        int v = Glyphs[glyph + row] << shift;
+                        at[0] |= (byte)(v >> 8);
+                        at[1] |= (byte)v;
+                        at += bytesPerRow;
+                    }
+                    continue;
+                }
+                for (int row = 0; row < GlyphHeight; row++)
+                {
+                    int bits = Glyphs[glyph + row];
+                    if (bits == 0) continue;
+                    for (int col = 0; col < GlyphWidth; col++)
+                    {
+                        if ((bits & (0x10 >> col)) == 0) continue;
+                        for (int sy = 0; sy < scale; sy++)
+                        {
+                            byte* line = strip + (row * scale + sy) * bytesPerRow;
+                            for (int sx = 0; sx < scale; sx++)
+                            {
+                                int px = left + col * scale + sx;
+                                line[px >> 3] |= (byte)(0x80 >> (px & 7));
+                            }
+                        }
+                    }
+                }
+            }
+            Video.Template(strip, bytesPerRow, width, rows, x, y, color);
+        }
+        return true;
+    }
+#endif
 
     /// <summary>Draws a decimal number and returns its width in pixels.</summary>
     public static int DrawInt(int value, int x, int y, int color, int scale)
@@ -96,13 +212,23 @@ public static class Font
         }
         while (v > 0);
         int cx = x;
-        if (negative) { DrawChar('-', cx, y, color, scale); cx += Advance * scale; }
+#if AMIGA
+        byte[] codes = new byte[12];
+        int len = 0;
+        if (negative) { codes[0] = (byte)'-'; len = 1; }
+        while (n > 0) { n--; codes[len] = (byte)('0' + digits[n]); len++; }
+        if (!DrawCodes(codes, len, x, y, color, scale))
+            for (int k = 0; k < len; k++) DrawCharRects((char)codes[k], x + k * Advance * scale, y, color, scale);
+        cx = x + len * Advance * scale;
+#else
+        if (negative) { DrawCharRects('-', cx, y, color, scale); cx += Advance * scale; }
         while (n > 0)
         {
             n--;
-            DrawChar((char)('0' + digits[n]), cx, y, color, scale);
+            DrawCharRects((char)('0' + digits[n]), cx, y, color, scale);
             cx += Advance * scale;
         }
+#endif
         return cx - x - scale;
     }
 }
