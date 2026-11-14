@@ -138,6 +138,16 @@ compiled with the host gcc and run) and the new `samples/objects` (21 checks), `
 - **`string.Substring(start[, count])`:** copies into the same ring of 8 static 128-byte buffers as interpolation (valid until 8 more strings are
   made, cut at 127 bytes). Out-of-range arguments are clamped on the Amiga, where .NET throws: do not rely on them (the host run throws). And
   generally: **a call or property of a .NET type that E# has no code for is now ES0099** (it used to pass and fail at link time).
+- **`string.IndexOf`, `LastIndexOf`, `Contains`, `StartsWith`, `EndsWith` (issue #72):** with a `char` or `string` value, ordinal and byte by byte,
+  on every target (small C helpers `es_str_*`, no buffer). `IndexOf` also takes a `startIndex`; every method takes a trailing constant
+  `StringComparison.Ordinal`, also together with the `startIndex` (`IndexOf(value, startIndex, StringComparison.Ordinal)`).
+  **Host difference:** the .NET host's string overloads without a `StringComparison` are culture-sensitive (a leading soft hyphen is ignored by
+  `"\u00ADabc".StartsWith("abc")`, true on .NET, false from the C helper), so `esharp test` can differ from the Amiga: pass
+  `StringComparison.Ordinal` explicitly (no analyzer suggestion yet). Not found is -1; the empty string is found at `startIndex` (`LastIndexOf("")` is the length); null text counts as
+  "" and a null value finds nothing. Like `Substring`, nothing throws on the Amiga: a `startIndex` past the end gives -1 and a negative one is
+  0, where .NET throws (do not rely on it; the host run throws). Culture and ignore-case comparisons, `IndexOf` with a count and
+  `LastIndexOf` with a start are still ES0099. Test (`ClassFeatureTests.String_search_methods_are_ordinal_and_never_throw`): generated C built
+  and run with the host gcc, 14 checks (empty strings, not found, at the start and end, start index past the end, startIndex with Ordinal).
 - **`is`, `as` and type patterns from an interface value to a class** (were ES0099): the interface value's function table names the class it came
   from; when that is a base class of the target, the object's own type id decides. `switch` patterns, property patterns and bindings work.
   Interface-to-interface tests and struct targets are still ES0099.
@@ -156,8 +166,10 @@ compiled with the host gcc and run) and the new `samples/objects` (21 checks), `
   Not checked: `samples/asl` opens a 640 x 256 screen and is now hires there, so the click positions found for its requester may have moved.
 - **Program arguments:** `Args.Count`, `Args.Get(i)`, `Args.Has("AUTO")` (ASCII case-insensitive), `Args.Value("SEED")` (`SEED 42` or `SEED=42`),
   `Args.Int("SEED", fallback)`; `main` keeps `argc`/`argv` only when a program uses them. A Workbench start has no arguments (tool types are not
-  read). `esharp run --args "SEED=42 auto"` passes a line to the program in FS-UAE (after the output redirection) and on SDL; not for os4 yet
-  (the CLI says so). Host fake: `Args.HostSet(...)`, none by default. Seen on A1200 / Kickstart 3.1 and SDL with `samples/objects`
+  read). `esharp run --args "SEED=42 auto"` passes a line to the program in FS-UAE (after the output redirection), on SDL and (issue #72) in the os4
+  VM (the line follows the program name in the harness script, so AmigaDOS splits it like a Shell; newlines, `<`, `>`, `;`, `|` and `$` are refused).
+  Host (dotnet): `Args` is now the real command line (issue #72, same words as `Main(string[] args)`); `Args.HostSet(...)` overrides it for tests
+  (tests call it for repeatability) and `Args.HostReset()` goes back to the command line. Seen on A1200 / Kickstart 3.1 and SDL with `samples/objects`
   (`2 arguments, first SEED=42, SEED 42, AUTO on`). 
 - **`Main(string[] args)` (issue #66, second part):** the `[EntryPoint]` method may be `void Main()`, `int Main()`, `void Main(string[] args)` or
   `int Main(string[] args)` (anything else is ES0022). `args` is built at the top of the entry function as a variable-length C array from the same
@@ -166,7 +178,7 @@ compiled with the host gcc and run) and the new `samples/objects` (21 checks), `
   targets (the C startup code of the toolchain turns it into the process result; not read back, see below) and the process exit code on SDL (seen: code 5). Quoting: the Amiga startup splits at spaces and keeps
   "quoted text" together (quotes removed); `esharp run --args` on SDL now splits the same way (before it split at every space, so quoted
   words were broken up; `SdlRun.SplitCommandLine`, unit-tested). Host (dotnet): the program is an ordinary C# `Main(string[] args)` and gets the
-  real command line from the runtime; the `Args` class on the host stays empty unless `Args.HostSet` is called. New `samples/mainargs`
+  real command line from the runtime, and `Args` reads the same line (it stayed empty before issue #72). New `samples/mainargs`
   (prints the words and returns `RC=n` as the return code). Unit tests (`MainArgsTests`): generated C built with the host gcc and run with no
   arguments, `one "two words" ""` and `RC` (exit code 7), void and int, plain `Main()` unchanged, `Args` and `args` agreeing, the ES0022
   signatures. Run on A1200 / Kickstart 3.1 in FS-UAE with `--args 'ONE "two words" RC=5'`: 3 arguments, `two words` kept whole, `rc 5`;
@@ -1029,3 +1041,13 @@ Not verified: sound was not audible (no OpenAL device in the emulator; only Busy
 - Member-level C name collisions (class `A_B` member `C` against class `A` member `B_C`: static fields, static properties, enum members, methods, constructors) are reported as ES0099 on the later declaration. They are not mangled apart.
 - SDL: `es_sdl_blit` gets the data lengths and stops the program with a message when the planar data (depth planes) or the mask is too short, like the host fake's exception; ES0102 also explains CS0117 for a member that exists only in the Amiga build of a class sdl has (`Video.Window`, `Dos.DateStamp`); the key map has the keypad, Help (0x5F), and F11/F12 as 0x4B/0x6F (no classic Amiga keys; the codes USB keyboard drivers use: not checked against hardware).
 - Checked: `dotnet test` (unit tests with gcc), `esharp test samples/language` host vs m68k (A1200, Kickstart 3.1) and host vs sdl (37 ok each), `samples/names` host vs m68k (12 ok), `samples/cards` on sdl headless with input. Not verified: the new keypad/F11/F12/Help keys on a real SDL window or with XTEST; the blit-length stop on SDL was only checked in the generated text, not run with a short buffer; hosted AROS and OS4 were not run (no target-specific change).
+
+## Small gaps from a larger game (issue #72)
+
+- **`esharp test --args "<line>"`:** the same argument line goes to the host run (`dotnet eshosttest.dll words...`, split like the Amiga startup:
+  spaces separate, "quoted text" stays together) and to the m68k, sdl or os4 run, then the checks are compared as before. Unit tests:
+  `MainArgsTests` (host run with a quoted word, option parsing, refused characters), `Os4VmTests` (script line).
+- **ES0011** says, in the message, to declare the parameter as `Span<T>` (also for class references) and pass the array.
+- **Seen** (`esharp test samples/objects --args "SEED=42 auto"`, 21 ok, 0 FAIL, host agrees with the target): m68k on A1200 / Kickstart 3.1 in
+  FS-UAE, sdl (esharp-sdl, headless) and os4 (AmigaOS 4.1 QEMU VM, `--args` in the harness script). The string search methods: a scratch program
+  of 7 checks agrees between host and m68k. Not verified: `--args` with quoted words in the os4 VM, os4/MorphOS string search runs, AROS (no hosted AROS available).

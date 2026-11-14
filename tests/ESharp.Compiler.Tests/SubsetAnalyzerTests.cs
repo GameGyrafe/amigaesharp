@@ -56,6 +56,7 @@ public class SubsetAnalyzerTests
     {
         var r = Compile(Program(members));
         Assert.Contains("ES0011", ErrorIds(r));
+        Assert.Contains("Span<T>", string.Join("\n", r.Diagnostics.Where(d => d.Id == "ES0011").Select(d => d.ToString())));
     }
 
     [Fact]

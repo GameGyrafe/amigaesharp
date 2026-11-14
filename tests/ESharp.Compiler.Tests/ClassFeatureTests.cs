@@ -287,11 +287,42 @@ Check(t.Substring(3, 0).Length == 0 && t.Substring(4, 3) == ""o w"", ""lengths""
     }
 
     [Fact]
+    public void String_search_methods_are_ordinal_and_never_throw()
+    {
+        const string body = @"
+string t = ""hello world"";
+string e = """";
+Check(t.IndexOf('o') == 4 && t.IndexOf('o', 5) == 7 && t.IndexOf('h') == 0 && t.IndexOf('d') == 10, ""IndexOf char"");
+Check(t.IndexOf('z') == -1 && t.IndexOf('o', 8) == -1 && e.IndexOf('a') == -1, ""IndexOf char not found"");
+Check(t.IndexOf(""world"") == 6 && t.IndexOf(""hello"") == 0 && t.IndexOf(""o w"") == 4 && t.IndexOf(""lo"", 4) == -1, ""IndexOf string"");
+Check(t.IndexOf(""l"", 4) == 9 && t.IndexOf(""xyz"") == -1 && t.IndexOf(""hello world!"") == -1, ""IndexOf string more"");
+Check(t.IndexOf("""") == 0 && t.IndexOf("""", 11) == 11 && e.IndexOf("""") == 0 && e.IndexOf(""a"") == -1, ""empty values and strings"");
+Check(t.IndexOf('o', 11) == -1 && t.IndexOf(""o"", 12) == -1 && t.IndexOf(""o"", -5) == 4, ""startIndex beyond the end is -1, below 0 is 0"");
+Check(t.IndexOf(""World"", StringComparison.Ordinal) == -1 && t.IndexOf(""world"", StringComparison.Ordinal) == 6, ""Ordinal"");
+Check(t.LastIndexOf('o') == 7 && t.LastIndexOf('h') == 0 && t.LastIndexOf('z') == -1 && e.LastIndexOf('a') == -1, ""LastIndexOf char"");
+Check(t.LastIndexOf(""o"") == 7 && t.LastIndexOf(""hello"") == 0 && t.LastIndexOf(""world"") == 6 && t.LastIndexOf(""xx"") == -1 && t.LastIndexOf("""") == 11, ""LastIndexOf string"");
+Check(t.Contains(""lo w"") && !t.Contains(""low"") && t.Contains("""") && e.Contains("""") && !e.Contains(""a"") && t.Contains('w') && !t.Contains('q'), ""Contains"");
+Check(t.StartsWith(""hello"") && !t.StartsWith(""world"") && t.StartsWith("""") && !e.StartsWith(""h"") && t.StartsWith('h') && !t.StartsWith('e') && !e.StartsWith('h'), ""StartsWith"");
+Check(t.EndsWith(""world"") && !t.EndsWith(""hello"") && t.EndsWith("""") && !e.EndsWith(""d"") && t.EndsWith('d') && !t.EndsWith('l') && !e.EndsWith('d'), ""EndsWith"");
+Check(t.StartsWith(""hello world"") && !t.StartsWith(""hello world!"") && t.EndsWith(""hello world"") && !t.EndsWith(""!hello world"") && t.StartsWith(""h"", StringComparison.Ordinal), ""whole string and longer values"");
+Check(t.IndexOf(""o"", 5, StringComparison.Ordinal) == 7 && t.IndexOf(""O"", 5, StringComparison.Ordinal) == -1 && t.IndexOf(""o"", 12, StringComparison.Ordinal) == -1, ""startIndex with Ordinal"");";
+        RunChecks("", body, 14);
+    }
+
+    [Fact]
+    public void String_search_with_other_comparisons_is_ES0099()
+    {
+        var r = Compile("using System;\n" + Program("", "string t = \"abc\"; int i = t.IndexOf(\"B\", StringComparison.OrdinalIgnoreCase);"));
+        Assert.Contains("ES0099", ErrorIds(r));
+        Assert.Contains("string.IndexOf", Messages(r, "ES0099"));
+    }
+
+    [Fact]
     public void Unmapped_library_members_are_ES0099_not_link_errors()
     {
-        var call = Compile("using System;\n" + Program("", "string t = \"abc\"; int i = t.IndexOf('b');"));
+        var call = Compile("using System;\n" + Program("", "string t = \"abc\"; string u = t.Trim();"));
         Assert.Contains("ES0099", ErrorIds(call));
-        Assert.Contains("string.IndexOf", Messages(call, "ES0099"));
+        Assert.Contains("string.Trim", Messages(call, "ES0099"));
 
         var prop = Compile("using System;\n" + Program("", "int n = Array.MaxLength;"));
         Assert.Contains("ES0099", ErrorIds(prop));
