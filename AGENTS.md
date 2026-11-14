@@ -118,4 +118,4 @@ is Kickstart 3.1 (40.069) on `--model A1200` (default). Kickstart 2.04 / A500+ i
 
 ## Next up
 
-See "Next" in `docs/STATUS.md`. At the time of writing: phase 1 passes on the emulator with Kickstart 2.04 and 3.1 (hardware not yet run) and phases 2 (data types) and 3 (screen, blitter, asset pipeline, with a screenshot) pass, and the phase 4 card building blocks (masked blits, mouse/keyboard, a playable higher-or-lower) work on host and on both Kickstarts in FS-UAE; PPC runs and hardware are open.
+See "Next" in `docs/STATUS.md` and the open GitHub issues (tracker #6, v2 epic #5). At the time of writing: the classic A1200 baseline (Kickstart 3.1 in FS-UAE), AmigaOS 4.1 in the QEMU VM, hosted AROS x86-64 and the `sdl` target all run the samples; the packages are on nuget.org. Open: real hardware (#7), MorphOS and PowerPC hardware runs, Windows (#11), debugging (#14), BOOPSI/MUI wrappers (#19), and the v2 items. Kickstart 2.04 / A500+ is no longer part of the test matrix.

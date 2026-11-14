@@ -43,11 +43,24 @@ design inspiration only.
 
 ## Status
 
-Phases 1 to 3 and most of phase 4 (a card demo) pass on the emulator; nothing has run on real hardware yet. See [docs/STATUS.md](docs/STATUS.md) for what works today and
-[docs/PROJECT_CONTEXT.md](docs/PROJECT_CONTEXT.md) for the design and roadmap.
+Early, and honest about it (details and dates in [docs/STATUS.md](docs/STATUS.md); design and roadmap in
+[docs/PROJECT_CONTEXT.md](docs/PROJECT_CONTEXT.md)):
 
-## Installing
+- **Works and is tested:** the compiler (a large part of C# 12: structs, classes with inheritance, generics, interfaces,
+  lambdas, LINQ over arrays, patterns, tuples, ...), the platform layer (video, blitter, input, sound, timing, files, assets, GadTools windows,
+  IFF, fonts), and more than thirty samples including a card game and rummy. Unit tests run the generated C with a host gcc.
+- **Verified on an emulator:** classic 68k in FS-UAE on an A1200 with Kickstart 3.1; AmigaOS 4.1 in a QEMU Pegasos II VM; AROS x86-64
+  (hosted); the `sdl` desktop target headless and under Xvfb.
+- **Not verified:** any real Amiga hardware (the 68k builds, the PowerPC builds, RTG), MorphOS (builds only), AROS i386,
+  Windows, and the SDL target on macOS and Windows. Hardware test reports are very welcome (see [CONTRIBUTING.md](CONTRIBUTING.md)).
+- **Known gaps:** capturing lambdas stored in fields and user classes that derive from platform classes (reported as `ES0099`,
+  never miscompiled), floating point is off by default, no exceptions/async/reflection, no source-level debugger for the Amiga
+  build (host builds can be debugged under .NET; see [docs/DEBUGGING.md](docs/DEBUGGING.md)). Open work is in the
+  [issues](https://github.com/GameGyrafe/amigaesharp/issues).
 
+## Installing and quick start
+
+You need the [.NET 10 SDK](https://dotnet.microsoft.com/download). That is enough to write, run and test E# code on your PC.
 E# is on nuget.org as a .NET tool ([AmigaESharp.Tool](https://www.nuget.org/packages/AmigaESharp.Tool)), with the
 [AmigaESharp.Sdk](https://www.nuget.org/packages/AmigaESharp.Sdk) package for projects; every change merged into main
 publishes a new `0.1.x` release:
@@ -57,8 +70,21 @@ dotnet tool install -g AmigaESharp.Tool      # the esharp command
 esharp new mygame && cd mygame
 dotnet run                                   # on the PC: Hello from E#!
 esharp test                                  # the ok/FAIL checks on the PC
-esharp build --target m68k --docker amigadev/crosstools:m68k-amigaos@sha256:32ec76dac03a642203f0f09f0416480d6c25de1092ed7ed472db870304a64859
+esharp build --emit-only                     # writes obj/m68k/mygame.c, no C compiler needed
 ```
+
+To build for an Amiga you also need Docker (the compilers live in pinned images) and, to run the result, the
+[FS-UAE](https://fs-uae.net) emulator (plus `xvfb` for `--headless` on Linux):
+
+```bash
+esharp build --target m68k --docker amigadev/crosstools:m68k-amigaos@sha256:32ec76dac03a642203f0f09f0416480d6c25de1092ed7ed472db870304a64859
+esharp run   --docker amigadev/crosstools:m68k-amigaos@sha256:32ec76dac03a642203f0f09f0416480d6c25de1092ed7ed472db870304a64859 --kickstart <rom>
+```
+
+**Bring your own Kickstart ROM.** No Kickstart ROM, Workbench disk or other copyrighted Amiga file is included in this repository
+or the packages, and none will be. Without `--kickstart <rom>` (or `ESHARP_KICKSTART`), FS-UAE uses its built-in AROS ROM
+replacement, which runs most samples but is not the tested target; the test matrix is Kickstart 3.1 (40.069) on `--model A1200`.
+Use a ROM you own, keep it outside the repository and never commit it.
 
 `esharp new` writes a csproj that references **AmigaESharp.Sdk** (the runtime, the platform contracts with their host
 fakes, and the subset analyzer) at the tool's own version. The installed tool needs no checkout for `new`, `build`,
@@ -71,16 +97,16 @@ dotnet pack ESharp.sln -c Release -o artifacts/packages -p:Version=0.1.0-local.1
 tools/package-smoke.sh artifacts/packages 0.1.0-local.1      # installs into a temporary tool path and tests a new project
 ```
 
-## Building
+## Building from a checkout
 
-Requires the .NET 10 SDK.
+This section is for working on E# itself. Requires the .NET 10 SDK.
 
 ```bash
 dotnet test
 dotnet run --project src/ESharp.Cli -- build samples/hello --emit-only
 ```
 
-To build for the Amiga, use the pinned toolchain image (68000, AmigaOS 4 PowerPC and MorphOS PowerPC):
+To build for the Amiga, use the pinned toolchain image (68020, AmigaOS 4 PowerPC and MorphOS PowerPC):
 
 ```bash
 docker build -t esharp-amiga-toolchain docker
@@ -108,10 +134,10 @@ dotnet run --project src/ESharp.Cli -- test samples/cards --target sdl --docker 
 
 | Target | Symbols | Runs on | Status |
 |---|---|---|---|
-| `m68k` (default) | `AMIGA M68K AMIGAOS3` | A1200 / Kickstart 3.1+ (FS-UAE) | runs |
+| `m68k` (default) | `AMIGA M68K AMIGAOS3` | A1200 / Kickstart 3.1+ (FS-UAE) | runs in the emulator; real hardware not tried |
 | `os4` | `AMIGA PPC AMIGAOS4` | AmigaOS 4.1 FE PowerPC (QEMU pegasos2 VM you provide; `tools/os4vm/README.md`) | runs in the VM (`esharp run/test --target os4`); real hardware not tried |
 | `morphos` | `AMIGA PPC MORPHOS` | MorphOS PowerPC | builds only |
-| `aros` | `AMIGA X86_64 AROS` | AROS x86-64 (hosted) | runs |
+| `aros` | `AMIGA X86_64 AROS` | AROS x86-64 (hosted) | runs on hosted AROS; not on native hardware |
 | `sdl` | `SDL` | Linux desktop through SDL 3 | runs (headless and under Xvfb; macOS/Windows not tried) |
 
 The Amiga-only APIs (GadTools `Gui`, `Asl`, `Iff`, `Fonts`, `Joystick`) do not exist on `sdl` (error ES0102).

@@ -1,6 +1,6 @@
 # Memory management (proposal)
 
-**Status: approved by Dave on 2026-11-01 "go with the recommendations"; step 1 (Mem + Arena) is implemented and verified; steps 2-4 are not.** It follows the design document
+**Status: approved by the maintainer on 2026-11-01 "go with the recommendations"; step 1 (Mem + Arena) is implemented and verified; steps 2-4 are not.** It follows the design document
 (`docs/design/E_Design_Document.pdf`): no garbage collector, "explicit pools or arenas" for heap
 objects, `[ChipRam]` and `Mem.AllocChip` for chip memory, and chip use reported against a budget.
 
@@ -127,7 +127,7 @@ Out of scope here. The design document puts heap classes in phase 2 "via explici
 Once pools and generics exist, a class could be a handle into a pool, or classes may turn out not to
 be needed at all. This proposal does not decide that.
 
-## Decisions (Dave approved the recommended answers, still revisable)
+## Decisions (the maintainer approved the recommended answers, still revisable)
 
 1. **Names:** `Mem.AllocChip` / `Mem.AllocFast`, matching the design document.
 2. **Failure:** null return only. No `OnFail` hook for now.
