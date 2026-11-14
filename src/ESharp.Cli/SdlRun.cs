@@ -18,6 +18,29 @@ namespace ESharp.Cli;
 /// </summary>
 public static class SdlRun
 {
+    /// <summary>
+    /// Splits an <c>--args</c> line the way the AmigaDOS startup code does for the Amiga targets: words are separated by spaces or tabs,
+    /// "quoted text" is one word (the quotes are removed, so <c>""</c> is an empty word), and outside quotes nothing else is special.
+    /// </summary>
+    public static List<string> SplitCommandLine(string line)
+    {
+        var words = new List<string>();
+        var sb = new StringBuilder();
+        var inWord = false;
+        var quoted = false;
+        foreach (var ch in line)
+        {
+            if (ch == '"') { quoted = !quoted; inWord = true; }
+            else if (!quoted && (ch == ' ' || ch == '\t'))
+            {
+                if (inWord) { words.Add(sb.ToString()); sb.Clear(); inWord = false; }
+            }
+            else { sb.Append(ch); inWord = true; }
+        }
+        if (inWord) words.Add(sb.ToString());
+        return words;
+    }
+
     public static (int Exit, string Output) Run(string exe, bool headless, TimeSpan timeout, string? docker, string? screenshot, string? input, bool echo = true, IReadOnlyList<string>? programArgs = null)
     {
         string? script = null;

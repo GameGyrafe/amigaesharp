@@ -10,9 +10,9 @@ The minimum system is now an **Amiga 1200: 68020, AGA, 2 MB chip RAM, Kickstart 
 - **Kept on purpose:** `HasAga()` and `HasRtg()` with their fallbacks. A classic A1200 always has AGA, but PowerPC, RTG-only and AROS targets may not, so the checks stay as the portable way to ask. **Not yet done:** using 68020 instructions deliberately and AROS (a new target, untested).
 - Verified after the change: all 17 samples built with `-m68020` and run on Kickstart 3.1 (A1200) in FS-UAE: 300 `ok` lines, no `FAIL` (the script shows only the last 25 lines of each sample, so long ones are truncated), 136 unit tests pass. Not verified: PowerPC, real hardware, a 68000/Kickstart 2.04 run (no longer supported).
 
-## NuGet packages: AmigaESharp.Tool and AmigaESharp.Sdk (not published yet)
+## NuGet packages: AmigaESharp.Tool and AmigaESharp.Sdk
 
-E# is packed as two nuget.org packages (the ID `esharp` is taken, so the prefix is `AmigaESharp`; `amigaesharp.tool` and `amigaesharp.sdk` were free when checked on 2026-11-13). **Nothing is published yet:** the first release happens when Dave adds a nuget.org trusted publishing policy for this repo, `release.yml` and environment `nuget`, sets the secret `NUGET_USER` in that environment (done 2026-11-13), and the next push to main that changes more than Markdown or workflows releases `0.1.<run number>`.
+E# is packed as two nuget.org packages (the ID `esharp` is taken, so the prefix is `AmigaESharp`; `amigaesharp.tool` and `amigaesharp.sdk` were free when checked on 2026-11-13). **Published:** 0.1.1 is on nuget.org (2026-11-14, Release run 43534423320 started by hand: test, pack, smoke test, trusted-publishing push, tag `v0.1.1` and GitHub release all passed). Every later push to main that changes more than Markdown or workflows releases `0.1.<run number>`.
 
 - **AmigaESharp.Tool** (`src/ESharp.Cli`, `PackAsTool`, command `esharp`): the compiler with the Runtime/Platform sources and the C runtime headers embedded (as before), the asset pipeline, the project template, the FS-UAE / SDL / os4 harnesses, and two new folders next to `esharp.dll`: `host/` (ESharp.Runtime, ESharp.Platform, ESharp.Target.Host built with `HOST`, copied from the build of `ESharp.Target.Host`) and `os4vm/` (`os4vm.py`, `estype.c`, README). `esharp test` builds the host run against `host/` (by DLL reference) unless `ESHARP_ROOT` names a checkout; a checkout found by walking up is only the last fallback. New commands: `esharp --version` (also `esharp version`) and `esharp os4vm check|start|install-hook|remove-hook` (runs the shipped `os4vm.py` with `python3 -I`). A docker exit code 125 (usually an image that is not there) now says that `esharp-amiga-toolchain`/`esharp-sdl` are built from the repository and names the pinned m68k image.
 - **AmigaESharp.Sdk** (`src/ESharp.Sdk`, packaging only): `lib/net10.0` holds ESharp.Runtime, ESharp.Platform and ESharp.Target.Host; `analyzers/dotnet/cs` holds ESharp.Analyzers. No package dependencies.
@@ -28,7 +28,7 @@ Verified (2026-11-13, this host, packages `0.1.0-local.1` in a folder feed under
 - `tools/package-smoke.sh` passes locally with the pinned m68k image; `esharp os4vm --help` runs the shipped script; `esharp test samples/language` from the checkout (now through `host/`) gives 39 ok.
 
 Not verified:
-- Nothing was pushed to nuget.org, so installing from nuget.org, the nuget.org README rendering and `release.yml` itself have not run. The `packages` CI job has not run on GitHub yet (only the same script locally).
+- Checked after the 0.1.1 release (Linux x86-64, 2026-11-14): `dotnet tool install AmigaESharp.Tool --version 0.1.1` from nuget.org into a tool path, `esharp new demo` (PackageReference AmigaESharp.Sdk 0.1.1), `dotnet run` (Hello from E#!) and `esharp test` (1 ok). The `packages` CI job runs on every PR. Not verified from nuget.org: an m68k build or emulator run with the installed tool, Windows and macOS installs, and how the nuget.org README page renders.
 - `esharp os4vm install-hook`/`start` from the installed tool (only `--help`); `--target os4`, `sdl` and `aros` runs from the installed tool; Windows and macOS installs; VS Code with the package csproj.
 - Still needs a checkout: the toolchain images `esharp-amiga-toolchain` (all four Amiga targets) and `esharp-sdl` (`docker build` from `docker/` and `docker/sdl`; the m68k-only pinned image works without one), `tools/aros-hosted/aros-hosted.sh` (expects `samples/<name>/obj/aros`), `tools/hwpack` (builds the repository's samples), BindGen, CardArt and AssetSamples.
 - Library packages as in issue #31 (E# source packages that `esharp build` reads from `project.assets.json`) are not started; the Sdk package ships compiled host assemblies only, and the Amiga build still uses the sources embedded in the tool, so the Sdk package version must match the tool's (the template writes the tool's version).
@@ -158,7 +158,20 @@ compiled with the host gcc and run) and the new `samples/objects` (21 checks), `
   `Args.Int("SEED", fallback)`; `main` keeps `argc`/`argv` only when a program uses them. A Workbench start has no arguments (tool types are not
   read). `esharp run --args "SEED=42 auto"` passes a line to the program in FS-UAE (after the output redirection) and on SDL; not for os4 yet
   (the CLI says so). Host fake: `Args.HostSet(...)`, none by default. Seen on A1200 / Kickstart 3.1 and SDL with `samples/objects`
-  (`2 arguments, first SEED=42, SEED 42, AUTO on`). `Main(string[] args)` is still not accepted (array parameters are not supported).
+  (`2 arguments, first SEED=42, SEED 42, AUTO on`). 
+- **`Main(string[] args)` (issue #66, second part):** the `[EntryPoint]` method may be `void Main()`, `int Main()`, `void Main(string[] args)` or
+  `int Main(string[] args)` (anything else is ES0022). `args` is built at the top of the entry function as a variable-length C array from the same
+  argv words `Args` reads (so `args.Length`, indexing, `foreach` and the Span conversion work; no arguments gives a zero-length array), and
+  ES0011 (array parameters) lets this one parameter through. An `int` result is the return value of C `main`, so it is the AmigaDOS RC on Amiga
+  targets (the C startup code of the toolchain turns it into the process result; not read back, see below) and the process exit code on SDL (seen: code 5). Quoting: the Amiga startup splits at spaces and keeps
+  "quoted text" together (quotes removed); `esharp run --args` on SDL now splits the same way (before it split at every space, so quoted
+  words were broken up; `SdlRun.SplitCommandLine`, unit-tested). Host (dotnet): the program is an ordinary C# `Main(string[] args)` and gets the
+  real command line from the runtime; the `Args` class on the host stays empty unless `Args.HostSet` is called. New `samples/mainargs`
+  (prints the words and returns `RC=n` as the return code). Unit tests (`MainArgsTests`): generated C built with the host gcc and run with no
+  arguments, `one "two words" ""` and `RC` (exit code 7), void and int, plain `Main()` unchanged, `Args` and `args` agreeing, the ES0022
+  signatures. Run on A1200 / Kickstart 3.1 in FS-UAE with `--args 'ONE "two words" RC=5'`: 3 arguments, `two words` kept whole, `rc 5`;
+  with no `--args`: `no arguments`. SDL (esharp-sdl, headless): the same output, `esharp: the program exited with code 5`. Not verified:
+  the numeric RC seen by the Amiga Shell (FS-UAE `run` shows output only), os4/MorphOS/AROS runs, a zero-length VLA on the PowerPC gcc.
 - **Tools and the host:** `esharp run --input "rel DX,DY"` spreads the shorter axis over the steps and the steps add up exactly (it sent
   `dx / steps` per step, so `rel 76,-320` did not move sideways at all); unit-tested, not re-run in the emulator. The analyzer no longer reports
   `Heap.Free` (or other generic methods of E#'s own library) as ES0008 in a host project made by `esharp new`, where the library is an assembly.
@@ -759,7 +772,7 @@ Screenshot: [images/phase4-cards-a1200.png](images/phase4-cards-a1200.png) (Kick
 - Run hello on real hardware, the last open item in the phase 1 gate. The emulator side is done: AROS replacement, Kickstart 2.04 and Kickstart 3.1.
 - OS4 findings from the first VM runs (see "AmigaOS 4.1 VM runs"): lowlevel port types, the RTG link error, the classic-only checks in memory/generics, scripted input for os4 runs. Done in wave 8: WaitTOF timing (timer fallback), the screen mode (centred), sound (clean skip; no working audio in the VM). Open: OS4 sound on real hardware.
 - MorphOS runs (QEMU `pegasos2` can boot MorphOS too; not tried) and PowerPC real hardware.
-- NuGet: Dave adds the trusted publishing policy and the `nuget` environment with `NUGET_USER`, then the first push to main releases; then E# library source packages (issue #31).
+- NuGet: published (0.1.1); next, E# library source packages (issue #31).
 - `esharp test` follow-ups: other targets (morphos, aros) and the Amiga program's return code (today only the ok/FAIL lines are compared; the os4 pipe hides it).
 - Memory management ([MEMORY.md](MEMORY.md)): step 1 (`Mem.AllocChip`/`AllocFast`/`Free`, `Arena`) is done; step 2 (`Pool<T>`) and most of step 3 (`--debug`: bounds checks, arena and pool poisoning) are done; the chip budget report (step 4) is done for constant sizes.
 - Phase 4 (rest): a bigger card game (rummy-style: melds, bots), a shared card library, timing, dithering and IFF/sample assets.
