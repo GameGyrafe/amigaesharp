@@ -756,12 +756,12 @@ Found by comparing what a real card game needs (heavy use of collections, tuples
 | LINQ | Over arrays and `Enumerable.Range`, as fused loops: Where, Select, Take, Skip, Count, Sum, Min, Max, Any, All, First, Last, Contains, Aggregate, OrderBy/ThenBy (stack copy, stable insertion sort) and simple queries (see the top of this file). No `ToArray`/`ToList`, no sequences stored in variables |
 | Still missing (needed by bigger games) | Closures that outlive their method, `OrderBy`/`ToArray`/`ToList`, float values in strings, `is`/`as` to interface types, inheritance from generic or library classes |
 
-## Phase 4: card demo (in progress)
+## Phase 4: card demo (done on the emulator)
 
 > Historical record: the runs below on Kickstart 2.04 / A500+ were done before the minimum system became the A1200 (see "Minimum system" at the top). They were true when run and are kept as dated evidence; the current test matrix is Kickstart 3.1 (40.069) on `--model A1200`.
 
 
-`samples/cards` is a playable higher-or-lower game on the Amiga screen. It is a **proof of the building blocks**, not the real target game, so the phase 4 gate (the real game's logic playable on an Amiga) is not met yet.
+`samples/cards` is a playable higher-or-lower game on the Amiga screen. Together with `samples/rummy` it meets the phase 4 gate (a card game playable on an Amiga) on the emulator; real hardware is not verified.
 Mouse: Higher/Lower buttons; Esc quits; it also quits after 10 seconds without input (so headless runs end).
 Screenshot: [images/phase4-cards-a1200.png](images/phase4-cards-a1200.png) (Kickstart 3.1, A1200, after scripted play).
 
