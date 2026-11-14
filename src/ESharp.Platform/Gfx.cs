@@ -11,6 +11,12 @@ public static unsafe class Intuition
     /// <summary>Locks a public screen by name (null: the default one, normally Workbench) so it cannot close; release it with <see cref="UnlockPubScreen"/>.</summary>
     [AmigaLib("intuition", -510), Since(36)] public static extern void* LockPubScreen(void* name);
     [AmigaLib("intuition", -516), Since(36)] public static extern void UnlockPubScreen(void* name, void* screen);
+    /// <summary>intuition.library AllocScreenBuffer() (v39): a struct ScreenBuffer for double buffering a screen (SB_SCREEN_BITMAP: the screen's own bitmap; SB_COPY_BITMAP: a new one with a copy of it), or null.</summary>
+    [AmigaLib("intuition", -768), Since(39)] public static extern void* AllocScreenBuffer(void* screen, void* bitMap, uint flags);
+    /// <summary>intuition.library FreeScreenBuffer() (v39). The buffer must not be on display and its messages must have arrived.</summary>
+    [AmigaLib("intuition", -774), Since(39)] public static extern void FreeScreenBuffer(void* screen, void* screenBuffer);
+    /// <summary>intuition.library ChangeScreenBuffer() (v39): shows the buffer's bitmap from the next frame; 0 if Intuition could not do it now (try again).</summary>
+    [AmigaLib("intuition", -780), Since(39)] public static extern uint ChangeScreenBuffer(void* screen, void* screenBuffer);
 
     public const uint TagDone = 0;
     public const uint SA_Width = 0x80000023, SA_Height = 0x80000024, SA_Depth = 0x80000025;
@@ -62,6 +68,15 @@ public static unsafe class Graphics
     [AmigaLib("graphics", -54)] public static extern int TextLength(void* rastPort, string text, int count);
     [AmigaLib("graphics", -240)] public static extern void Move(void* rastPort, int x, int y);
     [AmigaLib("graphics", -270)] public static extern void WaitTOF();
+    /// <summary>graphics.library InitRastPort(): a rast port with default pens and modes and no layer (drawing through it is not clipped).</summary>
+    [AmigaLib("graphics", -198)] public static extern void InitRastPort(void* rastPort);
+    /// <summary>graphics.library AllocBitMap() (v39): a bitmap like <paramref name="friendBitMap"/> (display memory on a graphics card), or null.</summary>
+    [AmigaLib("graphics", -918), Since(39)] public static extern void* AllocBitMap(uint width, uint height, uint depth, uint flags, void* friendBitMap);
+    /// <summary>graphics.library FreeBitMap() (v39). Call <see cref="WaitBlit"/> first if a blit may still use it.</summary>
+    [AmigaLib("graphics", -924), Since(39)] public static extern void FreeBitMap(void* bitMap);
+    /// <summary>graphics.library BltBitMap(): copies a rectangle between two bitmaps; the number of planes copied.</summary>
+    [AmigaLib("graphics", -30)] public static extern int BltBitMap(void* srcBitMap, int xSrc, int ySrc, void* destBitMap, int xDest, int yDest,
+        int xSize, int ySize, uint minterm, uint mask, void* tempA);
     /// <summary>graphics.library GetVPModeID() (v36): the display mode ID of a view port.</summary>
     [AmigaLib("graphics", -792), Since(36)] public static extern uint GetVPModeID(void* viewPort);
     /// <summary>graphics.library BestModeIDA() (v39): the display mode that best fits the BIDTAG_ tags, or INVALID_ID.</summary>

@@ -562,6 +562,82 @@ public class HostTargetTests
             Assert.True(expected == actual, $"{a} * {b}: expected {expected}, got {actual}");
         }
     }
+
+    [Fact]
+    public void Host_swap_draws_into_the_back_buffer_and_Flip_shows_it()
+    {
+        Assert.True(ESharp.Platform.Video.Open(8, 4, 3));
+        try
+        {
+            ESharp.Platform.Video.FillRect(0, 0, 8, 4, 1);
+            Assert.Same(ESharp.Platform.Video.HostPixels, ESharp.Platform.Video.HostShown);              // single buffered: drawing is what is shown
+            Assert.True(ESharp.Platform.Video.EnableDoubleBuffer());
+            Assert.Equal(ESharp.Platform.VideoBuffering.Swap, ESharp.Platform.Video.Buffering());
+            Assert.Equal(1, ESharp.Platform.Video.HostShown[0]);
+            Assert.Equal(1, ESharp.Platform.Video.GetPixel(0, 0));                       // the back buffer starts as a copy
+
+            ESharp.Platform.Video.FillRect(0, 0, 8, 4, 2);
+            Assert.Equal(1, ESharp.Platform.Video.HostShown[0]);                         // not shown yet
+            Assert.Equal(2, ESharp.Platform.Video.GetPixel(0, 0));
+            int frames = ESharp.Platform.Frame.Count;
+            ESharp.Platform.Video.Flip();
+            Assert.Equal(frames + 1, ESharp.Platform.Frame.Count);
+            Assert.Equal(1, ESharp.Platform.Video.HostFlips);
+            Assert.Equal(2, ESharp.Platform.Video.HostShown[0]);
+            Assert.Equal(1, ESharp.Platform.Video.GetPixel(0, 0));                       // swapped: the back buffer is the older frame
+
+            ESharp.Platform.Video.FillRect(0, 0, 8, 4, 3);
+            ESharp.Platform.Video.Flip();
+            ESharp.Platform.Video.FillRect(0, 0, 8, 4, 4);                               // never shown
+            ESharp.Platform.Video.DisableDoubleBuffer();
+            Assert.Equal(ESharp.Platform.VideoBuffering.Single, ESharp.Platform.Video.Buffering());
+            Assert.Equal(3, ESharp.Platform.Video.GetPixel(0, 0));                       // the frame on display stays
+            Assert.Same(ESharp.Platform.Video.HostPixels, ESharp.Platform.Video.HostShown);
+        }
+        finally { ESharp.Platform.Video.Close(); }
+    }
+
+    [Fact]
+    public void Host_copy_mode_keeps_the_shown_frame_in_the_back_buffer_and_is_the_fallback()
+    {
+        Assert.True(ESharp.Platform.Video.Open(8, 4, 3));
+        ESharp.Platform.Video.HostScreenBuffers = false;
+        try
+        {
+            Assert.True(ESharp.Platform.Video.EnableDoubleBuffer());
+            Assert.Equal(ESharp.Platform.VideoBuffering.Copy, ESharp.Platform.Video.Buffering());
+            ESharp.Platform.Video.FillRect(0, 0, 8, 4, 5);
+            Assert.Equal(0, ESharp.Platform.Video.HostShown[0]);
+            ESharp.Platform.Video.Flip();
+            Assert.Equal(5, ESharp.Platform.Video.HostShown[0]);
+            Assert.Equal(5, ESharp.Platform.Video.GetPixel(0, 0));                       // copied: the back buffer still has it
+            Assert.NotSame(ESharp.Platform.Video.HostPixels, ESharp.Platform.Video.HostShown);
+        }
+        finally
+        {
+            ESharp.Platform.Video.HostScreenBuffers = true;
+            ESharp.Platform.Video.Close();
+        }
+        Assert.False(ESharp.Platform.Video.IsDoubleBuffered());
+        Assert.False(ESharp.Platform.Video.EnableDoubleBuffer());                        // no screen
+        ESharp.Platform.Video.Flip();                                                    // without a back buffer: just a frame
+    }
+
+    [Fact]
+    public void Dbuffer_sample_runs_on_the_host_with_screen_buffers_and_with_the_fallback()
+    {
+        foreach (bool buffers in new[] { true, false })
+        {
+            using var console = HostConsole.Capture();
+            ESharp.Platform.Video.HostScreenBuffers = buffers;
+            try { DBufferSample.Program.Main(); }
+            finally { ESharp.Platform.Video.HostScreenBuffers = true; }
+            var output = console.Output;
+            Assert.DoesNotContain("FAIL", output);
+            Assert.Equal(30, output.Split('\n').Count(l => l.StartsWith("ok ")));
+            Assert.Contains(buffers ? "buffering: swap" : "buffering: copy", output);
+        }
+    }
 }
 
 /// <summary>What samples/phase2 prints: one "ok" line per check. Shared by the host, C and Amiga runs.</summary>

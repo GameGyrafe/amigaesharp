@@ -9,7 +9,8 @@
 static SDL_Window *es_sdl_win;
 static SDL_Renderer *es_sdl_ren;
 static SDL_Texture *es_sdl_tex;
-static uint8_t *es_sdl_fb;
+static uint8_t *es_sdl_fb;          /* where drawing goes (the back buffer when double buffered) */
+static uint8_t *es_sdl_front;       /* the buffer on display when double buffered, else NULL (es_sdl_fb is shown) */
 static uint32_t *es_sdl_argb;
 static uint32_t es_sdl_pal[256];
 static int32_t es_sdl_w, es_sdl_h, es_sdl_depth;
@@ -48,12 +49,13 @@ static void es_sdl_screenshot(void)
     const char *path = getenv("ESHARP_SCREENSHOT");
     if (es_sdl_shot_done || path == NULL || path[0] == 0 || es_sdl_fb == NULL) return;
     es_sdl_shot_done = true;
+    const uint8_t *shown = es_sdl_front != NULL ? es_sdl_front : es_sdl_fb;
     FILE *f = fopen(path, "wb");
     if (f == NULL) { fprintf(stderr, "esharp: cannot write %s\n", path); return; }
     fprintf(f, "P6\n%ld %ld\n255\n", (long)es_sdl_w, (long)es_sdl_h);
     for (int32_t i = 0; i < es_sdl_w * es_sdl_h; i++)
     {
-        uint32_t c = es_sdl_pal[es_sdl_fb[i]];
+        uint32_t c = es_sdl_pal[shown[i]];
         fputc((int)((c >> 16) & 255), f);
         fputc((int)((c >> 8) & 255), f);
         fputc((int)(c & 255), f);
@@ -124,7 +126,8 @@ static void es_sdl_present(void)
 {
     if (es_sdl_fb == NULL) return;
     int32_t n = es_sdl_w * es_sdl_h;
-    for (int32_t i = 0; i < n; i++) es_sdl_argb[i] = es_sdl_pal[es_sdl_fb[i]];
+    const uint8_t *shown = es_sdl_front != NULL ? es_sdl_front : es_sdl_fb;
+    for (int32_t i = 0; i < n; i++) es_sdl_argb[i] = es_sdl_pal[shown[i]];
     SDL_UpdateTexture(es_sdl_tex, NULL, es_sdl_argb, es_sdl_w * 4);
     SDL_SetRenderDrawColor(es_sdl_ren, 0, 0, 0, 255);
     SDL_RenderClear(es_sdl_ren);
@@ -141,9 +144,39 @@ static __attribute__((unused)) void es_sdl_video_close(void)
     SDL_DestroyRenderer(es_sdl_ren);
     SDL_DestroyWindow(es_sdl_win);
     free(es_sdl_fb);
+    free(es_sdl_front);
     free(es_sdl_argb);
-    es_sdl_tex = NULL; es_sdl_ren = NULL; es_sdl_win = NULL; es_sdl_fb = NULL; es_sdl_argb = NULL;
+    es_sdl_tex = NULL; es_sdl_ren = NULL; es_sdl_win = NULL; es_sdl_fb = NULL; es_sdl_front = NULL; es_sdl_argb = NULL;
     es_sdl_w = es_sdl_h = es_sdl_depth = 0;
+}
+
+/* Double buffering: the window shows es_sdl_front, drawing goes to es_sdl_fb (a copy of the screen at first). */
+static __attribute__((unused)) bool es_sdl_dbuf_enable(void)
+{
+    if (es_sdl_fb == NULL) return false;
+    if (es_sdl_front != NULL) return true;
+    size_t n = (size_t)es_sdl_w * (size_t)es_sdl_h;
+    es_sdl_front = (uint8_t *)malloc(n);
+    if (es_sdl_front == NULL) return false;
+    memcpy(es_sdl_front, es_sdl_fb, n);
+    return true;
+}
+
+/* Puts the back buffer on display: the two change places, or (copy) the back buffer is copied to the front one. */
+static __attribute__((unused)) void es_sdl_flip(bool copy)
+{
+    if (es_sdl_front == NULL) return;
+    if (copy) memcpy(es_sdl_front, es_sdl_fb, (size_t)es_sdl_w * (size_t)es_sdl_h);
+    else { uint8_t *t = es_sdl_front; es_sdl_front = es_sdl_fb; es_sdl_fb = t; }
+}
+
+/* Back to one buffer: the frame on display stays. */
+static __attribute__((unused)) void es_sdl_dbuf_disable(void)
+{
+    if (es_sdl_front == NULL) return;
+    free(es_sdl_fb);
+    es_sdl_fb = es_sdl_front;
+    es_sdl_front = NULL;
 }
 
 static __attribute__((unused)) void es_sdl_set_color(int32_t index, int32_t r, int32_t g, int32_t b)

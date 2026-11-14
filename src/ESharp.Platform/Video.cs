@@ -2,6 +2,17 @@ using System;
 
 namespace ESharp.Platform;
 
+/// <summary>How <see cref="Video"/> draws: straight to the screen, or into a back buffer that <see cref="Video.Flip"/> shows.</summary>
+public enum VideoBuffering
+{
+    /// <summary>No back buffer: drawing shows as it happens.</summary>
+    Single = 0,
+    /// <summary>Two screen bitmaps that change places at each Flip (the back buffer then holds the frame before the one shown).</summary>
+    Swap = 1,
+    /// <summary>An offscreen bitmap copied to the screen at each Flip (the back buffer keeps the frame just shown).</summary>
+    Copy = 2,
+}
+
 /// <summary>
 /// A single full-screen indexed-colour display. On the Amiga it opens a quiet custom Intuition screen
 /// with a borderless backdrop window (system friendly: no hardware takeover) and draws with the
@@ -18,6 +29,11 @@ public static unsafe class Video
     private static int _width;
     private static int _height;
     private static int _depth;
+    private static void* _windowRp;    // the window's own (layered, clipped) rast port; _rastPort is where drawing goes
+    private static int _left;          // the window's place on the screen (non-zero when a larger mode centres it, AmigaOS 4)
+    private static int _top;
+    private static int _dx;            // added to every drawing coordinate: the window's place when drawing goes straight to a screen bitmap
+    private static int _dy;
 
     /// <summary>
     /// True on a machine with the AGA chipset (A1200, A4000: 8 bitplanes, 256 colours out of 16.7 million). Needs
@@ -209,7 +225,12 @@ public static unsafe class Video
             return false;
         }
         _rastPort = *(void**)((byte*)_window + Intuition.WindowRPort);
+        _windowRp = _rastPort;
         _viewPort = (byte*)_screen + Intuition.ScreenViewPort;
+        _left = (screenWidth - width) / 2;
+        _top = (screenHeight - height) / 2;
+        _dx = 0;
+        _dy = 0;
         _width = width;
         _height = height;
         _depth = depth;
@@ -223,12 +244,14 @@ public static unsafe class Video
 
     public static void Close()
     {
+        DisableDoubleBuffer();
         if (_window != null) Intuition.CloseWindow(_window);
         if (_screen != null) Intuition.CloseScreen(_screen);
         Keys.Close();
         _window = null;
         _screen = null;
         _rastPort = null;
+        _windowRp = null;
         _viewPort = null;
     }
 
@@ -267,16 +290,21 @@ public static unsafe class Video
     /// <summary>Fills a rectangle with palette entry <paramref name="color"/> using the blitter.</summary>
     public static void FillRect(int x, int y, int width, int height, int color)
     {
-        if (width <= 0 || height <= 0) return;
+        // Clipped here: a back buffer's rast port has no layer to clip it (the window's clips the same rectangle).
+        if (x < 0) { width += x; x = 0; }
+        if (y < 0) { height += y; y = 0; }
+        if (x + width > _width) width = _width - x;
+        if (y + height > _height) height = _height - y;
+        if (width <= 0 || height <= 0 || _rastPort == null) return;
         Graphics.SetAPen(_rastPort, color);
-        Graphics.RectFill(_rastPort, x, y, x + width - 1, y + height - 1);
+        Graphics.RectFill(_rastPort, x + _dx, y + _dy, x + _dx + width - 1, y + _dy + height - 1);
     }
 
-    /// <summary>The palette index at a pixel, or -1 outside the screen.</summary>
+    /// <summary>The palette index at a pixel (of the back buffer when double buffered), or -1 outside the screen.</summary>
     public static int GetPixel(int x, int y)
     {
-        if (x < 0 || y < 0 || x >= _width || y >= _height) return -1;
-        return Graphics.ReadPixel(_rastPort, x, y);
+        if (x < 0 || y < 0 || x >= _width || y >= _height || _rastPort == null) return -1;
+        return Graphics.ReadPixel(_rastPort, x + _dx, y + _dy);
     }
 
     /// <summary>
@@ -285,10 +313,13 @@ public static unsafe class Video
     /// </summary>
     internal static void Template(byte* bits, int bytesPerRow, int width, int height, int x, int y, int color)
     {
+        if (x < 0 || y < 0) return;               // the caller (Font) draws such text with rectangles
+        if (x + width > _width) width = _width - x;
+        if (y + height > _height) height = _height - y;
         if (_rastPort == null || width <= 0 || height <= 0) return;
         Graphics.SetAPen(_rastPort, color);
         Graphics.SetDrMd(_rastPort, 0);           // JAM1: only the set bits
-        Graphics.BltTemplate(bits, 0, bytesPerRow, _rastPort, x, y, width, height);
+        Graphics.BltTemplate(bits, 0, bytesPerRow, _rastPort, x + _dx, y + _dy, width, height);
         Graphics.WaitBlit();                      // the blit may still be reading the strip: the CPU refills it next
         Graphics.SetDrMd(_rastPort, 1);           // back to JAM2, a new window's mode
     }
@@ -322,7 +353,13 @@ public static unsafe class Video
     private static void BltCommon(ReadOnlySpan<byte> planar, ReadOnlySpan<byte> mask, int width, int height, int depth,
         int sx, int sy, int w, int h, int x, int y)
     {
-        if (w <= 0 || h <= 0) return;
+        if (x < 0) { sx -= x; w += x; x = 0; }
+        if (y < 0) { sy -= y; h += y; y = 0; }
+        if (x + w > _width) w = _width - x;
+        if (y + h > _height) h = _height - y;
+        if (w <= 0 || h <= 0 || _rastPort == null) return;
+        x += _dx;
+        y += _dy;
         int bytesPerRow = ((width + 15) / 16) * 2;
         nuint[] bm = new nuint[10];   // struct BitMap (40 bytes, or 72 with 64-bit pointers), pointer-aligned
         fixed (nuint* bmw = bm)
@@ -368,6 +405,261 @@ public static unsafe class Video
 
     /// <summary>Waits for the next vertical blank (graphics.library WaitTOF), so drawing after it syncs to the display.</summary>
     public static void WaitVBlank() { Frame.WaitVBlank(); }
+
+    // ---- double buffering ----
+    private static VideoBuffering _buffering;
+    private static void* _sb0;            // struct ScreenBuffer of the screen's own bitmap (Swap)
+    private static void* _sb1;            // and of the second bitmap
+    private static int _backIndex;        // which of the two is the back buffer
+    private static void* _safePort;       // DBufInfo replies: safe to draw into the old buffer
+    private static void* _dispPort;       // and the new buffer is on display (safe to change again)
+    private static int _safeMessages;     // per port: 0 not known yet, 1 the system sends them (wait for them), 2 it does not
+    private static int _dispMessages;
+    private static bool _changePending;   // a ChangeScreenBuffer whose "on display" message has not been taken
+    private static void* _offBitMap;      // Copy: the offscreen bitmap
+    private static byte* _backRp;         // a rast port (no layer) on the back buffer
+
+    /// <summary>
+    /// Turns on double buffering: from now on every drawing call (<see cref="FillRect"/>, the blits, <see cref="Font"/>,
+    /// <see cref="Fonts"/>, <see cref="GetPixel"/>) goes to a back buffer that is not on display, and <see cref="Flip"/> shows it in one
+    /// go, so a whole-screen redraw does not flicker. Uses two screen bitmaps (intuition AllocScreenBuffer/ChangeScreenBuffer, graphics
+    /// v39) when the system gives them (<see cref="VideoBuffering.Swap"/>), else an offscreen bitmap copied with one blit per
+    /// <see cref="Flip"/> (<see cref="VideoBuffering.Copy"/>). The back buffer starts as a copy of the screen. True if it is on
+    /// (also when it already was). Intuition (the window, requesters such as <see cref="Asl.PickFile"/>) draws into the screen's own bitmap,
+    /// which is not on display during <see cref="VideoBuffering.Swap"/>: <see cref="Asl.PickFile"/> turns double buffering off first.
+    /// </summary>
+    public static bool EnableDoubleBuffer()
+    {
+        if (_screen == null) return false;
+        if (_buffering != VideoBuffering.Single) return true;
+        if (StartSwap()) return true;
+        return EnableBackBuffer();
+    }
+
+    /// <summary>
+    /// Double buffering with an offscreen bitmap (<see cref="VideoBuffering.Copy"/>) even where screen buffers are available: each
+    /// <see cref="Flip"/> waits for the vertical blank and copies the whole back buffer to the screen with one blit. The fallback of
+    /// <see cref="EnableDoubleBuffer"/>; useful to compare the two. True if it is on.
+    /// </summary>
+    public static bool EnableBackBuffer()
+    {
+        if (_screen == null) return false;
+        if (_buffering != VideoBuffering.Single) return _buffering == VideoBuffering.Copy;
+        void* screenBitMap = *(void**)((byte*)_windowRp + Layout.RastPortBitMap);
+        _offBitMap = Graphics.AllocBitMap((uint)_width, (uint)_height, (uint)_depth, Layout.BmfClear | Layout.BmfDisplayable, screenBitMap);
+        if (_offBitMap == null) return false;
+        if (!MakeBackRastPort(_offBitMap))
+        {
+            Graphics.FreeBitMap(_offBitMap);
+            _offBitMap = null;
+            return false;
+        }
+        // Start from what is on the screen, as the swap does.
+        Graphics.BltBitMap(screenBitMap, _left, _top, _offBitMap, 0, 0, _width, _height, 0xC0, 0xFF, null);
+        Graphics.WaitBlit();
+        _buffering = VideoBuffering.Copy;
+        _rastPort = _backRp;
+        _dx = 0;
+        _dy = 0;
+        return true;
+    }
+
+    private static bool MakeBackRastPort(void* bitMap)
+    {
+        if (_backRp == null) _backRp = Mem.AllocFast((uint)Layout.RastPortSize);
+        if (_backRp == null) return false;
+        Graphics.InitRastPort((void*)_backRp);
+        *(void**)(_backRp + Layout.RastPortBitMap) = bitMap;
+        return true;
+    }
+
+    private static bool StartSwap()
+    {
+        _sb0 = Intuition.AllocScreenBuffer(_screen, null, Layout.SbScreenBitMap);
+        if (_sb0 != null) _sb1 = Intuition.AllocScreenBuffer(_screen, null, Layout.SbCopyBitMap);
+        if (_sb1 != null) _safePort = Exec.CreateMsgPort();
+        if (_safePort != null) _dispPort = Exec.CreateMsgPort();
+        if (_dispPort == null || !MakeBackRastPort(*(void**)((byte*)_sb1 + Layout.SbBitMap)))
+        {
+            FreeSwap();
+            return false;
+        }
+        SetReplyPorts(_sb0);
+        SetReplyPorts(_sb1);
+        _safeMessages = 0;
+        _dispMessages = 0;
+        _changePending = false;
+        _backIndex = 1;
+        _buffering = VideoBuffering.Swap;
+        _rastPort = _backRp;
+        _dx = _left;
+        _dy = _top;
+        return true;
+    }
+
+    private static void SetReplyPorts(void* sb)
+    {
+        byte* dbi = *(byte**)((byte*)sb + Layout.SbDBufInfo);
+        *(void**)(dbi + Layout.DbiSafeReplyPort) = _safePort;
+        *(void**)(dbi + Layout.DbiDispReplyPort) = _dispPort;
+    }
+
+    private static void FreeSwap()
+    {
+        if (_sb1 != null) Intuition.FreeScreenBuffer(_screen, _sb1);
+        if (_sb0 != null) Intuition.FreeScreenBuffer(_screen, _sb0);
+        if (_dispPort != null) Exec.DeleteMsgPort(_dispPort);
+        if (_safePort != null) Exec.DeleteMsgPort(_safePort);
+        _sb0 = null;
+        _sb1 = null;
+        _safePort = null;
+        _dispPort = null;
+    }
+
+    /// <summary>
+    /// Waits for a DBufInfo message at <paramref name="port"/> and takes every one there. The first time it polls (a 1/50 second
+    /// delay between tries, about a second in all), because a system that never sends them would hang a plain WaitPort; once one
+    /// has come, later waits sleep in WaitPort, and if none came the swap is paced by <see cref="Frame.WaitVBlank"/> instead.
+    /// </summary>
+    private static void TakeMessage(bool safe)
+    {
+        void* port = safe ? _safePort : _dispPort;
+        int state = safe ? _safeMessages : _dispMessages;
+        if (state == 1) Exec.WaitPort(port);
+        if (state != 0)
+        {
+            while (Exec.GetMsg(port) != null) { }
+            return;
+        }
+        state = 2;
+        for (int i = 0; i < 50; i++)
+        {
+            if (Exec.GetMsg(port) != null)
+            {
+                while (Exec.GetMsg(port) != null) { }
+                state = 1;
+                break;
+            }
+            Dos.Delay(1);
+        }
+        if (safe) _safeMessages = state;
+        else _dispMessages = state;
+    }
+
+    private static void* BufferBitMap(int index) { return *(void**)((byte*)(index == 0 ? _sb0 : _sb1) + Layout.SbBitMap); }
+
+    /// <summary>
+    /// Shows the back buffer and waits for the display to take it (one frame, counted by <see cref="Frame.Count"/>); drawing then goes
+    /// to the new back buffer. Its contents are an older frame: the one before the frame just shown with
+    /// <see cref="VideoBuffering.Swap"/>, the frame just shown with <see cref="VideoBuffering.Copy"/>, so redraw the whole screen (or all
+    /// that changed in the last two frames). Without double buffering this is <see cref="WaitVBlank"/>.
+    /// </summary>
+    public static void Flip()
+    {
+        if (_buffering == VideoBuffering.Copy)
+        {
+            Graphics.WaitBlit();
+            Frame.WaitVBlank();
+            Graphics.BltBitMapRastPort(_offBitMap, 0, 0, _windowRp, 0, 0, _width, _height, 0xC0);
+            Graphics.WaitBlit();
+            return;
+        }
+        if (_buffering != VideoBuffering.Swap)
+        {
+            Frame.WaitVBlank();
+            return;
+        }
+        Graphics.WaitBlit();                           // the blitter has finished the frame
+        if (_changePending) TakeMessage(false);    // the previous change is on display, so another may follow
+        _changePending = false;
+        void* sb = _backIndex == 0 ? _sb0 : _sb1;
+        int tries = 0;
+        while (Intuition.ChangeScreenBuffer(_screen, sb) == 0)
+        {
+            if (++tries > 50) { Frame.WaitVBlank(); return; }   // Intuition stayed busy (a menu?): keep drawing into the same buffer
+            Graphics.WaitTOF();
+        }
+        _changePending = true;
+        // The old front buffer is no longer read by the display once this arrives (at the vertical blank that shows the new one).
+        TakeMessage(true);
+        if (_safeMessages == 2) Frame.WaitVBlank();
+        else Frame.CountFrame();
+        _backIndex ^= 1;
+        *(void**)(_backRp + Layout.RastPortBitMap) = BufferBitMap(_backIndex);
+    }
+
+    /// <summary>Single (drawing goes straight to the screen), Swap (two screen bitmaps) or Copy (an offscreen bitmap and one blit).</summary>
+    public static VideoBuffering Buffering() { return _buffering; }
+
+    /// <summary>True between <see cref="EnableDoubleBuffer"/> (or <see cref="EnableBackBuffer"/>) and <see cref="DisableDoubleBuffer"/>.</summary>
+    public static bool IsDoubleBuffered() { return _buffering != VideoBuffering.Single; }
+
+    /// <summary>
+    /// Turns double buffering off: the frame on display stays, and drawing goes straight to the screen again. <see cref="Close"/>
+    /// does this too. If the system will not switch back to the screen's own bitmap (500 tries), the buffers are leaked rather than
+    /// freed while on display.
+    /// </summary>
+    public static void DisableDoubleBuffer()
+    {
+        if (_buffering == VideoBuffering.Copy)
+        {
+            Graphics.WaitBlit();
+            Graphics.FreeBitMap(_offBitMap);
+            _offBitMap = null;
+        }
+        else if (_buffering == VideoBuffering.Swap)
+        {
+            Graphics.WaitBlit();
+            if (_changePending) TakeMessage(false);
+            _changePending = false;
+            if (_backIndex == 0)
+            {
+                // The second bitmap is on display: copy it into the screen's own one and show that again.
+                Graphics.BltBitMap(BufferBitMap(1), _left, _top, BufferBitMap(0), _left, _top, _width, _height, 0xC0, 0xFF, null);
+                Graphics.WaitBlit();
+                int tries = 0;
+                bool changed = Intuition.ChangeScreenBuffer(_screen, _sb0) != 0;
+                while (!changed && ++tries < 500)
+                {
+                    Graphics.WaitTOF();
+                    changed = Intuition.ChangeScreenBuffer(_screen, _sb0) != 0;
+                }
+                if (changed)
+                {
+                    TakeMessage(true);
+                    TakeMessage(false);
+                    if (_safeMessages == 2) Frame.WaitVBlank();
+                }
+                else
+                {
+                    // The second bitmap is still on display: freeing it would free what is being shown. Leak the buffers
+                    // (and the reply ports they may still post to) instead; the screen's own bitmap is not freed either.
+                    _sb0 = null;
+                    _sb1 = null;
+                    _safePort = null;
+                    _dispPort = null;
+                }
+            }
+            FreeSwap();
+        }
+        if (_backRp != null) Mem.Free(_backRp);
+        _backRp = null;
+        _buffering = VideoBuffering.Single;
+        _rastPort = _windowRp;
+        _dx = 0;
+        _dy = 0;
+    }
+
+    /// <summary>The rast port drawing goes to (the window's, or the back buffer's when double buffered), for <see cref="Fonts"/>.</summary>
+    internal static void* DrawRastPort { get { return _rastPort; } }
+
+    /// <summary>True when <see cref="DrawRastPort"/> has no layer: text drawn through it must be kept inside the screen by the caller.</summary>
+    internal static bool DrawUnclipped { get { return _buffering != VideoBuffering.Single; } }
+
+    internal static int DrawOffsetX { get { return _dx; } }
+    internal static int DrawOffsetY { get { return _dy; } }
+    internal static int DrawWidth { get { return _width; } }
+    internal static int DrawHeight { get { return _height; } }
 #elif SDL
     // SDL: a chunky 8-bit framebuffer and palette in the C runtime, shown in a window (integer scaled) at every
     // Frame.WaitVBlank and Dos.Delay. Drawing works on the framebuffer like the blitter works on the Amiga screen.
@@ -399,6 +691,7 @@ public static unsafe class Video
 
     public static void Close()
     {
+        _sdlBuffering = VideoBuffering.Single;
         Crt.es_sdl_video_close();
         Keys.Close();
     }
@@ -463,6 +756,46 @@ public static unsafe class Video
     public static void WaitFrames(int frames) { Frame.Wait(frames); }
 
     public static void WaitVBlank() { Frame.WaitVBlank(); }
+
+    // Double buffering: a second framebuffer in the C runtime. The window shows the front one; drawing goes to the back one.
+    private static VideoBuffering _sdlBuffering;
+
+    /// <summary>Drawing goes to a back buffer that <see cref="Flip"/> shows; on SDL the two framebuffers swap (<see cref="VideoBuffering.Swap"/>).</summary>
+    public static bool EnableDoubleBuffer()
+    {
+        if (_sdlBuffering != VideoBuffering.Single) return true;
+        if (!Crt.es_sdl_dbuf_enable()) return false;
+        _sdlBuffering = VideoBuffering.Swap;
+        return true;
+    }
+
+    /// <summary>Double buffering with the back buffer copied to the front one at each <see cref="Flip"/> (<see cref="VideoBuffering.Copy"/>).</summary>
+    public static bool EnableBackBuffer()
+    {
+        if (_sdlBuffering != VideoBuffering.Single) return _sdlBuffering == VideoBuffering.Copy;
+        if (!Crt.es_sdl_dbuf_enable()) return false;
+        _sdlBuffering = VideoBuffering.Copy;
+        return true;
+    }
+
+    /// <summary>Shows the back buffer (the window is redrawn once, here) and waits for the next frame, as on the Amiga.</summary>
+    public static void Flip()
+    {
+        if (_sdlBuffering != VideoBuffering.Single) Crt.es_sdl_flip(_sdlBuffering == VideoBuffering.Copy);
+        Frame.WaitVBlank();
+    }
+
+    public static VideoBuffering Buffering() { return _sdlBuffering; }
+
+    public static bool IsDoubleBuffered() { return _sdlBuffering != VideoBuffering.Single; }
+
+    /// <summary>The frame on display stays and drawing goes straight to it again.</summary>
+    public static void DisableDoubleBuffer()
+    {
+        if (_sdlBuffering == VideoBuffering.Single) return;
+        Crt.es_sdl_dbuf_disable();
+        _sdlBuffering = VideoBuffering.Single;
+    }
 #else
     private static byte[] _pixels = new byte[0];
     private static ushort[] _palette = new ushort[0];
@@ -498,6 +831,8 @@ public static unsafe class Video
 
     private static bool OpenFrame(int width, int height, int depth)
     {
+        _hostBuffering = VideoBuffering.Single;
+        _hostFlips = 0;
         _pixels = new byte[width * height];
         _palette = new ushort[1 << depth];
         _palette24 = new uint[1 << depth];
@@ -530,7 +865,7 @@ public static unsafe class Video
     /// <summary>True when the screen is 640 or more pixels wide (hires on an Amiga).</summary>
     public static bool IsHires() { return _open && _width >= 640; }
 
-    public static void Close() { _open = false; _rtgScreen = false; }
+    public static void Close() { DisableDoubleBuffer(); _open = false; _rtgScreen = false; }
 
     public static void SetColor(int index, int r, int g, int b)
     {
@@ -628,6 +963,79 @@ public static unsafe class Video
     public static void WaitFrames(int frames) { Frame.Wait(frames); }
 
     public static void WaitVBlank() { Frame.WaitVBlank(); }
+
+    // Double buffering: _pixels is where drawing goes (the back buffer), _shown what the display shows.
+    private static VideoBuffering _hostBuffering;
+    private static byte[] _shown = new byte[0];
+    private static int _hostFlips;
+
+    /// <summary>Host: whether the system gives screen buffers. Tests set it to false to check the offscreen-bitmap fallback.</summary>
+    public static bool HostScreenBuffers = true;
+
+    /// <summary>Host: the pixels on display, one byte per pixel. Without double buffering it is <see cref="HostPixels"/>, which is where drawing goes.</summary>
+    public static byte[] HostShown => _hostBuffering == VideoBuffering.Single ? _pixels : _shown;
+
+    /// <summary>Host: how many times <see cref="Flip"/> showed a back buffer since the screen opened.</summary>
+    public static int HostFlips => _hostFlips;
+
+    /// <summary>
+    /// Turns on double buffering: drawing goes to a back buffer (a copy of the screen at first) and <see cref="Flip"/> shows it.
+    /// <see cref="VideoBuffering.Swap"/>, or <see cref="VideoBuffering.Copy"/> when <see cref="HostScreenBuffers"/> is false.
+    /// </summary>
+    public static bool EnableDoubleBuffer()
+    {
+        if (!_open) return false;
+        if (_hostBuffering != VideoBuffering.Single) return true;
+        if (!HostScreenBuffers) return EnableBackBuffer();
+        StartBuffers(VideoBuffering.Swap);
+        return true;
+    }
+
+    public static bool EnableBackBuffer()
+    {
+        if (!_open) return false;
+        if (_hostBuffering != VideoBuffering.Single) return _hostBuffering == VideoBuffering.Copy;
+        StartBuffers(VideoBuffering.Copy);
+        return true;
+    }
+
+    private static void StartBuffers(VideoBuffering mode)
+    {
+        _shown = _pixels;
+        _pixels = (byte[])_shown.Clone();
+        _hostBuffering = mode;
+    }
+
+    /// <summary>Shows the back buffer (swapped or copied) and waits a frame (<see cref="Frame.WaitVBlank"/>).</summary>
+    public static void Flip()
+    {
+        if (_hostBuffering == VideoBuffering.Swap)
+        {
+            byte[] t = _shown;
+            _shown = _pixels;
+            _pixels = t;
+            _hostFlips++;
+        }
+        else if (_hostBuffering == VideoBuffering.Copy)
+        {
+            Array.Copy(_pixels, _shown, _pixels.Length);
+            _hostFlips++;
+        }
+        Frame.WaitVBlank();
+    }
+
+    public static VideoBuffering Buffering() { return _hostBuffering; }
+
+    public static bool IsDoubleBuffered() { return _hostBuffering != VideoBuffering.Single; }
+
+    /// <summary>The frame on display stays and drawing goes straight to it again.</summary>
+    public static void DisableDoubleBuffer()
+    {
+        if (_hostBuffering == VideoBuffering.Single) return;
+        _pixels = _shown;
+        _shown = new byte[0];
+        _hostBuffering = VideoBuffering.Single;
+    }
 #endif
 
     /// <summary>

@@ -24,7 +24,7 @@ public static unsafe class AslLib
 /// The system file requester (asl.library): <see cref="PickFile"/> asks the user for a file and returns its path, or null if
 /// they cancel. asl.library is on the Workbench disk, not in ROM: if it is missing <see cref="Open"/> returns false and
 /// <see cref="PickFile"/> returns null, so a program should say so. With a <see cref="Video"/> screen open the requester
-/// appears on it, otherwise on the default public screen (Workbench). On the host nothing is shown: <see cref="HostPick"/> is the fake answer.
+/// appears on it (double buffering is turned off first, see <see cref="Video.EnableDoubleBuffer"/>), otherwise on the default public screen (Workbench). On the host nothing is shown: <see cref="HostPick"/> is the fake answer.
 /// </summary>
 public static unsafe class Asl
 {
@@ -75,6 +75,9 @@ public static unsafe class Asl
     public static string? PickFile(string title, string drawer)
     {
         if (!Open()) return null;
+        // Intuition draws the requester into the screen's own bitmap, which is not on display while double buffered (and the next
+        // Flip would overwrite it): show the frame and draw straight to the screen again. The program can enable it again after.
+        if (Video.IsDoubleBuffered()) Video.DisableDoubleBuffer();
         void* req = AslLib.AllocAslRequest(Layout.AslFileRequest, null);
         if (req == null) return null;
         string? result = null;
