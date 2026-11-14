@@ -64,6 +64,10 @@ internal sealed partial class CEmitter
         }
     }
 
+    /// <summary>The entry point takes <c>string[] args</c>: C has no array parameter, so the function declares its own array from the command line.</summary>
+    public static bool IsArgsEntry(IMethodSymbol m) =>
+        HasAttribute(m, "EntryPointAttribute") && m.Parameters.Length == 1 && m.Parameters[0] is { RefKind: RefKind.None, Type: IArrayTypeSymbol { ElementType.SpecialType: SpecialType.System_String, Rank: 1 } };
+
     /// <summary>A non-static class: a heap object that variables hold by pointer.</summary>
     private static bool IsHeapClass(ITypeSymbol t) => t is INamedTypeSymbol { TypeKind: TypeKind.Class, IsStatic: false };
 
@@ -1407,7 +1411,7 @@ internal sealed partial class CEmitter
         if (m.MethodKind == MethodKind.AnonymousFunction) parts.Add("void *_env");   // a lambda is called through a delegate, which passes its environment
         if (!m.IsStatic && m.MethodKind is not (MethodKind.Constructor or MethodKind.LocalFunction or MethodKind.AnonymousFunction))
             parts.Add($"{TypeName(m.ContainingType)} *{ThisName}");
-        parts.AddRange(m.Parameters.Select(p => p.RefKind switch
+        parts.AddRange(m.Parameters.Where(_ => !IsArgsEntry(m)).Select(p => p.RefKind switch
         {
             RefKind.None => Decl(p.Type, p.Name, node),
             RefKind.Ref or RefKind.Out => Decl(p.Type, "*" + p.Name, node),
@@ -1518,6 +1522,15 @@ internal sealed partial class CEmitter
             // No initializer, or base() naming a base class that has no constructor of its own: the implicit chain.
             else if ((initializer == null || initializer.IsKind(SyntaxKind.BaseConstructorInitializer)) && ImplicitInits(m.ContainingType, ThisName, includeSelf: false) is { Length: > 0 } implicitBase) Line(implicitBase);
         }
+        if (IsArgsEntry(m))
+        {
+            // args: a variable-length array filled from the same argv words as the Args class (so ES_LEN gives the count; none is a zero-length array).
+            _natives.Add("es_args_count");
+            var an = m.Parameters[0].Name;
+            Line($"int32_t es_n_{an} = es_args_count();");
+            Line($"const char *{an}[es_n_{an}];");
+            Line($"for (int32_t es_i = 0; es_i < es_n_{an}; es_i++) {an}[es_i] = es_args_get(es_i);");
+        }
         var asmOpened = BeginSpecialMethod(m, decl);   // [InlineAsm]: the assembly, then the C# body under #else
         if (block != null)
         {
@@ -1563,8 +1576,8 @@ internal sealed partial class CEmitter
     {
         var entry = FindEntryPoints(_compilation, _user).FirstOrDefault();
         if (entry == null) return;
-        if (entry.Parameters.Length != 0)
-            Unsupported(entry.DeclaringSyntaxReferences.First().GetSyntax(), "entry point parameters");
+        if (entry.Parameters.Length != 0 && !IsArgsEntry(entry))
+            Unsupported(entry.DeclaringSyntaxReferences.First().GetSyntax(), "entry point parameters other than string[] args");
 
         if ((_usesBounds || _usesAlloc) && _atExit.Count > 0)
         {
@@ -2848,6 +2861,12 @@ internal sealed partial class CEmitter
         if (Model(inv).GetSymbolInfo(inv).Symbol is not IMethodSymbol m)
         {
             Unsupported(inv, "call");
+            return "0";
+        }
+
+        if (IsArgsEntry(m))
+        {
+            Unsupported(inv, "calling the entry point that takes string[] args");
             return "0";
         }
 

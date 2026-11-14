@@ -83,6 +83,10 @@ public static class Descriptors
         "ES0021", "Multiple entry points",
         "More than one method is marked [EntryPoint]");
 
+    public static readonly DiagnosticDescriptor BadEntryPoint = Error(
+        "ES0022", "Entry point signature",
+        "The [EntryPoint] method must be static, return void or int and take no parameters or one string[] (args): {0}");
+
     public static readonly DiagnosticDescriptor Unsupported = Error(
         "ES0099", "Construct not supported by the emitter",
         "'{0}' is not supported by the E# C emitter yet");

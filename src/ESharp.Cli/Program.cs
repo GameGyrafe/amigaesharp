@@ -580,7 +580,7 @@ Targets:
             var sdlRc = Build(buildArgs.ToArray(), out var sdlExe);
             if (sdlRc != 0 || sdlExe == null) return sdlRc;
             var (exit, _) = SdlRun.Run(sdlExe, headless, TimeSpan.FromSeconds(timeout), DockerImage(buildArgs, Targets.Sdl), screenshot, input,
-                programArgs: programArgs?.Split(' ', StringSplitOptions.RemoveEmptyEntries));
+                programArgs: programArgs == null ? null : SdlRun.SplitCommandLine(programArgs));
             if (exit != 0) Console.Error.WriteLine($"esharp: the program exited with code {exit}");
             return exit;
         }

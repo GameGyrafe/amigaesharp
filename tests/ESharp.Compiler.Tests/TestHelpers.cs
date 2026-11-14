@@ -47,7 +47,7 @@ public static class P
     }
 
     /// <summary>Compiles generated C with the host gcc against a shim of proto/dos.h (plus any <paramref name="extraHeaders"/>, relative path to text) and runs it.</summary>
-    public static (int exitCode, string output) RunWithHostGcc(string c, System.Collections.Generic.IReadOnlyDictionary<string, string>? extraHeaders = null)
+    public static (int exitCode, string output) RunWithHostGcc(string c, System.Collections.Generic.IReadOnlyDictionary<string, string>? extraHeaders = null, params string[] programArgs)
     {
         var dir = Path.Combine(Path.GetTempPath(), "esharp-test-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(Path.Combine(dir, "proto"));
@@ -78,7 +78,9 @@ public static class P
         cc.WaitForExit();
         Assert.True(cc.ExitCode == 0, Cc + " failed:\n" + err + "\n" + c);
 
-        var run = Process.Start(new ProcessStartInfo(exe) { RedirectStandardOutput = true })!;
+        var psi = new ProcessStartInfo(exe) { RedirectStandardOutput = true };
+        foreach (var a in programArgs) psi.ArgumentList.Add(a);
+        var run = Process.Start(psi)!;
         var output = run.StandardOutput.ReadToEnd();
         run.WaitForExit();
         return (run.ExitCode, output);
