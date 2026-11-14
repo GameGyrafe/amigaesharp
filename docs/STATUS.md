@@ -204,7 +204,7 @@ Verified:
 - `layouts.sh` re-run: Layout.g.cs unchanged.
 
 Not verified / not done:
-- Typed struct pointers and a `TagItem` type: the generator writes `void*`, as the hand-written bindings do, because E# has no C# declarations of the system structs (their fields come from Layout.g.cs). A pointer to a struct pointer is `void**` in C#, which C compilers accept with an incompatible-pointer warning (an error with gcc 14 and later); that is the same as the existing `GadTools.CreateContext`. Generating struct declarations is a design question for Dave.
+- Typed struct pointers and a `TagItem` type: the generator writes `void*`, as the hand-written bindings do, because E# has no C# declarations of the system structs (their fields come from Layout.g.cs). A pointer to a struct pointer is `void**` in C#, which C compilers accept with an incompatible-pointer warning (an error with gcc 14 and later); that is the same as the existing `GadTools.CreateContext`. Generating struct declarations is a design question for the maintainers.
 - The generated classes are not committed and the hand-written ones were not replaced by them; `Since` for AmigaOS 4 and MorphOS, their SDKs, and the `iffparse`/`asl`/`diskfont` samples with LIBS: (the Workbench-disk setup) were not run for this change; SDL was not run (the changed code is under `#if AMIGA`).
 
 ## SDL 3 target `sdl` (issue #15)
@@ -290,7 +290,7 @@ The generated C builds without warnings under clang `-Wall -Werror` as well as g
 (`-Wparentheses-equality`; an assignment used as a condition keeps exactly one pair, for `-Wparentheses`), and `x ??= y` as a statement no
 longer yields an unused value. The C tests honour `ESHARP_TEST_CC` (default `gcc`). Verified: the whole suite passes with gcc on Linux
 (269), with Ubuntu clang 18.1.3 in a container (268, before the assignment test was added), and on macOS 27 / Apple Silicon where `gcc` is
-Apple clang 21.0.0 (269, run by Dave; this is where the warnings were found); CI repeats the run with clang; samples/language agrees on the
+Apple clang 21.0.0 (269, run by the maintainer; this is where the warnings were found); CI repeats the run with clang; samples/language agrees on the
 A1200 emulator.
 
 ## String equality, null-forgiving `!`, base/derived comparisons (issue #49, part of #12)
@@ -325,7 +325,7 @@ Not verified:
 `esharp new <name>` now writes `Program.cs`, `<name>.csproj`, `.gitignore` and `.vscode/{tasks,launch,extensions}.json` (`src/ESharp.Cli/ProjectTemplate.cs`). The csproj references `ESharp.Target.Host` (runtime, platform, host fakes, `HOST` defined) and `ESharp.Analyzers` as an analyzer (`OutputItemType="Analyzer" ReferenceOutputAssembly="false"`), defining `HOST` like `esharp test` does, using an `ESharpRoot` property that `esharp new` fills in from the CLI's location (or `ESHARP_ROOT`; one shared lookup, `SourceTree.Find`, also used by `esharp test`). `esharp new games/demo` creates `games/demo/` with project name `demo`; a name that is not a valid C# identifier (`my-game`, a keyword) is rejected with a suggestion (`my_game`). Tasks call `dotnet <path to esharp.dll> build|run ...` (nothing has to be on PATH; the docker image is a `${input:dockerImage}` prompt defaulting to the pinned m68k image) and `dotnet run --project`. `launch.json` is a coreclr launch of the host build.
 
 - Verified (in a scratch directory, from the shell): `esharp new` output; the JSON files parse; `dotnet build` and `dotnet run` of the new project print `Hello from E#!`; a deliberate violation gives an `ES` error from `dotnet build` (see the PR for the output); the task command lines run. Unit tests check that the files are valid JSON with the expected tasks, the name rules, and `esharp new sub/dir` through the CLI.
-- **Verified on macOS (Dave, 2026-11-10; macOS 27, Apple Silicon, .NET 10 SDK, VS Code with the C# extension):** `dotnet test` (269 passed after the clang fix), `esharp new mygame` from a checkout, the project loads in VS Code, the analyzer shows ES0001 live while typing (squiggle and hover), the tasks "check subset and emit C" (error in the Problems panel; then `obj/m68k/mygame.c`), "run on the host" (`Hello from E#!`), "build for the host", F5 "debug on the host (.NET)" (breakpoint hit, step over), and "build (m68k)" through Docker Desktop (pulled the pinned m68k image under emulation, `Built .../obj/m68k/mygame`). Clicking a task error in Problems to jump to the line was not reported back.
+- **Verified on macOS (the maintainer, 2026-11-10; macOS 27, Apple Silicon, .NET 10 SDK, VS Code with the C# extension):** `dotnet test` (269 passed after the clang fix), `esharp new mygame` from a checkout, the project loads in VS Code, the analyzer shows ES0001 live while typing (squiggle and hover), the tasks "check subset and emit C" (error in the Problems panel; then `obj/m68k/mygame.c`), "run on the host" (`Hello from E#!`), "build for the host", F5 "debug on the host (.NET)" (breakpoint hit, step over), and "build (m68k)" through Docker Desktop (pulled the pinned m68k image under emulation, `Built .../obj/m68k/mygame`). Clicking a task error in Problems to jump to the line was not reported back.
 - Not verified: the editor on Windows and Linux. (A CLI installed away from a checkout now works through the AmigaESharp packages; see "NuGet packages" above.)
 
 ## Joystick and clock: lowlevel.library and timer.device (samples/controls)
@@ -647,6 +647,9 @@ Found while building it: `out var` declared in an `if` condition was scoped to t
 
 ## Phase 1: Hello world (emulator gate met; real hardware not yet run)
 
+> Historical record: the runs below on Kickstart 2.04 / A500+ were done before the minimum system became the A1200 (see "Minimum system" at the top). They were true when run and are kept as dated evidence; the current test matrix is Kickstart 3.1 (40.069) on `--model A1200`.
+
+
 Gate: runs in an emulator and on the host.
 
 | Item | State |
@@ -660,13 +663,16 @@ Gate: runs in an emulator and on the host.
 | Generated C compiled and run natively (host gcc + `proto/dos.h` shim) | Done, in tests |
 | Pinned toolchain image (`docker/Dockerfile`): m68k, AmigaOS 4 PPC, MorphOS PPC, AROS x86-64, by digest | Done |
 | Hello sample builds with the real compilers for m68k, os4 and morphos (`esharp build --target X --docker`) | Done: m68k yields a valid hunk executable, os4/morphos PPC ELF |
-| `esharp run` launches FS-UAE with the output mounted as DH0:; `--headless` captures output | Done: hello prints `Hello from E#!` on an emulated A500 (FS-UAE 3.1.66, built-in AROS ROM replacement) |
-| Same run on Dave's Linux dev host (Ubuntu, dotnet 10.0.402, FS-UAE 3.2.35, AROS ROM replacement) | Done: prints `Hello from E#!`, exit 0 |
-| Run in FS-UAE with a real Kickstart | Done on the Linux dev host (FS-UAE 3.2.35, headless): Kickstart 2.04 (37.175) on A500+ and Kickstart 3.1 (40.069) on A1200 both print `Hello from E#!`, exit 0, 5-8 s. Kickstart 1.x is out of scope (floor is 2.04) |
+| `esharp run` launches FS-UAE with the output mounted as DH0:; `--headless` captures output | Done: hello prints `Hello from E#!` on an emulated A500 (historical; FS-UAE 3.1.66, built-in AROS ROM replacement) |
+| Same run on the Linux dev host (Ubuntu, dotnet 10.0.402, FS-UAE 3.2.35, AROS ROM replacement) | Done: prints `Hello from E#!`, exit 0 |
+| Run in FS-UAE with a real Kickstart | Done on the Linux dev host (FS-UAE 3.2.35, headless): Kickstart 2.04 (37.175) on A500+ (historical, no longer in the matrix) and Kickstart 3.1 (40.069) on A1200 both print `Hello from E#!`, exit 0, 5-8 s. Kickstart 1.x was out of scope (historical: the floor was then 2.04; it is now 3.1 on an A1200, see "Minimum system") |
 | Run on real hardware | **Not done** |
 | Run the PowerPC builds (os4, morphos) | os4: **done in a QEMU pegasos2 VM** (AmigaOS 4.1 FE Update 3; `esharp run/test --target os4`, see "AmigaOS 4.1 VM runs"). MorphOS: **not done**. PowerPC real hardware: **not verified** |
 
 ## Phase 2: data types (done on host and both Kickstarts; PPC not run)
+
+> Historical record: the runs below on Kickstart 2.04 / A500+ were done before the minimum system became the A1200 (see "Minimum system" at the top). They were true when run and are kept as dated evidence; the current test matrix is Kickstart 3.1 (40.069) on `--model A1200`.
+
 
 Gate: logic tests pass on host and Amiga. `samples/phase2` prints one `ok NAME` line per check and
 must print the same 32 lines everywhere.
@@ -709,6 +715,9 @@ Notes and limits:
 
 ## Phase 3: screen (gate met on the emulator; real hardware not run)
 
+> Historical record: the runs below on Kickstart 2.04 / A500+ were done before the minimum system became the A1200 (see "Minimum system" at the top). They were true when run and are kept as dated evidence; the current test matrix is Kickstart 3.1 (40.069) on `--model A1200`.
+
+
 Gate: a PNG shows on an Amiga screen. `samples/screen` converts `card.png` with the asset pipeline,
 opens a screen, draws blitter rectangles, blits the card, reads every pixel back and compares it with
 the planar data (12 checks), then prints `SHOT` so `esharp run --headless --screenshot out.png` can save the emulator display
@@ -747,9 +756,12 @@ Found by comparing what a real card game needs (heavy use of collections, tuples
 | LINQ | Over arrays and `Enumerable.Range`, as fused loops: Where, Select, Take, Skip, Count, Sum, Min, Max, Any, All, First, Last, Contains, Aggregate, OrderBy/ThenBy (stack copy, stable insertion sort) and simple queries (see the top of this file). No `ToArray`/`ToList`, no sequences stored in variables |
 | Still missing (needed by bigger games) | Closures that outlive their method, `OrderBy`/`ToArray`/`ToList`, float values in strings, `is`/`as` to interface types, inheritance from generic or library classes |
 
-## Phase 4: card demo (in progress)
+## Phase 4: card demo (done on the emulator)
 
-`samples/cards` is a playable higher-or-lower game on the Amiga screen. It is a **proof of the building blocks**, not the real target game, so the phase 4 gate (the real game's logic playable on an Amiga) is not met yet.
+> Historical record: the runs below on Kickstart 2.04 / A500+ were done before the minimum system became the A1200 (see "Minimum system" at the top). They were true when run and are kept as dated evidence; the current test matrix is Kickstart 3.1 (40.069) on `--model A1200`.
+
+
+`samples/cards` is a playable higher-or-lower game on the Amiga screen. Together with `samples/rummy` it meets the phase 4 gate (a card game playable on an Amiga) on the emulator; real hardware is not verified.
 Mouse: Higher/Lower buttons; Esc quits; it also quits after 10 seconds without input (so headless runs end).
 Screenshot: [images/phase4-cards-a1200.png](images/phase4-cards-a1200.png) (Kickstart 3.1, A1200, after scripted play).
 
@@ -769,18 +781,22 @@ Screenshot: [images/phase4-cards-a1200.png](images/phase4-cards-a1200.png) (Kick
 
 ## Next
 
-- Run hello on real hardware, the last open item in the phase 1 gate. The emulator side is done: AROS replacement, Kickstart 2.04 and Kickstart 3.1.
-- OS4 findings from the first VM runs (see "AmigaOS 4.1 VM runs"): lowlevel port types, the RTG link error, the classic-only checks in memory/generics, scripted input for os4 runs. Done in wave 8: WaitTOF timing (timer fallback), the screen mode (centred), sound (clean skip; no working audio in the VM). Open: OS4 sound on real hardware.
-- MorphOS runs (QEMU `pegasos2` can boot MorphOS too; not tried) and PowerPC real hardware.
-- NuGet: published (0.1.1); next, E# library source packages (issue #31).
-- `esharp test` follow-ups: other targets (morphos, aros) and the Amiga program's return code (today only the ok/FAIL lines are compared; the os4 pipe hides it).
-- Memory management ([MEMORY.md](MEMORY.md)): step 1 (`Mem.AllocChip`/`AllocFast`/`Free`, `Arena`) is done; step 2 (`Pool<T>`) and most of step 3 (`--debug`: bounds checks, arena and pool poisoning) are done; the chip budget report (step 4) is done for constant sizes.
-- Phase 4 (rest): a bigger card game (rummy-style: melds, bots), a shared card library, timing, dithering and IFF/sample assets.
+Open work as of 2026-11-14 (the GitHub issues are the live list; the v1 tracker is #6 and the v2 epic is #5):
+
+- **Real hardware (#7):** nothing has run on a real Amiga yet. The hardware test pack (`tools/hwpack`) is ready; reports from an original A1200, an accelerated A1200 or an FPGA machine are the most valuable thing anyone can add. PowerPC real hardware and MorphOS runs are also not done (MorphOS only builds; QEMU `pegasos2` could boot it, not tried).
+- **Debugging (#14):** the host build can be stepped through under .NET and the Amiga build has serial `Trace` and `esharp addr`; a source-level debugger for the Amiga build is open.
+- **Windows (#11):** the build and test workflow is not verified on Windows (macOS was, see "VS Code support").
+- **Bindings (#19):** object wrappers for BOOPSI, GadTools and MUI (design); MUI/BOOPSI core is v2 (#40).
+- **Small gaps (#72):** `string.IndexOf`, `Args` on the host, `esharp test --args`, os4 `--args`.
+- **v2:** AROS i386 (#4), E# library source packages on NuGet (#31), capturing lambdas stored in fields (#41), user classes deriving from platform classes (#42).
+- Smaller follow-ups: `esharp test` for morphos and aros and the Amiga program's return code (today only the ok/FAIL lines are compared; the os4 pipe hides it); OS4 sound on real hardware; the chip budget report only covers constant sizes ([MEMORY.md](MEMORY.md)).
+
+Done and no longer "next": the emulator side of the phase 1 gate (AROS replacement and Kickstart 3.1; 2.04 was also run, historically), the NuGet packages (on nuget.org since 0.1.1), the card demo and rummy, os4 runs in the VM, the `sdl` target, hosted AROS runs, double buffering.
 
 ## AmigaOS 4.1 VM runs (wave 7: `esharp run/test --target os4`)
 
 The os4 target now runs unattended in a QEMU Pegasos II VM with AmigaOS 4.1 Final Edition (Updates 1-3 installed; kernel
-54.57, exec 54.57, dos 54.136), which Dave owns; no AmigaOS file is in the repo. `ESHARP_OS4_VM` names the VM directory
+54.57, exec 54.57, dos 54.136), which the maintainer owns; no AmigaOS file is in the repo. `ESHARP_OS4_VM` names the VM directory
 (`bboot`, `Kickstart.zip`, `amiga.img`, optional `qemu-data/`); unset, the CLI says "set ESHARP_OS4_VM to your AmigaOS 4.1
 VM dir". Details and the exact hook lines: `tools/os4vm/README.md`.
 
