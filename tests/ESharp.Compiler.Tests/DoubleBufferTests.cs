@@ -41,12 +41,23 @@ public class DoubleBufferTests
 /// (The host fake and the sample on the host are tested in <see cref="HostTargetTests"/>, which owns the shared Video state.)
     /// </summary>
     [Theory]
-    [InlineData(true)]
-    [InlineData(false)]
-    public void Amiga_double_buffer_runs_natively_against_a_screen_buffer_shim(bool messages)
+    [InlineData(true, false)]
+    [InlineData(false, false)]
+    [InlineData(true, true)]
+    public void Amiga_double_buffer_runs_natively_against_a_screen_buffer_shim(bool messages, bool stuck)
     {
         if (!HasGcc) return;
-        const string body = @"
+        // stuck: the system never switches back to the screen's own bitmap, so the second one must not be freed while on display.
+        const string stuckBody = @"
+Video.Open(32, 16, 2);
+Video.EnableDoubleBuffer();
+Video.FillRect(0, 0, 32, 16, 2);
+Video.Flip();
+Video.DisableDoubleBuffer();
+Dos.PutStr(""off "" + (int)Video.Buffering() + ""\n"");
+Video.Close();
+Dos.PutStr(""closed\n"");";
+        const string normalBody = @"
 Video.Open(32, 16, 2);
 Video.FillRect(0, 0, 32, 16, 1);
 bool on = Video.EnableDoubleBuffer();
@@ -68,6 +79,7 @@ Video.Flip();
 Dos.PutStr(""copied "" + Video.GetPixel(5, 5) + ""\n"");
 Video.Close();
 Dos.PutStr(""closed\n"");";
+        string body = stuck ? stuckBody : normalBody;
         var c = CompileOk(Program("", body), new CompileOptions { Defines = new[] { "AMIGA", "X86_64", "ESHARP_HOSTC" } });
         string shim = @"#include <stdio.h>
 #include <stdlib.h>
@@ -75,6 +87,7 @@ Dos.PutStr(""closed\n"");";
 #include <stdint.h>
 struct Library; struct Device;
 #define SHIM_MESSAGES " + (messages ? 1 : 0) + @"
+#define SHIM_STUCK " + (stuck ? 1 : 0) + @"
 typedef struct { int id; int w, h; uint8_t px[64 * 64]; } ShimBm;
 typedef struct { int pending; } ShimPort;
 static int shim_ids;
@@ -145,6 +158,7 @@ static inline uint32_t ChangeScreenBuffer(void *sc, void *sb)
 {
     (void)sc;
     unsigned char *dbi = *(unsigned char **)((unsigned char *)sb + 8);
+    if (SHIM_STUCK && *(ShimBm **)sb == shim_bm0 && shim_shown != shim_bm0) return 0;
     shim_shown = *(ShimBm **)sb;
     printf(""shim: show bitmap %d (%d)\n"", shim_shown->id, shim_shown->px[0]);
     if (SHIM_MESSAGES)
@@ -167,6 +181,15 @@ static inline uint32_t ChangeScreenBuffer(void *sc, void *sb)
         };
         var (code, output) = RunWithHostGcc(c, headers);
         Assert.True(code == 0, output);
+        if (stuck)
+        {
+            Assert.Equal(
+                "shim: show bitmap 1 (2)\n" +
+                "off 0\n" +                                              // no \"freed the bitmap on display\", no free buffer lines: leaked
+                "shim: close, bitmap 1 on display\n" +
+                "closed\n", output);
+            return;
+        }
         var expected =
             "on 1 1\n" +
             "back 2\n" +                                              // drawing went to the second bitmap, clipped to it

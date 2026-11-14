@@ -44,6 +44,12 @@ it too), `IsDoubleBuffered()` and `Buffering()`, a new enum `VideoBuffering { Si
 it on are unchanged. The back buffer starts as a copy of the screen. After a `Flip` it holds an older frame: the one before the frame
 just shown with `Swap`, the frame just shown with `Copy`. So redraw the whole screen each frame (or all that changed in the last two).
 
+Limits: with `Swap`, Intuition still draws on the screen's own bitmap, which is not on display while the second one is shown, so anything
+Intuition draws (the backdrop window, an ASL requester) can be invisible and the next `Flip` overwrites it. `Asl.PickFile` therefore turns
+double buffering off first (the frame on display stays); enable it again after the requester. `DisableDoubleBuffer` retries the switch
+back to the screen's own bitmap for about ten seconds (500 frames); if the system still refuses it leaks the two buffers and their ports
+instead of freeing the bitmap that is on display (tested in the shim with a `ChangeScreenBuffer` that never succeeds).
+
 - **Classic (m68k, graphics/intuition v39):** `Swap` uses two screen bitmaps: `AllocScreenBuffer` with `SB_SCREEN_BITMAP` (the
   screen's own) and `SB_COPY_BITMAP` (a second one, in chip RAM: width x height x depth / 8 bytes, 30 KB for 320x256x3, 50 KB for
   320x256x5, 80 KB for 320x256x8), `ChangeScreenBuffer` at `Flip`, and the DBufInfo messages on two message ports: `Flip` waits for the

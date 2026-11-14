@@ -425,7 +425,8 @@ public static unsafe class Video
     /// go, so a whole-screen redraw does not flicker. Uses two screen bitmaps (intuition AllocScreenBuffer/ChangeScreenBuffer, graphics
     /// v39) when the system gives them (<see cref="VideoBuffering.Swap"/>), else an offscreen bitmap copied with one blit per
     /// <see cref="Flip"/> (<see cref="VideoBuffering.Copy"/>). The back buffer starts as a copy of the screen. True if it is on
-    /// (also when it already was).
+    /// (also when it already was). Intuition (the window, requesters such as <see cref="Asl.PickFile"/>) draws into the screen's own bitmap,
+    /// which is not on display during <see cref="VideoBuffering.Swap"/>: <see cref="Asl.PickFile"/> turns double buffering off first.
     /// </summary>
     public static bool EnableDoubleBuffer()
     {
@@ -595,7 +596,8 @@ public static unsafe class Video
 
     /// <summary>
     /// Turns double buffering off: the frame on display stays, and drawing goes straight to the screen again. <see cref="Close"/>
-    /// does this too.
+    /// does this too. If the system will not switch back to the screen's own bitmap (500 tries), the buffers are leaked rather than
+    /// freed while on display.
     /// </summary>
     public static void DisableDoubleBuffer()
     {
@@ -617,7 +619,7 @@ public static unsafe class Video
                 Graphics.WaitBlit();
                 int tries = 0;
                 bool changed = Intuition.ChangeScreenBuffer(_screen, _sb0) != 0;
-                while (!changed && ++tries < 50)
+                while (!changed && ++tries < 500)
                 {
                     Graphics.WaitTOF();
                     changed = Intuition.ChangeScreenBuffer(_screen, _sb0) != 0;
@@ -627,6 +629,15 @@ public static unsafe class Video
                     TakeMessage(true);
                     TakeMessage(false);
                     if (_safeMessages == 2) Frame.WaitVBlank();
+                }
+                else
+                {
+                    // The second bitmap is still on display: freeing it would free what is being shown. Leak the buffers
+                    // (and the reply ports they may still post to) instead; the screen's own bitmap is not freed either.
+                    _sb0 = null;
+                    _sb1 = null;
+                    _safePort = null;
+                    _dispPort = null;
                 }
             }
             FreeSwap();
