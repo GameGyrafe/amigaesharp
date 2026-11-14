@@ -175,6 +175,16 @@ public static class Layout
     public const int IntCode = 40;
     public const uint NtInterrupt = 2u;
     public const uint IntbVertb = 5u;
+    public const int RastPortSize = 176;
+    public const int RastPortBitMap = 8;
+    public const int SbBitMap = 0;
+    public const int SbDBufInfo = 8;
+    public const int DbiSafeReplyPort = 48;
+    public const int DbiDispReplyPort = 120;
+    public const uint SbScreenBitMap = 1u;
+    public const uint SbCopyBitMap = 2u;
+    public const uint BmfClear = 1u;
+    public const uint BmfDisplayable = 2u;
 #else
     public const int WindowRPort = 50;
     public const int WindowUserPort = 86;
@@ -344,6 +354,16 @@ public static class Layout
     public const int IntCode = 18;
     public const uint NtInterrupt = 2u;
     public const uint IntbVertb = 5u;
+    public const int RastPortSize = 100;
+    public const int RastPortBitMap = 4;
+    public const int SbBitMap = 0;
+    public const int SbDBufInfo = 4;
+    public const int DbiSafeReplyPort = 22;
+    public const int DbiDispReplyPort = 54;
+    public const uint SbScreenBitMap = 1u;
+    public const uint SbCopyBitMap = 2u;
+    public const uint BmfClear = 1u;
+    public const uint BmfDisplayable = 2u;
 #endif
 }
 #endif

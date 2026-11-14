@@ -21,6 +21,8 @@ include libraries/asl.h
 include libraries/gadtools.h
 include graphics/displayinfo.h
 include graphics/modeid.h
+include graphics/rastport.h
+include graphics/view.h
 
 # Intuition (src/ESharp.Platform/Gfx.cs)
 WindowRPort = Window.RPort
@@ -215,3 +217,15 @@ IntData = Interrupt.is_Data
 IntCode = Interrupt.is_Code
 NtInterrupt = value NT_INTERRUPT
 IntbVertb = value INTB_VERTB
+
+# Double buffering: screen buffers and the back buffer's rast port (src/ESharp.Platform/Video.cs)
+RastPortSize = sizeof RastPort
+RastPortBitMap = RastPort.BitMap
+SbBitMap = ScreenBuffer.sb_BitMap
+SbDBufInfo = ScreenBuffer.sb_DBufInfo
+DbiSafeReplyPort = DBufInfo.dbi_SafeMessage.mn_ReplyPort
+DbiDispReplyPort = DBufInfo.dbi_DispMessage.mn_ReplyPort
+SbScreenBitMap = value SB_SCREEN_BITMAP
+SbCopyBitMap = value SB_COPY_BITMAP
+BmfClear = value BMF_CLEAR
+BmfDisplayable = value BMF_DISPLAYABLE

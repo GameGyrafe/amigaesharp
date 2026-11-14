@@ -33,6 +33,70 @@ Not verified:
 - Still needs a checkout: the toolchain images `esharp-amiga-toolchain` (all four Amiga targets) and `esharp-sdl` (`docker build` from `docker/` and `docker/sdl`; the m68k-only pinned image works without one), `tools/aros-hosted/aros-hosted.sh` (expects `samples/<name>/obj/aros`), `tools/hwpack` (builds the repository's samples), BindGen, CardArt and AssetSamples.
 - Library packages as in issue #31 (E# source packages that `esharp build` reads from `project.assets.json`) are not started; the Sdk package ships compiled host assemblies only, and the Amiga build still uses the sources embedded in the tool, so the Sdk package version must match the tool's (the template writes the tool's version).
 
+## Double buffer: `Video.EnableDoubleBuffer` and `Video.Flip` (samples/dbuffer, issue #66 part 1)
+
+A game can redraw the whole screen without flicker: after `Video.EnableDoubleBuffer()` every drawing call (`FillRect`, `Blit`,
+`BlitRegion`, `BlitMasked`, `BlitMaskedScaled`, `Font`, `Fonts.Draw`, and `GetPixel` for reading) goes to a back buffer that is not on
+display, and `Video.Flip()` shows it in one go and waits for the display to take it (one frame, counted in `Frame.Count`). The API is
+the same on every target: `EnableDoubleBuffer()` (true if on), `EnableBackBuffer()` (ask for the copy mode below), `Flip()` (without
+double buffering it is just `WaitVBlank`), `DisableDoubleBuffer()` (the frame on display stays and drawing goes to it again; `Close` does
+it too), `IsDoubleBuffered()` and `Buffering()`, a new enum `VideoBuffering { Single, Swap, Copy }`. Existing programs that never turn
+it on are unchanged. The back buffer starts as a copy of the screen. After a `Flip` it holds an older frame: the one before the frame
+just shown with `Swap`, the frame just shown with `Copy`. So redraw the whole screen each frame (or all that changed in the last two).
+
+- **Classic (m68k, graphics/intuition v39):** `Swap` uses two screen bitmaps: `AllocScreenBuffer` with `SB_SCREEN_BITMAP` (the
+  screen's own) and `SB_COPY_BITMAP` (a second one, in chip RAM: width x height x depth / 8 bytes, 30 KB for 320x256x3, 50 KB for
+  320x256x5, 80 KB for 320x256x8), `ChangeScreenBuffer` at `Flip`, and the DBufInfo messages on two message ports: `Flip` waits for the
+  "safe to write" message before drawing goes to the old front bitmap, and for the "on display" message of the previous change before
+  the next `ChangeScreenBuffer`. Drawing goes through our own rast port (`InitRastPort`, no layer) on the back bitmap, so `Video` now
+  clips rectangles, blits and the template text to the screen itself (the window's layer did that; with one buffer the result is the
+  same) and `Fonts.Draw` draws only lines that fit and the characters that fit in width when double buffered. The first wait polls (one
+  `Delay(1)` per try, about a second at most) so a system that never sends the messages cannot hang it; after the first message it
+  sleeps in `WaitPort`; without messages each `Flip` waits a frame instead. `ChangeScreenBuffer` returning 0 (Intuition busy) is retried
+  once a frame for 50 frames. `Copy` (the fallback when screen buffers cannot be had, and what `EnableBackBuffer` asks for) is an
+  offscreen bitmap (`AllocBitMap`, a friend of the screen bitmap, so it is in the card's format on RTG) that `Flip` copies to the window
+  with one `BltBitMapRastPort` after the vertical blank. Turning `Swap` off while the second bitmap is shown copies it into the screen's
+  own bitmap (`BltBitMap`) and shows that again before the buffers are freed. New bindings: intuition `AllocScreenBuffer`,
+  `FreeScreenBuffer`, `ChangeScreenBuffer`; graphics `InitRastPort`, `AllocBitMap`, `FreeBitMap`, `BltBitMap`; new measured layout
+  items (RastPort size and BitMap, ScreenBuffer, DBufInfo reply ports, `SB_*`, `BMF_*`) for m68k and AROS x86-64 (`tools/BindGen/layouts.sh`).
+- **AmigaOS 4 and AROS:** the same calls (the window's place on a larger centred OS4 mode is added to the coordinates in `Swap`, where
+  drawing goes to the full screen bitmap). On the OS4 VM the DBufInfo messages come back at once (the QEMU sm501 has no vertical blank),
+  so the frame count after a swap goes through the same timer.device padding as `Frame.WaitVBlank` (new internal `Frame.CountFrame`:
+  a frame less than half a frame after the previous one is padded to a whole frame); on a classic display that never happens.
+- **RTG (cybergraphics):** no own code path: `Swap` where the RTG system gives screen buffers, else the `Copy` fallback with a friend
+  bitmap. Neither was run on an RTG system (FS-UAE has no card here; the OS4 VM screen is RTG, see below).
+- **SDL:** a second framebuffer in the C runtime (`es_sdl_dbuf_enable`, `es_sdl_flip`, `es_sdl_dbuf_disable`); the window and the
+  screenshot show the front one, drawing goes to the back one, and `Flip` swaps them (or copies with `EnableBackBuffer`) and then waits a
+  frame, which presents once. `Dos.Delay` and `Frame.WaitVBlank` present the front buffer too.
+- **Host fake:** `Video.HostPixels` is where drawing goes (the back buffer when double buffered), new `Video.HostShown` is what is on
+  display, `Video.HostFlips` counts flips, and `Video.HostScreenBuffers = false` makes `EnableDoubleBuffer` fall back to `Copy`.
+
+`samples/dbuffer` (30 checks): single-buffered `Flip`, swap or copy, the back buffer starts as a copy, drawing goes to the back buffer,
+the older frame after `Flip`, clipping of rectangles and blits over the edges, text, 50 whole-screen frames with one `Flip` each (and
+their time printed), turning it off keeps the last frame, then the same for `EnableBackBuffer`, then a picture for the screenshot ("SHOT").
+
+Verified:
+- `dotnet test`: 422 passed, 2 skipped, 424 in all (9 new: `DoubleBufferTests`: the Amiga Video code built with the host gcc against a shim of
+  screen buffers, bitmaps and message ports that checks the order of buffer changes, which bitmap is on display when buffers are freed,
+  the reply ports at the measured DBufInfo offsets and that no `WaitPort` would hang, with and without messages; the sample compiles for
+  m68k, os4, aros and sdl with the expected calls; in `HostTargetTests`: the host fake's front and back buffers in both modes and the
+  sample on the host with and without screen buffers).
+- `esharp test samples/dbuffer --target m68k`, A1200 / Kickstart 3.1 (40.069) in FS-UAE: 30 ok, no FAIL, host and Amiga agree; `Swap`
+  (two screen bitmaps). 50 whole-screen frames (a full-screen fill, 9 bars, scaled text) took 2010-2012 ms with `Swap` (the drawing takes a
+  bit more than a frame) and 3010-3015 ms with `Copy` (plus the vertical blank wait and the copy). Screenshot (`esharp run --headless
+  --screenshot`) looked at: the last frame, complete.
+- `esharp test samples/dbuffer --target sdl --docker esharp-sdl`: 30 ok, host and SDL agree (999 ms per 50 frames in both modes);
+  screenshot looked at.
+- `esharp test samples/dbuffer --target os4` in the AmigaOS 4.1 VM: 30 ok, host and OS4 agree, `Swap`; 1003 ms per 50 frames (850 ms with
+  `Copy`, paced by `Frame.WaitVBlank` as before); the screenshot shows the frame centred on the 640x480 mode.
+- `--target aros` and `--target morphos` builds: aros builds (its gcc warnings are the existing timer ones, none from this code);
+  morphos fails as before on existing code (timer, tag lists, the blit BitMap), none of its errors is in the new code.
+
+Not verified: real hardware, hosted AROS runs (not available on the host now), an RTG card (Picasso96/CyberGraphX: whether they give
+screen buffers or the `Copy` fallback is used), MorphOS runs, `ChangeScreenBuffer` failing (Intuition busy) and a system that never
+sends the DBufInfo messages (both only against the shim), an NTSC display, the flicker itself by eye (screenshots are single frames),
+and the sample is not in the hardware test pack (`tools/hwpack`) yet.
+
 ## Gaps found while porting a game (classes, static initializers, text speed, screen modes, arguments)
 
 A port of a bigger game hit these limits; each is now an engine feature with original tests (`tests/ESharp.Compiler.Tests/ClassFeatureTests.cs`,
@@ -76,8 +140,8 @@ compiled with the host gcc and run) and the new `samples/objects` (21 checks), `
   `DrawInt` use it too, scales above 4 and text left of or above the screen fall back to rectangles; the host and SDL draw the same pixels as before.
   Measured with `samples/textspeed` on the emulated A1200 (Kickstart 3.1, chip RAM only): 30 lines of 30 characters take 171-173 ms with
   `Font.Draw`, 2737-2896 ms drawn the old way. The pixels are checked: `samples/screen` compares every printable character at scale 1 and five at
-  scale 2 with the glyph table pixel for pixel (new `Font.Pixel`), passing on host, A1200 / Kickstart 3.1, SDL and hosted AROS. Not done: an
-  offscreen bitmap or double buffer for whole-screen redraws (a design question: how much chip RAM a game may take for it).
+  scale 2 with the glyph table pixel for pixel (new `Font.Pixel`), passing on host, A1200 / Kickstart 3.1, SDL and hosted AROS. The
+  offscreen bitmap / double buffer for whole-screen redraws is now done: see "Double buffer" above.
 - **Screen modes:** `Video.Open` picks the classic mode from the size (m68k only): wider than 400 pixels is hires, wider than 800 super-hires,
   taller than 300 lines interlaced, so `Video.Open(640, 256, 4)` is a hires PAL screen (it used to be a lores screen twice as wide as the display).
   New `Video.IsHires()` (the view port's mode ID on the chipset). Without AGA a depth above 5 now opens an 8-bit RTG screen when there is a card

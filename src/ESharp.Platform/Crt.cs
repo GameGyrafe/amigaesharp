@@ -32,6 +32,9 @@ internal static unsafe class Crt
     [Native] public static extern void es_sdl_fill(int x, int y, int width, int height, int color);
     [Native] public static extern int es_sdl_get_pixel(int x, int y);
     [Native] public static extern void es_sdl_blit(byte* planar, byte* mask, int width, int height, int depth, int sx, int sy, int w, int h, int x, int y, int planarLen, int maskLen);
+    [Native] public static extern bool es_sdl_dbuf_enable();
+    [Native] public static extern void es_sdl_flip(bool copy);
+    [Native] public static extern void es_sdl_dbuf_disable();
     [Native] public static extern long es_sdl_ticks_us();
     [Native] public static extern void es_sdl_wait_frame(int fps);
     [Native] public static extern void es_sdl_delay(int ticks);

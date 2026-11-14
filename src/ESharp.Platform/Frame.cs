@@ -155,18 +155,39 @@ public static unsafe class Frame
             long gap = now - _last;
             if (now - before >= 0 && now - before < frame / 10) { if (_quick < 3) _quick++; } else _quick = 0;
             if (_quick >= 3) _tofBroken = true;
-            if (_haveLast && gap >= 0 && (_tofBroken ? gap < frame : gap < frame / 2))
-            {
-                long us = (frame - gap) * 1000000 / _efreq;
-                *(ushort*)(_tio + Layout.TrCommand) = (ushort)Layout.TimerAddRequest;
-                *(uint*)(_tio + Layout.TrSecs) = (uint)(us / 1000000);
-                *(uint*)(_tio + Layout.TrMicro) = (uint)(us % 1000000);
-                Exec.DoIO(_tio);
-                now = EClock();
-                _paced++;
-            }
-            _last = now;
-            _haveLast = true;
+            Pad(now, gap, frame);
+        }
+        _count++;
+    }
+
+    /// <summary>Pads a frame that came back too soon after the previous one with a timer.device wait, and remembers when it ended.</summary>
+    private static void Pad(long now, long gap, long frame)
+    {
+        if (_haveLast && gap >= 0 && (_tofBroken ? gap < frame : gap < frame / 2))
+        {
+            long us = (frame - gap) * 1000000 / _efreq;
+            *(ushort*)(_tio + Layout.TrCommand) = (ushort)Layout.TimerAddRequest;
+            *(uint*)(_tio + Layout.TrSecs) = (uint)(us / 1000000);
+            *(uint*)(_tio + Layout.TrMicro) = (uint)(us % 1000000);
+            Exec.DoIO(_tio);
+            now = EClock();
+            _paced++;
+        }
+        _last = now;
+        _haveLast = true;
+    }
+
+    /// <summary>
+    /// Counts a frame that something else waited for (<see cref="Video.Flip"/> waiting for the display to take a screen buffer). As
+    /// in <see cref="WaitVBlank"/>, a wait that came back less than half a frame after the previous frame (AmigaOS 4 in QEMU sends the
+    /// buffer messages at once) is padded with timer.device, so a double-buffered loop keeps the display rate there too.
+    /// </summary>
+    internal static void CountFrame()
+    {
+        if (OpenTimer())
+        {
+            long now = EClock();
+            Pad(now, now - _last, _efreq / FramesPerSecond);
         }
         _count++;
     }

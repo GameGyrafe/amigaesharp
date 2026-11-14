@@ -126,7 +126,7 @@ public static unsafe class Fonts
     private static void* RastPort()
     {
         if (!Video.IsOpen()) return null;
-        return *(void**)((byte*)Video.Window + Layout.WindowRPort);
+        return Video.DrawRastPort;     // the window's, or the back buffer's when double buffered
     }
 
     /// <summary>Width in pixels of <paramref name="text"/> in <paramref name="font"/> (exact with a <see cref="Video"/> screen open, else the character width times the length).</summary>
@@ -144,9 +144,17 @@ public static unsafe class Fonts
         void* rp = RastPort();
         if (!font.IsOpen || rp == null) return;
         Graphics.SetFont(rp, (void*)font.Handle);
+        int count = text.Length;
+        if (Video.DrawUnclipped)
+        {
+            // A back buffer has no layer to clip text: draw only lines that fit in height, and only the characters that fit in width.
+            if (x < 0 || y < 0 || y + font.Height > Video.DrawHeight) return;
+            while (count > 0 && x + Graphics.TextLength(rp, text, count) > Video.DrawWidth) count--;
+            if (count == 0) return;
+        }
         Graphics.SetAPen(rp, color);
-        Graphics.Move(rp, x, y + font.Baseline);
-        Graphics.Text(rp, text, text.Length);
+        Graphics.Move(rp, x + Video.DrawOffsetX, y + Video.DrawOffsetY + font.Baseline);
+        Graphics.Text(rp, text, count);
     }
 #else
     private static readonly System.Collections.Generic.List<(string Name, int Size, int Width, int Baseline)> HostList = new()

@@ -35,6 +35,7 @@ dotnet run --project src/ESharp.Cli -- run samples/objects --docker <image> --he
 dotnet run --project src/ESharp.Cli -- run samples/textspeed --docker <image> --headless --model A1200 --kickstart <rom>   # Font.Draw speed (one BltTemplate per line) against one rectangle per run
 dotnet run --project src/ESharp.Cli -- run samples/trace --trace --serial trace.txt --docker <image> --headless --model A1200   # serial Trace.Line/Value: FS-UAE writes the Amiga serial port into trace.txt, printed after the run (docs/DEBUGGING.md)
 dotnet run --project src/ESharp.Cli -- run samples/timing --docker <image> --headless --model A1200   # frame timing: Frame.WaitVBlank (WaitTOF), PAL/NTSC rate, FrameTimer fixed steps; prints a note instead of failing if the emulator is not real time
+dotnet run --project src/ESharp.Cli -- test samples/dbuffer --target m68k --docker <image> --model A1200 --kickstart <rom>   # double buffer: Video.EnableDoubleBuffer/Flip (screen buffers, offscreen-bitmap fallback); also --target sdl, --target os4; run --headless --screenshot shot.png for the last frame
 dotnet run --project src/ESharp.Cli -- addr samples/trace 0 e4 --docker <image>   # crash address (hunk 0, hex offset) -> C# file:line, using obj/m68k/<name>.o that every m68k build writes (docs/DEBUGGING.md)
 dotnet run --project src/ESharp.Cli -- run samples/lambdas --docker <image> --headless --model A1200   # capturing lambdas and delegates
 dotnet run --project src/ESharp.Cli -- run samples/linq --docker <image> --headless --model A1200   # LINQ over arrays, turned into loops
