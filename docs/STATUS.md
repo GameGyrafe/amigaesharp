@@ -140,11 +140,14 @@ compiled with the host gcc and run) and the new `samples/objects` (21 checks), `
   generally: **a call or property of a .NET type that E# has no code for is now ES0099** (it used to pass and fail at link time).
 - **`string.IndexOf`, `LastIndexOf`, `Contains`, `StartsWith`, `EndsWith` (issue #72):** with a `char` or `string` value, ordinal and byte by byte,
   on every target (small C helpers `es_str_*`, no buffer). `IndexOf` also takes a `startIndex`; every method takes a trailing constant
-  `StringComparison.Ordinal`. Not found is -1; the empty string is found at `startIndex` (`LastIndexOf("")` is the length); null text counts as
+  `StringComparison.Ordinal`, also together with the `startIndex` (`IndexOf(value, startIndex, StringComparison.Ordinal)`).
+  **Host difference:** the .NET host's string overloads without a `StringComparison` are culture-sensitive (a leading soft hyphen is ignored by
+  `"\u00ADabc".StartsWith("abc")`, true on .NET, false from the C helper), so `esharp test` can differ from the Amiga: pass
+  `StringComparison.Ordinal` explicitly (no analyzer suggestion yet). Not found is -1; the empty string is found at `startIndex` (`LastIndexOf("")` is the length); null text counts as
   "" and a null value finds nothing. Like `Substring`, nothing throws on the Amiga: a `startIndex` past the end gives -1 and a negative one is
   0, where .NET throws (do not rely on it; the host run throws). Culture and ignore-case comparisons, `IndexOf` with a count and
   `LastIndexOf` with a start are still ES0099. Test (`ClassFeatureTests.String_search_methods_are_ordinal_and_never_throw`): generated C built
-  and run with the host gcc, 13 checks (empty strings, not found, at the start and end, start index past the end).
+  and run with the host gcc, 14 checks (empty strings, not found, at the start and end, start index past the end, startIndex with Ordinal).
 - **`is`, `as` and type patterns from an interface value to a class** (were ES0099): the interface value's function table names the class it came
   from; when that is a base class of the target, the object's own type id decides. `switch` patterns, property patterns and bindings work.
   Interface-to-interface tests and struct targets are still ES0099.

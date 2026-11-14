@@ -304,8 +304,9 @@ Check(t.LastIndexOf(""o"") == 7 && t.LastIndexOf(""hello"") == 0 && t.LastIndexO
 Check(t.Contains(""lo w"") && !t.Contains(""low"") && t.Contains("""") && e.Contains("""") && !e.Contains(""a"") && t.Contains('w') && !t.Contains('q'), ""Contains"");
 Check(t.StartsWith(""hello"") && !t.StartsWith(""world"") && t.StartsWith("""") && !e.StartsWith(""h"") && t.StartsWith('h') && !t.StartsWith('e') && !e.StartsWith('h'), ""StartsWith"");
 Check(t.EndsWith(""world"") && !t.EndsWith(""hello"") && t.EndsWith("""") && !e.EndsWith(""d"") && t.EndsWith('d') && !t.EndsWith('l') && !e.EndsWith('d'), ""EndsWith"");
-Check(t.StartsWith(""hello world"") && !t.StartsWith(""hello world!"") && t.EndsWith(""hello world"") && !t.EndsWith(""!hello world"") && t.StartsWith(""h"", StringComparison.Ordinal), ""whole string and longer values"");";
-        RunChecks("", body, 13);
+Check(t.StartsWith(""hello world"") && !t.StartsWith(""hello world!"") && t.EndsWith(""hello world"") && !t.EndsWith(""!hello world"") && t.StartsWith(""h"", StringComparison.Ordinal), ""whole string and longer values"");
+Check(t.IndexOf(""o"", 5, StringComparison.Ordinal) == 7 && t.IndexOf(""O"", 5, StringComparison.Ordinal) == -1 && t.IndexOf(""o"", 12, StringComparison.Ordinal) == -1, ""startIndex with Ordinal"");";
+        RunChecks("", body, 14);
     }
 
     [Fact]

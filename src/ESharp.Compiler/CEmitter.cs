@@ -659,7 +659,10 @@ internal sealed partial class CEmitter
 
     /// <summary>
     /// s.IndexOf/LastIndexOf/Contains/StartsWith/EndsWith with a char or string value, an optional startIndex (IndexOf only) and an optional
-    /// StringComparison.Ordinal. Other overloads (culture or ignore-case comparisons, count, LastIndexOf with a start) are ES0099.
+    /// StringComparison.Ordinal (also together with the startIndex). Other overloads (culture or ignore-case comparisons, count, LastIndexOf with a
+    /// start) are ES0099. The search is ordinal on every target. On the .NET host, the overloads WITHOUT a StringComparison (IndexOf, LastIndexOf,
+    /// StartsWith, EndsWith with a string) use the current culture and can differ from the C helpers (for example a leading soft hyphen is ignored
+    /// by culture-sensitive StartsWith), so pass StringComparison.Ordinal in code that is run with esharp test.
     /// </summary>
     private string StringSearch(InvocationExpressionSyntax inv, IMethodSymbol m, MemberAccessExpressionSyntax access)
     {
@@ -672,7 +675,7 @@ internal sealed partial class CEmitter
         var hasStart = false;
         for (var i = 1; i < ps.Length; i++)
         {
-            if (ps[i].Type.SpecialType == SpecialType.System_Int32 && i == 1 && m.Name == "IndexOf" && ps.Length == 2) { hasStart = true; continue; }
+            if (ps[i].Type.SpecialType == SpecialType.System_Int32 && i == 1 && m.Name == "IndexOf") { hasStart = true; continue; }
             if (ps[i].Type.Name == "StringComparison" && i == ps.Length - 1)
             {
                 var cmp = Model(args[i].Expression).GetConstantValue(args[i].Expression);
