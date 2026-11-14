@@ -4,21 +4,39 @@ namespace ESharp.Platform;
 /// The program's command-line arguments, without the program name: <c>Game SEED 42 AUTO</c> from a Shell gives Count 3. They are the
 /// C <c>argv</c> words (the startup code splits the line at spaces and keeps "quoted text" together). A program started from
 /// Workbench has none (Count 0); its icon's tool types are not read. Matching of names is ASCII case-insensitive, as AmigaDOS does.
-/// <c>esharp run --args "SEED 42"</c> passes a line to the program in FS-UAE and on SDL.
+/// <c>esharp run --args "SEED 42"</c> passes a line to the program in FS-UAE, on SDL and in the os4 VM; on the dotnet host Args is the real command line
+/// (<c>HostSet</c> overrides it for tests).
 /// </summary>
 public static class Args
 {
 #if HOST
-    private static string[] _host = System.Array.Empty<string>();
+    private static string[]? _host;
 
-    /// <summary>Host fake: sets the arguments the program sees (none by default, so tests are repeatable).</summary>
+    // Without HostSet the host program's own command line (the words after the program), so Args and Main(string[] args) agree.
+    private static string[] HostArgs
+    {
+        get
+        {
+            if (_host == null)
+            {
+                var all = System.Environment.GetCommandLineArgs();
+                _host = all.Length > 1 ? all[1..] : System.Array.Empty<string>();
+            }
+            return _host;
+        }
+    }
+
+    /// <summary>Back to the real command line (what a program sees when nothing called <see cref="HostSet"/>).</summary>
+    public static void HostReset() { _host = null; }
+
+    /// <summary>Host fake: sets the arguments the program sees (tests call this to be repeatable; without it they are the real command line).</summary>
     public static void HostSet(params string[] args) { _host = args; }
 
     /// <summary>The number of arguments.</summary>
-    public static int Count { get { return _host.Length; } }
+    public static int Count { get { return HostArgs.Length; } }
 
     /// <summary>Argument <paramref name="index"/> (0 is the first after the program name), or null when there is none.</summary>
-    public static string Get(int index) { return index >= 0 && index < _host.Length ? _host[index] : null!; }
+    public static string Get(int index) { var a = HostArgs; return index >= 0 && index < a.Length ? a[index] : null!; }
 #else
     [Native] private static extern int es_args_count();
     [Native] private static extern string es_args_get(int index);

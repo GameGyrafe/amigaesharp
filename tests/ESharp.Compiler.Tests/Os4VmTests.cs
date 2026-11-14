@@ -107,6 +107,14 @@ public class Os4VmTests
         Assert.Contains("CD RAM:", lines);          // a writable current directory (the CD is read-only)
     }
 
+    [Fact]
+    public void Autorun_puts_the_argument_line_after_the_program_name()
+    {
+        var lines = Os4Vm.Autorun("cards", "n0nce", "SEED=42 \"two words\"").Split('\n');
+        Assert.Contains("ESTEST:cards SEED=42 \"two words\" | ESTEST:estype", lines);
+        Assert.Contains("ESTEST:cards | ESTEST:estype", Os4Vm.Autorun("cards", "n0nce", "  ").Split('\n'));
+    }
+
     private const string Serial =
         "Booting config 1: AmigaOS_4.1_Final_Edition\n" +
         "ES: old line from an earlier run\n" +

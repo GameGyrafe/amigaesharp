@@ -53,7 +53,7 @@ public sealed class SubsetAnalyzer : DiagnosticAnalyzer
     }
 
     private const string ArrayAdvice =
-        "arrays are fixed-size locals or static fields with a constant length ('int[] a = new int[16];'); pass them to methods as Span<T>";
+        "arrays are fixed-size locals or static fields with a constant length ('int[] a = new int[16];'); to pass one to a method, declare the parameter as Span<T> (also for class references) and hand over the array";
 
     private static void ReportArray(SyntaxNodeAnalysisContext c, Location at, string what) =>
         c.ReportDiagnostic(Diagnostic.Create(Descriptors.FixedArrays, at, $"{what}: {ArrayAdvice}"));

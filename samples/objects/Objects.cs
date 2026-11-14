@@ -200,9 +200,10 @@ public static class Program
         string title = "Harbour master";
         Check(title.Substring(0, 7) == "Harbour" && title.Substring(8) == "master" && title.Substring(14).Length == 0, "Substring");
 
-        // esharp test passes none; try esharp run samples/objects --args "SEED=42 auto"
+        // esharp test passes none unless given --args "SEED=42 auto" (then the host and the target both see them)
         if (Args.Count == 0) Check(Args.Get(0) == null && !Args.Has("AUTO") && Args.Int("SEED", 7) == 7, "no program arguments");
-        else Dos.PutStr($"{Args.Count} arguments, first {Args.Get(0)}, SEED {Args.Int("SEED", -1)}, AUTO {(Args.Has("AUTO") ? "on" : "off")}\n");
+        else Check(Args.Get(0) != null && Args.Get(Args.Count) == null, "program arguments are seen");
+        if (Args.Count > 0) Dos.PutStr($"{Args.Count} arguments, first {Args.Get(0)}, SEED {Args.Int("SEED", -1)}, AUTO {(Args.Has("AUTO") ? "on" : "off")}\n");
 
         for (int i = Port.Fleet.Count - 1; i >= 0; i--)
         {

@@ -348,6 +348,74 @@ internal sealed partial class CEmitter
             result.AppendLine("#define ES_IDX(i, n) es_idx((i), (n), __FILE__, __LINE__)");
             result.AppendLine();
         }
+        if (_usesStrSearch)
+        {
+            // string.IndexOf/LastIndexOf/Contains/StartsWith/EndsWith: ordinal, byte by byte, no exceptions (null counts as ""; a null
+            // value finds nothing; a startIndex past the end gives -1, a negative one is 0; the empty string is found at startIndex).
+            foreach (var line in new[]
+            {
+                "static __attribute__((unused)) int32_t es_str_len(const char *s) { int32_t n = 0; if (s == NULL) return 0; while (s[n]) n++; return n; }",
+                "static __attribute__((unused)) int32_t es_str_find(const char *s, const char *v, int32_t start)",
+                "{",
+                "    int32_t len = es_str_len(s), vl = es_str_len(v);",
+                "    if (v == NULL || start > len) return -1;",
+                "    if (start < 0) start = 0;",
+                "    for (int32_t i = start; i + vl <= len; i++)",
+                "    {",
+                "        int32_t k = 0;",
+                "        while (k < vl && s[i + k] == v[k]) k++;",
+                "        if (k == vl) return i;",
+                "    }",
+                "    return -1;",
+                "}",
+                "static __attribute__((unused)) int32_t es_str_findc(const char *s, int32_t c, int32_t start)",
+                "{",
+                "    int32_t len = es_str_len(s);",
+                "    if (start > len) return -1;",
+                "    if (start < 0) start = 0;",
+                "    for (int32_t i = start; i < len; i++) if ((unsigned char)s[i] == (c & 255)) return i;",
+                "    return -1;",
+                "}",
+                "static __attribute__((unused)) int32_t es_str_rfind(const char *s, const char *v)",
+                "{",
+                "    int32_t len = es_str_len(s), vl = es_str_len(v);",
+                "    if (v == NULL) return -1;",
+                "    for (int32_t i = len - vl; i >= 0; i--)",
+                "    {",
+                "        int32_t k = 0;",
+                "        while (k < vl && s[i + k] == v[k]) k++;",
+                "        if (k == vl) return i;",
+                "    }",
+                "    return -1;",
+                "}",
+                "static __attribute__((unused)) int32_t es_str_rfindc(const char *s, int32_t c)",
+                "{",
+                "    for (int32_t i = es_str_len(s) - 1; i >= 0; i--) if ((unsigned char)s[i] == (c & 255)) return i;",
+                "    return -1;",
+                "}",
+                "static __attribute__((unused)) int es_str_starts(const char *s, const char *v)",
+                "{",
+                "    int32_t vl = es_str_len(v);",
+                "    if (v == NULL || vl > es_str_len(s)) return 0;",
+                "    for (int32_t k = 0; k < vl; k++) if (s[k] != v[k]) return 0;",
+                "    return 1;",
+                "}",
+                "static __attribute__((unused)) int es_str_ends(const char *s, const char *v)",
+                "{",
+                "    int32_t vl = es_str_len(v), len = es_str_len(s);",
+                "    if (v == NULL || vl > len) return 0;",
+                "    for (int32_t k = 0; k < vl; k++) if (s[len - vl + k] != v[k]) return 0;",
+                "    return 1;",
+                "}",
+                "static __attribute__((unused)) int es_str_endsc(const char *s, int32_t c)",
+                "{",
+                "    int32_t len = es_str_len(s);",
+                "    return len > 0 && (unsigned char)s[len - 1] == (c & 255);",
+                "}",
+            })
+                result.AppendLine(line);
+            result.AppendLine();
+        }
         if (_usesFmt)
         {
             foreach (var line in new[]
@@ -589,6 +657,44 @@ internal sealed partial class CEmitter
 
     private SemanticModel Model(SyntaxNode node) => Model(node.SyntaxTree);
 
+    /// <summary>
+    /// s.IndexOf/LastIndexOf/Contains/StartsWith/EndsWith with a char or string value, an optional startIndex (IndexOf only) and an optional
+    /// StringComparison.Ordinal. Other overloads (culture or ignore-case comparisons, count, LastIndexOf with a start) are ES0099.
+    /// </summary>
+    private string StringSearch(InvocationExpressionSyntax inv, IMethodSymbol m, MemberAccessExpressionSyntax access)
+    {
+        var args = inv.ArgumentList.Arguments;
+        var ps = m.Parameters;
+        var form = $"string.{m.Name}({string.Join(", ", ps.Select(p => p.Type.ToDisplayString()))})";
+        if (ps.Length == 0 || ps[0].Type.SpecialType is not (SpecialType.System_Char or SpecialType.System_String))
+            return Unsupported(inv, form);
+        var isChar = ps[0].Type.SpecialType == SpecialType.System_Char;
+        var hasStart = false;
+        for (var i = 1; i < ps.Length; i++)
+        {
+            if (ps[i].Type.SpecialType == SpecialType.System_Int32 && i == 1 && m.Name == "IndexOf" && ps.Length == 2) { hasStart = true; continue; }
+            if (ps[i].Type.Name == "StringComparison" && i == ps.Length - 1)
+            {
+                var cmp = Model(args[i].Expression).GetConstantValue(args[i].Expression);
+                if (cmp.HasValue && cmp.Value is int v && v == 4) continue;   // StringComparison.Ordinal
+                return Unsupported(inv, $"{form} with a comparison other than the constant StringComparison.Ordinal");
+            }
+            return Unsupported(inv, form);
+        }
+        _usesStrSearch = true;
+        var s = Expr(access.Expression, top: true);
+        var value = Expr(args[0].Expression, top: true);
+        var start = hasStart ? Expr(args[1].Expression, top: true) : "0";
+        switch (m.Name)
+        {
+            case "IndexOf": return isChar ? $"es_str_findc({s}, {value}, {start})" : $"es_str_find({s}, {value}, {start})";
+            case "LastIndexOf": return isChar ? $"es_str_rfindc({s}, {value})" : $"es_str_rfind({s}, {value})";
+            case "Contains": return isChar ? $"(es_str_findc({s}, {value}, 0) >= 0)" : $"(es_str_find({s}, {value}, 0) >= 0)";
+            case "StartsWith": return isChar ? $"(es_str_findc({s}, {value}, 0) == 0)" : $"es_str_starts({s}, {value})";
+            default: return isChar ? $"es_str_endsc({s}, {value})" : $"es_str_ends({s}, {value})";
+        }
+    }
+
     private string Unsupported(SyntaxNode node, string what)
     {
         _diagnostics.Add(Diagnostic.Create(Descriptors.Unsupported, node.GetLocation(), what));
@@ -633,6 +739,7 @@ internal sealed partial class CEmitter
     private INamedTypeSymbol? _thisType;
     private bool _usesAlloc;
     private bool _usesFmt;
+    private bool _usesStrSearch;
     private int _objectTemps;
     private readonly HashSet<ISymbol> _usedSymbols = new(SymbolEqualityComparer.Default);
 
@@ -2932,6 +3039,11 @@ internal sealed partial class CEmitter
             var dargs = inv.ArgumentList.Arguments.Select(a => Argument(a, m)).Prepend($"{d}.env");
             return $"{d}.fn({string.Join(", ", dargs)})";
         }
+
+        if (m.ContainingType?.SpecialType == SpecialType.System_String && !m.IsStatic
+            && m.Name is "IndexOf" or "LastIndexOf" or "Contains" or "StartsWith" or "EndsWith"
+            && inv.Expression is MemberAccessExpressionSyntax strAccess)
+            return StringSearch(inv, m, strAccess);
 
         if (m.ContainingType?.SpecialType == SpecialType.System_String && m.Name == "Substring" && !m.IsStatic
             && inv.Expression is MemberAccessExpressionSyntax subAccess && inv.ArgumentList.Arguments.Count is 1 or 2)

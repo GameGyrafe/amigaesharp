@@ -46,14 +46,22 @@ public static class Os4Vm
     }
 
     /// <summary>The AmigaDOS script the hook executes: markers around the program, its output piped to the debug port.</summary>
-    public static string Autorun(string program, string nonce) =>
+    public static string Autorun(string program, string nonce, string? programArgs = null) =>
         "; E# os4 run harness (esharp run/test --target os4)\n" +
         "FailAt 1000000\n" +
         "Stack 1000000\n" +
         $"{Volume}:estype -t \"ESHARP-BEGIN {nonce}\"\n" +
         "CD RAM:\n" +
-        $"{Volume}:{program} | {Volume}:estype\n" +
+        $"{Volume}:{program}{(string.IsNullOrWhiteSpace(programArgs) ? "" : " " + programArgs.Trim())} | {Volume}:estype\n" +
         $"{Volume}:estype -t \"ESHARP-END {nonce}\"\n";
+
+    /// <summary>
+    /// Why an <c>--args</c> line cannot go into an AmigaDOS script or startup sequence (newlines, redirections, ';' comments, pipes and
+    /// '$' variables would change the script itself), or null when it is fine. Words are split at spaces and "quoted text" stays together.
+    /// </summary>
+    public static string? ProgramArgsError(string? line) =>
+        line != null && line.IndexOfAny(new[] { '\n', '\r', '>', '<', ';', '|', '$' }) >= 0
+            ? "--args: no newlines, redirections, '|', '$' or ';' in the line" : null;
 
     /// <summary>What the serial file says so far about one run.</summary>
     public sealed record SerialState(bool Begun, bool Ended, string Output, bool Shot, string Other = "");
@@ -131,8 +139,9 @@ public static class Os4Vm
         return pids;
     }
 
-    public static (int Exit, string Output) Run(string exe, TimeSpan timeout, string? docker, string? screenshot, string? serialOut = null, bool echo = true, string? input = null)
+    public static (int Exit, string Output) Run(string exe, TimeSpan timeout, string? docker, string? screenshot, string? serialOut = null, bool echo = true, string? input = null, string? programArgs = null)
     {
+        if (ProgramArgsError(programArgs) is { } argsError) return Fail(argsError);
         List<Os4Input.Step>? inputSteps = null;
         if (input != null)
         {
@@ -151,7 +160,7 @@ public static class Os4Vm
         Directory.CreateDirectory(cd);
         File.Copy(exe, Path.Combine(cd, name));
         var nonce = Guid.NewGuid().ToString("N")[..12];
-        File.WriteAllText(Path.Combine(cd, "autorun"), Autorun(name, nonce));
+        File.WriteAllText(Path.Combine(cd, "autorun"), Autorun(name, nonce, programArgs));
         var image = docker ?? Program.DefaultImage(ESharp.Compiler.Targets.Os4);
         if (!BuildEstype(runDir, cd, docker)) return Fail("could not build the estype helper (needs ppc-amigaos-gcc or --docker)");
         var iso = Path.Combine(runDir, "estest.iso");

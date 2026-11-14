@@ -34,7 +34,7 @@ public static class HostRun
     }
 
     /// <returns>exit code of the program (or of the build, with BuildFailed set), and its stdout.</returns>
-    public static (int Exit, string Output, bool BuildFailed) Run(string workDir, string hostSide, IEnumerable<string> sources, TimeSpan timeout)
+    public static (int Exit, string Output, bool BuildFailed) Run(string workDir, string hostSide, IEnumerable<string> sources, TimeSpan timeout, IReadOnlyList<string>? programArgs = null)
     {
         Directory.CreateDirectory(workDir);
         var proj = Path.Combine(workDir, "eshosttest.csproj");
@@ -46,7 +46,7 @@ public static class HostRun
             Console.Error.WriteLine(build.Out);
             return (build.Exit, "", true);
         }
-        var run = Exec("dotnet", new[] { Path.Combine(workDir, "out", "eshosttest.dll") }, timeout);
+        var run = Exec("dotnet", new[] { Path.Combine(workDir, "out", "eshosttest.dll") }.Concat(programArgs ?? Array.Empty<string>()), timeout);
         return (run.Exit, run.Out, false);
     }
 

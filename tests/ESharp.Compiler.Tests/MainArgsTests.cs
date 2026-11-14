@@ -86,6 +86,77 @@ public static class P
     }
 
     [Fact]
+    public void Args_on_the_host_default_to_the_real_command_line_and_HostSet_overrides_it()
+    {
+        try
+        {
+            ESharp.Platform.Args.HostReset();
+            var real = Environment.GetCommandLineArgs().Skip(1).ToArray();
+            Assert.Equal(real.Length, ESharp.Platform.Args.Count);
+            for (var i = 0; i < real.Length; i++) Assert.Equal(real[i], ESharp.Platform.Args.Get(i));
+            Assert.Null(ESharp.Platform.Args.Get(real.Length));
+            ESharp.Platform.Args.HostSet("SEED=42", "auto");
+            Assert.Equal(2, ESharp.Platform.Args.Count);
+            Assert.Equal(42, ESharp.Platform.Args.Int("seed", 0));
+            Assert.True(ESharp.Platform.Args.Has("AUTO"));
+            ESharp.Platform.Args.HostSet();
+            Assert.Equal(0, ESharp.Platform.Args.Count);
+        }
+        finally { ESharp.Platform.Args.HostSet(); }
+    }
+
+    [Fact]
+    public void Test_host_run_passes_the_args_line_to_both_Args_and_main_args()
+    {
+        var dir = Path.Combine(Path.GetTempPath(), "esharp-testargs-" + Guid.NewGuid().ToString("N")[..8]);
+        Directory.CreateDirectory(dir);
+        try
+        {
+            File.WriteAllText(Path.Combine(dir, "P.cs"), @"using ESharp;
+using ESharp.Platform;
+public static class P
+{
+    [EntryPoint]
+    public static void Main(string[] args)
+    {
+        Dos.PutStr(args.Length == Args.Count && args.Length == 2 && args[1] == ""two words"" && Args.Get(1) == ""two words"" && Args.Has(""one"") ? ""ok args agree\n"" : ""FAIL args agree\n"");
+    }
+}
+");
+            var sw = new StringWriter();
+            var saved = Console.Out;
+            int rc;
+            Console.SetOut(sw);
+            try { rc = ESharp.Cli.Program.Test(new[] { dir, "--args", "ONE \"two words\"" }); }
+            finally { Console.SetOut(saved); }
+            Assert.Equal(0, rc);
+            Assert.Contains("ok args agree", sw.ToString());
+            Assert.Contains("TEST PASSED", sw.ToString());
+        }
+        finally { try { Directory.Delete(dir, true); } catch (IOException) { } }
+    }
+
+    [Fact]
+    public void Test_option_args_needs_a_value_and_rejects_script_characters()
+    {
+        var err = new StringWriter();
+        var saved = Console.Error;
+        Console.SetError(err);
+        try
+        {
+            Assert.Equal(1, ESharp.Cli.Program.Test(new[] { ".", "--args" }));
+            Assert.Contains("unknown option '--args'", err.ToString());
+            Assert.Equal(1, ESharp.Cli.Program.Test(new[] { ".", "--args", "a > RAM:x" }));
+            Assert.Contains("--args: no newlines", err.ToString());
+        }
+        finally { Console.SetError(saved); }
+        Assert.Null(ESharp.Cli.Os4Vm.ProgramArgsError("SEED=42 \"two words\""));
+        Assert.NotNull(ESharp.Cli.Os4Vm.ProgramArgsError("a;b"));
+        Assert.NotNull(ESharp.Cli.Os4Vm.ProgramArgsError("a | b"));
+        Assert.Null(ESharp.Cli.Os4Vm.ProgramArgsError(null));
+    }
+
+    [Fact]
     public void Args_line_for_sdl_is_split_with_quotes_kept_together()
     {
         Assert.Equal(new[] { "ONE", "two words", "RC=5" }, ESharp.Cli.SdlRun.SplitCommandLine("ONE \"two words\"   RC=5 "));

@@ -58,7 +58,7 @@ Run options (build options also apply; run is m68k, os4 or sdl):
   --fsuae <path>    FS-UAE executable (or set ESHARP_FSUAE)
   --screenshot <png> Headless only: when the program prints SHOT, save the emulator screen to a PNG (needs xwd)
   --serial <file>   Headless only: write the program's serial output (Trace) to this file, and print it after the run
-  --args <line>     Arguments for the program (Args.Count, Args.Get, Args.Value): ""SEED 42 AUTO"" (m68k and sdl)
+  --args <line>     Arguments for the program (Args.Count, Args.Get, Args.Value): ""SEED 42 AUTO"" (run: m68k, sdl, os4; test: the host and the target)
   --input <script>  Headless only: after SHOT send mouse/keyboard input to the emulator (before the screenshot):
                     ""click X,Y;key 9;key 50+38"" with display pixels and X11 key codes, + holds keys (needs libXtst)
                     os4: the QEMU monitor sends it: click X,Y moves the pointer to X,Y of the screen (from the top-left
@@ -72,6 +72,7 @@ Test options (esharp test; a program prints ""ok NAME"" / ""FAIL NAME"" lines):
   With --target os4 it builds for os4 and boots the AmigaOS 4.1 VM in ESHARP_OS4_VM (QEMU pegasos2, on a throwaway
   overlay, unattended; tools/os4vm/README.md) and compares the same way; --timeout covers the boot (about 10 s).
   With --target sdl it builds for sdl and runs it headless (in the --docker image if given) and compares the same way.
+  --args ""<line>"" gives the same argument line to the host run and the target run (split at spaces, ""quoted text"" kept).
   Exit code is non-zero on any FAIL, crash, build error or host/Amiga difference.
 
 Targets:
@@ -109,7 +110,7 @@ Targets:
         return 1;
     }
 
-    private static int Test(string[] args)
+    internal static int Test(string[] args)
     {
         int timeout = 120;
         string? kickstart = Environment.GetEnvironmentVariable("ESHARP_KICKSTART");
@@ -118,12 +119,14 @@ Targets:
         bool amiga = false, sdl = false, os4 = false;
         var amigaOnly = new List<string>();   // options that only matter with --target m68k
         string path = ".";
+        string? programArgs = null;
         var buildArgs = new List<string>();
         for (var i = 0; i < args.Length; i++)
         {
             switch (args[i])
             {
                 case "--timeout" when i + 1 < args.Length && int.TryParse(args[i + 1], out timeout): i++; break;
+                case "--args" when i + 1 < args.Length: programArgs = args[++i]; break;
                 case "--kickstart" when i + 1 < args.Length: amigaOnly.Add("--kickstart"); kickstart = args[++i]; break;
                 case "--model" when i + 1 < args.Length: amigaOnly.Add("--model"); model = args[++i]; break;
                 case "--fsuae" when i + 1 < args.Length: amigaOnly.Add("--fsuae"); fsuae = args[++i]; break;
@@ -148,6 +151,7 @@ Targets:
             }
         }
 
+        if (Os4Vm.ProgramArgsError(programArgs) is { } testArgsError) return Fail(testArgsError);
         if (SyncAssets(path) is { } assetError) return Fail(assetError);
 
         var files = CollectSources(path);
@@ -161,7 +165,8 @@ Targets:
         var baseDir = Directory.Exists(path) ? path : Path.GetDirectoryName(Path.GetFullPath(path)) ?? ".";
 
         Console.WriteLine("Host:");
-        var host = HostRun.Run(Path.Combine(baseDir, "obj", "host"), repo, files, TimeSpan.FromSeconds(timeout));
+        var host = HostRun.Run(Path.Combine(baseDir, "obj", "host"), repo, files, TimeSpan.FromSeconds(timeout),
+            programArgs == null ? null : SdlRun.SplitCommandLine(programArgs));
         if (host.BuildFailed) return Fail("host build failed");
         Console.Write(host.Output);
         var hostReport = TestReport.Parse(host.Output);
@@ -185,7 +190,7 @@ Targets:
             var saved = Console.Out;
             int runRc;
             Console.SetOut(captured);
-            try { runRc = FsUae.Run(exe, true, TimeSpan.FromSeconds(timeout), kickstart, model, fsuae, null, null); }
+            try { runRc = FsUae.Run(exe, true, TimeSpan.FromSeconds(timeout), kickstart, model, fsuae, null, null, null, programArgs); }
             finally { Console.SetOut(saved); }
             Console.Write(captured.ToString());
             if (runRc != 0) return Fail("the Amiga run failed (see above)");
@@ -208,7 +213,7 @@ Targets:
             buildArgs.Insert(0, path);
             var rc = Build(buildArgs.ToArray(), out var exe);
             if (rc != 0 || exe == null) return Fail("os4 build failed");
-            var (exit, output) = Os4Vm.Run(exe, TimeSpan.FromSeconds(timeout), DockerImage(buildArgs, Targets.Os4), null);
+            var (exit, output) = Os4Vm.Run(exe, TimeSpan.FromSeconds(timeout), DockerImage(buildArgs, Targets.Os4), null, programArgs: programArgs);
             if (exit != 0) return Fail("the os4 run failed (see above)");
             var os4Report = TestReport.Parse(output);
             Console.WriteLine($"OS4: {os4Report.Summary}");
@@ -229,7 +234,8 @@ Targets:
             buildArgs.Insert(0, path);
             var rc = Build(buildArgs.ToArray(), out var exe);
             if (rc != 0 || exe == null) return Fail("sdl build failed");
-            var (exit, output) = SdlRun.Run(exe, true, TimeSpan.FromSeconds(timeout), DockerImage(buildArgs, Targets.Sdl), null, null);
+            var (exit, output) = SdlRun.Run(exe, true, TimeSpan.FromSeconds(timeout), DockerImage(buildArgs, Targets.Sdl), null, null,
+                programArgs: programArgs == null ? null : SdlRun.SplitCommandLine(programArgs));
             var sdlReport = TestReport.Parse(output);
             Console.WriteLine($"SDL: {sdlReport.Summary}" + (exit != 0 ? $", exit code {exit} (crash or error)" : ""));
             if (exit != 0 || sdlReport.Failed > 0) failed = true;
@@ -586,10 +592,10 @@ Targets:
         }
         if (string.Equals(targetName, "os4", StringComparison.OrdinalIgnoreCase))
         {
-            if (programArgs != null) return Fail("--args is not passed to the os4 VM yet (m68k and sdl only)");
+            if (Os4Vm.ProgramArgsError(programArgs) is { } os4ArgsError) return Fail(os4ArgsError);
             var os4Rc = Build(buildArgs.ToArray(), out var os4Exe);
             if (os4Rc != 0 || os4Exe == null) return os4Rc;
-            var (exit, _) = Os4Vm.Run(os4Exe, TimeSpan.FromSeconds(timeout), DockerImage(buildArgs, Targets.Os4), screenshot, serial, input: input);
+            var (exit, _) = Os4Vm.Run(os4Exe, TimeSpan.FromSeconds(timeout), DockerImage(buildArgs, Targets.Os4), screenshot, serial, input: input, programArgs: programArgs);
             return exit;
         }
         if (targetName != "m68k")
@@ -603,7 +609,7 @@ Targets:
 
         var rc = Build(buildArgs.ToArray(), out var exe);
         if (rc != 0 || exe == null) return rc;
-        if (programArgs != null && programArgs.IndexOfAny(new[] { '\n', '\r', '>', '<', ';' }) >= 0) return Fail("--args: no newlines, redirections or ';' in the line");
+        if (Os4Vm.ProgramArgsError(programArgs) is { } argsError) return Fail(argsError);
         return FsUae.Run(exe, headless, TimeSpan.FromSeconds(timeout), kickstart, model, fsuae, screenshot, input, serial, programArgs);
     }
 

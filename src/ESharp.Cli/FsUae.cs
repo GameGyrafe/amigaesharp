@@ -24,6 +24,7 @@ internal static class FsUae
         // Headless runs redirect the program's output to a file and then write a marker, so the
         // host can tell when the program has finished without scraping the screen.
         // AmigaDOS wants the redirection right after the command name, before the program's own arguments.
+        if (Os4Vm.ProgramArgsError(programArgs) is { } argsError) { Console.Error.WriteLine($"esharp: {argsError}"); return 1; }
         var line = string.IsNullOrWhiteSpace(programArgs) ? "" : " " + programArgs.Trim();
         File.WriteAllText(Path.Combine(dh0, "S", "Startup-sequence"), headless
             ? $"dh0:{name} >dh0:out.txt{line}\necho done >dh0:done\n"
