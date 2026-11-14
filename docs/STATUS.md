@@ -88,7 +88,20 @@ compiled with the host gcc and run) and the new `samples/objects` (21 checks), `
   `Args.Int("SEED", fallback)`; `main` keeps `argc`/`argv` only when a program uses them. A Workbench start has no arguments (tool types are not
   read). `esharp run --args "SEED=42 auto"` passes a line to the program in FS-UAE (after the output redirection) and on SDL; not for os4 yet
   (the CLI says so). Host fake: `Args.HostSet(...)`, none by default. Seen on A1200 / Kickstart 3.1 and SDL with `samples/objects`
-  (`2 arguments, first SEED=42, SEED 42, AUTO on`). `Main(string[] args)` is still not accepted (array parameters are not supported).
+  (`2 arguments, first SEED=42, SEED 42, AUTO on`). 
+- **`Main(string[] args)` (issue #66, second part):** the `[EntryPoint]` method may be `void Main()`, `int Main()`, `void Main(string[] args)` or
+  `int Main(string[] args)` (anything else is ES0022). `args` is built at the top of the entry function as a variable-length C array from the same
+  argv words `Args` reads (so `args.Length`, indexing, `foreach` and the Span conversion work; no arguments gives a zero-length array), and
+  ES0011 (array parameters) lets this one parameter through. An `int` result is the return value of C `main`, so it is the AmigaDOS RC on Amiga
+  targets (the C startup code of the toolchain turns it into the process result; not read back, see below) and the process exit code on SDL (seen: code 5). Quoting: the Amiga startup splits at spaces and keeps
+  "quoted text" together (quotes removed); `esharp run --args` on SDL now splits the same way (before it split at every space, so quoted
+  words were broken up; `SdlRun.SplitCommandLine`, unit-tested). Host (dotnet): the program is an ordinary C# `Main(string[] args)` and gets the
+  real command line from the runtime; the `Args` class on the host stays empty unless `Args.HostSet` is called. New `samples/mainargs`
+  (prints the words and returns `RC=n` as the return code). Unit tests (`MainArgsTests`): generated C built with the host gcc and run with no
+  arguments, `one "two words" ""` and `RC` (exit code 7), void and int, plain `Main()` unchanged, `Args` and `args` agreeing, the ES0022
+  signatures. Run on A1200 / Kickstart 3.1 in FS-UAE with `--args 'ONE "two words" RC=5'`: 3 arguments, `two words` kept whole, `rc 5`;
+  with no `--args`: `no arguments`. SDL (esharp-sdl, headless): the same output, `esharp: the program exited with code 5`. Not verified:
+  the numeric RC seen by the Amiga Shell (FS-UAE `run` shows output only), os4/MorphOS/AROS runs, a zero-length VLA on the PowerPC gcc.
 - **Tools and the host:** `esharp run --input "rel DX,DY"` spreads the shorter axis over the steps and the steps add up exactly (it sent
   `dx / steps` per step, so `rel 76,-320` did not move sideways at all); unit-tested, not re-run in the emulator. The analyzer no longer reports
   `Heap.Free` (or other generic methods of E#'s own library) as ES0008 in a host project made by `esharp new`, where the library is an assembly.

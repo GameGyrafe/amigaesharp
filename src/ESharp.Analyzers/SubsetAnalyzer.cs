@@ -94,8 +94,11 @@ public sealed class SubsetAnalyzer : DiagnosticAnalyzer
             _ => (null, null),
         };
         if (parameters == null) return;
+        // static void Main(string[] args) is the one array parameter: the emitter builds it from the command line.
+        var isArgsEntry = c.Node is MethodDeclarationSyntax { Identifier.Text: "Main" } em && em.AttributeLists.SelectMany(l => l.Attributes).Any(a => a.Name.ToString() is "EntryPoint" or "EntryPointAttribute" or "ESharp.EntryPoint" or "ESharp.EntryPointAttribute")
+            && parameters.Parameters.Count == 1 && parameters.Parameters[0].Type is ArrayTypeSyntax { RankSpecifiers.Count: 1, ElementType: PredefinedTypeSyntax { Keyword.Text: "string" } };
         foreach (var p in parameters.Parameters)
-            if (p.Type is ArrayTypeSyntax)
+            if (p.Type is ArrayTypeSyntax && !isArgsEntry)
                 ReportArray(c, p.GetLocation(), $"array parameter '{p.Identifier.Text}'");
         if (returnType is ArrayTypeSyntax)
             ReportArray(c, returnType.GetLocation(), "array return type");

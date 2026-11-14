@@ -158,6 +158,12 @@ public static class EsCompiler
         else if (entries.Count > 1)
             foreach (var e in entries.Skip(1))
                 diagnostics.Add(Diagnostic.Create(Descriptors.MultipleEntryPoints, e.Locations[0]));
+        foreach (var e in entries)
+        {
+            var ok = e.IsStatic && e.ReturnType.SpecialType is SpecialType.System_Void or SpecialType.System_Int32 && !e.IsGenericMethod
+                && (e.Parameters.Length == 0 || CEmitter.IsArgsEntry(e));
+            if (!ok) diagnostics.Add(Diagnostic.Create(Descriptors.BadEntryPoint, e.Locations[0], e.ToDisplayString()));
+        }
     }
 
     private static IEnumerable<MetadataReference> References()
