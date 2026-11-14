@@ -65,6 +65,13 @@ public static class P
     }
 
     [Fact]
+    public void Calling_the_args_entry_point_is_ES0099()
+    {
+        var r = Compile(Prelude + "public static class P { [EntryPoint] public static void Main(string[] args) { if (args.Length > 5) Main(args); } }");
+        Assert.Contains(r.Diagnostics, d => d.Id == "ES0099" && d.GetMessage().Contains("entry point"));
+    }
+
+    [Fact]
     public void Main_with_args_compiles_for_m68k_and_sdl_and_the_sample_runs_on_the_host()
     {
         var path = Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "..", "samples", "mainargs", "MainArgs.cs");

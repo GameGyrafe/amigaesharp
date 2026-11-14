@@ -2864,6 +2864,12 @@ internal sealed partial class CEmitter
             return "0";
         }
 
+        if (IsArgsEntry(m))
+        {
+            Unsupported(inv, "calling the entry point that takes string[] args");
+            return "0";
+        }
+
         if (IsLinqCall(inv, out var linqMethod, out var linqReceiver)) return Linq(inv, linqMethod, linqReceiver);
 
         if (m.ContainingType?.SpecialType == SpecialType.System_String && m.Name == "Equals")
