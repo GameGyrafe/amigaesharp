@@ -33,15 +33,24 @@ language for a retro machine with fast edit-build-run cycles. E# is an unrelated
 shares only that ambition. It reuses no code from Amiga E (whose compiler source is GPL); it is a
 design inspiration only.
 
+## Related projects
+
+- [CopperSharp68k](https://github.com/ilehtoranta/CopperSharp68k) (MIT) takes the other route to C# on the Amiga:
+  an ahead-of-time compiler from compiled .NET IL straight to 68k code, with a managed runtime (garbage
+  collector, exceptions) and a growing part of the .NET 10 class library. Choose it if you want ordinary .NET code
+  on a 68k Amiga. E# instead compiles a checked subset of C# source to C (no runtime), aims at games, and targets
+  the A1200 (68020/AGA), AmigaOS 4 and MorphOS (PowerPC), AROS and an SDL desktop build from the same source.
+
 ## Status
 
 Phases 1 to 3 and most of phase 4 (a card demo) pass on the emulator; nothing has run on real hardware yet. See [docs/STATUS.md](docs/STATUS.md) for what works today and
 [docs/PROJECT_CONTEXT.md](docs/PROJECT_CONTEXT.md) for the design and roadmap.
 
-## Installing (not published yet)
+## Installing
 
-E# will be installable from nuget.org as a .NET tool. **The packages are not published yet**; once the first release
-is out:
+E# is on nuget.org as a .NET tool ([AmigaESharp.Tool](https://www.nuget.org/packages/AmigaESharp.Tool)), with the
+[AmigaESharp.Sdk](https://www.nuget.org/packages/AmigaESharp.Sdk) package for projects; every change merged into main
+publishes a new `0.1.x` release:
 
 ```bash
 dotnet tool install -g AmigaESharp.Tool      # the esharp command
@@ -55,7 +64,7 @@ esharp build --target m68k --docker amigadev/crosstools:m68k-amigaos@sha256:32ec
 fakes, and the subset analyzer) at the tool's own version. The installed tool needs no checkout for `new`, `build`,
 `run`, `test`, `assets`, `addr` and `os4vm`. A checkout is still needed to build the `esharp-amiga-toolchain` and
 `esharp-sdl` images (the pinned m68k image above works without one), and for the scripts in `tools/` other than the
-os4 VM helper. Until the release, pack and try it from a local folder feed:
+os4 VM helper. To try a change before it is released, pack it and install from a local folder feed:
 
 ```bash
 dotnet pack ESharp.sln -c Release -o artifacts/packages -p:Version=0.1.0-local.1
