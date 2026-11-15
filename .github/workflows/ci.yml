@@ -56,13 +56,32 @@ jobs:
           feed=$(pwd)/artifacts/packages
           dotnet tool install AmigaESharp.Tool --tool-path "$work/tool" --version $v --add-source "$feed"
           cd "$work"
-          "$work/tool/esharp.exe" new demo
+          esharp="$work/tool/esharp.exe"
+          # Restore the demo from the local feed (as tools/package-smoke.sh does), not from nuget.org: a published
+          # AmigaESharp.Sdk with another version would otherwise be picked up silently (NU1603).
+          winfeed=$(cygpath -w "$feed")
+          cat > "$work/nuget.config" <<EOF
+          <?xml version="1.0" encoding="utf-8"?>
+          <configuration>
+            <packageSources>
+              <clear />
+              <add key="local" value="$winfeed" />
+              <add key="nuget.org" value="https://api.nuget.org/v3/index.json" />
+            </packageSources>
+          </configuration>
+          EOF
+          test "$("$esharp" --version | tr -d '\r')" = "$v"
+          "$esharp" new demo
+          grep -q "<PackageReference Include=\"AmigaESharp.Sdk\" Version=\"$v\" />" demo/demo.csproj
           cd demo
-          dotnet run | tee run.log
+          dotnet build -nologo 2>&1 | tee build.log
+          dotnet run 2>&1 | tee run.log
           grep -q 'Hello from E#!' run.log
-          "$work/tool/esharp.exe" test
-          "$work/tool/esharp.exe" build --emit-only
+          "$esharp" test 2>&1 | tee test.log
+          "$esharp" build --emit-only 2>&1 | tee emit.log
           test -s obj/m68k/demo.c
+          ! grep -q NU1603 build.log run.log test.log emit.log
+          grep -q "AmigaESharp.Sdk" demo.csproj
   packages:
     # Pack AmigaESharp.Tool and AmigaESharp.Sdk as release.yml does, install them from a local folder feed and use them
     # away from the checkout (tools/package-smoke.sh). Nothing is published.
