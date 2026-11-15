@@ -1,0 +1,9 @@
+# Text files are LF in the working tree on every platform: the committed generated files (Assets.g.cs, ...) are
+# compared byte for byte with what the tools write, and shell scripts must not get CRLF on Windows.
+* text=auto eol=lf
+*.png binary
+*.iff binary
+*.wav binary
+*.bat eol=crlf
+*.cmd eol=crlf
+*.pdf binary

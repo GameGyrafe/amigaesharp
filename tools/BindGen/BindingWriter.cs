@@ -93,7 +93,7 @@ internal static class BindingWriter
         sb.AppendLine("}");
         sb.AppendLine("#endif");
         if (unknown > 0) sb.AppendLine($"// {unknown} type(s) not in the type map, marked above.");
-        return sb.ToString();
+        return sb.ToString().Replace("\r\n", "\n");   // LF on every platform, like the committed bindings
     }
 
     private static string Registers(Func f)

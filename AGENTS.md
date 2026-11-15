@@ -54,7 +54,7 @@ dotnet run --project src/ESharp.Cli -- run samples/gui --docker <image> --headle
 AROS_HOSTED=<extracted hosted AROS dir> tools/aros-hosted/aros-hosted.sh gui --shot shot.png --input "click 208,74;click 47,37"   # same sample on hosted AROS (needs a --target aros build)
 ESHARP_OS4_VM=<AmigaOS 4.1 VM dir> dotnet run --project src/ESharp.Cli -- test samples/linq --target os4 --docker esharp-amiga-toolchain   # host vs AmigaOS 4.1 in QEMU pegasos2 (overlay boot, ~15 s; tools/os4vm/README.md)
 ESHARP_OS4_VM=<AmigaOS 4.1 VM dir> dotnet run --project src/ESharp.Cli -- run samples/cards --target os4 --docker esharp-amiga-toolchain --screenshot shot.png   # screendump after SHOT; --trace --serial f for Trace lines; no --input yet
-ESHARP_OS4_VM=<AmigaOS 4.1 VM dir> python3 -I tools/os4vm/os4vm.py check|start|install-hook|remove-hook   # VM helpers: start = VNC 127.0.0.1:5901 on an overlay; the hook is a one-time change to amiga.img (already installed on Dave's VM)
+ESHARP_OS4_VM=<AmigaOS 4.1 VM dir> python3 -I tools/os4vm/os4vm.py check|start|install-hook|remove-hook   # VM helpers: start = VNC 127.0.0.1:5901 on an overlay; the hook is a one-time change to amiga.img (a one-time change to your own VM image)
 dotnet run --project tools/BindGen -- compare <aros include dir> <fd dir> lowlevel asl   # AROS headers vs the m68k toolchain's fd files (ndk/lib/fd); fd versions are right for the classic OS
 tools/BindGen/layouts.sh                                  # re-measure struct offsets (tools/BindGen/structs.txt) for m68k and AROS into src/ESharp.Platform/Layout.g.cs (docker)
 tools/hwpack/build.sh <m68k image>                       # build the real-hardware test pack into obj/hwtest (run with Execute RunAll on the Amiga)
@@ -87,12 +87,12 @@ Requires the .NET 10 SDK (`global.json`). `src/ESharp.Analyzers` stays on `netst
 
 ## Rules
 
-- Minimum system is an Amiga 1200: 68020, AGA, 2 MB chip RAM, Kickstart/AmigaOS 3.1 (v40), installed on a hard disk (Dave's decision). Open libraries with version 39 or higher; 68020 instructions and AGA may be assumed on classic builds; no support for A500/A600, 68000 or Kickstart 1.x/2.x. Planned: PowerPC (AmigaOS 4, MorphOS), RTG cards, AROS.
+- Minimum system is an Amiga 1200: 68020, AGA, 2 MB chip RAM, Kickstart/AmigaOS 3.1 (v40), installed on a hard disk (the maintainer's decision). Open libraries with version 39 or higher; 68020 instructions and AGA may be assumed on classic builds; no support for A500/A600, 68000 or Kickstart 1.x/2.x. Planned: PowerPC (AmigaOS 4, MorphOS), RTG cards, AROS.
 - Symbols: `AMIGA` is defined for every Amiga-family target; `M68K`/`PPC` and `AMIGAOS3`/`AMIGAOS4`/`MORPHOS` narrow it. The desktop target `sdl` defines `SDL` (not `AMIGA`); the dotnet test host defines `HOST`. Platform code is `#if AMIGA` / `#elif SDL` / `#else` (host fake); Amiga-only classes (Gui, Asl, Iff, Fonts, Joystick and the raw library bindings) are left out on SDL, and using them is error ES0102. Nothing in the front end or platform contracts may assume a single target. The 68020 A1200 is the performance baseline (the 68000 no longer is).
 - Test the behaviour, not just the text: new emitter features need a test that compiles the generated C and runs it (see `CEmitterTests`).
 - Never commit Kickstart ROMs or other copyrighted Amiga files (`*.rom` is git-ignored). Never copy code from Amiga E (its compiler is GPL); design inspiration only. Avoid GPL/LGPL in anything linked into games.
 - Licence is MIT, copyright Gyrafe Software. The README must keep crediting Wouter van Oortmerssen's Amiga E.
-- Develop on the designated feature branch; do not push to `main` or open pull requests unless Dave asks.
+- Develop on the designated feature branch; do not push to `main` or open pull requests unless the maintainer asks.
 - Generated output (`obj/`, `bin/`, `samples/*/obj`) is ignored; do not commit it.
 
 ## Running the emulator
@@ -101,19 +101,19 @@ Requires the .NET 10 SDK (`global.json`). `src/ESharp.Analyzers` stays on `netst
 (`--kickstart <rom>` or `ESHARP_KICKSTART`; `--fsuae` / `ESHARP_FSUAE` for the executable). FS-UAE
 cannot run the PowerPC builds. `--target os4` runs in an AmigaOS 4.1 QEMU pegasos2 VM instead
 (`ESHARP_OS4_VM`, `tools/os4vm/README.md`): every run is a fresh boot on a throwaway overlay, so never boot `amiga.img`
-by hand while a run is going (one VM at a time; the CLI refuses then). The AmigaOS files stay in Dave's VM dir: never copy
+by hand while a run is going (one VM at a time; the CLI refuses then). The OS4 VM is the contributor's own and its AmigaOS files stay in its own directory: never copy
 them into the repo or any output. MorphOS and PowerPC real hardware: not done yet.
 
-## Dev host (Linux, shared)
+## Dev host (Linux, possibly shared)
 
-Dave's Linux machine runs other agents' build and test gates, so: check free memory before heavy
-work, run long jobs (full toolchain image builds, big test runs) in their own tmux session, and do
-not install packages or change the host without asking Dave. Docker runs without sudo. fs-uae and
-xvfb are installed. This repo's persistent clone is the main E# dev checkout; use scratch
-directories only for throwaway experiments.
+If the machine is shared with other people or agents running their own build and test gates: check free
+memory before heavy work, run long jobs (full toolchain image builds, big test runs) in their own tmux
+session, and do not install packages or change the host without asking its owner. Docker is assumed to run
+without sudo. fs-uae and xvfb are needed for headless emulator runs. If this repo's persistent clone is the main
+dev checkout, use scratch directories only for throwaway experiments.
 
-Kickstart ROMs: Dave keeps them outside any repo, and this file deliberately does not give the
-path. Ask Dave for the location, or use `ESHARP_KICKSTART` if he has set it. Read ROMs in place,
+Kickstart ROMs: the maintainer keeps theirs outside any repo, and this file deliberately does not give a
+path. Ask the machine's owner for the location, or use `ESHARP_KICKSTART` if it is set. Read ROMs in place,
 quote the path, never copy them into the repo, a branch, an artifact or a message. The test matrix
 is Kickstart 3.1 (40.069) on `--model A1200` (default). Kickstart 2.04 / A500+ is no longer part of the matrix.
 

@@ -212,8 +212,8 @@ public class Os4VmTests
         var a = Os4Vm.QemuArgs("/vm", "/tmp/x/overlay.qcow2", "/o/estest.iso", "/o/serial.log", "/tmp/x/mon.sock");
         string After(string opt) => a[a.IndexOf(opt) + 1];
         Assert.Equal("pegasos2", After("-M"));
-        Assert.Equal("/vm/bboot", After("-kernel"));
-        Assert.Equal("/vm/Kickstart.zip", After("-initrd"));
+        Assert.Equal("/vm/bboot", After("-kernel").Replace('\\', '/'));
+        Assert.Equal("/vm/Kickstart.zip", After("-initrd").Replace('\\', '/'));
         Assert.Equal("serial", After("-append"));
         Assert.Equal("none", After("-display"));
         Assert.Equal("file:/o/serial.log", After("-serial"));

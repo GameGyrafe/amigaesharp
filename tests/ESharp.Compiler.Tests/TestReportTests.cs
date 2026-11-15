@@ -50,7 +50,7 @@ public class TestReportTests
     {
         var text = HostRun.ProjectText("/repo", new[] { "/p/A.cs" });
         Assert.Contains("HOST", text);
-        Assert.Contains("/p/A.cs", text);
+        Assert.Contains("/p/A.cs", text.Replace('\\', '/'));   // a rooted path gets a drive letter and backslashes on Windows
         Assert.Contains("ESharp.Target.Host.csproj", text);
     }
 

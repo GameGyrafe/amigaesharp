@@ -83,6 +83,7 @@ public static class P
         var run = Process.Start(psi)!;
         var output = run.StandardOutput.ReadToEnd();
         run.WaitForExit();
-        return (run.ExitCode, output);
+        // A native Windows C runtime writes text-mode CRLF; the expected texts use LF.
+        return (run.ExitCode, output.Replace("\r\n", "\n"));
     }
 }
