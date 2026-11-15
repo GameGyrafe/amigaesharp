@@ -57,7 +57,8 @@ ESHARP_OS4_VM=<AmigaOS 4.1 VM dir> dotnet run --project src/ESharp.Cli -- run sa
 ESHARP_OS4_VM=<AmigaOS 4.1 VM dir> python3 -I tools/os4vm/os4vm.py check|start|install-hook|remove-hook   # VM helpers: start = VNC 127.0.0.1:5901 on an overlay; the hook is a one-time change to amiga.img (already installed on Dave's VM)
 dotnet run --project tools/BindGen -- compare <aros include dir> <fd dir> lowlevel asl   # AROS headers vs the m68k toolchain's fd files (ndk/lib/fd); fd versions are right for the classic OS
 tools/BindGen/layouts.sh                                  # re-measure struct offsets (tools/BindGen/structs.txt) for m68k and AROS into src/ESharp.Platform/Layout.g.cs (docker)
-tools/hwpack/build.sh <m68k image>                       # build the real-hardware test pack into obj/hwtest (run with Execute RunAll on the Amiga)
+tools/hwpack/build.sh <m68k image>                       # build the real-hardware test pack into obj/hwtest (run with Execute RunAll on the Amiga; README.txt in the pack)
+tools/hwpack/run-emulated.sh obj/hwtest --rom <rom> --wb <Workbench 3.1 disk .adf> [--profile fast8]   # the whole pack in FS-UAE (A1200, accuracy 1, 2 MB chip), prints SUMMARY.txt
 docker build -t esharp-amiga-toolchain docker && docker/smoke-test.sh    # combined toolchain image
 docker build -t esharp-sdl docker/sdl && docker/sdl/smoke-test.sh   # gcc + static SDL 3.4.20 (Linux x86-64) for the sdl target; offscreen/dummy drivers
 dotnet run --project src/ESharp.Cli -- run samples/cards --target sdl --docker esharp-sdl --headless --input "click 60,145;key 9" --screenshot shot.png   # sdl, headless in the image: --input X,Y are the game's screen pixels (keys are X11 codes, as for FS-UAE), replayed after SHOT; the shot is the game's own frame

@@ -1,0 +1,38 @@
+.KEY label/A,prog/A,expected/A,args
+.BRA {
+.KET }
+; Runs one program of the pack: RunOne LABEL PROGRAM EXPECTED [ARGUMENTS]. Called by RunAll; you can also use it by hand,
+; for instance to run just the programs that RunAll did not reach after a crash:  Execute RunOne cards cards 15
+; ARGUMENTS is one quoted string (inside it a quote is written *") that the program gets as its AmigaDOS arguments, for instance
+;   Execute RunOne objects-args objects 21 "SEED=42 auto"
+; EXPECTED is the number of ok lines an emulated A1200 gives, or the word text for a program that prints no ok lines.
+FailAt 1000
+If EXISTS T:hwpack-resume
+  If EXISTS results/{label}.sum
+    Echo "{label}: already done, skipped"
+    Skip finish
+  EndIf
+EndIf
+Echo "{label}"
+Echo "started {label}" >results/PROGRESS.txt
+If EXISTS results/{label}.rc
+  Delete results/{label}.rc QUIET
+EndIf
+{prog} >results/{label}.txt {args}
+If WARN
+  Echo "{label}: return code 5 or higher (a failure, or a crash that was caught): see results/{label}.txt <-- CHECK" >results/{label}.rc
+EndIf
+Echo "{label} finished:" >>results/TIMES.txt
+Date >>results/TIMES.txt
+Summary {label} results/{label}.txt {expected} >results/{label}.sum
+If WARN
+  Echo "{label}" >>results/FLAGS.txt
+EndIf
+Type results/{label}.sum
+Type results/{label}.sum >>SUMMARY.txt
+If EXISTS results/{label}.rc
+  Echo "{label}" >>results/FLAGS.txt
+  Type results/{label}.rc
+  Type results/{label}.rc >>SUMMARY.txt
+EndIf
+Lab finish
