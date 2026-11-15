@@ -1,79 +1,104 @@
-; E# hardware test pack. Run from this drawer:  Execute RunAll
+; E# hardware test pack. Run from this drawer:  Execute RunAll        (after a crash and reset: Execute RunAll RESUME)
 ; (AmigaDOS comments start with a semicolon at the beginning of a line only.)
-; Writes one file per program into results/ and a summary in SUMMARY.txt.
-; Self-checking programs print "ok name" or "FAIL name". screen, aga, assets, rtg, sound, cards and rummy
-; also show a picture or play sound: look and listen (see README.txt), press Esc or wait.
+; For every program: results/NAME.txt (its output), results/NAME.sum (its ok/FAIL counts) and a line in SUMMARY.txt.
+; results/PROGRESS.txt names the program that was started last, so a crash or hang can be pinned on one program.
+; Programs that show a picture or play sound are unattended too: look and listen (README.txt), press Esc or wait.
+.KEY resume/S
+.BRA {
+.KET }
 
-FailAt 21
-Echo "E# hardware test pack" >SUMMARY.txt
-Type BUILD >>SUMMARY.txt
-Echo "" >>SUMMARY.txt
-hwinfo >results/hwinfo.txt
-Type results/hwinfo.txt >>SUMMARY.txt
-Echo "" >>SUMMARY.txt
+FailAt 1000
+Stack 16000
+If "{resume}" EQ "RESUME"
+  Echo "" >T:hwpack-resume
+  Echo "" >>SUMMARY.txt
+  Echo "--- resumed run ---" >>SUMMARY.txt
+Else
+  If EXISTS T:hwpack-resume
+    Delete T:hwpack-resume QUIET
+  EndIf
+  If EXISTS results/PROGRESS.txt
+    Delete results/#? QUIET
+  EndIf
+  Echo "E# hardware test pack" >SUMMARY.txt
+  Type BUILD >>SUMMARY.txt
+  Date >>SUMMARY.txt
+  Echo "" >>SUMMARY.txt
+  Echo "hwinfo (machine report)"
+  hwinfo >results/hwinfo.txt
+  Type results/hwinfo.txt
+  Type results/hwinfo.txt >>SUMMARY.txt
+  Echo "" >>SUMMARY.txt
+  Echo "Programs (ok / FAIL / skip counts; an arrow at the end of a line marks anything to look at):" >>SUMMARY.txt
+EndIf
+Echo "started:" >>results/TIMES.txt
+Date >>results/TIMES.txt
 
-Echo "hello"
-hello >results/hello.txt
-Echo "phase2"
-phase2 >results/phase2.txt
-Echo "memory"
-memory >results/memory.txt
-Echo "generics"
-generics >results/generics.txt
-Echo "properties"
-properties >results/properties.txt
-Echo "operators"
-operators >results/operators.txt
-Echo "language"
-language >results/language.txt
-Echo "collections"
-collections >results/collections.txt
-Echo "inherit"
-inherit >results/inherit.txt
-Echo "lambdas"
-lambdas >results/lambdas.txt
-Echo "linq"
-linq >results/linq.txt
-Echo "refs"
-refs >results/refs.txt
-Echo "screen (a card picture appears for a few seconds)"
-screen >results/screen.txt
-Echo "aga (a 256 colour picture appears for a few seconds)"
-aga >results/aga.txt
-Echo "assets (dithered gradients and a badge appear for a few seconds; a short beep)"
-assets >results/assets.txt
-Echo "rtg"
-rtg >results/rtg.txt
-Echo "sound (you should hear tones)"
-sound >results/sound.txt
-Echo "controls (timer and joystick: move the stick in port 1 if you like)"
-controls >results/controls.txt
-Echo "keys (a blank screen: press A within 10 seconds)"
-keys >results/keys.txt
-Echo "dates (dates and case-insensitive text)"
-dates >results/dates.txt
-Echo "fonts (text in topaz and, if installed, a disk font)"
-fonts >results/fonts.txt
-Echo "iff (writes and reads back an IFF file in RAM:)"
-iff >results/iff.txt
-Echo "asl (a file requester opens: click Cancel, or pick a file and OK)"
-Echo >RAM:asl-open x
-asl >results/asl.txt
-Delete RAM:asl-open QUIET
-Echo "gui (a window opens on Workbench: click Hello, then the close gadget at its top left)"
-gui >results/gui.txt
-Echo "names (E# classes named like system structs)"
-names >results/names.txt
-Echo "trace (writes a few lines to the serial port: a terminal at 9600 baud shows them; the screen shows one line)"
-trace >results/trace.txt
-Echo "timing (frame timing: a second of vertical blanks)"
-timing >results/timing.txt
-Echo "cards (play a round; Esc quits, or leave it for 10 seconds)"
-cards >results/cards.txt
-Echo "rummy (play a turn; Esc quits, or leave it for 10 seconds)"
-rummy >results/rummy.txt
+Execute RunOne hello hello text
+Execute RunOne phase2 phase2 32
+Execute RunOne memory memory 19
+Execute RunOne generics generics 24
+Execute RunOne properties properties 18
+Execute RunOne operators operators 20
+Execute RunOne language language 39
+Execute RunOne collections collections 20
+Execute RunOne inherit inherit 24
+Execute RunOne lambdas lambdas 16
+Execute RunOne linq linq 37
+Execute RunOne refs refs 18
+Execute RunOne patterns patterns 23
+Execute RunOne objects objects 21
+Echo "(objects-args: the same program with AmigaDOS arguments)"
+Execute RunOne objects-args objects 21 "SEED=42 auto"
+Echo "(mainargs: prints its arguments and ends with return code 3)"
+Execute RunOne mainargs mainargs text "ONE *"two words*" RC=3"
+Execute RunOne names names 12
+Execute RunOne dates dates 19
+Echo "(interrupts: a vertical-blank server counts frames)"
+Execute RunOne interrupts interrupts 14
+Echo "(trace: also writes 9 lines to the serial port)"
+Execute RunOne trace trace text
+Echo "(timing: a second of vertical blanks)"
+Execute RunOne timing timing 10
+Echo "(fonts: text in topaz and, if installed, a disk font)"
+Execute RunOne fonts fonts 8
+Echo "(iff: writes and reads back an IFF file in RAM:)"
+Execute RunOne iff iff 10
+Echo "(controls: timer and joystick: move the stick in port 1 if you like)"
+Execute RunOne controls controls 12
+Echo "(keys: a blank screen: press A within 10 seconds, or wait)"
+Execute RunOne keys keys 8
+Echo "(asl: allocation checks only; the requester is a by-eye test, see README.txt)"
+Execute RunOne asl asl 3
+Echo "(screen: a card picture appears for a few seconds)"
+Execute RunOne screen screen 23
+Echo "(aga: a 256 colour picture appears for a few seconds)"
+Execute RunOne aga aga 6
+Echo "(assets: dithered gradients and a badge appear; a short beep)"
+Execute RunOne assets assets 17
+Execute RunOne rtg rtg 5
+Echo "(sound: you should hear tones)"
+Execute RunOne sound sound 21
+Echo "(dbuffer: a moving bar flips between two buffers for a few seconds)"
+Execute RunOne dbuffer dbuffer 30
+Echo "(textspeed: a screen of text, then a speed note)"
+Execute RunOne textspeed textspeed 1
+Echo "(cards: a round of higher/lower; Esc quits, or leave it for about 10 seconds)"
+Execute RunOne cards cards 15
+Echo "(rummy: a game of rummy; Esc quits, or leave it for about 10 seconds)"
+Execute RunOne rummy rummy 28
 
-Echo "Lines with FAIL (nothing listed below is good):" >>SUMMARY.txt
-Search results ALL "FAIL " QUIET >>SUMMARY.txt
+Echo "finished:" >>results/TIMES.txt
+Date >>results/TIMES.txt
 Echo "" >>SUMMARY.txt
-Echo "Done. Send SUMMARY.txt, the results drawer and the answers in README.txt (section 3) back."
+Echo "Start and finish times:" >>SUMMARY.txt
+Type results/TIMES.txt >>SUMMARY.txt
+Echo "" >>SUMMARY.txt
+If EXISTS results/FLAGS.txt
+  Echo "Programs with a FAIL line, no output, a return code of 5 or more, or a different ok count (see their lines above):" >>SUMMARY.txt
+  Type results/FLAGS.txt >>SUMMARY.txt
+Else
+  Echo "Every program printed the emulator's ok count and no FAIL line." >>SUMMARY.txt
+EndIf
+Echo "" >>SUMMARY.txt
+Echo "Done. Send SUMMARY.txt, the results drawer and the answers in README.txt (section 4) back."

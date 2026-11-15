@@ -75,6 +75,7 @@ public static class Program
         Library("graphics.library");
         Library("intuition.library");
         Library("dos.library");
+        Library("workbench.library");
 #endif
         Dos.PutStr("done\n");
     }
