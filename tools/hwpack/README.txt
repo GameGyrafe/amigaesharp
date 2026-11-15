@@ -25,7 +25,9 @@ in an emulator. Your run is the first on real hardware.
    with "return code 5 or higher"). If the machine guru-meditates or hangs, reset it, look at
    results/PROGRESS.txt (it names the program that was started last: that is the one that crashed), CD back
    into this drawer and type  Execute RunAll RESUME  to carry on after the programs that already finished
-   (their results are kept). To run one program again by hand:  Execute RunOne cards cards 15
+   (their results are kept). The program that was running at the crash is NOT run again: it is listed in
+   SUMMARY.txt and results/FLAGS.txt as crashed, with the RunOne line to try it by hand. To run one program
+   again by hand (also after a RESUME run):  Execute RunOne cards cards 15
 
    Time: in an emulator the whole run is about three minutes (the sound, keys, cards, rummy and
    screen programs wait on purpose); a real machine may be a bit slower or faster.

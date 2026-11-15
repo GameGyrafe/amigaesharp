@@ -88,6 +88,9 @@ Execute RunOne cards cards 15
 Echo "(rummy: a game of rummy; Esc quits, or leave it for about 10 seconds)"
 Execute RunOne rummy rummy 28
 
+If EXISTS T:hwpack-resume
+  Delete T:hwpack-resume QUIET
+EndIf
 Echo "finished:" >>results/TIMES.txt
 Date >>results/TIMES.txt
 Echo "" >>SUMMARY.txt
