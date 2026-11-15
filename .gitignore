@@ -431,3 +431,7 @@ FodyWeavers.xsd
 *.rom
 *.ROM
 roms/
+
+# AROS nightly archives (never committed)
+AROS-*.tar.bz2
+*.tar.bz2
