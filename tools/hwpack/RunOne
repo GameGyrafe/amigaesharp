@@ -12,9 +12,18 @@ If EXISTS T:hwpack-resume
     Echo "{label}: already done, skipped"
     Skip finish
   EndIf
+  If EXISTS results/{label}.run
+    Echo "{label}: was running when the machine crashed; NOT run again. Run it by hand later: Execute RunOne {label} {prog} {expected} <-- CHECK" >results/{label}.sum
+    Type results/{label}.sum
+    Type results/{label}.sum >>SUMMARY.txt
+    Echo "{label}" >>results/FLAGS.txt
+    Delete results/{label}.run QUIET
+    Skip finish
+  EndIf
 EndIf
 Echo "{label}"
 Echo "started {label}" >results/PROGRESS.txt
+Echo "" >results/{label}.run
 If EXISTS results/{label}.rc
   Delete results/{label}.rc QUIET
 EndIf
@@ -22,6 +31,7 @@ EndIf
 If WARN
   Echo "{label}: return code 5 or higher (a failure, or a crash that was caught): see results/{label}.txt <-- CHECK" >results/{label}.rc
 EndIf
+Delete results/{label}.run QUIET
 Echo "{label} finished:" >>results/TIMES.txt
 Date >>results/TIMES.txt
 Summary {label} results/{label}.txt {expected} >results/{label}.sum
