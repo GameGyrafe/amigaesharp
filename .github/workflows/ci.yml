@@ -5,6 +5,10 @@ on:
     branches: [main]
   pull_request:
 
+# Read-only by default; a job that needs more says so itself.
+permissions:
+  contents: read
+
 jobs:
   test:
     runs-on: ubuntu-latest
@@ -19,6 +23,46 @@ jobs:
           sudo apt-get update -qq
           sudo apt-get install -y -qq clang
           ESHARP_TEST_CC=clang dotnet test --configuration Release
+  windows:
+    # #11: the dotnet test run, the emit-only builds and a package round trip on Windows. No Docker or FS-UAE here.
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+      - name: Line ending setting (autocrlf is true on the runner by default)
+        run: git config core.autocrlf
+        continue-on-error: true
+      - run: dotnet test --configuration Release
+      - name: Emit-only builds, host test run, tree stays clean
+        shell: bash
+        run: |
+          dotnet run --project src/ESharp.Cli -- build samples/hello --emit-only
+          dotnet run --project src/ESharp.Cli -- build samples/cards --emit-only
+          dotnet run --project src/ESharp.Cli -- test samples/linq | tee linq.log
+          ! grep -q FAIL linq.log
+          rm linq.log
+          git status --porcelain
+          test -z "$(git status --porcelain)"
+      - name: Pack, install the tool from the local folder, esharp new, dotnet run, esharp test
+        shell: bash
+        run: |
+          v=0.0.0-ci.${{ github.run_number }}
+          dotnet pack ESharp.sln --configuration Release --output artifacts/packages -p:Version=$v
+          work=$(mktemp -d)
+          export NUGET_PACKAGES="$work/packages" DOTNET_CLI_TELEMETRY_OPTOUT=1 DOTNET_NOLOGO=1
+          unset ESHARP_ROOT ESHARP_REPO
+          feed=$(pwd)/artifacts/packages
+          dotnet tool install AmigaESharp.Tool --tool-path "$work/tool" --version $v --add-source "$feed"
+          cd "$work"
+          "$work/tool/esharp.exe" new demo
+          cd demo
+          dotnet run | tee run.log
+          grep -q 'Hello from E#!' run.log
+          "$work/tool/esharp.exe" test
+          "$work/tool/esharp.exe" build --emit-only
+          test -s obj/m68k/demo.c
   packages:
     # Pack AmigaESharp.Tool and AmigaESharp.Sdk as release.yml does, install them from a local folder feed and use them
     # away from the checkout (tools/package-smoke.sh). Nothing is published.
