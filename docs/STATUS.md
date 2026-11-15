@@ -1068,5 +1068,6 @@ and runs it in the image.
   interrupts 14, names 12, iff 10, timing 10, controls 9, fonts 8, rtg 6 (+1 known FAIL), aga 3, textspeed 1; hello, hwinfo, mainargs and trace print no ok
   lines and ran to completion. These equal the counts of the stopgap run on the same nightly outside the image. `cards --shot` with `--input "click 400,300"`:
   the screenshot shows the table, cards and sprite.
-- **Not verified:** the image built from the SourceForge download (only the URL answering and the local-archive path were exercised), gui, asl and keys
-  in the image, a different nightly date.
+- **Default build (no `--build-context`, `docker build --no-cache -t ... docker/aros-hosted`):** built from the SourceForge download (about 4.5 minutes,
+  the sha256 check printed OK); the smoke test against that image passes (hello prints `Hello from E#!`, 0 traps, image tree unpatched).
+- **Not verified:** gui, asl and keys in the image, a different nightly date.
