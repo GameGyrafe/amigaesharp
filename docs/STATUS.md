@@ -1051,3 +1051,23 @@ Not verified: sound was not audible (no OpenAL device in the emulator; only Busy
 - **Seen** (`esharp test samples/objects --args "SEED=42 auto"`, 21 ok, 0 FAIL, host agrees with the target): m68k on A1200 / Kickstart 3.1 in
   FS-UAE, sdl (esharp-sdl, headless) and os4 (AmigaOS 4.1 QEMU VM, `--args` in the harness script). The string search methods: a scratch program
   of 7 checks agrees between host and m68k. Not verified: `--args` with quoted words in the os4 VM, os4/MorphOS string search runs, AROS (no hosted AROS available).
+
+## Hosted AROS in a Docker image (issue #75)
+
+`docker/aros-hosted` builds `esharp-aros-hosted`: debian bookworm-slim (by digest) with Xvfb, xwd, python3, libx11 and libXtst, and the AROS
+x86-64 hosted nightly 20261114 (sha256 checked at build; build args `AROS_DATE` and `AROS_SHA256`; `--build-context archive=<folder>` builds from a
+local archive because SourceForge rotates nightlies; the archive is git-ignored). AHI's void audio mode is the only audio mode. `tools/aros-hosted/aros-hosted.sh
+<sample> --docker esharp-aros-hosted [--shot] [--input] [--wait] [--log]` mounts the repo read-only and copies the image's pristine AROS tree for each run, so
+`S:Startup-Sequence` is never patched in place; the `AROS_HOSTED=<dir>` path still works. `docker/aros-hosted/smoke-test.sh` builds `samples/hello` for aros
+and runs it in the image.
+
+- **Verified (main 31c0dd7 plus this change, image built from the local archive):** smoke test passes (hello prints `Hello from E#!`, 0 traps, image tree
+  unpatched). Every sample except gui, asl and keys (33 of them) built with `--target aros --docker esharp-amiga-toolchain` and run in the image: 0 traps, no
+  FAIL apart from the known rtg `the native screen is not RTG`. ok counts: language 39, linq 37, phase2 32, rummy 31, dbuffer 30, generics 24, inherit 24,
+  patterns 23, screen 23, objects 21, sound 21, collections 20, operators 20, dates 19, memory 19, properties 18, refs 18, assets 17, cards 16, lambdas 16,
+  interrupts 14, names 12, iff 10, timing 10, controls 9, fonts 8, rtg 6 (+1 known FAIL), aga 3, textspeed 1; hello, hwinfo, mainargs and trace print no ok
+  lines and ran to completion. These equal the counts of the stopgap run on the same nightly outside the image. `cards --shot` with `--input "click 400,300"`:
+  the screenshot shows the table, cards and sprite.
+- **Default build (no `--build-context`, `docker build --no-cache -t ... docker/aros-hosted`):** built from the SourceForge download (about 4.5 minutes,
+  the sha256 check printed OK); the smoke test against that image passes (hello prints `Hello from E#!`, 0 traps, image tree unpatched).
+- **Not verified:** gui, asl and keys in the image, a different nightly date.

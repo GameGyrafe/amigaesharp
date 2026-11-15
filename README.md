@@ -132,6 +132,14 @@ dotnet run --project src/ESharp.Cli -- run samples/cards --target sdl --docker e
 dotnet run --project src/ESharp.Cli -- test samples/cards --target sdl --docker esharp-sdl  # headless: host and SDL agree
 ```
 
+The `aros` target runs on hosted AROS x86-64 (AROS as a Linux process, headless under Xvfb) in a pinned image:
+
+```bash
+docker build -t esharp-aros-hosted docker/aros-hosted   # downloads the AROS nightly, checks its sha256 (docker/aros-hosted/README.md)
+dotnet run --project src/ESharp.Cli -- build samples/cards --target aros --docker esharp-amiga-toolchain
+tools/aros-hosted/aros-hosted.sh cards --docker esharp-aros-hosted --shot shot.png --input "click 400,300"
+```
+
 | Target | Symbols | Runs on | Status |
 |---|---|---|---|
 | `m68k` (default) | `AMIGA M68K AMIGAOS3` | A1200 / Kickstart 3.1+ (FS-UAE) | runs in the emulator; real hardware not tried |
