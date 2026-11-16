@@ -702,12 +702,15 @@ internal sealed partial class CEmitter
             result.AppendLine("#endif");
             result.AppendLine();
         }
-        if (_natives.Contains("es_domethod"))
+        if (_natives.Contains("es_domethod") || _natives.Contains("es_boopsi_prepare"))
         {
+            // es_boopsi_prepare runs at the first BoopsiObject.Create (on the program's own task), so the AROS probe below never
+            // runs for the first time inside a hook on another task.
             // DoMethodA is not a library vector: amiga.lib (m68k), a macro (AROS, MorphOS) or the intuition interface (AmigaOS 4).
             result.AppendLine("#include <proto/intuition.h>");
             result.AppendLine("#if defined(__amigaos4__)");
-            result.AppendLine("static inline uintptr_t es_domethod(void *obj, void *msg) { return (uintptr_t)IDoMethodA((Object *)obj, (Msg)msg); }");
+            result.AppendLine("static inline __attribute__((unused)) uintptr_t es_domethod(void *obj, void *msg) { return (uintptr_t)IDoMethodA((Object *)obj, (Msg)msg); }");
+            result.AppendLine("static inline __attribute__((unused)) void es_boopsi_prepare(void) { }");
             result.AppendLine("#elif defined(__AROS__)");
             // The AROS SDK's DoMethodA macro reads the class pointer just before the object through the SDK's struct _Object, but
             // newer AROS builds align that struct (SMP), so the class pointer may sit further back. Find out once where it is with an
@@ -715,9 +718,9 @@ internal sealed partial class CEmitter
             result.AppendLine("#include <intuition/classes.h>");
             result.AppendLine("#include <utility/hooks.h>");
             result.AppendLine("#include <proto/dos.h>");
-            result.AppendLine("static IPTR es_probe_dispatch(struct Hook *h, Object *o, Msg msg) { return CALLHOOKPKT((struct Hook *)((Class *)h)->cl_Super, o, msg); }");
+            result.AppendLine("static __attribute__((unused)) IPTR es_probe_dispatch(struct Hook *h, Object *o, Msg msg) { return CALLHOOKPKT((struct Hook *)((Class *)h)->cl_Super, o, msg); }");
             result.AppendLine("static int es_oclass_offset;   /* 0: not found out yet, -1: not found (no DoMethod then), else the offset */");
-            result.AppendLine("static int es_oclass_probe(void)");
+            result.AppendLine("static __attribute__((unused)) int es_oclass_probe(void)");
             result.AppendLine("{");
             result.AppendLine("    Class *cl = MakeClass(NULL, (ClassID)\"rootclass\", NULL, 0, 0);");
             result.AppendLine("    if (cl == NULL) return 0;   /* out of memory: try again next time */");
@@ -735,7 +738,8 @@ internal sealed partial class CEmitter
             result.AppendLine("    if (found < 0) PutStr((CONST_STRPTR)\"E#: DoMethod cannot find the class of a BOOPSI object on this AROS (unknown object layout); methods return 0\\n\");");
             result.AppendLine("    return found;");
             result.AppendLine("}");
-            result.AppendLine("static uintptr_t es_domethod(void *obj, void *msg)");
+            result.AppendLine("static inline __attribute__((unused)) void es_boopsi_prepare(void) { if (es_oclass_offset == 0) es_oclass_offset = es_oclass_probe(); }");
+            result.AppendLine("static __attribute__((unused)) uintptr_t es_domethod(void *obj, void *msg)");
             result.AppendLine("{");
             result.AppendLine("    if (obj == NULL) return 0;");
             result.AppendLine("    if (es_oclass_offset == 0) es_oclass_offset = es_oclass_probe();");
@@ -745,7 +749,8 @@ internal sealed partial class CEmitter
             result.AppendLine("}");
             result.AppendLine("#else");
             result.AppendLine("#include <clib/alib_protos.h>");
-            result.AppendLine("static inline uintptr_t es_domethod(void *obj, void *msg) { return (uintptr_t)DoMethodA((Object *)obj, (Msg)msg); }");
+            result.AppendLine("static inline __attribute__((unused)) uintptr_t es_domethod(void *obj, void *msg) { return (uintptr_t)DoMethodA((Object *)obj, (Msg)msg); }");
+            result.AppendLine("static inline __attribute__((unused)) void es_boopsi_prepare(void) { }");
             result.AppendLine("#endif");
             result.AppendLine();
         }

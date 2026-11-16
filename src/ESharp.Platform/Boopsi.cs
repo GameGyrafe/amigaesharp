@@ -286,6 +286,9 @@ public sealed unsafe class Hook
 internal static unsafe class BoopsiNative
 {
     [Native] public static extern nuint es_domethod(void* obj, void* msg);
+
+    /// <summary>Called at each Create: on AROS it finds out once, on the program's own task, where an object keeps its class (see es_domethod).</summary>
+    [Native] public static extern void es_boopsi_prepare();
 }
 #endif
 
@@ -321,7 +324,8 @@ public unsafe class BoopsiObject
     internal BoopsiObject? NextInWindow;
     internal BoopsiWindow? Window;     // the window it was added to
     internal bool IsImage;
-    internal int GadgetId;
+    internal int GadgetId;             // the id it has, or will be created with (-1: none yet)
+    internal bool Shown;               // in the open window (AddGList done)
     private bool _created;
     private bool _initFailed;          // an Init was refused: Create fails rather than make an object without it
     internal bool HasId;               // a Ga.Id was given
@@ -334,6 +338,7 @@ public unsafe class BoopsiObject
     public BoopsiObject(string publicClass)
     {
         _className = KeepString(publicClass, 0);
+        GadgetId = -1;
         _init = new TagList();
     }
 
@@ -357,14 +362,19 @@ public unsafe class BoopsiObject
     public bool Init(BoolAttr a, bool value) { return InitRaw(a.Tag, value ? (nuint)1 : (nuint)0); }
 
     /// <summary>A string attribute: the object keeps its own copy.</summary>
-    public bool Init(StrAttr a, string? value) { return InitRaw(a.Tag, (nuint)KeepString(value, a.Tag)); }
+    public bool Init(StrAttr a, string? value)
+    {
+        byte* copy = KeepString(value, a.Tag);
+        if (value != null && copy == null) { if (!_created) _initFailed = true; return false; }
+        return InitRaw(a.Tag, (nuint)copy);
+    }
 
     public bool Init(PtrAttr a, void* value) { return InitRaw(a.Tag, (nuint)value); }
 
     /// <summary>An object attribute: <paramref name="value"/> must be created already. It stays owned by whoever owned it (see <see cref="Keep(BoopsiObject)"/>).</summary>
     public bool Init(ObjAttr a, BoopsiObject? value)
     {
-        if (value != null && !value.IsCreated) return false;
+        if (value != null && !value.IsCreated) { if (!_created) _initFailed = true; return false; }
         return InitRaw(a.Tag, value == null ? (nuint)0 : (nuint)value.Address);
     }
 
@@ -385,7 +395,7 @@ public unsafe class BoopsiObject
         if (_created) return false;
         if (_init.Count >= max) { _initFailed = true; return false; }
         _init.Add(tag, value);
-        if (tag == BTag.GaId) HasId = true;
+        if (tag == BTag.GaId) { HasId = true; GadgetId = (int)value; }
         return true;
     }
 
@@ -396,6 +406,7 @@ public unsafe class BoopsiObject
         nuint* tags = _init.End();
         if (tags == null) return false;
 #if AMIGA
+        BoopsiNative.es_boopsi_prepare();
         _handle = Intuition.NewObjectA(null, _className, (void*)tags);
         if (_handle == null) return false;
 #else
@@ -416,13 +427,20 @@ public unsafe class BoopsiObject
 
     public bool Set(BoolAttr a, bool value) { return SetRaw(a.Tag, value ? (nuint)1 : (nuint)0); }
 
-    /// <summary>Sets a string attribute from a copy the object keeps; the copy made for the previous value of the same attribute is freed then.</summary>
+    /// <summary>
+    /// Sets a string attribute from a copy the object keeps. The copies made for earlier values of the same attribute are freed when the
+    /// attribute reads back as the new copy (or as the object's own memory); otherwise they stay until <see cref="Dispose"/>.
+    /// </summary>
     public bool Set(StrAttr a, string? value)
     {
         byte* fresh = KeepString(value, a.Tag);
         if (value != null && fresh == null) return false;
         if (!SetRaw(a.Tag, (nuint)fresh)) return false;
-        FreeOlderStrings(a.Tag, fresh);
+        // Free the copies of earlier values only when the object provably no longer points at them: the attribute reads back as the
+        // new copy, or as memory of its own (a class that copies the text, such as strgclass). A class that ignores the new value
+        // (an attribute it takes only at creation) or cannot report it keeps all copies until Dispose.
+        nuint now = 0;
+        if (TryGetRaw(a.Tag, out now) && ((byte*)now == fresh || !IsOurCopy((byte*)now))) FreeOlderStrings(a.Tag, fresh);
         return true;
     }
 
@@ -657,6 +675,15 @@ public unsafe class BoopsiObject
 #endif
     }
 
+    private bool IsOurCopy(byte* p)
+    {
+#if AMIGA
+        for (byte* b = _strings; b != null; b = *(byte**)b)
+            if (b + 2 * sizeof(nuint) == p) return true;
+#endif
+        return false;
+    }
+
     // After a Set: the copies of earlier values of the same attribute are no longer pointed at by the object.
     private void FreeOlderStrings(uint tag, byte* keep)
     {
@@ -864,8 +891,17 @@ public unsafe class BoopsiWindow
         _innerTop = *(sbyte*)((byte*)_window + Layout.WindowBorderTop);
         _open = true;
         // Images first: a frame fills its inside, so it must not be drawn over a gadget.
-        for (BoopsiObject? o = _first; o != null; o = o.NextInWindow) if (o.IsImage) Attach(o);
-        for (BoopsiObject? o = _first; o != null; o = o.NextInWindow) if (!o.IsImage) Attach(o);
+        bool ok = true;
+        for (BoopsiObject? o = _first; o != null && ok; o = o.NextInWindow) if (o.IsImage) ok = Attach(o);
+        for (BoopsiObject? o = _first; o != null && ok; o = o.NextInWindow) if (!o.IsImage) ok = Attach(o);
+        if (!ok)
+        {
+            // A gadget could not be created: nothing stays open (the objects stay in the window's list; Close disposes them).
+            for (BoopsiObject? o = _first; o != null; o = o.NextInWindow) Unshow(o);
+            CloseSystemWindow();
+            ReleaseScreen();
+            return false;
+        }
         return true;
     }
 
@@ -878,17 +914,21 @@ public unsafe class BoopsiWindow
             Intuition.DrawImage(*(void**)((byte*)_window + Layout.WindowRPort), o.Address, 0, 0);
             return true;
         }
-        o.GadgetId = *(ushort*)((byte*)o.Address + Layout.GadGadgetId);
+        o.GadgetId = ReadId(o);
         if (IdInUse(o.GadgetId, o)) return false;
         Intuition.AddGList(_window, o.Address, 0xFFFF, 1, null);   // position ~0: at the end
         Intuition.RefreshGList(o.Address, _window, null, 1);
+        o.Shown = true;
         return true;
     }
 
-    // Takes a gadget out of the open window (before it is disposed).
+    private static int ReadId(BoopsiObject o) { return *(ushort*)((byte*)o.Address + Layout.GadGadgetId); }
+
+    // Takes a gadget out of the open window (before it is disposed); only one that was put in.
     private void Unshow(BoopsiObject o)
     {
-        if (_window != null && !o.IsImage && o.IsCreated) Intuition.RemoveGList(_window, o.Address, 1);
+        if (_window != null && o.Shown) Intuition.RemoveGList(_window, o.Address, 1);
+        o.Shown = false;
     }
 
     private void CloseSystemWindow()
@@ -982,11 +1022,15 @@ public unsafe class BoopsiWindow
     {
         if (!Prepare(o, null)) return false;
         if (o.IsImage) return true;
-        o.GadgetId = o.Get(Ga.Id);
-        return !IdInUse(o.GadgetId, o);
+        o.GadgetId = ReadId(o);
+        if (IdInUse(o.GadgetId, o)) return false;
+        o.Shown = true;
+        return true;
     }
 
-    private void Unshow(BoopsiObject o) { }
+    private static int ReadId(BoopsiObject o) { return o.Get(Ga.Id); }
+
+    private void Unshow(BoopsiObject o) { o.Shown = false; }
 
     private void CloseSystemWindow() { }
 
@@ -1032,7 +1076,8 @@ public unsafe class BoopsiWindow
     /// <summary>
     /// Adds a gadget (any BOOPSI gadget). The window owns it from now on and disposes and frees it in <see cref="Close"/>. If the window is
     /// open, it is created (if it is not yet, with <see cref="Ga.DrawInfo"/>) and shown at once; otherwise when the window opens.
-    /// False if it belongs to a window or another object already, or could not be created.
+    /// False if it belongs to a window or another object already, its <see cref="Ga.Id"/> is one another gadget of the window has or asked for,
+    /// or it could not be created. After a false the caller still owns the gadget (it may have been created already: dispose and free it).
     /// </summary>
     public bool Add(BoopsiObject gadget) { return AddObject(gadget, false); }
 
@@ -1060,10 +1105,11 @@ public unsafe class BoopsiWindow
         return o.Create();
     }
 
+    // An id is taken when another gadget of the window has it or asked for it (Ga.Id before it is created).
     private bool IdInUse(int id, BoopsiObject except)
     {
         for (BoopsiObject? p = _first; p != null; p = p.NextInWindow)
-            if (p != except && !p.IsImage && p.IsCreated && p.GadgetId == id) return true;
+            if (p != except && !p.IsImage && p.GadgetId == id) return true;
         return false;
     }
 
@@ -1071,6 +1117,12 @@ public unsafe class BoopsiWindow
     {
         if (o.Window != null || o.OwnerObject != null) return false;
         o.IsImage = image;
+        if (!image)
+        {
+            // A duplicate id is refused here, before anything is created or shown.
+            if (o.IsCreated) o.GadgetId = ReadId(o);
+            if (o.GadgetId >= 0 && IdInUse(o.GadgetId, o)) return false;
+        }
         if (_open && !Attach(o)) return false;
         o.Window = this;
         if (_last == null) _first = o; else _last.NextInWindow = o;
@@ -1158,8 +1210,10 @@ public unsafe class BoopsiWindow
             }
         }
         _dispatching--;
-        if (_dispatching == 0 && _closePending)
+        if (_closePending)
         {
+            // At any depth: a Run inside a handler stops too; the outermost Dispatch closes the window.
+            if (_dispatching > 0) return false;
             _closePending = false;
             Close();
             return false;

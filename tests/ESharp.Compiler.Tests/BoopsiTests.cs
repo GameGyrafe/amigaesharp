@@ -133,8 +133,8 @@ typedef void Object;
 typedef void *Msg;
 struct Library;
 typedef struct { unsigned char head[128]; char cls[24]; int n; uintptr_t tag[32], val[32]; } ShimObj;
-static int shim_live;
-static void shim_set(ShimObj *o, const uintptr_t *t)
+static __attribute__((unused)) int shim_live;
+static __attribute__((unused)) void shim_set(ShimObj *o, const uintptr_t *t)
 {
     for (; t != NULL && t[0] != 0; t += 2)
     {
@@ -145,7 +145,7 @@ static void shim_set(ShimObj *o, const uintptr_t *t)
         o->val[i] = t[1];
     }
 }
-static inline void *NewObjectA(void *cl, const void *id, void *tags)
+static inline __attribute__((unused)) void *NewObjectA(void *cl, const void *id, void *tags)
 {
     static const char *known[] = { ""propgclass"", ""strgclass"", ""frbuttonclass"", ""buttongclass"", ""frameiclass"", NULL };
     (void)cl;
@@ -160,46 +160,48 @@ static inline void *NewObjectA(void *cl, const void *id, void *tags)
     shim_live++;
     return o;
 }
-static inline void DisposeObject(void *o) { printf(""[dispose %s]\n"", ((ShimObj *)o)->cls); shim_live--; free(o); }
-static inline uintptr_t SetAttrsA(void *o, void *t) { shim_set(o, t); return 0; }
-static inline uintptr_t SetGadgetAttrsA(void *g, void *w, void *r, void *t) { (void)w; (void)r; shim_set(g, t); return 1; }
-static inline uintptr_t GetAttr(uint32_t id, void *o, void *store)
+static inline __attribute__((unused)) void DisposeObject(void *o) { printf(""[dispose %s]\n"", ((ShimObj *)o)->cls); shim_live--; free(o); }
+/* GA_Text (x86-64 value) is taken at creation only, as some classes do: a later set is ignored. */
+static __attribute__((unused)) int shim_initonly(const uintptr_t *t) { return t != NULL && t[0] == 2147680265u; }
+static inline __attribute__((unused)) uintptr_t SetAttrsA(void *o, void *t) { if (!shim_initonly(t)) shim_set(o, t); return 0; }
+static inline __attribute__((unused)) uintptr_t SetGadgetAttrsA(void *g, void *w, void *r, void *t) { (void)w; (void)r; if (!shim_initonly(t)) shim_set(g, t); return 1; }
+static inline __attribute__((unused)) uintptr_t GetAttr(uint32_t id, void *o, void *store)
 {
     ShimObj *s = o;
     for (int i = 0; i < s->n; i++) if (s->tag[i] == id) { *(uintptr_t *)store = s->val[i]; return 1; }
     return 0;
 }
-static inline uint16_t AddGList(void *w, void *g, uint32_t p, int32_t n, void *r) { (void)w; (void)p; (void)n; (void)r; printf(""[add %s]\n"", ((ShimObj *)g)->cls); return 0; }
-static inline uint16_t RemoveGList(void *w, void *g, int32_t n) { (void)w; (void)n; printf(""[remove %s]\n"", ((ShimObj *)g)->cls); return 0; }
-static inline void RefreshGList(void *g, void *w, void *r, int32_t n) { (void)g; (void)w; (void)r; (void)n; }
-static inline void DrawImage(void *rp, void *i, int32_t l, int32_t t) { (void)rp; (void)l; (void)t; printf(""[draw %s]\n"", ((ShimObj *)i)->cls); }
-static unsigned char shim_screen[512], shim_drawinfo[64];
-static inline void *LockPubScreen(const void *n) { (void)n; return shim_screen; }
-static inline void UnlockPubScreen(const void *n, void *s) { (void)n; (void)s; printf(""[unlock screen]\n""); }
-static inline void *GetScreenDrawInfo(void *s) { (void)s; return shim_drawinfo; }
-static inline void FreeScreenDrawInfo(void *s, void *d) { (void)s; (void)d; printf(""[free drawinfo]\n""); }
-static inline void *OpenWindowTagList(void *nw, void *t) { (void)nw; (void)t; printf(""[open window]\n""); return calloc(1, 512); }
-static inline void CloseWindow(void *w) { printf(""[close window]\n""); free(w); }
+static inline __attribute__((unused)) uint16_t AddGList(void *w, void *g, uint32_t p, int32_t n, void *r) { (void)w; (void)p; (void)n; (void)r; printf(""[add %s]\n"", ((ShimObj *)g)->cls); return 0; }
+static inline __attribute__((unused)) uint16_t RemoveGList(void *w, void *g, int32_t n) { (void)w; (void)n; printf(""[remove %s]\n"", ((ShimObj *)g)->cls); return 0; }
+static inline __attribute__((unused)) void RefreshGList(void *g, void *w, void *r, int32_t n) { (void)g; (void)w; (void)r; (void)n; }
+static inline __attribute__((unused)) void DrawImage(void *rp, void *i, int32_t l, int32_t t) { (void)rp; (void)l; (void)t; printf(""[draw %s]\n"", ((ShimObj *)i)->cls); }
+static __attribute__((unused)) unsigned char shim_screen[512], shim_drawinfo[64];
+static inline __attribute__((unused)) void *LockPubScreen(const void *n) { (void)n; return shim_screen; }
+static inline __attribute__((unused)) void UnlockPubScreen(const void *n, void *s) { (void)n; (void)s; printf(""[unlock screen]\n""); }
+static inline __attribute__((unused)) void *GetScreenDrawInfo(void *s) { (void)s; return shim_drawinfo; }
+static inline __attribute__((unused)) void FreeScreenDrawInfo(void *s, void *d) { (void)s; (void)d; printf(""[free drawinfo]\n""); }
+static inline __attribute__((unused)) void *OpenWindowTagList(void *nw, void *t) { (void)nw; (void)t; printf(""[open window]\n""); return calloc(1, 512); }
+static inline __attribute__((unused)) void CloseWindow(void *w) { printf(""[close window]\n""); free(w); }
 /* Only reached by BoopsiWindow.Wait, which these programs do not call: no events here. */
-static inline void *GetMsg(void *p) { (void)p; return NULL; }
-static inline void *WaitPort(void *p) { (void)p; printf(""[WaitPort would hang]\n""); exit(3); }
-static inline void ReplyMsg(void *m) { (void)m; }
-static inline void *Output(void) { return NULL; }
-static inline int32_t Flush(void *f) { (void)f; fflush(stdout); return 1; }
+static inline __attribute__((unused)) void *GetMsg(void *p) { (void)p; return NULL; }
+static inline __attribute__((unused)) void *WaitPort(void *p) { (void)p; printf(""[WaitPort would hang]\n""); exit(3); }
+static inline __attribute__((unused)) void ReplyMsg(void *m) { (void)m; }
+static inline __attribute__((unused)) void *Output(void) { return NULL; }
+static inline __attribute__((unused)) int32_t Flush(void *f) { (void)f; fflush(stdout); return 1; }
 ";
 
     private const string UtilityShim = @"#pragma once
 #include <stdint.h>
-static unsigned char shim_lib[64];
-static inline void *OpenLibrary(const void *n, uint32_t v) { (void)n; (void)v; return shim_lib; }
-static inline void CloseLibrary(void *l) { (void)l; }
+static __attribute__((unused)) unsigned char shim_lib[64];
+static inline __attribute__((unused)) void *OpenLibrary(const void *n, uint32_t v) { (void)n; (void)v; return shim_lib; }
+static inline __attribute__((unused)) void CloseLibrary(void *l) { (void)l; }
 /* As AROS's CallHookPkt: h_Entry (after the MinNode) called as C with the hook, the object and the message. */
-static inline uintptr_t CallHookPkt(void *hook, void *obj, void *msg) { return ((uintptr_t (*)(void *, void *, void *))((void **)hook)[2])(hook, obj, msg); }
+static inline __attribute__((unused)) uintptr_t CallHookPkt(void *hook, void *obj, void *msg) { return ((uintptr_t (*)(void *, void *, void *))((void **)hook)[2])(hook, obj, msg); }
 ";
 
     private const string AlibShim = @"#pragma once
 /* DoMethodA for the fake objects: OM_GET only (the method numbers are the same on every target). */
-static inline uintptr_t DoMethodA(void *obj, void *msg)
+static inline __attribute__((unused)) uintptr_t DoMethodA(void *obj, void *msg)
 {
     uintptr_t *m = msg;
     return m[0] == 260 ? GetAttr((uint32_t)m[1], obj, (void *)m[2]) : 0;
@@ -303,7 +305,7 @@ Dos.PutStr($""{Heap.LiveClosures()}\n"");";
         Assert.True(r.Success, string.Join("\n", r.Diagnostics));
         Assert.Contains("NewObjectA(NULL, ", r.C!);
         Assert.Contains("Es_ESharp_Platform_Hook_Dispatch_HOOK", r.C!);
-        Assert.Contains("static inline uintptr_t es_domethod(void *obj, void *msg) { return (uintptr_t)IDoMethodA((Object *)obj, (Msg)msg); }", r.C!);
+        Assert.Contains("static inline __attribute__((unused)) uintptr_t es_domethod(void *obj, void *msg) { return (uintptr_t)IDoMethodA((Object *)obj, (Msg)msg); }", r.C!);
         Assert.Contains("CALLHOOKPKT((struct Hook *)c, obj, msg)", r.C!);
     }
 
@@ -366,7 +368,7 @@ Dos.PutStr($""r={(int)r} slot={(int)slot} {(int)r2}\n"");
 o.Dispose();
 Heap.Free(ref o);";
         var c = CompileOk(Program("", body).Replace("public static class P", "public static unsafe class P"), HostC);
-        Assert.Contains("static int es_oclass_probe(void)", c);
+        Assert.Contains("static __attribute__((unused)) int es_oclass_probe(void)", c);
         // Take the AROS branch of es_domethod with host gcc: a small intuition with classes whose objects keep the class pointer
         // OFFSET bytes before them.
         var shim = $@"#pragma once
@@ -383,14 +385,14 @@ struct Hook {{ void *succ, *pred; IPTR (*h_Entry)(struct Hook *, Object *, Msg);
 typedef IPTR (*HOOKFUNC)(struct Hook *, Object *, Msg);
 typedef struct IClass {{ struct Hook cl_Dispatcher; uint32_t cl_Reserved; struct IClass *cl_Super; }} Class;
 #define CALLHOOKPKT(h, o, m) (((struct Hook *)(h))->h_Entry((struct Hook *)(h), (Object *)(o), (Msg)(m)))
-static IPTR shim_root(struct Hook *h, Object *o, Msg m) {{ (void)h; (void)o; (void)m; return 0; }}
-static Class shim_rootclass = {{ {{ NULL, NULL, shim_root, NULL, NULL }}, 0, NULL }};
-static IPTR shim_top;
-static IPTR shim_prop(struct Hook *h, Object *o, Msg m) {{ (void)h; (void)o; IPTR *x = m; if (x[0] == 260) {{ *(IPTR *)x[2] = shim_top; return 1; }} return 0; }}
-static Class shim_propclass = {{ {{ NULL, NULL, shim_prop, NULL, NULL }}, 0, &shim_rootclass }};
-static inline Class *MakeClass(ClassID id, ClassID super, Class *sp, uint32_t isz, uint32_t f) {{ (void)id; (void)super; (void)sp; (void)isz; (void)f; Class *c = calloc(1, sizeof(Class)); c->cl_Super = &shim_rootclass; return c; }}
-static inline void FreeClass(Class *c) {{ free(c); }}
-static inline void *NewObjectA(void *cl, const void *id, void *tags)
+static __attribute__((unused)) IPTR shim_root(struct Hook *h, Object *o, Msg m) {{ (void)h; (void)o; (void)m; return 0; }}
+static __attribute__((unused)) Class shim_rootclass = {{ {{ NULL, NULL, shim_root, NULL, NULL }}, 0, NULL }};
+static __attribute__((unused)) IPTR shim_top;
+static __attribute__((unused)) IPTR shim_prop(struct Hook *h, Object *o, Msg m) {{ (void)h; (void)o; IPTR *x = m; if (x[0] == 260) {{ *(IPTR *)x[2] = shim_top; return 1; }} return 0; }}
+static __attribute__((unused)) Class shim_propclass = {{ {{ NULL, NULL, shim_prop, NULL, NULL }}, 0, &shim_rootclass }};
+static inline __attribute__((unused)) Class *MakeClass(ClassID id, ClassID super, Class *sp, uint32_t isz, uint32_t f) {{ (void)id; (void)super; (void)sp; (void)isz; (void)f; Class *c = calloc(1, sizeof(Class)); c->cl_Super = &shim_rootclass; return c; }}
+static inline __attribute__((unused)) void FreeClass(Class *c) {{ free(c); }}
+static inline __attribute__((unused)) void *NewObjectA(void *cl, const void *id, void *tags)
 {{
     char *block = calloc(1, 128);
     Object *o = block + 64;
@@ -399,9 +401,9 @@ static inline void *NewObjectA(void *cl, const void *id, void *tags)
     (void)id;
     return o;
 }}
-static inline void DisposeObject(void *o) {{ free((char *)o - 64); }}
-static inline uint16_t RemoveGList(void *w, void *g, int32_t n) {{ (void)w; (void)g; (void)n; return 0; }}
-static inline uintptr_t GetAttr(uint32_t id, void *o, void *s) {{ (void)id; (void)o; *(uintptr_t *)s = shim_top; return 1; }}
+static inline __attribute__((unused)) void DisposeObject(void *o) {{ free((char *)o - 64); }}
+static inline __attribute__((unused)) uint16_t RemoveGList(void *w, void *g, int32_t n) {{ (void)w; (void)g; (void)n; return 0; }}
+static inline __attribute__((unused)) uintptr_t GetAttr(uint32_t id, void *o, void *s) {{ (void)id; (void)o; *(uintptr_t *)s = shim_top; return 1; }}
 ";
         var src = "#define __AROS__ 1\n" + c.Replace("#include <intuition/classes.h>", "").Replace("#include <utility/hooks.h>", "");
         var (code, output) = RunWithHostGcc(src, new Dictionary<string, string> { ["proto/intuition.h"] = shim, ["clib/alib_protos.h"] = "" });
@@ -409,5 +411,65 @@ static inline uintptr_t GetAttr(uint32_t id, void *o, void *s) {{ (void)id; (voi
         Assert.EndsWith(expected + "\n", output);
         var note = "E#: DoMethod cannot find the class";
         Assert.Equal(offset == 48 ? 1 : 0, output.Split(note).Length - 1);   // said once, not per call
+    }
+
+    [Fact]
+    public void Set_keeps_string_copies_the_object_still_points_at_and_ids_and_refusals_are_checked_at_Add()
+    {
+        if (!HasGcc) return;
+        const string body = @"
+// A string attribute the class ignores after creation: the copy it points at must stay (ASan catches a read of a freed one).
+BoopsiObject t = new BoopsiObject(""frbuttonclass"");
+t.Init(Ga.Text, $""fir{""st""}"");
+t.Create();
+int n0 = t.StringCopies;
+t.Set(Ga.Text, $""second {1}"");
+t.Set(Ga.Text, ""third"");
+string? now = t.Get(Ga.Text);
+int kept = t.StringCopies - n0;
+// One the class takes: the earlier copies go.
+BoopsiObject s = new BoopsiObject(""strgclass"");
+s.Create();
+s.Set(Stringa.TextVal, ""a"");
+int s1 = s.StringCopies;
+s.Set(Stringa.TextVal, ""b"");
+s.Set(Stringa.TextVal, ""c"");
+Dos.PutStr($""{now} {kept} {s.StringCopies - s1} {s.Get(Stringa.TextVal)}\n"");
+t.Dispose(); Heap.Free(ref t);
+s.Dispose(); Heap.Free(ref s);
+// An object attribute that is not created yet, and a hook without a struct: Create fails.
+BoopsiObject img = new BoopsiObject(""frameiclass"");
+BoopsiObject g = new BoopsiObject(""frbuttonclass"");
+bool r0 = g.Init(Ga.Image, img);
+bool c0 = g.Create();
+g.Dispose(); Heap.Free(ref g);
+img.Dispose(); Heap.Free(ref img);
+// Ids: an automatic id never takes one another gadget asked for; a duplicate explicit id is refused by Add, before Create.
+BoopsiWindow w = new BoopsiWindow();
+BoopsiObject a = new BoopsiObject(""propgclass"");
+BoopsiObject b = new BoopsiObject(""propgclass"");
+b.Init(Ga.Id, 1000);
+BoopsiObject d = new BoopsiObject(""propgclass"");
+d.Init(Ga.Id, 1000);
+bool ra = w.Add(a), rb = w.Add(b), rd = w.Add(d);
+bool open = w.Open();
+Dos.PutStr($""{r0} {c0} {ra} {rb} {rd} {d.IsCreated} {open} {a.Get(Ga.Id)} {b.Get(Ga.Id)}\n"");
+d.Dispose(); Heap.Free(ref d);     // refused by Add: still the caller's
+// Close from a handler: a nested Dispatch (and so a nested Run) stops at once; the outer one closes.
+bool inner = true;
+a.Notify += e => { w.Close(); inner = w.Dispatch(new BoopsiEvent(BoopsiEventKind.GadgetUp, b, 0, 0)); };
+bool outer = w.Dispatch(new BoopsiEvent(BoopsiEventKind.GadgetUp, a, 0, 0));
+Dos.PutStr($""{inner} {outer} {w.IsOpen} {BoopsiObject.Live}\n"");
+w.Close();
+Heap.Free(ref w);
+Dos.PutStr($""{BoopsiObject.Live} {Heap.LiveClosures()}\n"");";
+        var c = CompileOk(Program("", body).Replace("public static class P", "public static unsafe class P"), HostC);
+        var (code, output) = RunShimmed(c, HasSanitizers);
+        Assert.True(code == 0, output);
+        Assert.Contains("first 2 0 c\n", output);
+        Assert.Contains("False False True True False False True 1001 1000\n", output);
+        Assert.Equal(2, output.Split("[add propgclass]").Length - 1);       // both shown
+        Assert.Equal(2, output.Split("[remove propgclass]").Length - 1);    // and only those taken out
+        Assert.Contains("False False False 0\n0 0\n", output);
     }
 }
