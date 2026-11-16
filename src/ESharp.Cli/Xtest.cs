@@ -9,7 +9,7 @@ namespace ESharp.Cli;
 /// <summary>
 /// Sends scripted mouse and keyboard input to an X display through the XTEST extension (libX11 + libXtst),
 /// so headless emulator runs can exercise the program's input handling.
-/// Script: steps separated by ';': <c>click X,Y</c> (move to display pixels, then click), <c>rel DX,DY</c> (relative motion), <c>press</c> (click here), <c>key N</c> (X11 keycode, Esc is 9; <c>key 50+38</c> holds the first keys while the last is pressed: Shift+A).
+/// Script: steps separated by ';': <c>click X,Y</c> (move to display pixels, then click), <c>rel DX,DY</c> (relative motion), <c>press</c> (click here), <c>down</c> / <c>up</c> (hold and release the button, for a drag), <c>key N</c> (X11 keycode, Esc is 9; <c>key 50+38</c> holds the first keys while the last is pressed: Shift+A).
 /// </summary>
 internal static class Xtest
 {
@@ -81,6 +81,11 @@ internal static class Xtest
                     XTestFakeButtonEvent(display, 1, 1, 0); XFlush(display); Thread.Sleep(120);
                     XTestFakeButtonEvent(display, 1, 0, 0); XFlush(display); Thread.Sleep(500);
                 }
+                else if (parts[0] is "down" or "up")
+                {
+                    // Hold or release the button, for a drag: "down;rel 40,0;up" moves a slider knob.
+                    XTestFakeButtonEvent(display, 1, parts[0] == "down" ? 1 : 0, 0); XFlush(display); Thread.Sleep(parts[0] == "down" ? 250 : 500);
+                }
                 else if (parts[0] == "key" && parts.Length == 2)
                 {
                     // "key 38", or "key 50+38" to hold 50 (left Shift) while 38 is pressed.
@@ -90,7 +95,7 @@ internal static class Xtest
                 }
                 else
                 {
-                    throw new FormatException($"bad input step '{raw}' (use 'click X,Y' or 'key N')");
+                    throw new FormatException($"bad input step '{raw}' (use 'click X,Y', 'rel DX,DY', 'press', 'down', 'up' or 'key N')");
                 }
             }
             return true;

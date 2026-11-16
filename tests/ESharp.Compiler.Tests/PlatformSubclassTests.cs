@@ -193,7 +193,7 @@ public static class P {{ [EntryPoint] public static void Main() {{ Base b = new 
         Assert.Contains(AnalyzeAgainstPlatformAssembly(dotnet), d => d.Id == "ES0007");
     }
 
-    private static System.Collections.Generic.IEnumerable<MetadataReference> HostReferences() =>
+    internal static System.Collections.Generic.IEnumerable<MetadataReference> HostReferences() =>
         ((string)AppContext.GetData("TRUSTED_PLATFORM_ASSEMBLIES")!).Split(Path.PathSeparator)
             .Where(p => Path.GetFileNameWithoutExtension(p) is "System.Private.CoreLib" or "System.Runtime" or "System.Console")
             .Select(p => (MetadataReference)MetadataReference.CreateFromFile(p))

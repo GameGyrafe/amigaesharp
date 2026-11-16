@@ -2,7 +2,7 @@
 # Run an E# sample (built with --target aros) on the hosted AROS x86-64 build, headless under Xvfb.
 #
 #   AROS_HOSTED=<dir of the extracted AROS-*-linux-x86_64-system archive> \
-#   tools/aros-hosted/aros-hosted.sh <sample> [--shot out.png] [--wait N] [--log] [--input "click 400,300;key 9"]
+#   tools/aros-hosted/aros-hosted.sh <sample> [--shot out.png] [--wait N] [--log] [--input "click 400,300;key 9"] [--args "WAIT"]
 #
 # Or, with no local AROS tree, inside the esharp-aros-hosted image (docker/aros-hosted/README.md): add --docker <image>.
 # Every run then copies the image's pristine tree, so nothing is patched in place. Same options.
@@ -14,15 +14,15 @@
 set -u
 here=$(cd "$(dirname "$0")" && pwd); root=$(cd "$here/../.." && pwd)
 s=${1:?sample name}; shift
-shot=""; wait=2; input=""; log=0; image=""
+shot=""; wait=2; input=""; log=0; image=""; pargs=""
 while [ $# -gt 0 ]; do case $1 in
   --shot) shot=$2; shift 2;; --wait) wait=$2; shift 2;; --input) input=$2; shift 2;; --log) log=1; shift;;
-  --docker) image=$2; shift 2;; *) echo "bad arg $1"; exit 2;; esac; done
+  --docker) image=$2; shift 2;; --args) pargs=$2; shift 2;; *) echo "bad arg $1"; exit 2;; esac; done
 if [ -n "$image" ]; then
   # Re-run this script in the image: the repo is mounted read-only, screenshots go to a mounted folder.
   [ -f "$root/samples/$s/obj/aros/$s" ] || { echo "build it first: esharp build samples/$s --target aros --docker <image>"; exit 1; }
   args=("$s" --wait "$wait"); mounts=(-v "$root:/repo:ro")
-  [ -n "$input" ] && args+=(--input "$input"); [ "$log" = 1 ] && args+=(--log)
+  [ -n "$input" ] && args+=(--input "$input"); [ "$log" = 1 ] && args+=(--log); [ -n "$pargs" ] && args+=(--args "$pargs")
   if [ -n "$shot" ]; then
     od=$(cd "$(dirname "$shot")" && pwd); mounts+=(-v "$od:/out"); args+=(--shot "/out/$(basename "$shot")")
   fi
@@ -37,11 +37,11 @@ fi
 bin="$root/samples/$s/obj/aros/$s"; [ -f "$bin" ] || { echo "build it first: esharp build samples/$s --target aros --docker <image>"; exit 1; }
 cd "$A" || exit 1
 cp "$bin" "./$s"; chmod +x "$s"
-python3 -I - "$s" <<'P'
+python3 -I - "$s" "$pargs" <<'P'
 import sys,re
-s=sys.argv[1];p='S/Startup-Sequence';t=open(p).read()
-t=re.sub(r'\nSYS:\S+ >SYS:\S+\nEcho >SYS:done.txt done\n',"\n",t)
-t=t.replace("FailAt 21\n","FailAt 21\n\nSYS:%s >SYS:%s.out\nEcho >SYS:done.txt done\n"%(s,s),1)
+s=sys.argv[1];a=sys.argv[2];p='S/Startup-Sequence';t=open(p).read()
+t=re.sub(r'\nSYS:\S+ >SYS:\S+[^\n]*\nEcho >SYS:done.txt done\n',"\n",t)
+t=t.replace("FailAt 21\n","FailAt 21\n\nSYS:%s >SYS:%s.out %s\nEcho >SYS:done.txt done\n"%(s,s,a),1)
 open(p,'w').write(t)
 P
 rm -f ./*.out done.txt boot.log

@@ -287,6 +287,7 @@ internal sealed partial class CEmitter
         if (methods.Count > 0 || _fieldInitClasses.Count > 0) Line("");
         CheckBodilessAsm(reachable);
         EmitInterruptDeclarations(methods);
+        EmitHookDeclarations(methods);
         foreach (var c in heapClasses.Where(IsPoly)) EmitVtInstance(c, reachable);
         foreach (var c in heapClasses)
             foreach (var i in interfaces.Where(i => c.AllInterfaces.Contains(i, SymbolEqualityComparer.Default)))
@@ -297,6 +298,7 @@ internal sealed partial class CEmitter
 
         EmitMain();
         EmitInterruptEntries();
+        EmitHookEntries();
 
         body.Append(typeText);
         foreach (var span in _spans.Values) body.Append(span);
@@ -316,6 +318,13 @@ internal sealed partial class CEmitter
         // the usual name, so neither libnix nor AROS's autoinit tries to open it.
         foreach (var (name, type) in _bases) { result.AppendLine($"#define {name} es_{name}"); result.AppendLine($"extern {type} *es_{name};"); }
         foreach (var h in _headers) result.AppendLine($"#include <{h}>");
+        if (UsesHookEntries)
+        {
+            // [HookEntry] gates on MorphOS: struct EmulLibEntry, TRAP_LIB and the 68k registers (REG_A0, ...) of the emulation handle.
+            result.AppendLine("#if defined(__MORPHOS__)");
+            result.AppendLine("#include <emul/emulregs.h>");
+            result.AppendLine("#endif");
+        }
         if (_headers.Contains("proto/dos.h"))
         {
             // AmigaOS 4 renamed some dos.library calls (Flush is FFlush, DeleteFile is Delete); its SDK maps the classic names here.
@@ -693,6 +702,58 @@ internal sealed partial class CEmitter
             result.AppendLine("#endif");
             result.AppendLine();
         }
+        if (_natives.Contains("es_domethod") || _natives.Contains("es_boopsi_prepare"))
+        {
+            // es_boopsi_prepare runs at the first BoopsiObject.Create (on the program's own task), so the AROS probe below never
+            // runs for the first time inside a hook on another task.
+            // DoMethodA is not a library vector: amiga.lib (m68k), a macro (AROS, MorphOS) or the intuition interface (AmigaOS 4).
+            result.AppendLine("#include <proto/intuition.h>");
+            result.AppendLine("#if defined(__amigaos4__)");
+            result.AppendLine("static inline __attribute__((unused)) uintptr_t es_domethod(void *obj, void *msg) { return (uintptr_t)IDoMethodA((Object *)obj, (Msg)msg); }");
+            result.AppendLine("static inline __attribute__((unused)) void es_boopsi_prepare(void) { }");
+            result.AppendLine("#elif defined(__AROS__)");
+            // The AROS SDK's DoMethodA macro reads the class pointer just before the object through the SDK's struct _Object, but
+            // newer AROS builds align that struct (SMP), so the class pointer may sit further back. Find out once where it is with an
+            // object of a class of our own (its class pointer is known), then call the class's dispatcher as DoMethodA does.
+            result.AppendLine("#include <intuition/classes.h>");
+            result.AppendLine("#include <utility/hooks.h>");
+            result.AppendLine("#include <proto/dos.h>");
+            result.AppendLine("static __attribute__((unused)) IPTR es_probe_dispatch(struct Hook *h, Object *o, Msg msg) { return CALLHOOKPKT((struct Hook *)((Class *)h)->cl_Super, o, msg); }");
+            result.AppendLine("static int es_oclass_offset;   /* 0: not found out yet, -1: not found (no DoMethod then), else the offset */");
+            result.AppendLine("static __attribute__((unused)) int es_oclass_probe(void)");
+            result.AppendLine("{");
+            result.AppendLine("    Class *cl = MakeClass(NULL, (ClassID)\"rootclass\", NULL, 0, 0);");
+            result.AppendLine("    if (cl == NULL) return 0;   /* out of memory: try again next time */");
+            result.AppendLine("    cl->cl_Dispatcher.h_Entry = (HOOKFUNC)es_probe_dispatch;");
+            result.AppendLine("    Object *o = NewObjectA(cl, NULL, NULL);");
+            result.AppendLine("    int found = 0;");
+            result.AppendLine("    if (o != NULL)");
+            result.AppendLine("    {");
+            result.AppendLine("        found = -1;");
+            result.AppendLine("        for (int k = 1; k <= 4 && found < 0; k++)");
+            result.AppendLine("            if (*(Class **)((char *)o - k * (int)sizeof(void *)) == cl) found = k * (int)sizeof(void *);");
+            result.AppendLine("        DisposeObject(o);");
+            result.AppendLine("    }");
+            result.AppendLine("    FreeClass(cl);");
+            result.AppendLine("    if (found < 0) PutStr((CONST_STRPTR)\"E#: DoMethod cannot find the class of a BOOPSI object on this AROS (unknown object layout); methods return 0\\n\");");
+            result.AppendLine("    return found;");
+            result.AppendLine("}");
+            result.AppendLine("static inline __attribute__((unused)) void es_boopsi_prepare(void) { if (es_oclass_offset == 0) es_oclass_offset = es_oclass_probe(); }");
+            result.AppendLine("static __attribute__((unused)) uintptr_t es_domethod(void *obj, void *msg)");
+            result.AppendLine("{");
+            result.AppendLine("    if (obj == NULL) return 0;");
+            result.AppendLine("    if (es_oclass_offset == 0) es_oclass_offset = es_oclass_probe();");
+            result.AppendLine("    if (es_oclass_offset <= 0) return 0;");
+            result.AppendLine("    Class *c = *(Class **)((char *)obj - es_oclass_offset);");
+            result.AppendLine("    return (uintptr_t)CALLHOOKPKT((struct Hook *)c, obj, msg);");
+            result.AppendLine("}");
+            result.AppendLine("#else");
+            result.AppendLine("#include <clib/alib_protos.h>");
+            result.AppendLine("static inline __attribute__((unused)) uintptr_t es_domethod(void *obj, void *msg) { return (uintptr_t)DoMethodA((Object *)obj, (Msg)msg); }");
+            result.AppendLine("static inline __attribute__((unused)) void es_boopsi_prepare(void) { }");
+            result.AppendLine("#endif");
+            result.AppendLine();
+        }
         // Non-Amiga targets: [Native] calls named es_std_* are standard C (stdio, stdlib, time), es_sdl_* need SDL 3. The C runtime is
         // pasted in whole (its functions are static and marked unused), so a program that only prints needs no SDL at all.
         var usesSdl = _natives.Any(n => n.StartsWith("es_sdl_", StringComparison.Ordinal));
@@ -1020,7 +1081,8 @@ internal sealed partial class CEmitter
     /// <summary>A type inside a longer C name (overloads, span and tuple typedefs); namespaced, so same-named types stay apart.</summary>
     private static string Mangle(ITypeSymbol t) => t switch
     {
-        INamedTypeSymbol n => n.SpecialType != SpecialType.None ? n.ToDisplayString() : QualifiedName(n),
+        // string? and string are one C type: the nullable annotation is not part of the name (a '?' is no C identifier).
+        INamedTypeSymbol n => n.SpecialType != SpecialType.None ? n.WithNullableAnnotation(NullableAnnotation.NotAnnotated).ToDisplayString() : QualifiedName(n),
         IPointerTypeSymbol p => Mangle(p.PointedAtType) + "Ptr",
         IArrayTypeSymbol a => Mangle(a.ElementType) + "Arr",
         _ => "t",
@@ -1809,6 +1871,7 @@ internal sealed partial class CEmitter
         Line("");
         _lastLineFile = null;
         EmitInterruptServer(m, decl);
+        EmitHookFunction(m, decl);
     }
 
     // The runtime's own fatal errors (index out of range, out of memory) end with exit(20), which skips the code after
@@ -3206,6 +3269,18 @@ internal sealed partial class CEmitter
             // Strings are plain byte pointers in C: reinterpret.
             var arg = Expr(inv.ArgumentList.Arguments[0].Expression, top: true);
             return m.Name == "StringToPtr" ? $"((uint8_t *)({arg}))" : $"((const char *)({arg}))";
+        }
+
+        if (m.ContainingType is { Name: "Cast" } && m.ContainingNamespace?.ToDisplayString() == "ESharp.Platform"
+            && m.Name is "ObjectToPtr" or "PtrToObject" && m.IsGenericMethod && inv.ArgumentList.Arguments.Count == 1)
+        {
+            // A class reference is a plain pointer in C: reinterpret (for h_Data, user data slots and the like). Interfaces are
+            // { obj, vt } pairs and delegates { fn, env }: no single pointer.
+            var targ = m.TypeArguments[0];
+            if (!IsHeapClass(targ) || targ.SpecialType == SpecialType.System_String)
+                return Unsupported(inv, $"Cast.{m.Name} with {targ.ToDisplayString()}: only classes (not interfaces, delegates, arrays or strings) are one pointer");
+            var arg = Expr(inv.ArgumentList.Arguments[0].Expression, top: true);
+            return m.Name == "ObjectToPtr" ? $"((void *)({arg}))" : $"(({CType(m.TypeArguments[0], inv)})({arg}))";
         }
 
         if (m.Name == "Ready" && m.IsExtern && inv.ArgumentList.Arguments.Count == 0 && UseBase(m.ContainingType) is { } readyBase)

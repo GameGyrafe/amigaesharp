@@ -109,6 +109,21 @@ public sealed class InterruptAttribute : Attribute
 }
 
 /// <summary>
+/// A function the system calls through a <c>struct Hook</c> (h_Entry): a static method <c>nuint M(void* hook, void* obj, void* msg)</c>
+/// (the three parameters may be any pointer types or nint/nuint; the result void, int, uint, nint, nuint or a pointer). Its address
+/// <c>&amp;M</c> is what goes into h_Entry. The emitter adds the entry each target needs: on m68k one that takes the hook from a0,
+/// the object from a2 and the message from a1 and returns the result in d0; on MorphOS a 68k-callable gate (an EmulLibEntry) that
+/// reads the same registers; on AmigaOS 4 and AROS the method is called as a plain C function with the three in that order.
+/// sdl reports ES0099. The hook may be called from another task (input.device for a string edit hook, for example): keep it short,
+/// and make fields it shares with the program <c>volatile</c>. <c>ESharp.Platform.Hook</c> builds on it so that a C# delegate
+/// (also a capturing lambda) can be a hook.
+/// </summary>
+[AttributeUsage(AttributeTargets.Method)]
+public sealed class HookEntryAttribute : Attribute
+{
+}
+
+/// <summary>
 /// Escape hatch: on m68k (and on PowerPC when <see cref="Ppc"/> is given) the static method's body is the given GCC
 /// inline assembly instead of its C# body; the C# body still runs on the host, sdl, AROS and any target without assembly
 /// for its CPU, so it is required. Operands: the result (a non-void method) is <c>%[result]</c> (also <c>%0</c>), an

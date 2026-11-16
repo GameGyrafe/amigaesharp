@@ -23,6 +23,14 @@ include graphics/displayinfo.h
 include graphics/modeid.h
 include graphics/rastport.h
 include graphics/view.h
+include utility/hooks.h
+include utility/tagitem.h
+include intuition/classes.h
+include intuition/classusr.h
+include intuition/gadgetclass.h
+include intuition/imageclass.h
+include intuition/icclass.h
+include intuition/sghooks.h
 
 # Intuition (src/ESharp.Platform/Gfx.cs)
 WindowRPort = Window.RPort
@@ -229,3 +237,55 @@ SbScreenBitMap = value SB_SCREEN_BITMAP
 SbCopyBitMap = value SB_COPY_BITMAP
 BmfClear = value BMF_CLEAR
 BmfDisplayable = value BMF_DISPLAYABLE
+# BOOPSI and hooks (src/ESharp.Platform/Boopsi.cs)
+WindowBorderLeft = Window.BorderLeft
+WindowBorderTop = Window.BorderTop
+HookSize = sizeof Hook
+HookEntryOffset = Hook.h_Entry
+HookSubEntry = Hook.h_SubEntry
+HookData = Hook.h_Data
+TagItemSize = sizeof TagItem
+TagIgnore = value TAG_IGNORE
+TagMore = value TAG_MORE
+TagSkip = value TAG_SKIP
+OmSet = value OM_SET
+OmGet = value OM_GET
+GaLeft = value GA_Left
+GaTop = value GA_Top
+GaWidth = value GA_Width
+GaHeight = value GA_Height
+GaText = value GA_Text
+GaImage = value GA_Image
+GaId = value GA_ID
+GaUserData = value GA_UserData
+GaDisabled = value GA_Disabled
+GaSelected = value GA_Selected
+GaImmediate = value GA_Immediate
+GaRelVerify = value GA_RelVerify
+GaDrawInfo = value GA_DrawInfo
+PgaFreedom = value PGA_Freedom
+PgaTop = value PGA_Top
+PgaVisible = value PGA_Visible
+PgaTotal = value PGA_Total
+PgaNewLook = value PGA_NewLook
+PgaBorderless = value PGA_Borderless
+FreeHoriz = value FREEHORIZ
+FreeVert = value FREEVERT
+StringaMaxChars = value STRINGA_MaxChars
+StringaTextVal = value STRINGA_TextVal
+StringaLongVal = value STRINGA_LongVal
+StringaEditHook = value STRINGA_EditHook
+IcaTarget = value ICA_TARGET
+IcaMap = value ICA_MAP
+IaLeft = value IA_Left
+IaTop = value IA_Top
+IaWidth = value IA_Width
+IaHeight = value IA_Height
+IaRecessed = value IA_Recessed
+IaFrameType = value IA_FrameType
+FrameDefault = value FRAME_DEFAULT
+FrameButton = value FRAME_BUTTON
+FrameRidge = value FRAME_RIDGE
+IdcmpIdcmpUpdate = value IDCMP_IDCMPUPDATE
+SghKey = value SGH_KEY
+SghClick = value SGH_CLICK

@@ -94,6 +94,8 @@ public static class EsCompiler
         "Gui", "GtWindow", "GtButton", "GtString", "GtText", "GtGadget", "GuiEvent", "GuiEventKind", "IGuiHandler", "GadTools",
         "Asl", "AslLib", "Interrupts", "Iff", "IffFile", "IffParse", "Fonts", "FontHandle", "DiskFontLib", "Joystick", "LowLevel",
         "Exec", "Intuition", "Graphics", "CyberGfx", "Utility", "TimerDevice", "Keymap", "Layout", "DosLib",
+        "BoopsiObject", "BoopsiWindow", "BoopsiEvent", "BoopsiEventKind", "Hook", "HookFunc", "IntAttr", "BoolAttr", "StrAttr", "PtrAttr",
+        "ObjAttr", "HookAttr", "Ga", "Pga", "Stringa", "Ica", "Ia", "Om",
     };
 
     private static IEnumerable<Diagnostic> AmigaOnlyHints(IEnumerable<Diagnostic> errors, string target)

@@ -33,6 +33,10 @@ internal sealed partial class CEmitter
 
     private static bool IsInterrupt(IMethodSymbol m) => HasAttribute(m, "InterruptAttribute");
 
+    private static bool IsHookEntry(IMethodSymbol m) => HasAttribute(m, "HookEntryAttribute");
+
+    private readonly List<IMethodSymbol> _hookEntries = new();
+
     private static string? NamedString(AttributeData a, string name) =>
         a.NamedArguments.FirstOrDefault(kv => kv.Key == name).Value.Value as string;
 
@@ -51,11 +55,11 @@ internal sealed partial class CEmitter
     /// <summary>[InlineAsm] and [Interrupt] methods without a body (extern) cannot be emitted: say so instead of leaving an undefined C function.</summary>
     private void CheckBodilessAsm(IEnumerable<IMethodSymbol> reachable)
     {
-        foreach (var m in reachable.Where(m => (IsInlineAsm(m) || IsInterrupt(m)) && !DeclaresBody(m)))
+        foreach (var m in reachable.Where(m => (IsInlineAsm(m) || IsInterrupt(m) || IsHookEntry(m)) && !DeclaresBody(m)))
             Unsupported(m.DeclaringSyntaxReferences.First().GetSyntax(),
                 IsInlineAsm(m)
                     ? $"[InlineAsm] method '{m.Name}' without a C# body: the body is required, it runs on the host and on targets without assembly for their CPU"
-                    : $"[Interrupt] method '{m.Name}' without a body");
+                    : IsHookEntry(m) ? $"[HookEntry] method '{m.Name}' without a body" : $"[Interrupt] method '{m.Name}' without a body");
     }
 
     /// <summary>An operand's constraint letter: integers in data registers, pointers in address registers; null when the type cannot be an operand.</summary>
@@ -82,7 +86,9 @@ internal sealed partial class CEmitter
     private bool BeginSpecialMethod(IMethodSymbol m, SyntaxNode decl)
     {
         if (IsInterrupt(m)) CheckInterrupt(m, decl);
+        if (IsHookEntry(m)) CheckHookEntry(m, decl);
         if (!IsInlineAsm(m)) return false;
+        if (IsHookEntry(m)) { Unsupported(decl, "[InlineAsm] together with [HookEntry]; write the hook body in C# and call an [InlineAsm] method from it"); return false; }
         if (IsInterrupt(m)) { Unsupported(decl, "[InlineAsm] together with [Interrupt]; write the interrupt body in C# and call an [InlineAsm] method from it"); return false; }
         if (!m.IsStatic || m.MethodKind != MethodKind.Ordinary || m.IsGenericMethod)
         {
@@ -235,8 +241,127 @@ internal sealed partial class CEmitter
         var info = Model(u).GetSymbolInfo(u.Operand);
         var m = info.Symbol as IMethodSymbol ?? info.CandidateSymbols.OfType<IMethodSymbol>().FirstOrDefault();
         if (m == null) return null;
+        if (IsHookEntry(m)) return HookAddress(m);
         if (!IsInterrupt(m))
-            return Unsupported(u, $"address of method '{m.Name}': only [Interrupt] methods have an address in E# (and it is only for exec, not to call)");
+            return Unsupported(u, $"address of method '{m.Name}': only [Interrupt] and [HookEntry] methods have an address in E# (and it is only for the system, not to call)");
         return IsrAddress(m);
     }
+
+    // ------------------------------------------------------------------ [HookEntry]
+
+    /// <summary>A pointer-sized value a hook passes or returns: a pointer, nint or nuint.</summary>
+    private static bool IsHookWord(ITypeSymbol t) =>
+        t is IPointerTypeSymbol || t.SpecialType is SpecialType.System_IntPtr or SpecialType.System_UIntPtr;
+
+    private void CheckHookEntry(IMethodSymbol m, SyntaxNode decl)
+    {
+        if (IsDefined("SDL"))
+        {
+            Unsupported(decl, "[HookEntry] on the sdl target, which has no system hooks; keep it under #if AMIGA");
+            return;
+        }
+        if (IsInterrupt(m))
+        {
+            Unsupported(decl, "[HookEntry] together with [Interrupt]");
+            return;
+        }
+        if (!m.IsStatic || m.MethodKind != MethodKind.Ordinary || m.IsGenericMethod)
+        {
+            Unsupported(decl, "[HookEntry] on anything but a static, non-generic method");
+            return;
+        }
+        if (m.Parameters.Length != 3 || m.Parameters.Any(p => p.RefKind != RefKind.None || !IsHookWord(p.Type)))
+        {
+            Unsupported(decl, "[HookEntry] method parameters: exactly three pointers (or nint/nuint): the hook, the object and the message");
+            return;
+        }
+        if (!m.ReturnsVoid && (m.ReturnsByRef || m.ReturnsByRefReadonly ||
+            !(IsHookWord(m.ReturnType) || m.ReturnType.SpecialType is SpecialType.System_Int32 or SpecialType.System_UInt32)))
+        {
+            Unsupported(decl, "[HookEntry] method result: void (the hook returns 0), int, uint, nint, nuint or a pointer");
+            return;
+        }
+        if (!_hookEntries.Contains(m, SymbolEqualityComparer.Default)) _hookEntries.Add(m);
+    }
+
+    private static string HookName(IMethodSymbol m) => FuncName(m) + "_hook";
+
+    private static string HookAddress(IMethodSymbol m) => FuncName(m) + "_HOOK";
+
+    private static string HookM68kEntry(IMethodSymbol m) => FuncName(m) + "_hentry";
+
+    private static string HookGate(IMethodSymbol m) => FuncName(m) + "_gate";
+
+    /// <summary>
+    /// Declarations of every [HookEntry] method's C function (hook, object, message as plain C arguments, the result pointer-sized)
+    /// and the macro for the address that goes into h_Entry: on m68k an assembly entry at the end of the file that takes the
+    /// registers (a0 hook, a2 object, a1 message); on MorphOS a 68k-callable EmulLibEntry (TRAP_LIB) whose function reads those
+    /// registers from the emulation handle; on AmigaOS 4, AROS x86-64 and the host gcc of the tests the C function itself (they call
+    /// hooks as C functions with the hook, object and message in that order).
+    /// </summary>
+    private void EmitHookDeclarations(IEnumerable<IMethodSymbol> methods)
+    {
+        var list = methods.Where(IsHookEntry).ToList();
+        if (list.Count == 0) return;
+        foreach (var m in list)
+        {
+            Line($"uintptr_t {HookName(m)}(void *es_hook, void *es_obj, void *es_msg);");
+            _out.Append("#if defined(__mc68000__)\n");
+            Line($"extern void {HookM68kEntry(m)}(void);   /* hook entry (end of file): a0 hook, a2 object, a1 message, result in d0 */");
+            Line($"#define {HookAddress(m)} ((void *){HookM68kEntry(m)})");
+            _out.Append("#elif defined(__MORPHOS__)\n");
+            Line($"extern const struct EmulLibEntry {HookGate(m)};");
+            Line($"#define {HookAddress(m)} ((void *)&{HookGate(m)})");
+            _out.Append("#else\n");
+            Line($"#define {HookAddress(m)} ((void *){HookName(m)})");
+            _out.Append("#endif\n");
+        }
+        Line("");
+    }
+
+    /// <summary>After a [HookEntry] method: the C function the system (or the m68k entry, or the MorphOS gate) calls.</summary>
+    private void EmitHookFunction(IMethodSymbol m, SyntaxNode decl)
+    {
+        if (!_hookEntries.Contains(m, SymbolEqualityComparer.Default)) return;
+        var names = new[] { "es_hook", "es_obj", "es_msg" };
+        var args = string.Join(", ", m.Parameters.Select((p, i) => $"({CType(p.Type, decl)}){(p.Type is IPointerTypeSymbol ? "" : "(uintptr_t)")}{names[i]}"));
+        Line($"uintptr_t {HookName(m)}(void *es_hook, void *es_obj, void *es_msg)");
+        Line("{");
+        if (m.ReturnsVoid)
+        {
+            Line($"    {FuncName(m)}({args});");
+            Line("    return 0;");
+        }
+        else
+            Line($"    return (uintptr_t){(m.ReturnType is IPointerTypeSymbol ? "" : m.ReturnType.SpecialType == SpecialType.System_Int32 ? "(intptr_t)" : "")}{FuncName(m)}({args});");
+        Line("}");
+        _out.Append("#if defined(__MORPHOS__)\n");
+        Line($"static uintptr_t {HookGate(m)}_fn(void) {{ return {HookName(m)}((void *)REG_A0, (void *)REG_A2, (void *)REG_A1); }}");
+        Line($"const struct EmulLibEntry {HookGate(m)} = {{ TRAP_LIB, 0, (void (*)(void)){HookGate(m)}_fn }};");
+        _out.Append("#endif\n");
+        Line("");
+    }
+
+    /// <summary>
+    /// The m68k entries of the [HookEntry] methods, last in the file. The system calls a hook with the hook in a0, the object in
+    /// a2 and the message in a1 and takes the result from d0; it may lose d0/d1/a0/a1. The entry pushes the three as C arguments
+    /// (the C function keeps d2-d7/a2-a6) and pops them again.
+    /// </summary>
+    private void EmitHookEntries()
+    {
+        if (_hookEntries.Count == 0) return;
+        var sb = new StringBuilder();
+        foreach (var m in _hookEntries)
+            sb.Append($"\\t.text\\n\\t.even\\n\\t.globl _{HookM68kEntry(m)}\\n_{HookM68kEntry(m)}:\\n\\tmove.l a1,-(sp)\\n\\tmove.l a2,-(sp)\\n\\tmove.l a0,-(sp)\\n\\tjsr _{HookName(m)}\\n\\tlea 12(sp),sp\\n\\trts\\n");
+        Line("#if defined(__mc68000__)");
+        // The entry calls C with the caller's registers: a small-data (a4-relative) build would see input.device's a4, not ours.
+        Line("#if defined(__baserel__)");
+        Line("#error \"[HookEntry] entries need a large-data build (no -fbaserel / -resident)\"");
+        Line("#endif");
+        Line($"__asm__(\"{sb}\");");
+        Line("#endif");
+    }
+
+    /// <summary>MorphOS needs the emulation interface for the hook gates; the other targets nothing extra.</summary>
+    private bool UsesHookEntries => _hookEntries.Count > 0;
 }
