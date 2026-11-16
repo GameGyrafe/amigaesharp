@@ -72,10 +72,11 @@ if [ -n "$bootwb" ]; then
   bootadf="${out%/}-boot.adf"
   # The bootable image holds AmigaOS files: refuse to write it anywhere git does not ignore (obj/ is ignored).
   git check-ignore -q -- "$bootadf" || { echo "refusing to write $bootadf: it holds AmigaOS files and is not git-ignored (use an outdir under obj/)" >&2; exit 1; }
-  # Only what the scripts and programs use that Kickstart 3.1 does not hold in ROM: the C: commands RunAll/RunOne and our startup call
+  # Only what the scripts and programs use that Kickstart 3.0/3.1 does not hold in ROM: the C: commands RunAll/RunOne and our startup call
   # (Execute, Date, Delete, Type, Assign, MakeDir, SetPatch) and the libraries the programs open from LIBS: (asl, diskfont, iffparse, lowlevel).
   # Workbench 3.0 has no lowlevel.library (it came with 3.1), so a library missing from your disk is left out (the program that
   # uses it then takes its no-library path); a missing C: command is still an error.
+  python3 -I "$here/mkadf.py" ls "$bootwb" >/dev/null || { echo "cannot read the Workbench disk image $bootwb" >&2; exit 1; }
   from=(); for f in C/Execute C/Date C/Delete C/Type C/Assign C/MakeDir C/SetPatch Libs/asl.library Libs/diskfont.library Libs/iffparse.library Libs/lowlevel.library; do
     if [[ $f == Libs/* ]] && ! python3 -I "$here/mkadf.py" cat "$bootwb" "$f" >/dev/null 2>&1; then
       echo "note: $f is not on your Workbench disk; the bootable image is written without it"; continue; fi
