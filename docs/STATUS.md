@@ -1035,7 +1035,7 @@ Verified:
 - A1200, Kickstart 3.1 in FS-UAE: 17 ok, screenshot viewed.
 - After the review fixes: 248 unit tests pass, and the A1200 / Kickstart 3.1 run of samples/assets gives 17 ok again (its generated Assets.g.cs did not change). Hosted AROS was not re-run after the fixes (no platform code changed).
 - Hosted AROS (nightly 20261106, run on a private copy of the AROS directory): 17 ok, screenshot taken but not viewed.
-- The hwpack script was edited to include `assets` but it was not built or run.
+- The `assets` entry of the hwpack has been run in FS-UAE (A1200, Kickstart 3.1) through `tools/hwpack/run-emulated.sh`: every program gave its expected ok count (PR #79), 17 ok for `assets`. Real hardware: not verified.
 
 Not verified: sound was not audible (no OpenAL device in the emulator; only Busy/Stop was checked), a malformed-ILBM size above 4096x4096 pixels is rejected (unit-tested only), ILBM files written by real paint programs (only files written by our own writer in tests, so odd real-world files such as 4-bit CMAPs are untested), dithered output of photographic images beyond the generated gradient, 8SVX with several octaves, real hardware.
 
