@@ -36,7 +36,7 @@ public static class Descriptors
 
     public static readonly DiagnosticDescriptor HeapClass = Error(
         "ES0007", "This kind of class is not supported yet",
-        "Class '{0}': {1}. Supported: static classes and plain heap classes (fields, properties, methods, constructors; single inheritance from another plain class of the program)");
+        "Class '{0}': {1}. Supported: static classes and plain heap classes (fields, properties, methods, constructors; single inheritance from another plain class of the program or an [Extensible] library class)");
 
     public static readonly DiagnosticDescriptor Generics = Error(
         "ES0008", "Generic classes and library generics are not supported",

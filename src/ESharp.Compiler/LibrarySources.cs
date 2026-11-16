@@ -7,6 +7,9 @@ namespace ESharp.Compiler;
 /// <summary>Runtime and platform sources embedded in the compiler assembly.</summary>
 internal static class LibrarySources
 {
+    /// <summary>The paths the library files are parsed under (resource names, ESharp.Compiler.csproj), for the analyzer: ';'-separated prefixes.</summary>
+    public const string PathPrefixes = "lib/Runtime/;lib/Platform/";
+
     public static IEnumerable<SourceFile> Load()
     {
         var asm = typeof(LibrarySources).Assembly;

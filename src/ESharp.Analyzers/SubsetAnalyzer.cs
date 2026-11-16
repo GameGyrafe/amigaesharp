@@ -16,6 +16,9 @@ public sealed partial class SubsetAnalyzer : DiagnosticAnalyzer
 {
     public const string AllowFloatProperty = "build_property.ESharpAllowFloat";
 
+    /// <summary>Set by the compiler, which parses E#'s library as source: the path prefixes of those files, separated by ';'.</summary>
+    public const string LibrarySourcesProperty = "build_property.ESharpLibrarySources";
+
     public override ImmutableArray<DiagnosticDescriptor> SupportedDiagnostics => Descriptors.SubsetRules;
 
     public override void Initialize(AnalysisContext context)
@@ -187,7 +190,8 @@ public sealed partial class SubsetAnalyzer : DiagnosticAnalyzer
     /// <summary>
     /// Classes are heap objects (allocated by <c>new</c>, freed with <c>Heap.Free</c>) held by pointer. A class may derive from
     /// one other plain class declared in the program (single inheritance, with virtual, abstract and override members, and
-    /// <c>is</c>/<c>as</c> tests) and may implement interfaces. A base class from the library (anything but object) or a generic base is not supported.
+    /// <c>is</c>/<c>as</c> tests), or from an E# library class marked <c>[Extensible]</c> (such as <c>GtWindow</c>), and may implement
+    /// interfaces. Other library classes (.NET's, or E#'s without the attribute) and generic bases are not supported.
     /// </summary>
     private static void CheckClass(SyntaxNodeAnalysisContext c)
     {
@@ -196,10 +200,26 @@ public sealed partial class SubsetAnalyzer : DiagnosticAnalyzer
             if (m.IsKind(SyntaxKind.StaticKeyword)) return;
         if (c.SemanticModel.GetDeclaredSymbol(decl, c.CancellationToken) is { BaseType: { SpecialType: not SpecialType.System_Object } baseType })
         {
-            if (baseType.IsGenericType || baseType.IsStatic || baseType.TypeKind != TypeKind.Class || !baseType.Locations.Any(l => l.IsInSource))
+            if (baseType.IsGenericType || baseType.IsStatic || baseType.TypeKind != TypeKind.Class)
             {
                 c.ReportDiagnostic(Diagnostic.Create(Descriptors.HeapClass, decl.Identifier.GetLocation(), decl.Identifier.Text,
-                    $"it inherits from '{baseType.Name}': only a plain, non-generic class declared in the program can be a base class"));
+                    $"it inherits from '{baseType.Name}': only a plain, non-generic class can be a base class"));
+                return;
+            }
+            // E#'s own library is source in esharp build but a referenced assembly in the IDE: the same rule both ways, by attribute.
+            if (IsESharpLibraryType(c, baseType))
+            {
+                if (!IsExtensible(baseType))
+                {
+                    c.ReportDiagnostic(Diagnostic.Create(Descriptors.HeapClass, decl.Identifier.GetLocation(), decl.Identifier.Text,
+                        $"it inherits from '{baseType.Name}', a library class that is not marked [Extensible]: only library classes made for it (such as GtWindow) can be base classes"));
+                    return;
+                }
+            }
+            else if (!baseType.Locations.Any(l => l.IsInSource))
+            {
+                c.ReportDiagnostic(Diagnostic.Create(Descriptors.HeapClass, decl.Identifier.GetLocation(), decl.Identifier.Text,
+                    $"it inherits from '{baseType.Name}': only a plain, non-generic class declared in the program, or an [Extensible] E# library class, can be a base class"));
                 return;
             }
         }
@@ -273,6 +293,25 @@ public sealed partial class SubsetAnalyzer : DiagnosticAnalyzer
         var assembly = method.OriginalDefinition.ContainingAssembly?.Name;
         return assembly == "ESharp.Platform" || assembly == "ESharp.Runtime";
     }
+
+    /// <summary>
+    /// A type of E#'s own library: from the ESharp.Platform / ESharp.Runtime assemblies (IDE, host projects), or, where the compiler
+    /// parses the library as source together with the program, declared in one of the library's source files. The compiler names
+    /// those by path prefix in the <see cref="LibrarySourcesProperty"/> option (lib/Runtime/ and lib/Platform/); the IDE does not set it.
+    /// </summary>
+    private static bool IsESharpLibraryType(SyntaxNodeAnalysisContext c, INamedTypeSymbol type)
+    {
+        var assembly = type.OriginalDefinition.ContainingAssembly?.Name;
+        if (assembly == "ESharp.Platform" || assembly == "ESharp.Runtime") return true;
+        if (!c.Options.AnalyzerConfigOptionsProvider.GlobalOptions.TryGetValue(LibrarySourcesProperty, out var prefixes) || string.IsNullOrEmpty(prefixes))
+            return false;
+        var list = prefixes.Split(new[] { ';' }, System.StringSplitOptions.RemoveEmptyEntries);
+        return type.OriginalDefinition.DeclaringSyntaxReferences.Any(r => list.Any(p => r.SyntaxTree.FilePath.StartsWith(p, System.StringComparison.Ordinal)));
+    }
+
+    /// <summary>The library class is marked <c>[ESharp.Extensible]</c>: programs may derive from it.</summary>
+    private static bool IsExtensible(INamedTypeSymbol type) =>
+        type.OriginalDefinition.GetAttributes().Any(a => a.AttributeClass is { Name: "ExtensibleAttribute", ContainingNamespace: { Name: "ESharp", ContainingNamespace.IsGlobalNamespace: true } });
 
     private static void CheckSince(SyntaxNodeAnalysisContext c, IMethodSymbol method)
     {
