@@ -1082,7 +1082,7 @@ complement), no RLE, no ARGB chunk.
 name from the startup message), copies the tool types into a static 2 KB buffer as the argument words and at once frees the DiskObject, drops the OS4 interface and closes the
 library, so nothing stays allocated or open (the first version leaked them; the review found it). Argument 0 is the program name from the startup message. `KEY=VALUE` and `SWITCH` stay as they are;
 quotes around a value (`NAME="two words"`) are removed as a Shell does. Skipped: `(NAME)` (switched off in the icon), empty ones and Workbench's own tool types TOOLPRI, STARTPRI,
-DONOTWAIT, TOOLWINDOW and WINDOW (case-insensitive). At most 64 words and 2 KB of text; the rest is dropped without a message. So `Args.Value("SEED")`, `Args.Has("AUTO")` and
+DONOTWAIT and TOOLWINDOW (case-insensitive; WINDOW is not skipped, a program may use it as its own switch). At most 64 words and 2 KB of text; the rest is dropped without a message. So `Args.Value("SEED")`, `Args.Has("AUTO")` and
 `args` work as from a Shell. No C# bindings were added for icon.library: the C uses the toolchain's own `proto/icon.h`, `workbench/startup.h` and `workbench/workbench.h`, so no
 vector number or struct offset is written by us (the usual `IconBase` / `IIcon` names are renamed so the C startup does not open the library itself). A Shell start and
 `esharp run --args` are unchanged. Host gcc tests: the tool type conversion, and a whole Workbench start against fake icon.library and WBStartup headers that count open libraries
@@ -1098,18 +1098,18 @@ copy of the pack without the `.info` files (it boots into RunAll, not Workbench)
 m68k, the stack size read from the task.
 
 Verified:
-- `dotnet test`: see the pull request for the numbers; new `IconTests` (10): header offsets and endianness, write then read back (fields, tool types, both images),
-  sizes of the classic image and the FORM, odd widths, PNG conversion, csproj properties, Amiga-only, and the tool types reaching `Args` in generated C built and run with the host gcc.
+- `dotnet test`: 452 passed, 0 failed, 2 skipped (454) after the review fixes. `IconTests` (13 + the Workbench-start ones; the filter run gave 13 passed before the WINDOW change): header offsets and endianness, write then read back (fields, tool types, both images),
+  sizes of the classic image and the FORM, odd widths, PNG conversion, an opaque black pixel next to a transparent one, csproj properties, `$(` refused, Amiga-only, tool types reaching `Args`
+  in generated C built and run with the host gcc, and a whole Workbench start against fake icon.library / WBStartup headers (quotes removed, TOOLPRI / donotwait / (OFF) / empty skipped,
+  open libraries and loaded DiskObjects both 0 afterwards).
 - A1200, Kickstart 3.1 (40.069) in FS-UAE 3.2.35, Workbench 3.1 disk 2 booted in DF0, the built program and `.info` in a directory hard disk: the volume window shows the
   E# icon (classic image), a double-click starts the program (scripted mouse through XTEST, screenshots looked at), the window shows `arguments 2, SEED 42, AUTO yes`
-  and `Stack 32768` (the icon's tool types and the icon's stack size, 32768 against the Workbench default). The hardware pack's `hwtest.adf` as DF1: its window shows the icons
-  (aga, asl, assets, cards, collections ... in a scrolled window); a double-click on one of them was not repeated with the final colour format (the classic part is
-  what Kickstart 3.1 reads and it did not change).
+  and `Stack 32768` (the icon's stack size against the Workbench default). Re-run after the review fixes (static buffer, DiskObject freed, library closed): same result. The hardware pack's `hwtest.adf` as DF1: its window shows the icons
+  (aga, asl, assets, cards, collections ... in a scrolled window); a double-click on one of them was not repeated with the final colour format.
 - AmigaOS 4.1 (QEMU pegasos2, `ESHARP_OS4_VM`): the program and icon on a CD (`ESTEST`), the Workbench window shows the icon, a double-click starts the program (scripted mouse
-  through the QEMU monitor, screendumps looked at) and the window shows `arguments 2, SEED 42, AUTO yes`. What the first try taught: OS4's Workbench dropped the whole icon (it did not
-  show at all) when the colour image was packed at 3 bits per pixel with Depth 3; one byte per pixel with the depth field 8 is accepted (and the FACE palette field is the largest palette in bytes minus 1).
+  through the QEMU monitor, screendumps looked at) and the window shows `arguments 2, SEED 42, AUTO yes`; re-run after the review fixes with the same result. What the first try taught: OS4's Workbench dropped the whole icon when the colour image was packed at 3 bits per pixel with Depth 3; one byte per pixel with the depth field 8 is accepted (and the FACE palette field is the largest palette in bytes minus 1).
   The stack size on OS4 was not read back (the sample's probe is m68k only).
-- Built for all four Amiga targets: `samples/wbstart` for m68k, os4 and aros, `samples/mainargs` for morphos (gui does not build for morphos, as before).
+- Built with the reworked C (static buffer, release code, `.info` written each time): `samples/wbstart` for m68k, os4 and aros; `samples/mainargs` for morphos and aros. `samples/wbstart` for morphos stops at the same gadtools pointer-type errors as `samples/gui` (Gui is not ported to morphos); none of its errors mention the icon or Workbench-start code.
 - Not verified: MorphOS and AROS Workbench start (the C compiles; nothing was run there: hosted AROS has no Workbench in the harness), real hardware, Workbench 3.1 showing the
   colour image (it reads the classic one only; GlowIcons/OS 3.5+ were not available), OS 3.5/3.9, a stack size larger than the Workbench default taking effect on OS4, a drawer
   icon for a program folder, how the colour image looks on MorphOS/AROS.

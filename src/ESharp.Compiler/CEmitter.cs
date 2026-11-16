@@ -555,7 +555,7 @@ internal sealed partial class CEmitter
             // Workbench's own tool types (they steer how Workbench starts the program) are not program arguments.
             result.AppendLine("static int es_tt_is_workbench(const char *s)");
             result.AppendLine("{");
-            result.AppendLine("    static const char *const names[] = { \"TOOLPRI\", \"STARTPRI\", \"DONOTWAIT\", \"TOOLWINDOW\", \"WINDOW\", NULL };");
+            result.AppendLine("    static const char *const names[] = { \"TOOLPRI\", \"STARTPRI\", \"DONOTWAIT\", \"TOOLWINDOW\", NULL };");
             result.AppendLine("    for (int k = 0; names[k] != NULL; k++)");
             result.AppendLine("    {");
             result.AppendLine("        const char *n = names[k]; const char *p = s;");

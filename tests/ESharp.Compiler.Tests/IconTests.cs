@@ -210,13 +210,13 @@ static struct Library es_t_lib;
 static inline struct Library *OpenLibrary(CONST_STRPTR n, unsigned v) { (void)n; (void)v; es_t_open++; return &es_t_lib; }
 static inline void CloseLibrary(struct Library *l) { (void)l; es_t_open--; }
 static inline BPTR CurrentDir(BPTR b) { return b; }
-static char *es_t_src[] = { ""SEED=42"", ""(OFF)"", ""AUTO"", """", ""TOOLPRI=5"", ""NAME=\""two words\"""", ""donotwait"", NULL };
+static char *es_t_src[] = { ""SEED=42"", ""(OFF)"", ""AUTO"", """", ""TOOLPRI=5"", ""NAME=\""two words\"""", ""donotwait"", ""WINDOW=small"", NULL };
 static inline struct DiskObject *GetDiskObject(CONST_STRPTR n)
 {
     (void)n; es_t_dobs++;
     struct DiskObject *d = malloc(sizeof *d);
     d->do_ToolTypes = malloc(sizeof es_t_src);
-    for (int i = 0; i < 8; i++) d->do_ToolTypes[i] = es_t_src[i] ? strdup(es_t_src[i]) : NULL;
+    for (int i = 0; i < 9; i++) d->do_ToolTypes[i] = es_t_src[i] ? strdup(es_t_src[i]) : NULL;
     return d;
 }
 static inline void FreeDiskObject(struct DiskObject *d)
@@ -242,7 +242,7 @@ static void __attribute__((destructor)) es_t_report(void) { printf(""open %d dis
         var test = "#define __AMIGA__ 1\n" + c.Replace("argc == 0", "1").Replace("(struct WBStartup *)argv", "&es_t_wb");
         Assert.Contains("&es_t_wb", test);
         // Quotes around a value are removed, TOOLPRI / donotwait / (OFF) / empty are skipped, and the library and the DiskObject are released.
-        Assert.Equal((0, "SEED=42\nAUTO\nNAME=two words\nopen 0 diskobjects 0\n"), RunWithHostGcc(test, headers));
+        Assert.Equal((0, "SEED=42\nAUTO\nNAME=two words\nWINDOW=small\nopen 0 diskobjects 0\n"), RunWithHostGcc(test, headers));
     }
 
     [Fact]
