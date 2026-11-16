@@ -147,3 +147,14 @@ public sealed class InlineAsmAttribute : Attribute
 public sealed class OwnedAttribute : Attribute
 {
 }
+
+/// <summary>
+/// On a class of the E# library (ESharp.Platform, ESharp.Runtime): a class of the program may derive from it and override its
+/// virtual members (<c>class MyWindow : GtWindow</c>). Library classes without it cannot be base classes (ES0007), so what is
+/// meant to be extended is said explicitly. The analyzer reads it from source (esharp build) and from the referenced assembly
+/// (an IDE project made by <c>esharp new</c>) alike.
+/// </summary>
+[AttributeUsage(AttributeTargets.Class, Inherited = false)]
+public sealed class ExtensibleAttribute : Attribute
+{
+}

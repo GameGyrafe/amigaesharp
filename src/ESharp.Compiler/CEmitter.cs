@@ -852,6 +852,27 @@ internal sealed partial class CEmitter
         {
             if (m == null || !reachable.Add(m.OriginalDefinition)) return;
             foreach (var r in m.OriginalDefinition.DeclaringSyntaxReferences) work.Push(r.GetSyntax());
+            if (m.MethodKind == MethodKind.Constructor && !m.IsStatic && IsHeapClass(m.ContainingType)) AddChainedConstructor(m.OriginalDefinition);
+        }
+
+        // A class constructor runs another one that no expression names: the one its ': base(...)' / ': this(...)' calls, or, without
+        // one, the nearest explicit parameterless base constructor. Within the program all of them are emitted anyway; a class of the
+        // program that derives from an [Extensible] library class (class MyWindow : GtWindow) needs the library's constructor too.
+        void AddChainedConstructor(IMethodSymbol ctor)
+        {
+            var init = ctor.DeclaringSyntaxReferences.Select(r => r.GetSyntax()).OfType<ConstructorDeclarationSyntax>().FirstOrDefault()?.Initializer;
+            if (init != null && Model(init).GetSymbolInfo(init).Symbol is IMethodSymbol { IsImplicitlyDeclared: false } chained) { Add(chained); return; }
+            if (init != null && init.IsKind(SyntaxKind.ThisConstructorInitializer)) return;
+            for (var b = BaseClass(ctor.ContainingType); b != null; b = BaseClass(b))
+            {
+                // Base field initializers run too (ImplicitInits): what they use is walked like any used field.
+                foreach (var member in b.GetMembers())
+                    if (member is IFieldSymbol { IsStatic: false } or IPropertySymbol { IsStatic: false }) _usedSymbols.Add(member);
+                var explicitCtors = b.InstanceConstructors.Where(k => !k.IsImplicitlyDeclared).ToList();
+                if (explicitCtors.Count == 0) continue;
+                Add(explicitCtors.FirstOrDefault(k => k.Parameters.Length == 0));
+                break;
+            }
         }
 
         foreach (var entry in FindEntryPoints(_compilation, _user)) Add(entry);
