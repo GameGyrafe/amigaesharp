@@ -8,8 +8,47 @@ in an emulator. Your run is the first on real hardware.
    An Amiga 1200 or a THEA1200 (68020 or better, AGA, 2 MB chip RAM, Kickstart 3.1, Workbench 3.1 on a
    hard disk or CF card). Other machines are welcome to report (see section 5) but are not the target.
 
+1b. The floppy image (obj/hwtest.adf)
+   tools/hwpack/build.sh also writes the whole pack as ONE 880 KB AmigaDOS floppy image, hwtest.adf (FFS, volume
+   HWTEST, a data disk: only E# files, no AmigaOS files, not bootable; about 660 KB used, 220 KB left for results).
+   a) A real Amiga 1200 with only a floppy drive (no hard disk, no fast RAM; often Kickstart 3.0):
+      - Write hwtest.adf to a double-density disk with a Greaseweazle or KryoFlux (or put it on a USB stick for a Gotek
+        running FlashFloppy and select it there). A PC floppy drive cannot write Amiga disks.
+      - Boot your own Workbench 3.x floppy. Insert the pack disk in the same drive (or DF1:), open a Shell
+        (Workbench disk, System drawer) and type:   CD HWTEST:   then   Execute RunAll
+        Do not write-protect the pack disk: the results are written to it (results drawer and SUMMARY.txt).
+      - Before RunAll, so that diskfont.library does not stop with an "insert volume FONTS:" requester (the Workbench
+        disk has no Fonts drawer):   MakeDir RAM:Fonts   then   Assign FONTS: RAM:Fonts
+      - The Workbench disk's startup makes T: and ENV: in RAM:, which RunAll needs. Its Libs drawer has the libraries
+        asl, diskfont, iffparse and lowlevel, so the ok counts in section 3 apply; with a different boot disk some
+        programs print "not installed" lines (section 3).
+      - Afterwards read results/ and SUMMARY.txt off the disk (copy them to a hard disk or read the image back with
+        tools/hwpack/mkadf.py: python3 -I mkadf.py extract <image> <folder>). With a Greaseweazle or KryoFlux read the disk
+        into an .adf first.
+      Kickstart 3.0 is not verified (only Kickstart 3.1 was run); the pack needs version 39 or higher libraries.
+   b) THEA500 Mini (or another UAE-based emulator that loads .adf files):
+      - Copy hwtest.adf, and your own Workbench disk image, to a USB stick and choose the A1200 / AGA setting in the
+        machine's menu. NOT VERIFIED: the exact menu entries and the file-name convention were not checked on a machine.
+        Retro Games' official manual is at https://retrogames.biz/support/thea500-mini (not read in full here; check its
+        sections on the USB stick and on loading your own programs).
+      - Boot the Workbench image in DF0 and the pack image in DF1 (or insert the pack disk as the second disk), then as in a).
+      - The emulator writes the results into the image; copy the image back from the stick and read it with mkadf.py.
+   c) FS-UAE, no hard disk, as a stock A1200 (Kickstart 3.1, 2 MB chip RAM only):
+        tools/hwpack/run-emulated.sh --floppy obj/hwtest.adf --rom <rom> --wb <Workbench 3.1 disk .adf>
+      DF0 is a throwaway copy of your Workbench disk (with one extra file, S:User-Startup, that runs the pack from
+      DF1), DF1 a copy of the pack disk. It prints SUMMARY.txt read back from the image; the run directory keeps
+      results-disk/ (everything on the pack disk afterwards).
+   d) Bootable variant, for your own use only: build.sh <image> --boot-wb <your Workbench 3.x disk 2 .adf> also writes
+      obj/hwtest-boot.adf, the pack plus ONLY the few AmigaOS files needed to boot and run it (C:Execute, Date, Delete,
+      Type, Assign, MakeDir and four libraries, read from YOUR Workbench disk at build time) and a startup-sequence we
+      wrote. Boot it alone in DF0: it runs RunAll and leaves a shell. THIS DISK HOLDS COPYRIGHTED AMIGAOS FILES: use it
+      yourself, never share it, attach it to a report or commit it (obj/ is git-ignored). Emulated:
+        tools/hwpack/run-emulated.sh --boot-floppy obj/hwtest-boot.adf --rom <rom>
+      The pack disk with 880 KB has room for results, but the boot variant has only about 130 KB left: if the disk fills up
+      during the run, delete README.txt on it (or use the two-disk way in a)).
+
 2. Run it
-   - Copy this whole drawer to the Amiga (anywhere on the hard disk), open a Shell, CD into it.
+   - (Floppy only: see 1b.) Copy this whole drawer to the Amiga (anywhere on the hard disk), open a Shell, CD into it.
    - Only if you copied it from a PC (the Amiga protection bits are lost):
          Protect RunAll RunOne +s
          Protect #? +e
@@ -52,6 +91,10 @@ in an emulator. Your run is the first on real hardware.
      controls   12 with lowlevel.library in LIBS: (9 without it); the joystick line depends on what is plugged in
      keys       9 if you press a key while it waits (it waits about ten seconds)
      fonts      7 without diskfont.library, 8 with it, 10 with it and a disk font such as ruby in FONTS:
+     dates      19; when you boot a Workbench disk first (the floppy way in 1b) the Workbench locale may be active and one line,
+                "FAIL the division sign is not a letter" (ToUpper of 0xF7), appears: 18 ok and 1 FAIL. It was seen in FS-UAE
+                with the Workbench 3.1 disk booted (not with the bootable pack disk, which has no locale); the cause is the locale
+                tables, not yet checked on a real machine. Report it either way.
      iff, asl   one line saying "not installed" and no ok lines if iffparse.library / asl.library is not in LIBS:
      timing     one fewer ok and a "note" line if the machine is not real time; 60 frames per second on NTSC
      rtg        runs more checks on a machine with an RTG card
