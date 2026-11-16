@@ -517,10 +517,8 @@ public static class P
     static void Smash() { int a = 1, b = 2, c = 3, d = 4; int[] z = new int[8]; for (int i = 0; i < 8; i++) z[i] = 0x5A5A5A5A; Dos.PutStr(a+b+c+d+z[3] > 0 ? """" : ""z""); }
     static void Make()
     {
-        int x = 0;
         System.Action a = () => { };
         System.Action b = () => a();
-        x++;
         Field = b;
     }
     [EntryPoint]
