@@ -135,7 +135,7 @@ public class IconTests
             var s = IconStep.ReadSettings(dir);
             Assert.Equal(32768, s.StackSize);
             Assert.Equal(new[] { "SEED=42", "AUTO" }, s.ToolTypes);
-            Assert.EndsWith("art/i.png", s.IconPng);
+            Assert.EndsWith(Path.Combine("art", "i.png"), s.IconPng);
             File.WriteAllText(Path.Combine(dir, "G.csproj"), "<Project><PropertyGroup><EsStackSize>12</EsStackSize></PropertyGroup></Project>");
             Assert.Throws<InvalidDataException>(() => IconStep.ReadSettings(dir));
             File.WriteAllText(Path.Combine(dir, "G.csproj"), "<Project><PropertyGroup><EsIcon>none</EsIcon></PropertyGroup></Project>");
