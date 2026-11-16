@@ -48,7 +48,7 @@ public static unsafe class Keys
     public static bool Open()
     {
         if (_base != null) return true;
-        _base = Exec.OpenLibrary("keymap.library", 39);
+        _base = Exec.OpenLibrary("keymap.library", 37);   // the ROM copy is v37 on Kickstart 3.0 (v40 on 3.1); every call used here is v36
         if (_base == null) return false;
         Keymap.SetBase(_base);
         return true;
