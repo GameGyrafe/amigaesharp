@@ -43,7 +43,8 @@ in an emulator. Your run is the first on real hardware.
       - Afterwards read results/ and SUMMARY.txt off the disk (copy them to a hard disk or read the image back with
         tools/hwpack/mkadf.py: python3 -I mkadf.py extract <image> <folder>). With a Greaseweazle or KryoFlux read the disk
         into an .adf first.
-      Kickstart 3.0 is not verified (only Kickstart 3.1 was run); the pack needs version 39 or higher libraries.
+      Kickstart 3.0 with Workbench 3.0 was run in an emulator: everything passes except controls, which gives 9 ok instead
+      of 12 (Workbench 3.0 has no lowlevel.library). The bootable disk is then written without lowlevel.library.
    b) THEA500 Mini (or another UAE-based emulator that loads .adf files):
       - Copy hwtest.adf, and your own Workbench disk image, to a USB stick and choose the A1200 / AGA setting in the
         machine's menu. NOT VERIFIED: the exact menu entries and the file-name convention were not checked on a machine.
