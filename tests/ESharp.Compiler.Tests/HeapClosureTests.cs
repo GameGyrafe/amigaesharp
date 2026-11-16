@@ -286,7 +286,6 @@ Kept = null;   // dropped without Heap.Free: the frame is unreachable, which the
 
     [Theory]
     [InlineData("static System.Func<int>[] Fs = new System.Func<int>[3];", "int[] xs = new int[3]; foreach (int x in xs) Fs[0] = () => x;")]            // a foreach variable
-    [InlineData("static System.Action Kept; static void Keep(System.Action a) { Kept = () => a(); }", "")]                                       // captures a borrowed parameter
     [InlineData("static System.Func<int> Kept; static void Run(System.Action a) { a(); }", "int k = 1; Run(() => { Kept = () => k; });")]     // through a borrowed lambda
     [InlineData("public class E { public event System.Action Ev; public void Clear() { Ev = null; } }", "")]                                  // assigning an event
     [InlineData("public class E { public event System.Action Ev { add { } remove { } } }", "")]                                               // event accessors
@@ -340,6 +339,399 @@ public class B { public event System.Action Ev; public void Drop() { Heap.Free(r
 static System.Func<int> Kept;
 static void Wire(B b) { int n = 0; System.Action h = () => n++; b.Ev += h; Heap.Free(ref h); b.Ev += () => n--; Kept = () => n; Heap.Free(ref Kept); }", ""));
         Assert.DoesNotContain(r.Diagnostics, x => x.Id == "ES0013");
+    }
+
+    // ---- review probes (PR #83): each runs under AddressSanitizer/LeakSanitizer when available, or must not compile.
+
+    private static (int code, string output) RunProgram(string source)
+    {
+        var c = CompileOk(source);
+        return HasSanitizers ? RunSanitized(c) : RunWithHostGcc(c);
+    }
+
+    private const string Probe_coalesce = @"using ESharp;
+using ESharp.Platform;
+public static class P
+{
+    static System.Action? Held;
+    static System.Action? Other;
+    static void Smash() { int a = 1, b = 2, c = 3, d = 4; int[] z = new int[8]; for (int i = 0; i < 8; i++) z[i] = 0x5A5A5A5A; Dos.PutStr(a+b+c+d+z[3] > 0 ? """" : ""z""); }
+    static void Make() { int x = 41; System.Action a = () => x++; Held = a ?? Other; }
+    [EntryPoint]
+    public static void Main() { Make(); Smash(); Held!(); Heap.Free(ref Held); Dos.PutStr(""done\n""); }
+}
+";
+
+    private const string Probe_coalasg = @"using ESharp;
+using ESharp.Platform;
+public static class P
+{
+    static System.Action? Held;
+    static void Smash() { int a = 1, b = 2, c = 3, d = 4; int[] z = new int[8]; for (int i = 0; i < 8; i++) z[i] = 0x5A5A5A5A; Dos.PutStr(a+b+c+d+z[3] > 0 ? """" : ""z""); }
+    static void Make() { int x = 41; System.Action a = () => x++; Held ??= a; }
+    [EntryPoint]
+    public static void Main() { Make(); Smash(); Held!(); Heap.Free(ref Held); Dos.PutStr(""done\n""); }
+}
+";
+
+    private const string Probe_switchx = @"using ESharp;
+using ESharp.Platform;
+public static class P
+{
+    static System.Action? Held;
+    static System.Action? Other;
+    static bool Flag = true;
+    static void Smash() { int a = 1, b = 2, c = 3, d = 4; int[] z = new int[8]; for (int i = 0; i < 8; i++) z[i] = 0x5A5A5A5A; Dos.PutStr(a+b+c+d+z[3] > 0 ? """" : ""z""); }
+    static void Make() { int x = 41; System.Action a = () => x++; Held = Flag switch { true => a, _ => Other }; }
+    [EntryPoint]
+    public static void Main() { Make(); Smash(); Held!(); Heap.Free(ref Held); Dos.PutStr(""done\n""); }
+}
+";
+
+    private const string Probe_p2 = @"using ESharp;
+using ESharp.Platform;
+public class Btn
+{
+    public event System.Action? Clicked;
+    public void Click() { Clicked?.Invoke(); }
+    public void Dispose() { Heap.Free(ref Clicked); }
+}
+public class Derived : Btn { }
+public class Counter
+{
+    public int N;
+    public System.Action? Inc;
+    public Counter(int start) { N = start; Inc = () => N++; }
+    public System.Action Bump => () => N += 10;
+    public void Dispose() { Heap.Free(ref Inc); }
+}
+public static class P
+{
+    static int Hits;
+    static System.Action MakeHit(int k) { return () => Hits += k; }
+    static System.Action? Stat;
+    static P() { int s = 7; Stat = () => Hits += s; }
+    static void Check(bool ok, string n) { Dos.PutStr(ok ? ""ok "" : ""FAIL ""); Dos.PutStr(n); Dos.PutStr(""\n""); }
+    static System.Action? G;
+    static void Gotos(int n) { for (int i = 0; i < n; i++) { int v = i; G = () => Hits += v; if (i < n - 1) { Heap.Free(ref G); continue; } } }
+    static void Sw(int k)
+    {
+        switch (k)
+        {
+            case 1:
+            {
+                int v = 100;
+                G = () => Hits += v;
+                break;
+            }
+            default:
+                return;
+        }
+    }
+    [EntryPoint]
+    public static void Main()
+    {
+        int b0 = Heap.LiveClosures();
+        var b = new Derived();
+        b.Clicked += MakeHit(1);      // a call result: the event retains again
+        b.Click();
+        Check(Hits == 1, ""call result handler ran"");
+        b.Dispose();
+        Heap.Free(ref b);
+        Dos.PutStr(""live after dispose: ""); Dos.PutStr(Heap.LiveClosures() == b0 ? ""0\n"" : ""LEAK\n"");
+        var c = new Counter(5);
+        c.Inc!(); 
+        Check(c.N == 6, ""ctor closure captures this"");
+        var bump = c.Bump; bump(); Heap.Free(ref bump);
+        Check(c.N == 16, ""property getter closure"");
+        c.Dispose(); Heap.Free(ref c);
+        Stat!(); Check(Hits == 8, ""static ctor closure""); Heap.Free(ref Stat);
+        Hits = 0; Gotos(3); G!(); Check(Hits == 2, ""loop continue frame""); Heap.Free(ref G);
+        Hits = 0; Sw(1); G!(); Check(Hits == 100, ""switch section block""); Heap.Free(ref G);
+        // self removal and removing another during a raise
+        var d = new Btn();
+        System.Action? h1 = null;
+        System.Action? h2 = null;
+        int calls = 0;
+        h1 = () => { calls++; d.Clicked -= h1; d.Clicked -= h2; };
+        h2 = () => { calls += 10; };
+        d.Clicked += h1; d.Clicked += h2;
+        d.Click();
+        Check(calls == 11, ""removed during raise still runs (snapshot)"");
+        d.Click();
+        Check(calls == 11, ""removed handlers gone"");
+        Heap.Free(ref h1); Heap.Free(ref h2);
+        d.Dispose(); Heap.Free(ref d);
+        Dos.PutStr(""live at end: ""); Dos.PutStr(Heap.LiveClosures() == 0 ? ""0\n"" : ""LEAK\n"");   // Stat (made before b0 was read) is freed by now
+    }
+}
+";
+
+    private const string Probe_p3 = @"using ESharp;
+using ESharp.Platform;
+public static class P
+{
+    static int Hits;
+    static System.Action? G;
+    static void Check(bool ok, string n) { Dos.PutStr(ok ? ""ok "" : ""FAIL ""); Dos.PutStr(n); Dos.PutStr(""\n""); }
+    static System.Func<System.Func<int>> Nested(int a)
+    {
+        int b = a * 2;
+        return () => { int c = b + 1; return () => a + b + c; };
+    }
+    static void Loop(int n)
+    {
+        int i = 0;
+        while (i < n)
+        {
+            int v = i;
+            if (v == 1) { i++; continue; }
+            if (v == 3) break;
+            System.Action t = () => Hits += v * 100;
+            if (G == null) G = t; else Heap.Free(ref t);
+            i++;
+        }
+    }
+    static System.Func<int> Ret(int p) { System.Func<int> f = () => p; if (p > 0) return f; Heap.Free(ref f); return () => -1; }
+    [EntryPoint]
+    public static void Main()
+    {
+        var mk = Nested(1);
+        var inner = mk();
+        Check(inner() == 1 + 2 + 3, ""nested stored lambdas"");
+        Heap.Free(ref inner); Heap.Free(ref mk);
+        Loop(5); G!(); Check(Hits == 0, ""loop frames""); Heap.Free(ref G);
+        var r1 = Ret(4); var r2 = Ret(0); Check(r1() == 4 && r2() == -1, ""early return""); Heap.Free(ref r1); Heap.Free(ref r2);
+        Check(Heap.LiveClosures() == 0, ""no leaks"");
+    }
+}
+";
+
+    private const string Probe_p7 = @"using ESharp;
+using ESharp.Platform;
+public class Btn { public event System.Action? Clicked; public void Click() { Clicked?.Invoke(); } public void Dispose() { Heap.Free(ref Clicked); } }
+public static class P
+{
+    static System.Action? Field;
+    static int Hits;
+    static void Smash() { int a = 1, b = 2, c = 3, d = 4; int[] z = new int[8]; for (int i = 0; i < 8; i++) z[i] = 0x5A5A5A5A; Dos.PutStr(a+b+c+d+z[3] > 0 ? """" : ""z""); }
+    static void Make()
+    {
+        int x = 0;
+        System.Action a = () => { };
+        System.Action b = () => a();
+        x++;
+        Field = b;
+    }
+    [EntryPoint]
+    public static void Main()
+    {
+        int b0 = Heap.LiveClosures();
+        var btn = new Btn();
+        int k = 2;
+        btn.Clicked += k > 1 ? () => Hits += k : () => Hits -= k;
+        btn.Click();
+        btn.Dispose();
+        Dos.PutStr(Heap.LiveClosures() == b0 ? ""no leak\n"" : ""LEAK conditional +=\n"");
+        Heap.Free(ref btn);
+        Make(); Smash(); Dos.PutStr(""done\n"");
+    }
+}
+";
+
+    [Theory]
+    [InlineData("coalesce")]
+    [InlineData("coalasg")]
+    [InlineData("switchx")]
+    public void Delegate_locals_kept_through_coalesce_and_switch_are_heap_closures(string probe)
+    {
+        if (!HasGcc) return;
+        var source = probe switch { "coalesce" => Probe_coalesce, "coalasg" => Probe_coalasg, _ => Probe_switchx };
+        var (code, output) = RunProgram(source);
+        Assert.Equal("done\n", output);
+        Assert.Equal(0, code);
+    }
+
+    [Fact]
+    public void Review_probe_handlers_from_calls_constructors_getters_loops_and_switch_sections()
+    {
+        if (!HasGcc) return;
+        var (code, output) = RunProgram(Probe_p2);
+        Assert.Equal("ok call result handler ran\nlive after dispose: 0\nok ctor closure captures this\nok property getter closure\nok static ctor closure\n" +
+            "ok loop continue frame\nok switch section block\nok removed during raise still runs (snapshot)\nok removed handlers gone\nlive at end: 0\n", output);
+        Assert.Equal(0, code);
+    }
+
+    [Fact]
+    public void Review_probe_nested_lambdas_loop_frames_and_early_returns()
+    {
+        if (!HasGcc) return;
+        var (code, output) = RunProgram(Probe_p3);
+        Assert.Equal("ok nested stored lambdas\nok loop frames\nok early return\nok no leaks\n", output);
+        Assert.Equal(0, code);
+    }
+
+    [Fact]
+    public void Adding_a_conditional_of_new_lambdas_hands_its_reference_to_the_event()
+    {
+        if (!HasGcc) return;
+        var (code, output) = RunProgram(Probe_p7);
+        Assert.Equal("no leak\ndone\n", output);
+        Assert.Equal(0, code);
+    }
+
+    private const string Probe_p4 = @"using ESharp;
+using ESharp.Platform;
+public static class P
+{
+    static System.Action? Held;
+    static void Keep(System.Action a) { System.Action t = a; Held = t; }
+    static void Smash() { int a = 1, b = 2, c = 3, d = 4; int[] z = new int[8]; for (int i = 0; i < 8; i++) z[i] = 0x5A5A5A5A; Dos.PutStr(a+b+c+d+z[3] > 0 ? """" : ""z""); }
+    static void Make() { int x = 41; Keep(() => x++); }
+    [EntryPoint]
+    public static void Main() { Make(); Smash(); Held!(); Dos.PutStr(""done\n""); }
+}
+";
+
+    private const string Probe_p6 = @"using ESharp;
+using ESharp.Platform;
+public static class P
+{
+    static System.Action Held = () => { };
+    static void Put<T>(ref T slot, T x) { slot = x; }
+    static void Smash() { int a = 1, b = 2, c = 3, d = 4; int[] z = new int[8]; for (int i = 0; i < 8; i++) z[i] = 0x5A5A5A5A; Dos.PutStr(a+b+c+d+z[3] > 0 ? """" : ""z""); }
+    static void Make() { int x = 41; Put(ref Held, () => x++); }
+    [EntryPoint]
+    public static void Main() { Make(); Smash(); Held(); Dos.PutStr(""done\n""); }
+}
+";
+
+    private const string Probe_p5 = @"using ESharp;
+using ESharp.Platform;
+public class Box<T> { public T V = default!; public void Set(T x) { V = x; } }
+public static class P
+{
+    static Box<System.Action> B = new Box<System.Action>();
+    static void Smash() { int a = 1, b = 2, c = 3, d = 4; int[] z = new int[8]; for (int i = 0; i < 8; i++) z[i] = 0x5A5A5A5A; Dos.PutStr(a+b+c+d+z[3] > 0 ? """" : ""z""); }
+    static void Make() { int x = 41; B.Set(() => x++); }
+    [EntryPoint]
+    public static void Main() { Make(); Smash(); B.V(); Dos.PutStr(""done\n""); }
+}
+";
+
+    private const string Probe_vec = @"using ESharp;
+using ESharp.Platform;
+public static class P
+{
+    static Vec<System.Action> list = new Vec<System.Action>(4, false);
+    static void Fill() { int x = 41; list.Add(() => x++); }
+    static void Smash() { int a = 1, b = 2, c = 3, d = 4; Dos.PutStr(a+b+c+d > 0 ? """" : ""z""); }
+    [EntryPoint]
+    public static void Main() { Fill(); Smash(); list[0](); Dos.PutStr(""done\n""); }
+}
+";
+
+    private const string Probe_tuple = @"using ESharp;
+using ESharp.Platform;
+public static class P
+{
+    static System.Action? Held;
+    static System.Action? Other;
+    static (System.Action, int) Pair;
+    static bool Flag = true;
+    static void Smash() { int a = 1, b = 2, c = 3, d = 4; int[] z = new int[8]; for (int i = 0; i < 8; i++) z[i] = 0x5A5A5A5A; Dos.PutStr(a+b+c+d+z[3] > 0 ? """" : ""z""); }
+    static void Make() { int x = 41; Pair = (() => x++, 1); }
+    [EntryPoint]
+    public static void Main() { Make(); Smash(); Pair.Item1(); Dos.PutStr(""done\n""); }
+}
+";
+
+    private const string Probe_tuple2 = @"using ESharp;
+using ESharp.Platform;
+public static class P
+{
+    static System.Action? Held;
+    static System.Action? Other;
+    static (System.Action, int) Pair;
+    static bool Flag = true;
+    static void Smash() { int a = 1, b = 2, c = 3, d = 4; int[] z = new int[8]; for (int i = 0; i < 8; i++) z[i] = 0x5A5A5A5A; Dos.PutStr(a+b+c+d+z[3] > 0 ? """" : ""z""); }
+    static void Make() { int x = 41; System.Action a = () => x++; Pair = (a, 1); }
+    [EntryPoint]
+    public static void Main() { Make(); Smash(); Pair.Item1(); Dos.PutStr(""done\n""); }
+}
+";
+
+    [Theory]
+    [InlineData("p4", "ES0012")]     // a borrowed parameter copied into a local, then stored
+    [InlineData("p6", "ES0014")]     // a capturing lambda passed as a generic T that the callee stores
+    [InlineData("p5", null)]         // a generic class holding a delegate (ES0008 and more)
+    [InlineData("vec", "ES0014")]    // Vec<System.Action>
+    [InlineData("tuple", "ES0099")]  // a tuple holding a lambda
+    [InlineData("tuple2", "ES0099")] // a tuple holding a delegate local
+    public void Review_probes_that_must_not_compile(string probe, string? id)
+    {
+        var source = probe switch { "p4" => Probe_p4, "p6" => Probe_p6, "p5" => Probe_p5, "vec" => Probe_vec, "tuple" => Probe_tuple, _ => Probe_tuple2 };
+        var r = Compile(source);
+        Assert.False(r.Success, "should not compile");
+        if (id != null) Assert.Contains(id, ErrorIds(r));
+    }
+
+    [Theory]
+    [InlineData("static System.Action? Held; static void Keep(System.Action a) { System.Action t = a; System.Action u = t; Held = u; }", "through the local")]
+    [InlineData("static System.Action? Held; static void Keep(System.Action a) { System.Action t = () => a(); Held = t; }", "captured by a stored lambda")]
+    [InlineData("static System.Action? Held; static void Keep(System.Action a) { Held ??= a; }", "stored")]
+    [InlineData("static System.Action? Held; static void Keep(System.Action a, bool f) { Held = f ? a : null; }", "stored")]
+    public void ES0012_follows_locals_coalesce_and_generic_arguments(string members, string words)
+    {
+        var r = Compile(Program(members));
+        Assert.Contains(r.Diagnostics, d => d.Id == "ES0012" && d.GetMessage().Contains(words));
+    }
+
+    [Fact]
+    public void Adding_a_call_result_to_an_event_does_not_leak()
+    {
+        if (!HasGcc) return;
+        const string members = @"
+public class B { public event System.Action Ev; public void Fire() { Ev?.Invoke(); } public void Drop() { Heap.Free(ref Ev); } }
+static int Hits;
+static System.Action Make(int k) { return () => Hits += k; }
+";
+        const string body = @"
+B b = new B();
+int k = 3;
+b.Ev += Make(1);
+b.Ev += k > 1 ? Make(2) : Make(3);
+b.Ev += k switch { 3 => () => Hits += k * 100, _ => null };
+b.Fire();
+Check(Hits == 303, ""handlers from a call, a conditional of calls and a switch expression"");
+b.Drop(); Heap.Free(ref b);
+Check(Heap.LiveClosures() == 0, ""the event held the only references"");
+";
+        var (code, output) = Run(members, body);
+        Assert.Equal(OkLines("handlers from a call, a conditional of calls and a switch expression", "the event held the only references"), output);
+        Assert.Equal(0, code);
+    }
+
+    [Fact]
+    public void A_delegate_local_in_an_unrecognised_position_is_made_a_heap_closure_not_left_on_the_stack()
+    {
+        if (!HasGcc) return;
+        const string members = @"
+static System.Action? Held;
+static bool Seen;
+static void Make() { int x = 41; System.Action a = () => x++; Seen = a is not null; Held = a; }
+";
+        const string body = @"
+Make();
+Held!();
+Check(Heap.LiveClosures() == 1, ""the local was made a heap closure"");
+Heap.Free(ref Held);
+";
+        var r = Compile(Program(members + Check, body));
+        if (!r.Success) { Assert.Contains("ES0099", ErrorIds(r)); return; }   // or rejected outright: never a stack closure
+        var (code, output) = HasSanitizers ? RunSanitized(r.C!) : RunWithHostGcc(r.C!);
+        Assert.Equal(OkLines("the local was made a heap closure"), output);
+        Assert.Equal(0, code);
     }
 }
 

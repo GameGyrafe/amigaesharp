@@ -102,23 +102,40 @@ internal sealed partial class CEmitter
         if (IsInlinedLinqLambda(lam)) return _heapLambdas[lam] = false;
         var (locals, usesThis) = FindCaptures(lam);
         if (locals.Count == 0 && !usesThis) return _heapLambdas[lam] = false;
-        if (!_heapBusy.Add(lam)) return false;   // asked again while deciding: the outer question decides
-        var kept = KeptAt(lam);
+        // Asked again while deciding (a lambda that reaches itself through locals): answer "kept", which is always memory-safe
+        // (at worst a closure that is never freed), so a cycle can never leave a stack closure behind.
+        if (!_heapBusy.Add(lam)) return true;
+        var site = Classify(lam);
+        var kept = site.Kind switch
+        {
+            SiteKind.Kept => true,
+            SiteKind.Local => Escapes(site.Local!),
+            _ => false,   // Borrowed: the stack form; Unknown and Reject: the stack path reports ES0099 unless it is an argument or a local's initializer
+        };
+        if (site.Kind == SiteKind.Reject) ReportOnce(lam, site.Reason!);
         _heapBusy.Remove(lam);
         return _heapLambdas[lam] = kept;
     }
 
+    /// <summary>
+    /// The expression whose value <paramref name="node"/> becomes: through parentheses, casts, <c>!</c>, the branches of <c>?:</c>,
+    /// both operands of <c>??</c> and the arms of a switch expression (all of these pass the delegate on unchanged).
+    /// </summary>
     private static SyntaxNode ValueSite(SyntaxNode node, out SyntaxNode? parent)
     {
         parent = node.Parent;
-        while (parent is ParenthesizedExpressionSyntax or CastExpressionSyntax
-               || parent is PostfixUnaryExpressionSyntax { RawKind: (int)SyntaxKind.SuppressNullableWarningExpression }
-               || parent is ConditionalExpressionSyntax c && c.Condition != node)
+        while (true)
         {
-            node = parent;
-            parent = parent.Parent;
+            var through = parent is ParenthesizedExpressionSyntax or CastExpressionSyntax
+                || parent is PostfixUnaryExpressionSyntax { RawKind: (int)SyntaxKind.SuppressNullableWarningExpression }
+                || parent is ConditionalExpressionSyntax c && c.Condition != node
+                || parent is BinaryExpressionSyntax { RawKind: (int)SyntaxKind.CoalesceExpression }
+                || parent is SwitchExpressionArmSyntax arm && arm.Expression == node
+                || parent is SwitchExpressionSyntax sw && sw.GoverningExpression != node;
+            if (!through) return node;
+            node = parent!;
+            parent = parent!.Parent;
         }
-        return node;
     }
 
     private IParameterSymbol? ParameterOf(ArgumentSyntax a)
@@ -137,42 +154,91 @@ internal sealed partial class CEmitter
         Model(inv).GetSymbolInfo(inv).Symbol is IMethodSymbol { Name: "Free", ContainingType.Name: "Heap" } hf &&
         hf.ContainingNamespace?.ToDisplayString() == "ESharp.Platform";
 
-    /// <summary>True when the value of <paramref name="e"/> is kept: stored, added to an event, returned, or given to an [Owned] parameter.</summary>
-    private bool KeptAt(SyntaxNode e)
+    private enum SiteKind { Borrowed, Kept, Local, Unknown, Reject }
+
+    private readonly record struct Site(SiteKind Kind, ISymbol? Local = null, string? Reason = null);
+
+    private readonly HashSet<SyntaxNode> _reported = new();
+
+    private void ReportOnce(SyntaxNode at, string what)
+    {
+        if (_reported.Add(at)) Unsupported(at, what);
+    }
+
+    /// <summary>
+    /// Where a delegate value goes. Borrowed: called, compared, removed from an event, or passed to a non-generic delegate parameter
+    /// (the callee may not keep it, ES0012). Kept: stored, returned, added to an event, freed, or given to an [Owned] parameter.
+    /// Local: copied into a local (kept if that local is). Reject: a place E# cannot track (ES0099). Unknown: anything else, which
+    /// callers treat as kept for a delegate local (heap: safe) and as ES0099 for a capturing lambda; never as the stack.
+    /// </summary>
+    private Site Classify(SyntaxNode e)
     {
         var node = ValueSite(e, out var p);
         switch (p)
         {
+            case InvocationExpressionSyntax inv when inv.Expression == node:
+            case MemberAccessExpressionSyntax { Name.Identifier.Text: "Invoke", Parent: InvocationExpressionSyntax } ma when ma.Expression == node:
+            case ConditionalAccessExpressionSyntax ca when ca.Expression == node:
+            case BinaryExpressionSyntax { RawKind: (int)SyntaxKind.EqualsExpression or (int)SyntaxKind.NotEqualsExpression }:
+                return new Site(SiteKind.Borrowed);
+            case ArgumentSyntax { Parent: TupleExpressionSyntax }:
+                return new Site(SiteKind.Reject, Reason: "a capturing delegate in a tuple");
             case ArgumentSyntax arg:
-                return IsOwned(ParameterOf(arg));
+            {
+                if (IsHeapFreeArgument(arg)) return new Site(SiteKind.Kept);
+                var prm = ParameterOf(arg);
+                if (IsOwned(prm)) return new Site(SiteKind.Kept);
+                if (prm == null) return new Site(SiteKind.Unknown);
+                if (prm.OriginalDefinition.Type is ITypeParameterSymbol)
+                    return new Site(SiteKind.Reject, Reason: "a capturing delegate passed as a generic argument (T); the callee could keep it, so pass it to a delegate-typed parameter, or mark the parameter [Owned]");
+                if (arg.RefKindKeyword.IsKind(SyntaxKind.RefKeyword) || arg.RefKindKeyword.IsKind(SyntaxKind.OutKeyword)) return new Site(SiteKind.Kept);
+                return new Site(SiteKind.Borrowed);
+            }
             case EqualsValueClauseSyntax { Parent: VariableDeclaratorSyntax { Parent: VariableDeclarationSyntax { Parent: LocalDeclarationStatementSyntax } } vd }:
-                return Model(vd).GetDeclaredSymbol(vd) is ILocalSymbol local && Escapes(local);
-            case EqualsValueClauseSyntax:
-                return true;   // a field or property initializer
+                return Model(vd).GetDeclaredSymbol(vd) is ILocalSymbol local ? new Site(SiteKind.Local, local) : new Site(SiteKind.Unknown);
+            case EqualsValueClauseSyntax { Parent: VariableDeclaratorSyntax { Parent.Parent: FieldDeclarationSyntax or EventFieldDeclarationSyntax } }:
+            case EqualsValueClauseSyntax { Parent: PropertyDeclarationSyntax }:
+                return new Site(SiteKind.Kept);
+            case AssignmentExpressionSyntax a when a.Left == node:
+                return new Site(SiteKind.Borrowed);   // written, not read
             case AssignmentExpressionSyntax a when a.Right == node:
-                if (a.IsKind(SyntaxKind.SimpleAssignmentExpression))
+                if (a.IsKind(SyntaxKind.SimpleAssignmentExpression) || a.IsKind(SyntaxKind.CoalesceAssignmentExpression))
                     return Model(a).GetSymbolInfo(a.Left).Symbol switch
                     {
-                        ILocalSymbol { RefKind: RefKind.None } l => Escapes(l),
-                        IParameterSymbol { RefKind: RefKind.None } prm => Escapes(prm),
-                        _ => true,
+                        ILocalSymbol { RefKind: RefKind.None } l => new Site(SiteKind.Local, l),
+                        IParameterSymbol { RefKind: RefKind.None } prm => new Site(SiteKind.Local, prm),
+                        _ => new Site(SiteKind.Kept),
                     };
-                return (a.IsKind(SyntaxKind.AddAssignmentExpression) || a.IsKind(SyntaxKind.SubtractAssignmentExpression))
-                       && Model(a).GetSymbolInfo(a.Left).Symbol is IEventSymbol;
+                if (Model(a).GetSymbolInfo(a.Left).Symbol is IEventSymbol)
+                {
+                    if (a.IsKind(SyntaxKind.AddAssignmentExpression)) return new Site(SiteKind.Kept);
+                    if (a.IsKind(SyntaxKind.SubtractAssignmentExpression)) return new Site(SiteKind.Borrowed);   // only compared
+                }
+                return new Site(SiteKind.Unknown);
             case ReturnStatementSyntax or ArrowExpressionClauseSyntax or LambdaExpressionSyntax or InitializerExpressionSyntax:
-                return true;
+                return new Site(SiteKind.Kept);
             default:
-                return false;
+                return new Site(SiteKind.Unknown);
         }
     }
 
-    /// <summary>A delegate local (or value parameter) escapes when its value is kept somewhere, freed, or captured by a heap closure.</summary>
+    /// <summary>True when the value of <paramref name="e"/> is kept (stored, added to an event, returned, freed, given to an [Owned] parameter).</summary>
+    private bool KeptAt(SyntaxNode e)
+    {
+        var site = Classify(e);
+        return site.Kind == SiteKind.Kept || site.Kind == SiteKind.Local && Escapes(site.Local!);
+    }
+
+    /// <summary>
+    /// A delegate local (or value parameter) escapes when its value is kept somewhere, freed, captured by a heap closure, or used
+    /// anywhere E# does not recognise (then it is made a heap closure, which is safe). A use E# cannot track reports ES0099.
+    /// </summary>
     private bool Escapes(ISymbol v)
     {
         var type = v switch { ILocalSymbol l => l.Type, IParameterSymbol p => p.Type, _ => null };
         if (type?.TypeKind != TypeKind.Delegate) return false;
         if (_escapes.TryGetValue(v, out var known)) return known;
-        if (!_escapeBusy.Add(v)) return false;
+        if (!_escapeBusy.Add(v)) return true;   // a cycle: assume kept (memory-safe), see IsHeapLambda
         var result = false;
         var syntax = v.DeclaringSyntaxReferences.FirstOrDefault()?.GetSyntax();
         var fn = syntax == null ? null : FunctionOf(syntax);
@@ -182,12 +248,81 @@ internal sealed partial class CEmitter
                 if (id.Identifier.Text != v.Name || !SymbolEqualityComparer.Default.Equals(Model(id).GetSymbolInfo(id).Symbol, v)) continue;
                 for (var anc = id.Parent; anc != null && anc != fn; anc = anc.Parent)
                     if (anc is LambdaExpressionSyntax inner && IsHeapLambda(inner)) { result = true; break; }
-                if (!result && id.Parent is ArgumentSyntax arg && IsHeapFreeArgument(arg)) result = true;
-                if (!result && KeptAt(id)) result = true;
+                if (result) break;
+                var site = Classify(id);
+                switch (site.Kind)
+                {
+                    case SiteKind.Kept or SiteKind.Unknown:
+                        result = true;
+                        break;
+                    case SiteKind.Local:
+                        result = !SymbolEqualityComparer.Default.Equals(site.Local, v) && Escapes(site.Local!);
+                        break;
+                    case SiteKind.Reject:
+                        ReportOnce(id, site.Reason!);
+                        result = true;
+                        break;
+                }
                 if (result) break;
             }
         _escapeBusy.Remove(v);
         return _escapes[v] = result;
+    }
+
+    /// <summary>A borrowed delegate parameter (not [Owned], not a setter's value).</summary>
+    private static bool IsBorrowedParameter(ISymbol? s) =>
+        s is IParameterSymbol { RefKind: RefKind.None, Type.TypeKind: TypeKind.Delegate } p && !IsOwned(p)
+        && p.ContainingSymbol is not IMethodSymbol { MethodKind: MethodKind.PropertySet };
+
+    /// <summary>Backstop for ES0012: a local that is kept must not hold a borrowed delegate parameter (it may point at the caller's stack).</summary>
+    private void CheckBorrowedCopy(ISymbol local, ExpressionSyntax value, SyntaxNode at)
+    {
+        var v = Strip(value);
+        if (v is IdentifierNameSyntax id && IsBorrowedParameter(Model(id).GetSymbolInfo(id).Symbol) && Escapes(local))
+            ReportOnce(at, $"keeping the borrowed delegate parameter '{id.Identifier.Text}' through the local '{local.Name}' (the caller's closure may live on its stack); mark the parameter [Owned]");
+    }
+
+    /// <summary>
+    /// Whether an event's += gets a reference of its own to hand over (a new lambda, a call's result) or must take one (a variable,
+    /// field, property or element that keeps its own). Null (after ES0099) when the branches of ?: or ?? differ.
+    /// </summary>
+    private bool? IsFreshDelegate(ExpressionSyntax e)
+    {
+        e = Strip(e);
+        switch (e)
+        {
+            case LambdaExpressionSyntax:
+            case InvocationExpressionSyntax:
+                return true;
+            case CastExpressionSyntax cast:
+                return IsFreshDelegate(cast.Expression);
+            case ConditionalExpressionSyntax c:
+                return Merge(new[] { c.WhenTrue, c.WhenFalse }, e);
+            case BinaryExpressionSyntax { RawKind: (int)SyntaxKind.CoalesceExpression } b:
+                return Merge(new[] { b.Left, b.Right }, e);
+            case SwitchExpressionSyntax sw:
+                return Merge(sw.Arms.Select(arm => arm.Expression).ToArray(), e);
+            default:
+                return false;
+        }
+
+        bool? Merge(ExpressionSyntax[] parts, SyntaxNode at)
+        {
+            bool? result = null;
+            foreach (var part in parts)
+            {
+                if (IsNullConstant(part)) continue;   // null holds nothing either way
+                var f = IsFreshDelegate(part);
+                if (f == null) return null;
+                if (result != null && result != f)
+                {
+                    ReportOnce(at, "+= of a value that is a new delegate on one branch and an existing one on another; split it into separate statements");
+                    return null;
+                }
+                result = f;
+            }
+            return result ?? false;
+        }
     }
 
     // ------------------------------------------------------------------ frames
@@ -388,7 +523,7 @@ internal sealed partial class CEmitter
         if (a.IsKind(SyntaxKind.SubtractAssignmentExpression))
             return $"({{ {dt} {t} = {value}; es_event_remove(&({place}), (void (*)(void)){t}.fn, {t}.env); }})";
         // A new lambda's reference goes to the event; any other value (a variable, a field, a call) is shared, so the event takes its own.
-        var fresh = Strip(a.Right) is LambdaExpressionSyntax;
+        if (IsFreshDelegate(a.Right) is not bool fresh) return "0";
         return $"({{ {dt} {t} = {value}; es_event_add(&({place}), (void (*)(void)){t}.fn, {(fresh ? $"{t}.env" : $"es_closure_retain({t}.env)")}); }})";
     }
 

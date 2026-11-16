@@ -51,6 +51,7 @@ public sealed partial class SubsetAnalyzer : DiagnosticAnalyzer
         context.RegisterSyntaxNodeAction(CheckArrayVariable, SyntaxKind.VariableDeclarator);
         context.RegisterSyntaxNodeAction(CheckArrayAssignment, SyntaxKind.SimpleAssignmentExpression);
         context.RegisterSyntaxNodeAction(CheckBorrowedDelegate, SyntaxKind.IdentifierName);
+        context.RegisterSyntaxNodeAction(CheckDelegateTypeArguments, SyntaxKind.GenericName, SyntaxKind.InvocationExpression);
         context.RegisterCompilationStartAction(Closures.Start);
     }
 

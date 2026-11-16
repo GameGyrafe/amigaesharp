@@ -982,6 +982,11 @@ internal sealed partial class CEmitter
             case IPointerTypeSymbol p:
                 var inner = CType(p.PointedAtType, at);
                 return inner.EndsWith("*") ? inner + "*" : inner + " *";
+            case INamedTypeSymbol { TypeKind: not TypeKind.Delegate } holder when HoldsDelegate(holder):
+                // A span, tuple or generic struct (Vec<Action>) of delegates: its typedef would come before the delegate's, and
+                // copies of it would share closures with no owner. Not supported yet.
+                ReportOnce(at, $"'{holder.ToDisplayString()}': a span, tuple or generic struct that holds delegates (use an array of delegates, or a class with delegate fields)");
+                return "int32_t";
             case INamedTypeSymbol { Name: "Span" or "ReadOnlySpan", TypeArguments.Length: 1 } sp when
                 sp.ContainingNamespace?.ToDisplayString() == "System":
                 return SpanType(sp, at);
@@ -1040,6 +1045,10 @@ internal sealed partial class CEmitter
     }
 
     private readonly Dictionary<string, string> _delegateNames = new();
+
+    private static bool HoldsDelegate(INamedTypeSymbol t) =>
+        t.IsTupleType ? t.TupleElements.Any(e => e.Type.TypeKind == TypeKind.Delegate)
+        : t.TypeKind == TypeKind.Struct && t.TypeArguments.Any(a => a.TypeKind == TypeKind.Delegate);
 
     /// <summary>C struct for a value tuple: fields Item1, Item2, ...</summary>
     private string TupleType(INamedTypeSymbol tuple, SyntaxNode at)
@@ -1889,6 +1898,7 @@ internal sealed partial class CEmitter
                         Line($"{Decl(sym.Type, "*" + sym.Name, l)} = {Expr(v.Initializer.Value, top: true)};");
                         continue;
                     }
+                    if (v.Initializer != null && sym.Type.TypeKind == TypeKind.Delegate) CheckBorrowedCopy(sym, v.Initializer.Value, v);
                     if (_captures.TryGetValue(sym, out var framed))
                     {
                         // Captured by a heap closure: the variable lives in the scope's frame.
@@ -2416,6 +2426,8 @@ internal sealed partial class CEmitter
                 }
                 if (a.IsKind(SyntaxKind.CoalesceAssignmentExpression)) return CoalesceAssignment(a);
                 if (Model(a).GetSymbolInfo(a.Left).Symbol is IEventSymbol assignedEvent) return EventAssignment(a, assignedEvent);
+                if (a.IsKind(SyntaxKind.SimpleAssignmentExpression) && Model(a).GetSymbolInfo(a.Left).Symbol is ILocalSymbol { Type.TypeKind: TypeKind.Delegate } assignedLocal)
+                    CheckBorrowedCopy(assignedLocal, a.Right, a);
                 if (WrittenProperty(a.Left) is { } wp) return PropertyAssignment(wp, a);
                 if (a.Kind() != SyntaxKind.SimpleAssignmentExpression &&
                     Model(a).GetSymbolInfo(a).Symbol is IMethodSymbol { MethodKind: MethodKind.UserDefinedOperator } op)

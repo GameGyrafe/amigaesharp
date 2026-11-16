@@ -75,6 +75,10 @@ public static class Descriptors
         "ES0012", "A borrowed delegate parameter cannot be kept",
         "'{0}' is a borrowed delegate parameter: the caller's closure may live on the caller's stack, so it cannot be {1}; mark the parameter [Owned] to take ownership of it");
 
+    public static readonly DiagnosticDescriptor DelegateTypeArgument = Error(
+        "ES0014", "Generic code over a delegate type",
+        "'{0}' instantiates generic code with the delegate type '{1}': the closures it would hold or pass on have no owner E# can track; use an array of delegates, a class with delegate fields, or a delegate-typed parameter");
+
     public static readonly DiagnosticDescriptor ClosureNeverFreed = new(
         "ES0013", "A stored closure is never freed",
         "{0}",
@@ -104,5 +108,5 @@ public static class Descriptors
         System.Collections.Immutable.ImmutableArray.Create(
             Exceptions, Linq, FloatingPoint, AsyncAwait, Dynamic, Reflection,
             HeapClass, Generics, Interfaces, SlowArithmetic, LibraryTooOld, ReferenceField, FixedArrays,
-            BorrowedDelegate, ClosureNeverFreed);
+            BorrowedDelegate, ClosureNeverFreed, DelegateTypeArgument);
 }
