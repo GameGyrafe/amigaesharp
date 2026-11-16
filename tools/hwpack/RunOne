@@ -6,6 +6,8 @@
 ; ARGUMENTS is one quoted string (inside it a quote is written *") that the program gets as its AmigaDOS arguments, for instance
 ;   Execute RunOne objects-args objects 21 "SEED=42 auto"
 ; EXPECTED is the number of ok lines an emulated A1200 gives, or the word text for a program that prints no ok lines.
+; The crashed-program line below carries the program arguments, quoted as RunAll passes them. {args} arrives with its quotes
+; already resolved, so the one value that holds quotes (mainargs) is spelled out (*** gives a printed *").
 FailAt 1000
 If EXISTS T:hwpack-resume
   If EXISTS results/{label}.sum
@@ -13,7 +15,15 @@ If EXISTS T:hwpack-resume
     Skip finish
   EndIf
   If EXISTS results/{label}.run
-    Echo "{label}: was running when the machine crashed; NOT run again. Run it by hand later: Execute RunOne {label} {prog} {expected} <-- CHECK" >results/{label}.sum
+    If "{label}" EQ "mainargs"
+      Echo "{label}: was running when the machine crashed; NOT run again. Run it by hand later: Execute RunOne {label} {prog} {expected} *"ONE ***"two words***" RC=3*" <-- CHECK" >results/{label}.sum
+    Else
+      If "{args}" EQ ""
+        Echo "{label}: was running when the machine crashed; NOT run again. Run it by hand later: Execute RunOne {label} {prog} {expected} <-- CHECK" >results/{label}.sum
+      Else
+        Echo "{label}: was running when the machine crashed; NOT run again. Run it by hand later: Execute RunOne {label} {prog} {expected} *"{args}*" <-- CHECK" >results/{label}.sum
+      EndIf
+    EndIf
     Type results/{label}.sum
     Type results/{label}.sum >>SUMMARY.txt
     Echo "{label}" >>results/FLAGS.txt

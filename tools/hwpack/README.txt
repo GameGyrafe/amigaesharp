@@ -28,6 +28,9 @@ in an emulator. Your run is the first on real hardware.
    (their results are kept). The program that was running at the crash is NOT run again: it is listed in
    SUMMARY.txt and results/FLAGS.txt as crashed, with the RunOne line to try it by hand. To run one program
    again by hand (also after a RESUME run):  Execute RunOne cards cards 15
+   If you stop a RESUME run with Ctrl-C, the resume marker T:hwpack-resume stays behind and a later RunOne
+   by hand would skip finished programs: type  Delete T:hwpack-resume  (or reboot: T: is in RAM). A plain
+   Execute RunAll also removes it.
 
    Time: in an emulator the whole run is about three minutes (the sound, keys, cards, rummy and
    screen programs wait on purpose); a real machine may be a bit slower or faster.
