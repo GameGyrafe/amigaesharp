@@ -1108,8 +1108,8 @@ and loaded DiskObjects (both 0 after the run). csproj values are literal only: `
 converted PNG an opaque black pixel keeps its own palette entry (entry 0 is only for transparent pixels). Prefer icon-sized PNGs (32 to 64 pixels).
 
 **Packaging.** The os4 test CD (`esharp run/test --target os4`) now holds `<name>.info` next to the program. `tools/hwpack/build.sh` copies each program's icon into the
-pack drawer and the one-disk `hwtest.adf` (37 icons of about 2 KB; `hwtest.adf` is now 779 KB used, 101 KB free, was 660 KB / 220 KB). The bootable
-`hwtest-boot.adf` (the pack plus the AmigaOS files from the user's disk) has 107 KB free without icons and the icons need about 120 KB, so it is written from a
+pack drawer and the one-disk `hwtest.adf` (38 icons of about 2 KB; `hwtest.adf` is now 801 KB used, 79 KB free with the closures program, was 660 KB / 220 KB). The bootable
+`hwtest-boot.adf` (the pack plus the AmigaOS files from the user's disk) has 88 KB free without icons (with the closures program) and the icons need about 120 KB, so it is written from a
 copy of the pack without the `.info` files (it boots into RunAll, not Workbench).
 
 `samples/wbstart` (new; `WbStart.csproj` sets `EsStackSize` 32768 and `EsToolTypes` `SEED=42;AUTO`) opens a window that shows the number of arguments, SEED, AUTO and, on
