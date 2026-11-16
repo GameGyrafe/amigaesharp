@@ -1,3 +1,4 @@
+using System.Collections.Generic;
 using System.Text;
 using ESharp.Assets;
 using ESharp.Cli;
@@ -176,11 +177,102 @@ public static class P
         Assert.Contains("es_args_from_tooltypes", c);
         if (!HasGcc) return;
         // Replace the host path of main with the tool type conversion (the Amiga path calls it from the Workbench start).
-        var test = c.Replace("es_argc = argc; es_argv = argv;", "{ static char *tt[] = { \"SEED=42\", \"(OFF)\", \"AUTO\", \"\", NULL }; es_args_from_tooltypes(tt); }");
+        var test = c.Replace("es_argc = argc; es_argv = argv;", "{ static char *tt[] = { \"SEED=42\", \"(OFF)\", \"AUTO\", \"\", NULL }; es_args_from_tooltypes(\"prog\", tt); }");
         Assert.NotEqual(c, test);
         Assert.Equal((0, "n=2 seed=42 auto=yes off=no\n"), RunWithHostGcc(test));
-        var none = c.Replace("es_argc = argc; es_argv = argv;", "es_args_from_tooltypes(NULL);");
+        var none = c.Replace("es_argc = argc; es_argv = argv;", "es_args_from_tooltypes(\"prog\", NULL);");
         Assert.Equal((0, "n=0 seed=-1 auto=no off=no\n"), RunWithHostGcc(none));
+    }
+
+    private const string ShowArgs = @"
+public static class P
+{
+    [EntryPoint]
+    public static void Main()
+    {
+        for (int i = 0; i < Args.Count; i++) { Dos.PutStr(Args.Get(i)); Dos.PutStr(""\n""); }
+    }
+}";
+
+    // A stand-in for icon.library and the Workbench startup structures: counts open libraries and loaded DiskObjects.
+    private const string FakeIcon = @"
+#include <stdint.h>
+#include <stdlib.h>
+#include <string.h>
+#include <stdio.h>
+typedef long BPTR; typedef const unsigned char *CONST_STRPTR;
+struct Library { int x; };
+struct DiskObject { char **do_ToolTypes; };
+struct WBArg { BPTR wa_Lock; char *wa_Name; };
+struct WBStartup { long sm_NumArgs; struct WBArg *sm_ArgList; };
+static int es_t_open, es_t_dobs;
+static struct Library es_t_lib;
+static inline struct Library *OpenLibrary(CONST_STRPTR n, unsigned v) { (void)n; (void)v; es_t_open++; return &es_t_lib; }
+static inline void CloseLibrary(struct Library *l) { (void)l; es_t_open--; }
+static inline BPTR CurrentDir(BPTR b) { return b; }
+static char *es_t_src[] = { ""SEED=42"", ""(OFF)"", ""AUTO"", """", ""TOOLPRI=5"", ""NAME=\""two words\"""", ""donotwait"", NULL };
+static inline struct DiskObject *GetDiskObject(CONST_STRPTR n)
+{
+    (void)n; es_t_dobs++;
+    struct DiskObject *d = malloc(sizeof *d);
+    d->do_ToolTypes = malloc(sizeof es_t_src);
+    for (int i = 0; i < 8; i++) d->do_ToolTypes[i] = es_t_src[i] ? strdup(es_t_src[i]) : NULL;
+    return d;
+}
+static inline void FreeDiskObject(struct DiskObject *d)
+{
+    es_t_dobs--;
+    for (int i = 0; d->do_ToolTypes[i]; i++) free(d->do_ToolTypes[i]);
+    free(d->do_ToolTypes); free(d);
+}
+static struct WBArg es_t_arg = { 0, ""prog"" };
+static struct WBStartup es_t_wb = { 1, &es_t_arg };
+static void __attribute__((destructor)) es_t_report(void) { printf(""open %d diskobjects %d\n"", es_t_open, es_t_dobs); }
+";
+
+    [Fact]
+    public void A_Workbench_start_reads_the_icon_skips_workbench_tool_types_and_releases_everything()
+    {
+        var c = CompileOk(Prelude + ShowArgs);
+        if (!HasGcc) return;
+        var headers = new Dictionary<string, string>
+        {
+            ["proto/icon.h"] = FakeIcon, ["workbench/startup.h"] = "/* fake */\n", ["workbench/workbench.h"] = "/* fake */\n",
+        };
+        var test = "#define __AMIGA__ 1\n" + c.Replace("argc == 0", "1").Replace("(struct WBStartup *)argv", "&es_t_wb");
+        Assert.Contains("&es_t_wb", test);
+        // Quotes around a value are removed, TOOLPRI / donotwait / (OFF) / empty are skipped, and the library and the DiskObject are released.
+        Assert.Equal((0, "SEED=42\nAUTO\nNAME=two words\nopen 0 diskobjects 0\n"), RunWithHostGcc(test, headers));
+    }
+
+    [Fact]
+    public void An_opaque_black_pixel_next_to_a_transparent_one_stays_opaque()
+    {
+        var rgba = new byte[4 * 4]
+        {
+            0, 0, 0, 0,        255, 255, 255, 255,
+            0, 0, 0, 255,      255, 0, 0, 255,
+        };
+        var (_, colour) = IconArt.FromPng(Png.Write(new RgbaImage(2, 2, rgba)));
+        Assert.Equal(0, colour.TransparentIndex);
+        Assert.Equal(0, colour.Indices[0]);                       // the transparent pixel
+        Assert.NotEqual(0, colour.Indices[2]);                    // the opaque black one
+        Assert.Equal(0x000000u, colour.Palette[colour.Indices[2]]);
+        Assert.NotEqual(colour.Indices[2], colour.Indices[1]);
+    }
+
+    [Fact]
+    public void An_msbuild_property_in_a_setting_is_refused()
+    {
+        var dir = Path.Combine(Path.GetTempPath(), "esharp-icon-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(dir);
+        try
+        {
+            File.WriteAllText(Path.Combine(dir, "G.csproj"), "<Project><PropertyGroup><EsIcon>$(Foo).png</EsIcon></PropertyGroup></Project>");
+            var e = Assert.Throws<InvalidDataException>(() => IconStep.ReadSettings(dir));
+            Assert.Contains("literal", e.Message);
+        }
+        finally { Directory.Delete(dir, true); }
     }
 
     [Fact]

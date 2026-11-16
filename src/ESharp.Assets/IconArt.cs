@@ -80,7 +80,19 @@ public static class IconArt
         }
         var planar = Planar.Convert(img, 64, aga: true);
         var palette = planar.Palette24.Take(1 << planar.Depth).ToArray();
+        var indices = planar.Indices;
         var transparent = img.Rgba.Where((_, i) => i % 4 == 3).Any(a => a < 128);
-        return (new IconPicture(img.Width, img.Height, ci, ClassicPalette), new IconPicture(img.Width, img.Height, planar.Indices, palette, transparent ? 0 : -1));
+        if (transparent)
+        {
+            // Planar.Convert shares entry 0 between "transparent" and black (a blit mask says which is which). An icon has no mask, so
+            // an opaque pixel must not use entry 0: those pixels move to an extra black entry at the end.
+            var black = (byte)palette.Length;
+            var moved = false;
+            indices = (byte[])indices.Clone();
+            for (var i = 0; i < n; i++)
+                if (img.Rgba[i * 4 + 3] >= 128 && indices[i] == 0) { indices[i] = black; moved = true; }
+            if (moved) palette = palette.Append(0x000000u).ToArray();
+        }
+        return (new IconPicture(img.Width, img.Height, ci, ClassicPalette), new IconPicture(img.Width, img.Height, indices, palette, transparent ? 0 : -1));
     }
 }

@@ -10,7 +10,7 @@ namespace ESharp.Cli;
 /// <summary>
 /// The Workbench icon of a built Amiga program (issue #84): <c>esharp build</c> writes <c>&lt;name&gt;.info</c> next to the program, a Tool icon with a stack
 /// size, tool types and a picture. The settings are MSBuild-style properties in the project's csproj (read as plain XML, no MSBuild
-/// evaluation): <c>EsStackSize</c> (bytes, default 65536), <c>EsToolTypes</c> (semicolon-separated, e.g. <c>SEED=42;AUTO</c>) and
+/// evaluation: literal values only; $(...), Condition and Directory.Build.props are not looked at): <c>EsStackSize</c> (bytes, default 65536), <c>EsToolTypes</c> (semicolon-separated, e.g. <c>SEED=42;AUTO</c>) and
 /// <c>EsIcon</c> (a PNG relative to the project, at most 256 x 256; <c>none</c> writes no icon at all). Without a PNG the icon is E#'s own default art.
 /// </summary>
 public static class IconStep
@@ -33,6 +33,9 @@ public static class IconStep
             try { doc = XDocument.Load(csproj); }
             catch (System.Xml.XmlException e) { throw new InvalidDataException($"{csproj}: {e.Message}"); }
             string? Prop(string n) => doc.Descendants().Where(e => e.Name.LocalName == n).Select(e => e.Value.Trim()).LastOrDefault(v => v.Length > 0);
+            foreach (var name in new[] { "EsStackSize", "EsToolTypes", "EsIcon" })
+                if (Prop(name) is { } v && v.Contains("$("))
+                    throw new InvalidDataException($"{csproj}: {name} '{v}' uses an MSBuild property; esharp reads only literal values (no $(...), no Condition, no Directory.Build.props)");
             if (Prop("EsStackSize") is { } s)
             {
                 if (!int.TryParse(s, out stack) || stack < 4096 || stack > 16 * 1024 * 1024)

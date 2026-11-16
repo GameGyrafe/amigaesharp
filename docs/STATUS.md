@@ -1078,12 +1078,16 @@ sample. Drawer, disk and project icons with a drawer record are not written (the
 complement), no RLE, no ARGB chunk.
 
 **Workbench start and `Args`.** A Workbench start has argc 0 and argv pointing at the WBStartup message (every Amiga C startup does this); the emitted C
-(only when a program uses `Args` or `Main(string[] args)`) opens icon.library (v33) only then, reads the program's own icon (`GetDiskObject` with the lock and
-name from the startup message) and turns the tool types into the argument words: `KEY=VALUE` and `SWITCH` as they are, `(NAME)` (switched off in the icon) and
-empty ones skipped, at most 64. So `Args.Value("SEED")`, `Args.Has("AUTO")` and `args` work as from a Shell. No C# bindings were added for icon.library: the C uses the
-toolchain's own `proto/icon.h`, `workbench/startup.h` and `workbench/workbench.h`, so no vector number or struct offset is written by us (the usual `IconBase` /
-`IIcon` names are renamed so the C startup does not open the library itself). A Shell start and `esharp run --args` are unchanged. The tool types array is a plain
-`char *const *` conversion (`es_args_from_tooltypes`), tested with the host gcc.
+(only when a program uses `Args` or `Main(string[] args)`) opens icon.library (v39) only then, reads the program's own icon (`GetDiskObject` with the lock and
+name from the startup message), copies the tool types into a static 2 KB buffer as the argument words and at once frees the DiskObject, drops the OS4 interface and closes the
+library, so nothing stays allocated or open (the first version leaked them; the review found it). Argument 0 is the program name from the startup message. `KEY=VALUE` and `SWITCH` stay as they are;
+quotes around a value (`NAME="two words"`) are removed as a Shell does. Skipped: `(NAME)` (switched off in the icon), empty ones and Workbench's own tool types TOOLPRI, STARTPRI,
+DONOTWAIT, TOOLWINDOW and WINDOW (case-insensitive). At most 64 words and 2 KB of text; the rest is dropped without a message. So `Args.Value("SEED")`, `Args.Has("AUTO")` and
+`args` work as from a Shell. No C# bindings were added for icon.library: the C uses the toolchain's own `proto/icon.h`, `workbench/startup.h` and `workbench/workbench.h`, so no
+vector number or struct offset is written by us (the usual `IconBase` / `IIcon` names are renamed so the C startup does not open the library itself). A Shell start and
+`esharp run --args` are unchanged. Host gcc tests: the tool type conversion, and a whole Workbench start against fake icon.library and WBStartup headers that count open libraries
+and loaded DiskObjects (both 0 after the run). csproj values are literal only: `$(...)` is refused with a message; `Condition` and Directory.Build.props are not looked at. In a
+converted PNG an opaque black pixel keeps its own palette entry (entry 0 is only for transparent pixels). Prefer icon-sized PNGs (32 to 64 pixels).
 
 **Packaging.** The os4 test CD (`esharp run/test --target os4`) now holds `<name>.info` next to the program. `tools/hwpack/build.sh` copies each program's icon into the
 pack drawer and the one-disk `hwtest.adf` (37 icons of about 2 KB; `hwtest.adf` is now 779 KB used, 101 KB free, was 660 KB / 220 KB). The bootable
