@@ -610,11 +610,16 @@ Check(zero() == 0, ""lambda without parameters"");
     }
 
     [Fact]
-    public void Lambda_that_captures_a_local_cannot_be_returned_or_stored()
+    public void Lambda_that_captures_a_local_and_is_returned_or_stored_is_a_heap_closure()
     {
-        var r = Compile(Program("static System.Func<int, int> Make(int k) { return x => x + k; }", "Dos.PutStr(Make(3)(1) == 4 ? \"y\" : \"n\");"));
-        Assert.Contains("ES0099", ErrorIds(r));
-        r = Compile(Program("static System.Func<int, int> Held;", "int k = 3; Held = x => x + k;"));
+        // Before issue #41 both were ES0099; they are heap closures now (run in HeapClosureTests).
+        var r = Compile(Program("static System.Func<int, int> Make(int k) { return x => x + k; }", "System.Func<int, int> f = Make(3); Dos.PutStr(f(1) == 4 ? \"y\" : \"n\"); Heap.Free(ref f);"));
+        Assert.True(r.Success, string.Join("\n", r.Diagnostics));
+        Assert.Contains("es_closure_retain", r.C);
+        r = Compile(Program("static System.Func<int, int> Held;", "int k = 3; Held = x => x + k; Heap.Free(ref Held);"));
+        Assert.True(r.Success, string.Join("\n", r.Diagnostics));
+        // A borrowed (stack) closure assigned to a local declared earlier is still not supported.
+        r = Compile(Program("static int Call(System.Func<int> f) => f();", "int k = 3; System.Func<int> g = null; g = () => k; Dos.PutStr(Call(g) == 3 ? \"y\" : \"n\");"));
         Assert.Contains("ES0099", ErrorIds(r));
     }
 

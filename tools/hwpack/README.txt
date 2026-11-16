@@ -8,13 +8,70 @@ in an emulator. Your run is the first on real hardware.
    An Amiga 1200 or a THEA1200 (68020 or better, AGA, 2 MB chip RAM, Kickstart 3.1, Workbench 3.1 on a
    hard disk or CF card). Other machines are welcome to report (see section 5) but are not the target.
 
+1b. The floppy image (obj/hwtest.adf)
+   tools/hwpack/build.sh also writes the whole pack as ONE 880 KB AmigaDOS floppy image, hwtest.adf (FFS, volume
+   HWTEST, a data disk: only E# files, no AmigaOS files, not bootable; about 800 KB used, 80 KB left for results).
+   Every program has a Workbench icon (NAME.info, written by esharp build): open the disk's window on Workbench and double-click a program to
+   start it (a console window for its output may open: seen for the wbstart sample, not checked for these programs; RunAll still needs a Shell). The bootable variant in d) has no icons (no room).
+   a) A real Amiga 1200 with only a floppy drive (no hard disk, no fast RAM; often Kickstart 3.0). A stock A1200 has ONE
+      floppy drive: use the bootable variant in d) (one disk, no swapping). The Workbench-disk way below was run in the
+      emulator with TWO drives (Workbench in DF0, pack in DF1); the one-drive version of it is NOT VERIFIED (steps further down).
+      - Write hwtest.adf to a double-density disk with a Greaseweazle or KryoFlux (or put it on a USB stick for a Gotek
+        running FlashFloppy and select it there). A PC floppy drive cannot write Amiga disks.
+      - Boot your own Workbench 3.x floppy. With a second drive insert the pack disk in DF1:, open a Shell
+        (Workbench disk, System drawer) and type:   CD HWTEST:   then   Execute RunAll
+        Do not write-protect the pack disk: the results are written to it (results drawer and SUMMARY.txt).
+      - Before RunAll, so that diskfont.library does not stop with an "insert volume FONTS:" requester (the Workbench
+        disk has no Fonts drawer):   MakeDir RAM:Fonts   then   Assign FONTS: RAM:Fonts
+      - The Workbench disk's startup makes T: and ENV: in RAM:, which RunAll needs. Its Libs drawer has the libraries
+        asl, diskfont, iffparse and lowlevel, so the ok counts in section 3 apply; with a different boot disk some
+        programs print "not installed" lines (section 3).
+      - ONE DRIVE (NOT VERIFIED, not run even in the emulator): after the Workbench 3.1 startup the Workbench disk is needed again
+        for every C: command and every library, so first load what the scripts use into RAM while the Workbench disk is still
+        in DF0, in the Shell:
+            Resident C:Execute PURE
+            Resident C:Date PURE
+            Resident C:Type PURE
+            Resident C:Delete PURE
+            Resident C:Assign PURE
+            Resident C:MakeDir PURE
+            Copy Libs/asl.library Libs/diskfont.library Libs/iffparse.library Libs/lowlevel.library RAM:Libs   (MakeDir RAM:Libs first)
+            Assign LIBS: RAM:Libs ADD
+        then swap the Workbench disk for the pack disk and CD HWTEST: ; Execute RunAll. If a requester still asks for the
+        Workbench disk, put it back, answer, and tell us which command it was (it needs a Resident line too). The bootable
+        variant in d) avoids all of this.
+      - Afterwards read results/ and SUMMARY.txt off the disk (copy them to a hard disk or read the image back with
+        tools/hwpack/mkadf.py: python3 -I mkadf.py extract <image> <folder>). With a Greaseweazle or KryoFlux read the disk
+        into an .adf first.
+      Kickstart 3.0 is not verified (only Kickstart 3.1 was run); the pack needs version 39 or higher libraries.
+   b) THEA500 Mini (or another UAE-based emulator that loads .adf files):
+      - Copy hwtest.adf, and your own Workbench disk image, to a USB stick and choose the A1200 / AGA setting in the
+        machine's menu. NOT VERIFIED: the exact menu entries and the file-name convention were not checked on a machine.
+        Retro Games' official manual is at https://retrogames.biz/support/thea500-mini (not read in full here; check its
+        sections on the USB stick and on loading your own programs).
+      - Boot the Workbench image in DF0 and the pack image in DF1 (or insert the pack disk as the second disk), then as in a).
+      - The emulator writes the results into the image; copy the image back from the stick and read it with mkadf.py.
+   c) FS-UAE, no hard disk, as a stock A1200 (Kickstart 3.1, 2 MB chip RAM only):
+        tools/hwpack/run-emulated.sh --floppy obj/hwtest.adf --rom <rom> --wb <Workbench 3.1 disk .adf>
+      DF0 is a throwaway copy of your Workbench disk (with one extra file, S:User-Startup, that runs the pack from
+      DF1), DF1 a copy of the pack disk. It prints SUMMARY.txt read back from the image; the run directory keeps
+      results-disk/ (everything on the pack disk afterwards).
+   d) Bootable variant, for your own use only: build.sh <image> --boot-wb <your Workbench 3.x disk 2 .adf> also writes
+      obj/hwtest-boot.adf, the pack plus ONLY the few AmigaOS files needed to boot and run it (C:Execute, Date, Delete,
+      Type, Assign, MakeDir, SetPatch and four libraries, read from YOUR Workbench disk at build time, boot block included, so build.sh needs --boot-wb for it) and a
+      startup-sequence we wrote. build.sh refuses to write it anywhere that git does not ignore. Boot it alone in DF0: it runs SetPatch (copied from your disk, as a real Workbench does), then RunAll, and leaves a shell. THIS DISK HOLDS COPYRIGHTED AMIGAOS FILES: use it
+      yourself, never share it, attach it to a report or commit it (obj/ is git-ignored). Emulated:
+        tools/hwpack/run-emulated.sh --boot-floppy obj/hwtest-boot.adf --rom <rom>
+      The pack disk with 880 KB has room for results, but the boot variant has only about 108 KB left: if the disk fills up
+      during the run, delete README.txt on it (or use the two-disk way in a)).
+
 2. Run it
-   - Copy this whole drawer to the Amiga (anywhere on the hard disk), open a Shell, CD into it.
+   - (Floppy only: see 1b.) Copy this whole drawer to the Amiga (anywhere on the hard disk), open a Shell, CD into it.
    - Only if you copied it from a PC (the Amiga protection bits are lost):
          Protect RunAll RunOne +s
          Protect #? +e
    - Type:  Execute RunAll
-   First hwinfo runs, then the programs one after the other (35 runs of 34 programs). Each one writes results/NAME.txt (what it
+   First hwinfo runs, then the programs one after the other (36 runs of 35 programs). Each one writes results/NAME.txt (what it
    printed) and results/NAME.sum (its counts); RunAll collects them into SUMMARY.txt, which starts with a
    machine report (hwinfo: CPU, FPU, chipset, Kickstart and library versions, chip and fast RAM), then one line per
    program, then the start and finish times, then every line that needs a look. Several programs open a screen or
@@ -41,7 +98,7 @@ in an emulator. Your run is the first on real hardware.
    the last lines of SUMMARY.txt list those programs. FAIL is the thing to report; a count difference is a
    note, and sometimes expected (below). Emulator counts:
      phase2 32, memory 19, generics 24, properties 18, operators 20, language 39, collections 20, inherit 24,
-     lambdas 16, linq 37, refs 18, patterns 23, objects 21 (and 21 again with the arguments SEED=42 auto, which
+     lambdas 16, closures 20, linq 37, refs 18, patterns 23, objects 21 (and 21 again with the arguments SEED=42 auto, which
      RunAll passes as AmigaDOS arguments), names 12, dates 19, interrupts 14, timing 10, fonts 8, iff 10,
      controls 12, keys 8, asl 3, screen 23, aga 6, assets 17, rtg 5, sound 21, dbuffer 30, textspeed 1,
      cards 15, rummy 28.
@@ -52,6 +109,11 @@ in an emulator. Your run is the first on real hardware.
      controls   12 with lowlevel.library in LIBS: (9 without it); the joystick line depends on what is plugged in
      keys       9 if you press a key while it waits (it waits about ten seconds)
      fonts      7 without diskfont.library, 8 with it, 10 with it and a disk font such as ruby in FONTS:
+     dates      19. The "accented letters fold too" line (0xE9 and 0xC4) follows the language rules of utility.library: with
+                locale.library running (the Workbench startup runs IPrefs) it follows the user's locale, so a language driver
+                that is not Latin-1 could fail it. It passed in the emulator both with the plain ROM and after the Workbench
+                3.1 startup (default locale). The sample also prints an "info: ToUpper(0xF7) = ..." line: 0xF7 (the ROM) or
+                another value under a locale; it is information, not a check.
      iff, asl   one line saying "not installed" and no ok lines if iffparse.library / asl.library is not in LIBS:
      timing     one fewer ok and a "note" line if the machine is not real time; 60 frames per second on NTSC
      rtg        runs more checks on a machine with an RTG card

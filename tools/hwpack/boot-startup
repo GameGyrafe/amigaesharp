@@ -1,0 +1,13 @@
+; E# hardware test pack: startup of the bootable floppy (hwtest-boot.adf). Written for E#; it runs the pack and stops at a shell.
+; The pack is on this disk (the files in its root drawer); the results are written to this disk too.
+C:SetPatch QUIET
+Makedir RAM:T
+Assign T: RAM:T
+Makedir RAM:Env
+Assign ENV: RAM:Env
+Makedir RAM:Fonts
+Assign FONTS: RAM:Fonts
+CD SYS:
+Echo "E# hardware test pack: running RunAll from this disk. Do not remove the disk until it says Done."
+Execute RunAll
+Echo "Results are in SUMMARY.txt and the results drawer on this disk."

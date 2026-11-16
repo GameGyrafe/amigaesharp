@@ -226,8 +226,15 @@ public unsafe class GtText : GtGadget
 /// <see cref="Close"/> releases the system objects in the right order (window, gadgets, visual info, screen lock) and frees the
 /// gadgets that were added; free the window itself afterwards. Events come through GadTools' own message calls. On the host nothing is
 /// shown: <see cref="HostClick"/>, <see cref="HostType"/> and <see cref="HostClose"/> drive the window the way a person would.
-/// No menus, no hooks, no keyboard shortcuts (an underscore in a label is shown as is).
+/// No menus, no GadTools/Intuition callback hooks (the event hooks below are plain virtual methods), no keyboard shortcuts (an underscore in a label is shown as is).
+/// <para>
+/// A program may also derive its own window from it (<c>class Greeter : GtWindow</c>, marked <see cref="ExtensibleAttribute"/>):
+/// add the gadgets in the constructor, override <see cref="OnClicked"/>, <see cref="OnChanged"/> and <see cref="OnCloseRequest"/>,
+/// and call <see cref="Run()"/>. The derived object is freed like the window (<see cref="Close"/>, then <c>Heap.Free</c>); anything
+/// it owns besides the gadgets it frees itself before that.
+/// </para>
 /// </summary>
+[Extensible]
 public unsafe class GtWindow
 {
     public string? Title { get; set; }
@@ -440,6 +447,8 @@ public unsafe class GtWindow
         }
     }
 
+    private bool NoMoreEvents() { return false; }
+
     /// <summary>Closes the window and releases everything GadTools and Intuition gave it, then frees the gadgets that were added (do not use them afterwards).</summary>
     public void Close()
     {
@@ -454,6 +463,9 @@ public unsafe class GtWindow
     // One queue for the fake (one window at a time).
     private static GuiEvent[] _queue = new GuiEvent[16];
     private static int _queued;
+    private bool _drained;          // the last Wait found no event queued (its Close is made up, not a click)
+
+    private bool NoMoreEvents() { return _drained; }
 
     public bool Open()
     {
@@ -467,6 +479,7 @@ public unsafe class GtWindow
     /// <summary>Host: the next event driven by <see cref="HostClick"/> or <see cref="HostClose"/>; <see cref="GuiEventKind.Close"/> when none is left (so a loop cannot hang).</summary>
     public GuiEvent Wait()
     {
+        _drained = _queued == 0;
         if (!_open || _queued == 0) return new GuiEvent(GuiEventKind.Close, null);
         GuiEvent e = _queue[0];
         for (int i = 1; i < _queued; i++) _queue[i - 1] = _queue[i];
@@ -513,6 +526,46 @@ public unsafe class GtWindow
             else handler.Changed(source);
         }
     }
+
+    /// <summary>
+    /// Waits for events until the close gadget is accepted, handing each to <see cref="Dispatch"/>, which calls the window's own
+    /// <see cref="OnClicked"/>, <see cref="OnChanged"/> and <see cref="OnCloseRequest"/> (override them in a class derived from
+    /// <see cref="GtWindow"/>). Returns when <see cref="OnCloseRequest"/> says true (the default); call <see cref="Close"/> afterwards.
+    /// </summary>
+    public void Run()
+    {
+        while (true)
+        {
+            GuiEvent e = Wait();
+            // Not open (or, on the host, no event left): nothing more can come, so that ends it whatever OnCloseRequest would say.
+            if (e.Kind == GuiEventKind.Close && (!_open || NoMoreEvents())) return;
+            if (!Dispatch(e)) return;
+        }
+    }
+
+    /// <summary>
+    /// Hands one event (from <see cref="Wait"/>) to the window's hooks: <see cref="OnClicked"/>, <see cref="OnChanged"/> or
+    /// <see cref="OnCloseRequest"/>. False when it was a close request that was accepted (stop waiting), true otherwise. A pull loop
+    /// can use it for the events it does not handle itself. Pass events from this window's own <see cref="Wait"/> (not checked).
+    /// </summary>
+    public bool Dispatch(GuiEvent e)
+    {
+        if (e.Kind == GuiEventKind.Close) return !OnCloseRequest();
+        GtGadget? source = e.Source;
+        if (source == null) return true;
+        if (e.Kind == GuiEventKind.Clicked) OnClicked(source);
+        else OnChanged(source);
+        return true;
+    }
+
+    /// <summary>A button of this window was clicked (from <see cref="Run()"/> or <see cref="Dispatch"/>). Does nothing unless overridden.</summary>
+    protected virtual void OnClicked(GtGadget gadget) { }
+
+    /// <summary>A string gadget of this window was accepted with Return (from <see cref="Run()"/> or <see cref="Dispatch"/>). Does nothing unless overridden.</summary>
+    protected virtual void OnChanged(GtGadget gadget) { }
+
+    /// <summary>The close gadget was clicked (from <see cref="Run()"/>): true ends <see cref="Run()"/>, false keeps the window open. True unless overridden.</summary>
+    protected virtual bool OnCloseRequest() { return true; }
 
     private void FreeOwnedStrings()
     {

@@ -11,6 +11,7 @@ you have not actually run.
 ```bash
 dotnet test                                     # unit tests, incl. generated C built and run with host gcc
 dotnet run --project src/ESharp.Cli -- build samples/hello --emit-only
+dotnet run --project src/ESharp.Cli -- build samples/hello --target m68k --docker <image>   # also writes obj/m68k/hello.info (Workbench Tool icon; csproj properties EsStackSize, EsToolTypes, EsIcon; Amiga targets only, not --emit-only; src/ESharp.Assets/Icon*.cs, src/ESharp.Cli/IconStep.cs)
 dotnet run --project src/ESharp.Cli -- build samples/hello --target m68k --docker <image>   # os4, morphos too
 dotnet run --project src/ESharp.Cli -- run samples/hello --docker <image> --headless        # m68k in FS-UAE
 dotnet run --project src/ESharp.Cli -- assets samples/screen                                # PNG -> Assets.g.cs   # also automatic in build/run when stale (mtime); --force rebuilds
@@ -41,6 +42,7 @@ dotnet run --project src/ESharp.Cli -- run samples/timing --docker <image> --hea
 dotnet run --project src/ESharp.Cli -- test samples/dbuffer --target m68k --docker <image> --model A1200 --kickstart <rom>   # double buffer: Video.EnableDoubleBuffer/Flip (screen buffers, offscreen-bitmap fallback); also --target sdl, --target os4; run --headless --screenshot shot.png for the last frame
 dotnet run --project src/ESharp.Cli -- addr samples/trace 0 e4 --docker <image>   # crash address (hunk 0, hex offset) -> C# file:line, using obj/m68k/<name>.o that every m68k build writes (docs/DEBUGGING.md)
 dotnet run --project src/ESharp.Cli -- run samples/lambdas --docker <image> --headless --model A1200   # capturing lambdas and delegates
+dotnet run --project src/ESharp.Cli -- test samples/closures --target m68k --docker <image> --model A1200 --kickstart <rom>   # heap closures (stored, returned) and events, Heap.Free and the Heap.LiveClosures leak check; also --target sdl, os4
 dotnet run --project src/ESharp.Cli -- run samples/linq --docker <image> --headless --model A1200   # LINQ over arrays, turned into loops
 dotnet run --project src/ESharp.Cli -- test samples/interrupts --target m68k --docker <image> --model A1200 --kickstart <rom>   # [InlineAsm] (68020 and PowerPC code, C# fallback) and [Interrupt] VBlank servers (Interrupts.AddVBlank)
 dotnet run --project src/ESharp.Cli -- run samples/refs --docker <image> --headless --model A1200   # ref locals and returns, foreach over Vec and struct enumerators
@@ -52,7 +54,8 @@ dotnet run --project tools/BindGen -- check <sdk include dir> src/ESharp.Platfor
 dotnet run --project tools/BindGen -- gen <fd dir> exec dos graphics --include <include dir> --out <dir>   # C# bindings from fd files + prototypes (NDK or AROS form); add --docs, --namespace N
 dotnet run --project tools/BindGen -- gen <fd dir> exec dos graphics intuition gadtools lowlevel keymap utility diskfont iffparse asl timer --include <include dir> --check src/ESharp.Platform   # hand-written vs generated: problems (exit 1) and notes
 ESHARP_SDK=<fd dir> ESHARP_SDK_INCLUDE=<include dir> dotnet test --filter BindGen   # the SDK-backed BindGen test (skipped without ESHARP_SDK)
-dotnet run --project src/ESharp.Cli -- run samples/gui --docker <image> --headless --model A1200 --timeout 60 --input "click 400,300;rel -96,-100;press;rel -72,-63;rel -42,-20;press"   # GadTools window on the Workbench screen: Hello button, then the close gadget (rel moves were found by screenshot; add --screenshot and drop the last press to look)
+dotnet run --project src/ESharp.Cli -- run samples/gui --docker <image> --headless --model A1200 --timeout 60 --input "click 400,300;rel -96,-100;press;rel -72,-63;rel -28,-10;press"   # GadTools window on the Workbench screen: Hello button, then the close gadget (rel moves were found by screenshot, re-found after the exact-rel fix f76a167; add --screenshot and drop the last press to look)
+dotnet run --project src/ESharp.Cli -- run samples/guiclass --docker <image> --headless --model A1200 --kickstart <rom> --timeout 60 --input "click 400,300;rel -96,-100;press;rel -72,-63;rel -28,-10;press"   # the same window as a class derived from GtWindow ([Extensible]) with overridden OnClicked/OnCloseRequest; also --target os4 --input "click 208,101;click 57,45"
 AROS_HOSTED=<extracted hosted AROS dir> tools/aros-hosted/aros-hosted.sh gui --shot shot.png --input "click 208,74;click 47,37"   # same sample on hosted AROS (needs a --target aros build)
 ESHARP_OS4_VM=<AmigaOS 4.1 VM dir> dotnet run --project src/ESharp.Cli -- test samples/linq --target os4 --docker esharp-amiga-toolchain   # host vs AmigaOS 4.1 in QEMU pegasos2 (overlay boot, ~15 s; tools/os4vm/README.md)
 ESHARP_OS4_VM=<AmigaOS 4.1 VM dir> dotnet run --project src/ESharp.Cli -- run samples/cards --target os4 --docker esharp-amiga-toolchain --screenshot shot.png   # screendump after SHOT; --trace --serial f for Trace lines; no --input yet
@@ -61,6 +64,9 @@ dotnet run --project tools/BindGen -- compare <aros include dir> <fd dir> lowlev
 tools/BindGen/layouts.sh                                  # re-measure struct offsets (tools/BindGen/structs.txt) for m68k and AROS into src/ESharp.Platform/Layout.g.cs (docker)
 tools/hwpack/build.sh <m68k image>                       # build the real-hardware test pack into obj/hwtest (run with Execute RunAll on the Amiga; README.txt in the pack)
 tools/hwpack/run-emulated.sh obj/hwtest --rom <rom> --wb <Workbench 3.1 disk .adf> [--profile fast8]   # the whole pack in FS-UAE (A1200, accuracy 1, 2 MB chip), prints SUMMARY.txt
+tools/hwpack/build.sh <m68k image> [--boot-wb <Workbench 3.x disk 2 .adf>] [--adf-only]   # also obj/hwtest.adf (one 880 KB floppy, our files only); --boot-wb adds obj/hwtest-boot.adf with a few AmigaOS files from YOUR disk (own use only, never share)
+tools/hwpack/run-emulated.sh --floppy obj/hwtest.adf --rom <rom> --wb <Workbench 3.1 disk .adf>   # floppy mode: stock A1200, no hard disk, DF0 Workbench copy + DF1 pack disk; --boot-floppy obj/hwtest-boot.adf runs the bootable disk alone
+python3 -I tools/hwpack/test_mkadf.py                      # tests of tools/hwpack/mkadf.py (ADF writer and reader)
 docker build -t esharp-amiga-toolchain docker && docker/smoke-test.sh    # combined toolchain image
 docker build -t esharp-sdl docker/sdl && docker/sdl/smoke-test.sh   # gcc + static SDL 3.4.20 (Linux x86-64) for the sdl target; offscreen/dummy drivers
 dotnet run --project src/ESharp.Cli -- run samples/cards --target sdl --docker esharp-sdl --headless --input "click 60,145;key 9" --screenshot shot.png   # sdl, headless in the image: --input X,Y are the game's screen pixels (keys are X11 codes, as for FS-UAE), replayed after SHOT; the shot is the game's own frame
@@ -79,7 +85,7 @@ Requires the .NET 10 SDK (`global.json`). `src/ESharp.Analyzers` stays on `netst
 
 ## Layout and how the pieces fit
 
-- `src/ESharp.Analyzers`: subset rules (`ES0001`-`ES0010`, `ES0100`, `ES0101`). One analyzer, used by the IDE and by the compiler.
+- `src/ESharp.Analyzers`: subset rules (`ES0001`-`ES0010`, `ES0100`, `ES0101`). One analyzer, used by the IDE and by the compiler. A program class may derive only from its own classes or from a library class marked `[Extensible]` (GtWindow); the rule must hold where the library is source (compiler) and where it is metadata (IDE).
 - `src/ESharp.Compiler`: `EsCompiler.Compile` (parse, C# errors, analyzer, entry point check) then `CEmitter` (C output with `#line`). `Targets.cs` defines the CPU x OS target model. `CRuntime/es_std.h` (standard C) and `CRuntime/es_sdl.h` (SDL 3) are pasted into the generated C of the sdl target when a `[Native]` extern of `src/ESharp.Platform/Crt.cs` named `es_std_*` / `es_sdl_*` is called.
 - `src/ESharp.Runtime` and `src/ESharp.Platform`: parsed together with user code. They are embedded in the compiler as source, built by dotnet with `HOST` defined, and parsed with `AMIGA` defined for Amiga targets. Target-specific code uses `#if`.
 - `src/ESharp.Assets`: PNG reader/writer, colour reduction, planar packing and the `assets.json` -> `Assets.g.cs` generator (used by `esharp assets`), with an incremental `Sync` (run by `esharp build`/`run`/`test`; commit the `Assets.g.cs` it writes).

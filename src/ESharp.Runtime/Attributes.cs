@@ -136,3 +136,25 @@ public sealed class InlineAsmAttribute : Attribute
     /// <summary>Registers the PowerPC code changes besides its operands, comma separated (for example <c>"r0,r11"</c>).</summary>
     public string? PpcClobbers { get; set; }
 }
+
+/// <summary>
+/// On a delegate parameter: the method keeps the delegate it is given (stores it in a field, an event or a collection, or
+/// returns it), so a capturing lambda passed here is made a heap closure, which the method (or whoever it hands it to) owns
+/// and frees with <c>Heap.Free</c>. Without it a delegate parameter is borrowed: the caller's closure may live on the caller's
+/// stack, so the method may call it and pass it on as an argument, but not keep it (ES0012).
+/// </summary>
+[AttributeUsage(AttributeTargets.Parameter)]
+public sealed class OwnedAttribute : Attribute
+{
+}
+
+/// <summary>
+/// On a class of the E# library (ESharp.Platform, ESharp.Runtime): a class of the program may derive from it and override its
+/// virtual members (<c>class MyWindow : GtWindow</c>). Library classes without it cannot be base classes (ES0007), so what is
+/// meant to be extended is said explicitly. The analyzer reads it from source (esharp build) and from the referenced assembly
+/// (an IDE project made by <c>esharp new</c>) alike.
+/// </summary>
+[AttributeUsage(AttributeTargets.Class, Inherited = false)]
+public sealed class ExtensibleAttribute : Attribute
+{
+}
