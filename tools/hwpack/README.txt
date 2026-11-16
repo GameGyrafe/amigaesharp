@@ -6,7 +6,7 @@ in an emulator. Your run is the first on real hardware.
 
 1. What you need
    An Amiga 1200 or a THEA1200 (68020 or better, AGA, 2 MB chip RAM, Kickstart 3.1, Workbench 3.1 on a
-   hard disk or CF card). Other machines are welcome to report (see section 5) but are not the target.
+   hard disk or CF card; Kickstart/Workbench 3.0 also runs it, see 1b a)). Other machines are welcome to report (see section 5) but are not the target.
 
 1b. The floppy image (obj/hwtest.adf)
    tools/hwpack/build.sh also writes the whole pack as ONE 880 KB AmigaDOS floppy image, hwtest.adf (FFS, volume
@@ -24,7 +24,7 @@ in an emulator. Your run is the first on real hardware.
       - Before RunAll, so that diskfont.library does not stop with an "insert volume FONTS:" requester (the Workbench
         disk has no Fonts drawer):   MakeDir RAM:Fonts   then   Assign FONTS: RAM:Fonts
       - The Workbench disk's startup makes T: and ENV: in RAM:, which RunAll needs. Its Libs drawer has the libraries
-        asl, diskfont, iffparse and lowlevel, so the ok counts in section 3 apply; with a different boot disk some
+        asl, diskfont, iffparse and (Workbench 3.1 only) lowlevel, so the ok counts in section 3 apply; with a different boot disk some
         programs print "not installed" lines (section 3).
       - ONE DRIVE (NOT VERIFIED, not run even in the emulator): after the Workbench 3.1 startup the Workbench disk is needed again
         for every C: command and every library, so first load what the scripts use into RAM while the Workbench disk is still
@@ -43,7 +43,8 @@ in an emulator. Your run is the first on real hardware.
       - Afterwards read results/ and SUMMARY.txt off the disk (copy them to a hard disk or read the image back with
         tools/hwpack/mkadf.py: python3 -I mkadf.py extract <image> <folder>). With a Greaseweazle or KryoFlux read the disk
         into an .adf first.
-      Kickstart 3.0 is not verified (only Kickstart 3.1 was run); the pack needs version 39 or higher libraries.
+      Kickstart 3.0 with Workbench 3.0 was run in an emulator: everything passes except controls, which gives 9 ok instead
+      of 12 (Workbench 3.0 has no lowlevel.library). The bootable disk is then written without lowlevel.library.
    b) THEA500 Mini (or another UAE-based emulator that loads .adf files):
       - Copy hwtest.adf, and your own Workbench disk image, to a USB stick and choose the A1200 / AGA setting in the
         machine's menu. NOT VERIFIED: the exact menu entries and the file-name convention were not checked on a machine.
