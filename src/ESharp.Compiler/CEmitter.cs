@@ -543,9 +543,54 @@ internal sealed partial class CEmitter
         }
         if (UsesArgs)
         {
-            // Args: main keeps argc/argv (a Workbench start has argc 0); argument 0 is the program name, so Args counts from 1.
+            // Args: main keeps argc/argv; argument 0 is the program name, so Args counts from 1.
+            // A Workbench start has argc 0 and argv pointing at the WBStartup message (the C startup code of every Amiga target does this):
+            // the program icon's tool types then stand in for the command line (issue #84). "KEY=VALUE" and "SWITCH" tool types are the
+            // words Args.Value/Has already look for; a tool type in parentheses is switched off in the icon and is skipped.
             result.AppendLine("static int es_argc;");
             result.AppendLine("static char **es_argv;");
+            result.AppendLine("#define ES_WB_MAX 64");
+            result.AppendLine("static char *es_wb_args[ES_WB_MAX + 2];");
+            result.AppendLine("static __attribute__((unused)) void es_args_from_tooltypes(char *const *tt)");
+            result.AppendLine("{");
+            result.AppendLine("    int n = 1;");
+            result.AppendLine("    es_wb_args[0] = (char *)\"\";");
+            result.AppendLine("    for (; tt != NULL && *tt != NULL && n < ES_WB_MAX + 1; tt++)");
+            result.AppendLine("        if ((*tt)[0] != 0 && (*tt)[0] != '(') es_wb_args[n++] = *tt;");
+            result.AppendLine("    es_wb_args[n] = NULL;");
+            result.AppendLine("    es_argc = n;");
+            result.AppendLine("    es_argv = es_wb_args;");
+            result.AppendLine("}");
+            result.AppendLine("#if defined(__AMIGA__) || defined(__amigaos__) || defined(__amigaos4__) || defined(__MORPHOS__) || defined(__AROS__)");
+            // icon.library is on the Workbench disk (not in ROM) on a classic Amiga, but Workbench has it open when it starts a program, so
+            // it is opened only here, in a Workbench start. The usual base names are renamed so the C startup code does not open it itself.
+            result.AppendLine("#define IconBase es_IconBase");
+            result.AppendLine("#define IIcon es_IIcon");
+            result.AppendLine("#include <proto/exec.h>");
+            result.AppendLine("#include <proto/dos.h>");
+            result.AppendLine("#include <proto/icon.h>");
+            result.AppendLine("#include <workbench/startup.h>");
+            result.AppendLine("#include <workbench/workbench.h>");
+            result.AppendLine("struct Library *es_IconBase;");
+            result.AppendLine("#if defined(__amigaos4__)");
+            result.AppendLine("struct IconIFace *es_IIcon;");
+            result.AppendLine("#endif");
+            result.AppendLine("static void es_args_from_workbench(struct WBStartup *wb)");
+            result.AppendLine("{");
+            result.AppendLine("    if (wb == NULL || wb->sm_NumArgs < 1 || wb->sm_ArgList == NULL || wb->sm_ArgList[0].wa_Name == NULL) return;");
+            result.AppendLine("    es_IconBase = OpenLibrary((CONST_STRPTR)\"icon.library\", 33);");
+            result.AppendLine("    if (es_IconBase == NULL) return;");
+            result.AppendLine("#if defined(__amigaos4__)");
+            result.AppendLine("    es_IIcon = (struct IconIFace *)GetInterface(es_IconBase, \"main\", 1, NULL);");
+            result.AppendLine("    if (es_IIcon == NULL) return;");
+            result.AppendLine("#endif");
+            result.AppendLine("    BPTR old = CurrentDir(wb->sm_ArgList[0].wa_Lock);");
+            result.AppendLine("    struct DiskObject *dob = GetDiskObject((CONST_STRPTR)wb->sm_ArgList[0].wa_Name);");
+            result.AppendLine("    CurrentDir(old);");
+            result.AppendLine("    /* The tool type strings belong to the DiskObject: it stays loaded until the program ends. */");
+            result.AppendLine("    if (dob != NULL) es_args_from_tooltypes((char *const *)dob->do_ToolTypes);");
+            result.AppendLine("}");
+            result.AppendLine("#endif");
             result.AppendLine("static __attribute__((unused)) int32_t es_args_count(void) { return es_argc > 1 ? (int32_t)es_argc - 1 : 0; }");
             result.AppendLine("static __attribute__((unused)) const char *es_args_get(int32_t i) { return i >= 0 && i < es_args_count() ? es_argv[i + 1] : NULL; }");
         }
@@ -1700,7 +1745,14 @@ internal sealed partial class CEmitter
         Line(UsesArgs ? "int main(int argc, char **argv)" : "int main(void)");
         Line("{");
         _indent++;
-        if (UsesArgs) Line("es_argc = argc; es_argv = argv;");
+        if (UsesArgs)
+        {
+            Line("#if defined(__AMIGA__) || defined(__amigaos__) || defined(__amigaos4__) || defined(__MORPHOS__) || defined(__AROS__)");
+            Line("if (argc == 0) es_args_from_workbench((struct WBStartup *)argv); else { es_argc = argc; es_argv = argv; }");
+            Line("#else");
+            Line("es_argc = argc; es_argv = argv;");
+            Line("#endif");
+        }
         if ((_usesBounds || _usesAlloc) && _atExit.Count > 0) Line("es_exit_hook = es_run_atexit;");
         // Static field initializers that are not C constants, then the static constructors, run once at start-up, in the order the types
         // appear (C# runs them lazily, before a type is first used).

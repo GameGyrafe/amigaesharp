@@ -159,6 +159,8 @@ public static class Os4Vm
         var cd = Path.Combine(runDir, "cd");
         Directory.CreateDirectory(cd);
         File.Copy(exe, Path.Combine(cd, name));
+        // The icon `esharp build` wrote next to the program goes on the CD too, so the program shows (and starts by double-click) on Workbench.
+        if (File.Exists(exe + ".info")) File.Copy(exe + ".info", Path.Combine(cd, name + ".info"));
         var nonce = Guid.NewGuid().ToString("N")[..12];
         File.WriteAllText(Path.Combine(cd, "autorun"), Autorun(name, nonce, programArgs));
         var image = docker ?? Program.DefaultImage(ESharp.Compiler.Targets.Os4);

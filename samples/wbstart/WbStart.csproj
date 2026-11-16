@@ -1,0 +1,7 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- Read by esharp build for the Workbench icon (wbstart.info); not used to compile the sample. -->
+  <PropertyGroup>
+    <EsStackSize>32768</EsStackSize>
+    <EsToolTypes>SEED=42;AUTO</EsToolTypes>
+  </PropertyGroup>
+</Project>

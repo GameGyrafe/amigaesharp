@@ -10,7 +10,9 @@ in an emulator. Your run is the first on real hardware.
 
 1b. The floppy image (obj/hwtest.adf)
    tools/hwpack/build.sh also writes the whole pack as ONE 880 KB AmigaDOS floppy image, hwtest.adf (FFS, volume
-   HWTEST, a data disk: only E# files, no AmigaOS files, not bootable; about 660 KB used, 220 KB left for results).
+   HWTEST, a data disk: only E# files, no AmigaOS files, not bootable; about 780 KB used, 100 KB left for results).
+   Every program has a Workbench icon (NAME.info, written by esharp build): open the disk's window on Workbench and double-click a program to
+   start it (the output of most programs goes to a console window that opens; RunAll still needs a Shell). The bootable variant in d) has no icons (no room).
    a) A real Amiga 1200 with only a floppy drive (no hard disk, no fast RAM; often Kickstart 3.0). A stock A1200 has ONE
       floppy drive: use the bootable variant in d) (one disk, no swapping). The Workbench-disk way below was run in the
       emulator with TWO drives (Workbench in DF0, pack in DF1); the one-drive version of it is NOT VERIFIED (steps further down).

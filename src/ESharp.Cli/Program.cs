@@ -479,6 +479,14 @@ Targets:
         if (target.IsM68k && Compile(new[] { "-g", "-c" }, name + ".o", link: false) != 0) return 1;
 
         Console.WriteLine($"Built {exe}");
+        try
+        {
+            if (IconStep.Write(Directory.Exists(path) ? path : null, outDir, name, target.IsAmiga) is { } icon) Console.WriteLine($"Wrote {icon}");
+        }
+        catch (Exception e) when (e is InvalidDataException or IOException or NotSupportedException or ArgumentException)
+        {
+            return Fail("icon: " + e.Message);
+        }
         builtExe = exe;
         return 0;
     }

@@ -11,6 +11,7 @@ you have not actually run.
 ```bash
 dotnet test                                     # unit tests, incl. generated C built and run with host gcc
 dotnet run --project src/ESharp.Cli -- build samples/hello --emit-only
+dotnet run --project src/ESharp.Cli -- build samples/hello --target m68k --docker <image>   # also writes obj/m68k/hello.info (Workbench Tool icon; csproj properties EsStackSize, EsToolTypes, EsIcon; Amiga targets only, not --emit-only; src/ESharp.Assets/Icon*.cs, src/ESharp.Cli/IconStep.cs)
 dotnet run --project src/ESharp.Cli -- build samples/hello --target m68k --docker <image>   # os4, morphos too
 dotnet run --project src/ESharp.Cli -- run samples/hello --docker <image> --headless        # m68k in FS-UAE
 dotnet run --project src/ESharp.Cli -- assets samples/screen                                # PNG -> Assets.g.cs   # also automatic in build/run when stale (mtime); --force rebuilds

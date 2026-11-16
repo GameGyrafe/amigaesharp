@@ -165,8 +165,7 @@ compiled with the host gcc and run) and the new `samples/objects` (21 checks), `
   (`samples/screen`: 640 x 256 opens, is hires, pixels and text at the right edge) and on hosted AROS (`aga`: an 8-bit screen opens without AGA).
   Not checked: `samples/asl` opens a 640 x 256 screen and is now hires there, so the click positions found for its requester may have moved.
 - **Program arguments:** `Args.Count`, `Args.Get(i)`, `Args.Has("AUTO")` (ASCII case-insensitive), `Args.Value("SEED")` (`SEED 42` or `SEED=42`),
-  `Args.Int("SEED", fallback)`; `main` keeps `argc`/`argv` only when a program uses them. A Workbench start has no arguments (tool types are not
-  read). `esharp run --args "SEED=42 auto"` passes a line to the program in FS-UAE (after the output redirection), on SDL and (issue #72) in the os4
+  `Args.Int("SEED", fallback)`; `main` keeps `argc`/`argv` only when a program uses them. A Workbench start reads the program icon's tool types as the arguments (issue #84, see "Workbench icons"; "(NAME)" disabled ones skipped). `esharp run --args "SEED=42 auto"` passes a line to the program in FS-UAE (after the output redirection), on SDL and (issue #72) in the os4
   VM (the line follows the program name in the harness script, so AmigaDOS splits it like a Shell; newlines, `<`, `>`, `;`, `|` and `$` are refused).
   Host (dotnet): `Args` is now the real command line (issue #72, same words as `Main(string[] args)`); `Args.HostSet(...)` overrides it for tests
   (tests call it for repeatability) and `Args.HostReset()` goes back to the command line. Seen on A1200 / Kickstart 3.1 and SDL with `samples/objects`
@@ -1065,6 +1064,51 @@ Not verified: sound was not audible (no OpenAL device in the emulator; only Busy
 - **Seen** (`esharp test samples/objects --args "SEED=42 auto"`, 21 ok, 0 FAIL, host agrees with the target): m68k on A1200 / Kickstart 3.1 in
   FS-UAE, sdl (esharp-sdl, headless) and os4 (AmigaOS 4.1 QEMU VM, `--args` in the harness script). The string search methods: a scratch program
   of 7 checks agrees between host and m68k. Not verified: `--args` with quoted words in the os4 VM, os4/MorphOS string search runs, AROS (no hosted AROS available).
+
+## Workbench icons (issue #84)
+
+`esharp build` for an Amiga target (m68k, os4, morphos, aros; not sdl, not `--emit-only`) writes `<out dir>/<name>.info` next to the program: a Tool icon.
+Our own writer (`src/ESharp.Assets/Icon.cs`, `IconArt.cs`, written from the file layout, no SDK text or code copied; the layout is described in the
+comments of `DiskObject`): the classic DiskObject (78-byte header, gadget, one 2-bitplane image, tool types) that every Amiga OS reads, then the OS 3.5 colour
+image as an IFF `FORM ICON` (`FACE`, one `IMAG`, uncompressed, one byte per pixel) after it. Settings come from the project's csproj (read as XML, no MSBuild
+evaluation, `src/ESharp.Cli/IconStep.cs`): `EsStackSize` (bytes, default 65536; 4096 to 16 MB), `EsToolTypes` (`SEED=42;AUTO`), `EsIcon` (a PNG up to
+256 x 256: the classic image takes the nearest of the four Workbench colours, the colour image up to 64 colours, transparent pixels stay transparent; `none`
+writes no icon). Default picture: a blue plate with "E#" (48 x 32, drawn in `IconArt.Default`). The stack default is a round generous number, not measured per
+sample. Drawer, disk and project icons with a drawer record are not written (the writer refuses them); no selected-state image (the classic icon highlights by
+complement), no RLE, no ARGB chunk.
+
+**Workbench start and `Args`.** A Workbench start has argc 0 and argv pointing at the WBStartup message (every Amiga C startup does this); the emitted C
+(only when a program uses `Args` or `Main(string[] args)`) opens icon.library (v33) only then, reads the program's own icon (`GetDiskObject` with the lock and
+name from the startup message) and turns the tool types into the argument words: `KEY=VALUE` and `SWITCH` as they are, `(NAME)` (switched off in the icon) and
+empty ones skipped, at most 64. So `Args.Value("SEED")`, `Args.Has("AUTO")` and `args` work as from a Shell. No C# bindings were added for icon.library: the C uses the
+toolchain's own `proto/icon.h`, `workbench/startup.h` and `workbench/workbench.h`, so no vector number or struct offset is written by us (the usual `IconBase` /
+`IIcon` names are renamed so the C startup does not open the library itself). A Shell start and `esharp run --args` are unchanged. The tool types array is a plain
+`char *const *` conversion (`es_args_from_tooltypes`), tested with the host gcc.
+
+**Packaging.** The os4 test CD (`esharp run/test --target os4`) now holds `<name>.info` next to the program. `tools/hwpack/build.sh` copies each program's icon into the
+pack drawer and the one-disk `hwtest.adf` (37 icons of about 2 KB; `hwtest.adf` is now 779 KB used, 101 KB free, was 660 KB / 220 KB). The bootable
+`hwtest-boot.adf` (the pack plus the AmigaOS files from the user's disk) has 107 KB free without icons and the icons need about 120 KB, so it is written from a
+copy of the pack without the `.info` files (it boots into RunAll, not Workbench).
+
+`samples/wbstart` (new; `WbStart.csproj` sets `EsStackSize` 32768 and `EsToolTypes` `SEED=42;AUTO`) opens a window that shows the number of arguments, SEED, AUTO and, on
+m68k, the stack size read from the task.
+
+Verified:
+- `dotnet test`: see the pull request for the numbers; new `IconTests` (10): header offsets and endianness, write then read back (fields, tool types, both images),
+  sizes of the classic image and the FORM, odd widths, PNG conversion, csproj properties, Amiga-only, and the tool types reaching `Args` in generated C built and run with the host gcc.
+- A1200, Kickstart 3.1 (40.069) in FS-UAE 3.2.35, Workbench 3.1 disk 2 booted in DF0, the built program and `.info` in a directory hard disk: the volume window shows the
+  E# icon (classic image), a double-click starts the program (scripted mouse through XTEST, screenshots looked at), the window shows `arguments 2, SEED 42, AUTO yes`
+  and `Stack 32768` (the icon's tool types and the icon's stack size, 32768 against the Workbench default). The hardware pack's `hwtest.adf` as DF1: its window shows the icons
+  (aga, asl, assets, cards, collections ... in a scrolled window); a double-click on one of them was not repeated with the final colour format (the classic part is
+  what Kickstart 3.1 reads and it did not change).
+- AmigaOS 4.1 (QEMU pegasos2, `ESHARP_OS4_VM`): the program and icon on a CD (`ESTEST`), the Workbench window shows the icon, a double-click starts the program (scripted mouse
+  through the QEMU monitor, screendumps looked at) and the window shows `arguments 2, SEED 42, AUTO yes`. What the first try taught: OS4's Workbench dropped the whole icon (it did not
+  show at all) when the colour image was packed at 3 bits per pixel with Depth 3; one byte per pixel with the depth field 8 is accepted (and the FACE palette field is the largest palette in bytes minus 1).
+  The stack size on OS4 was not read back (the sample's probe is m68k only).
+- Built for all four Amiga targets: `samples/wbstart` for m68k, os4 and aros, `samples/mainargs` for morphos (gui does not build for morphos, as before).
+- Not verified: MorphOS and AROS Workbench start (the C compiles; nothing was run there: hosted AROS has no Workbench in the harness), real hardware, Workbench 3.1 showing the
+  colour image (it reads the classic one only; GlowIcons/OS 3.5+ were not available), OS 3.5/3.9, a stack size larger than the Workbench default taking effect on OS4, a drawer
+  icon for a program folder, how the colour image looks on MorphOS/AROS.
 
 ## Hosted AROS in a Docker image (issue #75)
 
