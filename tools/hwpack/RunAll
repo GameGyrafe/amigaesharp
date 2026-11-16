@@ -71,6 +71,8 @@ Echo "(keys: a blank screen: press A within 10 seconds, or wait)"
 Execute RunOne keys keys 8
 Echo "(asl: allocation checks only; the requester is a by-eye test, see README.txt)"
 Execute RunOne asl asl 3
+Echo "(boopsi: a small window with a button, a slider and a text field opens and closes again)"
+Execute RunOne boopsi boopsi 29
 Echo "(screen: a card picture appears for a few seconds)"
 Execute RunOne screen screen 23
 Echo "(aga: a 256 colour picture appears for a few seconds)"

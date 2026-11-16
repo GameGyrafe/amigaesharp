@@ -18,6 +18,30 @@ public static unsafe class Intuition
     /// <summary>intuition.library ChangeScreenBuffer() (v39): shows the buffer's bitmap from the next frame; 0 if Intuition could not do it now (try again).</summary>
     [AmigaLib("intuition", -780), Since(39)] public static extern uint ChangeScreenBuffer(void* screen, void* screenBuffer);
 
+    // BOOPSI (v36). Vectors from the classic fd file. A null classPtr with a classId names a public class ("propgclass").
+    /// <summary>intuition.library NewObjectA(): a new BOOPSI object of a private class (<paramref name="classPtr"/>) or a public one by name, or null.</summary>
+    [AmigaLib("intuition", -636), Since(36)] public static extern void* NewObjectA(void* classPtr, byte* classId, void* tagList);
+    /// <summary>intuition.library DisposeObject(): disposes a BOOPSI object (a gadget must be out of any window first).</summary>
+    [AmigaLib("intuition", -642), Since(36)] public static extern void DisposeObject(void* obj);
+    /// <summary>intuition.library SetAttrsA(): sets attributes; non-zero if the object needs a refresh. Gadgets in a window use <see cref="SetGadgetAttrsA"/>.</summary>
+    [AmigaLib("intuition", -648), Since(36)] public static extern nuint SetAttrsA(void* obj, void* tagList);
+    /// <summary>intuition.library GetAttr(): stores one attribute (pointer-sized slot); 0 if the class does not know it.</summary>
+    [AmigaLib("intuition", -654), Since(36)] public static extern nuint GetAttr(uint attrId, void* obj, void* storage);
+    /// <summary>intuition.library SetGadgetAttrsA(): sets attributes of a gadget that may be in a window, so it can redraw itself.</summary>
+    [AmigaLib("intuition", -660), Since(36)] public static extern nuint SetGadgetAttrsA(void* gadget, void* window, void* requester, void* tagList);
+    /// <summary>intuition.library AddGList(): adds <paramref name="numGad"/> linked gadgets (-1: all) at a position (-1: the end); the position used.</summary>
+    [AmigaLib("intuition", -438)] public static extern ushort AddGList(void* window, void* gadget, uint position, int numGad, void* requester);
+    /// <summary>intuition.library RemoveGList(): takes gadgets out of a window again; their old position.</summary>
+    [AmigaLib("intuition", -444)] public static extern ushort RemoveGList(void* window, void* gadget, int numGad);
+    /// <summary>intuition.library RefreshGList(): redraws <paramref name="numGad"/> gadgets starting at <paramref name="gadgets"/>.</summary>
+    [AmigaLib("intuition", -432)] public static extern void RefreshGList(void* gadgets, void* window, void* requester, int numGad);
+    /// <summary>intuition.library DrawImage(): draws an image (also a BOOPSI image) at its own position plus the offsets.</summary>
+    [AmigaLib("intuition", -114)] public static extern void DrawImage(void* rastPort, void* image, int leftOffset, int topOffset);
+    /// <summary>intuition.library GetScreenDrawInfo() (v36): the screen's pens and font for gadgets that draw text (GA_DrawInfo).</summary>
+    [AmigaLib("intuition", -690), Since(36)] public static extern void* GetScreenDrawInfo(void* screen);
+    /// <summary>intuition.library FreeScreenDrawInfo() (v36).</summary>
+    [AmigaLib("intuition", -696), Since(36)] public static extern void FreeScreenDrawInfo(void* screen, void* drawInfo);
+
     public const uint TagDone = 0;
     public const uint SA_Width = 0x80000023, SA_Height = 0x80000024, SA_Depth = 0x80000025;
     public const uint SA_DisplayID = 0x80000032, SA_Quiet = 0x80000038, SA_ShowTitle = 0x80000036, SA_Type = 0x8000002d;

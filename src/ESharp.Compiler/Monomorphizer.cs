@@ -71,9 +71,9 @@ internal static class Monomorphizer
                         newName = Mangle(t.Name, t.TypeArguments);
                         key = "T:" + t.OriginalDefinition.ToDisplayString() + "|" + newName;
                     }
-                    // Heap.Free<T> is an emitter intrinsic (free + null): it is not copied per type.
+                    // Heap.Free<T> and Cast.ObjectToPtr<T> / PtrToObject<T> are emitter intrinsics: they are not copied per type.
                     else if (symbol is IMethodSymbol { IsGenericMethod: true } m && !m.ContainingType.IsGenericType &&
-                             !(m.ContainingType.Name == "Heap" && m.ContainingNamespace?.ToDisplayString() == "ESharp.Platform") &&
+                             !(m.ContainingType.Name is "Heap" or "Cast" && m.ContainingNamespace?.ToDisplayString() == "ESharp.Platform") &&
                              IsSource(m.OriginalDefinition) && Concrete(m.TypeArguments))
                     {
                         def = m.OriginalDefinition.DeclaringSyntaxReferences[0].GetSyntax();
@@ -151,7 +151,7 @@ internal static class Monomorphizer
     {
         IPointerTypeSymbol p => MangleType(p.PointedAtType) + "Ptr",
         IArrayTypeSymbol a => MangleType(a.ElementType) + "Arr",
-        INamedTypeSymbol n when n.SpecialType != SpecialType.None => n.ToDisplayString().Replace('.', '_'),
+        INamedTypeSymbol n when n.SpecialType != SpecialType.None => n.WithNullableAnnotation(NullableAnnotation.NotAnnotated).ToDisplayString().Replace('.', '_'),
         // The namespace is part of the name, so Pair<A.Point> and Pair<B.Point> get copies of their own.
         INamedTypeSymbol n => (n.ContainingType != null ? MangleType(n.ContainingType) + "_" : Namespace(n)) + n.Name +
                               (n.TypeArguments.Length > 0 ? "__" + string.Join("_", n.TypeArguments.Select(MangleType)) : ""),

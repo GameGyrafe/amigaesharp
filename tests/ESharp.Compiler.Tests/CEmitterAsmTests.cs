@@ -178,7 +178,7 @@ int main(void)
     [InlineData("[Interrupt] static void F(int d) { }", "AMIGA,M68K", "one pointer")]
     [InlineData("[Interrupt] static long F() { return 0; }", "AMIGA,M68K", "void")]
     [InlineData("} public class Q { [Interrupt] public void F() { }", "AMIGA,M68K", "static")]
-    [InlineData("static void F() { } static void G() { delegate*<void> f = &F; }", "AMIGA,M68K", "only [Interrupt] methods")]
+    [InlineData("static void F() { } static void G() { delegate*<void> f = &F; }", "AMIGA,M68K", "only [Interrupt] and [HookEntry] methods")]
     public void Bad_Interrupt_methods_are_ES0099(string member, string defines, string message)
     {
         var src = Prelude + "public static unsafe class P { [EntryPoint] public static void Main() { } " + member + " }";

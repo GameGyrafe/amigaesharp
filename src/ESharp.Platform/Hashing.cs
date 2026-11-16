@@ -15,6 +15,14 @@ public static unsafe class Cast
 
     /// <summary>The string that starts at <paramref name="p"/>. Emitter intrinsic: <c>(const char *)p</c>.</summary>
     public static extern string PtrToString(byte* p);
+
+    /// <summary>The address of a class object, for a system slot that holds a pointer (a hook's h_Data, a user-data attribute).
+    /// It does not keep the object alive or count as an owner. Emitter intrinsic: <c>(void *)o</c>.</summary>
+    public static extern void* ObjectToPtr<T>(T o) where T : class;
+
+    /// <summary>The object whose address <see cref="ObjectToPtr"/> gave. The pointer must come from there and the object must not
+    /// have been freed: nothing is checked. Emitter intrinsic: <c>(T *)p</c>.</summary>
+    public static extern T PtrToObject<T>(void* p) where T : class;
 #else
     private static readonly System.Collections.Generic.Dictionary<string, ulong> ToNative = new();
     private static readonly System.Collections.Generic.Dictionary<ulong, string> FromNative = new();
@@ -34,6 +42,25 @@ public static unsafe class Cast
     }
 
     public static string PtrToString(byte* p) { return FromNative[(ulong)p]; }
+
+    // Host: objects get made-up addresses (never dereferenced), kept in both directions.
+    private static readonly System.Collections.Generic.Dictionary<object, ulong> ObjToNative = new(System.Collections.Generic.ReferenceEqualityComparer.Instance);
+    private static readonly System.Collections.Generic.Dictionary<ulong, object> NativeToObj = new();
+    private static ulong _nextObject = 0x10000;
+
+    public static void* ObjectToPtr<T>(T o) where T : class
+    {
+        if (!ObjToNative.TryGetValue(o, out var address))
+        {
+            address = _nextObject;
+            _nextObject += 16;
+            ObjToNative[o] = address;
+            NativeToObj[address] = o;
+        }
+        return (void*)address;
+    }
+
+    public static T PtrToObject<T>(void* p) where T : class { return (T)NativeToObj[(ulong)p]; }
 #endif
 }
 

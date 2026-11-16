@@ -31,6 +31,8 @@ public static unsafe class Utility
         _base = null;
     }
 
+    /// <summary>utility.library CallHookPkt() (v36): calls a struct Hook the way the system does (on m68k: hook in a0, object in a2, message in a1).</summary>
+    [AmigaLib("utility", -102), Since(36)] public static extern nuint CallHookPkt(void* hook, void* obj, void* message);
     /// <summary>Fills a ClockData from seconds since 1 January 1978.</summary>
     [AmigaLib("utility", -120), Since(36)] public static extern void Amiga2Date(uint seconds, void* clockData);
     /// <summary>Seconds since 1 January 1978 for a ClockData (not checked: see CheckDate).</summary>

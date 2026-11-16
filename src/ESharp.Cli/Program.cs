@@ -60,7 +60,8 @@ Run options (build options also apply; run is m68k, os4 or sdl):
   --serial <file>   Headless only: write the program's serial output (Trace) to this file, and print it after the run
   --args <line>     Arguments for the program (Args.Count, Args.Get, Args.Value): ""SEED 42 AUTO"" (run: m68k, sdl, os4; test: the host and the target)
   --input <script>  Headless only: after SHOT send mouse/keyboard input to the emulator (before the screenshot):
-                    ""click X,Y;key 9;key 50+38"" with display pixels and X11 key codes, + holds keys (needs libXtst)
+                    ""click X,Y;key 9;key 50+38"" with display pixels and X11 key codes, + holds keys (needs libXtst);
+                    ""rel DX,DY"" moves, ""press"" clicks where the pointer is, ""down""/""up"" hold and release (a drag)
                     os4: the QEMU monitor sends it: click X,Y moves the pointer to X,Y of the screen (from the top-left
                     corner), rel DX,DY moves it, and key N takes an AMIGA RAW key code (Esc is 69, 96+32 is Shift+A)
                     sdl: the same script is replayed by the program itself after SHOT, with X,Y in the program's

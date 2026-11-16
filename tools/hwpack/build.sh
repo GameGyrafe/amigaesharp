@@ -26,7 +26,7 @@ cd "$root"
 
 # Order: quick pure checks first, then the ones that open a screen or the audio device. RunAll runs them in the order of
 # its own lines; keep the two in step (tools/hwpack/RunAll lists every program but gui, which needs clicks: README.txt).
-samples="hwinfo hello phase2 memory generics properties operators language collections inherit lambdas closures linq refs patterns objects mainargs names dates interrupts trace timing fonts iff controls keys asl screen aga assets rtg sound dbuffer textspeed cards rummy gui"
+samples="hwinfo hello phase2 memory generics properties operators language collections inherit lambdas closures linq refs patterns objects mainargs names dates interrupts trace timing fonts iff controls keys asl boopsi screen aga assets rtg sound dbuffer textspeed cards rummy gui"
 
 # The pack's own counting helper (AmigaDOS cannot count lines), built like a sample.
 buildone() {   # <source dir> <name>
