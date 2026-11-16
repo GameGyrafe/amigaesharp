@@ -233,8 +233,12 @@ internal sealed partial class CEmitter
             foreach (var c in heapClasses.Where(c => IsPoly(c) && BaseClass(c) == null)) Line($"struct {CvtName(c)};");
         }
         foreach (var s in structs) EmitStruct(s);
-        foreach (var c in heapClasses) EmitClass(c);
         var typeText = _out.ToString();
+        _out.Clear();
+        // Class structs come after the span, tuple and delegate typedefs: a class may hold a delegate field or an event
+        // (those typedefs only need the structs and the forward declarations above, classes being pointers).
+        foreach (var c in heapClasses) EmitClass(c);
+        var classText = _out.ToString();
         _out.Clear();
         // The tables of virtual and interface functions come after the span, tuple and delegate typedefs, which their parameters may
         // use (a method taking a ReadOnlySpan of a struct); those typedefs only need the structs and the forward declarations above.
@@ -254,7 +258,13 @@ internal sealed partial class CEmitter
         var staticProps = types.SelectMany(t => t.GetMembers().OfType<IPropertySymbol>())
             .Where(p => p.IsStatic && IsAutoProperty(p) && usedStatics.Contains(p)).ToList();
         foreach (var p in staticProps) EmitStaticProperty(p);
-        if (fields.Count + staticProps.Count > 0) Line("");
+        var staticEvents = statics.SelectMany(t => t.GetMembers().OfType<IEventSymbol>()).Where(e => e.IsStatic && IsFieldLikeEvent(e)).ToList();
+        foreach (var ev in staticEvents)
+        {
+            _usesClosures = true;
+            Line($"static es_event {StaticEventName(ev)};");
+        }
+        if (fields.Count + staticProps.Count + staticEvents.Count > 0) Line("");
 
         var methods = types.SelectMany(t => t.GetMembers().OfType<IMethodSymbol>())
             .Where(m => !m.IsGenericMethod)
@@ -291,6 +301,7 @@ internal sealed partial class CEmitter
         body.Append(typeText);
         foreach (var span in _spans.Values) body.Append(span);
         if (_spans.Count > 0) body.Append('\n');
+        body.Append(classText);
         body.Append(interfaceText);
         body.Append(_out);
         _out.Clear();
@@ -507,6 +518,7 @@ internal sealed partial class CEmitter
                 "}",
             }) result.AppendLine(line);
         }
+        if (_usesClosures) _usesAlloc = true;
         if (_usesAlloc)
         {
             result.AppendLine("#include <stdio.h>");
@@ -519,6 +531,7 @@ internal sealed partial class CEmitter
             result.AppendLine("    return p;");
             result.AppendLine("}");
             result.AppendLine("#define ES_NEW(T) ((T *)es_new(sizeof(T)))");
+            if (_usesClosures) AppendClosureRuntime(result);
         }
         if (_usesStrlen)
         {
@@ -781,7 +794,8 @@ internal sealed partial class CEmitter
                 var more = false;
                 foreach (var f in _usedSymbols.ToList())
                 {
-                    if (!f.IsStatic || !walkedFields.Add(f)) continue;
+                    // Instance field and auto-property initializers too: they run in the class's field-init function and may hold lambdas.
+                    if (!walkedFields.Add(f)) continue;
                     foreach (var r in f.DeclaringSyntaxReferences)
                     {
                         var decl = r.GetSyntax();
@@ -969,6 +983,11 @@ internal sealed partial class CEmitter
             case IPointerTypeSymbol p:
                 var inner = CType(p.PointedAtType, at);
                 return inner.EndsWith("*") ? inner + "*" : inner + " *";
+            case INamedTypeSymbol { TypeKind: not TypeKind.Delegate } holder when HoldsDelegate(holder):
+                // A span, tuple or generic struct (Vec<Action>) of delegates: its typedef would come before the delegate's, and
+                // copies of it would share closures with no owner. Not supported yet.
+                ReportOnce(at, $"'{holder.ToDisplayString()}': a span, tuple or generic struct that holds delegates (use an array of delegates, or a class with delegate fields)");
+                return "int32_t";
             case INamedTypeSymbol { Name: "Span" or "ReadOnlySpan", TypeArguments.Length: 1 } sp when
                 sp.ContainingNamespace?.ToDisplayString() == "System":
                 return SpanType(sp, at);
@@ -1027,6 +1046,10 @@ internal sealed partial class CEmitter
     }
 
     private readonly Dictionary<string, string> _delegateNames = new();
+
+    private static bool HoldsDelegate(INamedTypeSymbol t) =>
+        t.IsTupleType ? t.TupleElements.Any(e => e.Type.TypeKind == TypeKind.Delegate)
+        : t.TypeKind == TypeKind.Struct && t.TypeArguments.Any(a => a.TypeKind == TypeKind.Delegate);
 
     /// <summary>C struct for a value tuple: fields Item1, Item2, ...</summary>
     private string TupleType(INamedTypeSymbol tuple, SyntaxNode at)
@@ -1313,8 +1336,8 @@ internal sealed partial class CEmitter
             var supported = member is FieldDeclarationSyntax or EnumDeclarationSyntax or StructDeclarationSyntax
                 or ClassDeclarationSyntax or InterfaceDeclarationSyntax
                 or MethodDeclarationSyntax or OperatorDeclarationSyntax or ConversionOperatorDeclarationSyntax
-                or PropertyDeclarationSyntax or IndexerDeclarationSyntax or ConstructorDeclarationSyntax;
-            if (!supported) Unsupported(member, $"{member.Kind()} in a class");
+                or PropertyDeclarationSyntax or IndexerDeclarationSyntax or ConstructorDeclarationSyntax or EventFieldDeclarationSyntax;
+            if (!supported) Unsupported(member, member is EventDeclarationSyntax ? "an event with add/remove accessors; declare it as 'event Action Name;'" : $"{member.Kind()} in a class");
         }
         if (FieldInits(c).Count > 0) _fieldInitClasses.Add(c);
 
@@ -1336,7 +1359,14 @@ internal sealed partial class CEmitter
             else Line(Decl(field.Type, field.Name, decl) + ";");
         foreach (var p in c.GetMembers().OfType<IPropertySymbol>().Where(p => !p.IsStatic && IsAutoProperty(p)))
             Line(Decl(p.Type, p.Name, decl) + ";");
-        if (baseClass == null && !IsPoly(c) && !c.GetMembers().Any(m => m is IFieldSymbol { IsStatic: false, IsConst: false, AssociatedSymbol: null } || m is IPropertySymbol { IsStatic: false } pp && IsAutoProperty(pp)))
+        foreach (var ev in c.GetMembers().OfType<IEventSymbol>().Where(e => !e.IsStatic && IsFieldLikeEvent(e)))
+        {
+            _usesClosures = true;
+            CType(ev.Type, decl);   // the delegate typedef, used when the event is raised
+            Line($"es_event {ev.Name};");   // the handlers (see CEmitter.Closures.cs)
+        }
+        if (baseClass == null && !IsPoly(c) && !c.GetMembers().Any(m => m is IFieldSymbol { IsStatic: false, IsConst: false, AssociatedSymbol: null } || m is IPropertySymbol { IsStatic: false } pp && IsAutoProperty(pp)
+                || m is IEventSymbol { IsStatic: false } pe && IsFieldLikeEvent(pe)))
             Line("char ES_empty;");   // C has no empty structs
         _indent--;
         Line("};");
@@ -1599,7 +1629,11 @@ internal sealed partial class CEmitter
         _thisType = m.ContainingType;
         _this = isCtor && !isClassCtor ? ThisKind.Value : m.IsStatic || m.MethodKind is MethodKind.LocalFunction or MethodKind.AnonymousFunction ? ThisKind.None : ThisKind.Pointer;
         _captures.Clear();
-        if (m.MethodKind == MethodKind.AnonymousFunction)
+        _fnNode = decl;
+        _outerFrames = new List<Frame>();
+        if (m.MethodKind == MethodKind.AnonymousFunction && decl is LambdaExpressionSyntax heapLam && IsHeapLambda(heapLam))
+            HeapLambdaPrologue(heapLam, m);
+        else if (m.MethodKind == MethodKind.AnonymousFunction)
         {
             var caps = FindCaptures(decl);
             if (caps.Locals.Count > 0 || caps.UsesThis)
@@ -1613,6 +1647,7 @@ internal sealed partial class CEmitter
                 }
             }
         }
+        EmitFrame(decl);   // the parameters and top-level locals that heap closures capture
         if (isCtor && !isClassCtor) Line($"{CType(m.ContainingType, decl)} {ThisName} = {{0}};");
         if (isCtor && !isClassCtor && decl is ConstructorDeclarationSyntax { Initializer: { } init } &&
             Model(init).GetSymbolInfo(init).Symbol is IMethodSymbol { IsImplicitlyDeclared: false } chained)
@@ -1660,6 +1695,8 @@ internal sealed partial class CEmitter
         _thisIsClass = false;
         _thisType = null;
         _captures.Clear();
+        _fnNode = null;
+        _outerFrames = new List<Frame>();
         _indent--;
         Line("}");
         Line("");
@@ -1831,6 +1868,7 @@ internal sealed partial class CEmitter
             case BlockSyntax b:
                 Line("{");
                 _indent++;
+                EmitFrame(b);
                 foreach (var s in b.Statements) Statement(s);
                 _indent--;
                 Line("}");
@@ -1859,6 +1897,13 @@ internal sealed partial class CEmitter
                         // ref T x = ref place;  ->  T *x = &place;  (uses of x read and write through the pointer)
                         if (v.Initializer == null) { Unsupported(v, "ref local without an initializer"); continue; }
                         Line($"{Decl(sym.Type, "*" + sym.Name, l)} = {Expr(v.Initializer.Value, top: true)};");
+                        continue;
+                    }
+                    if (v.Initializer != null && sym.Type.TypeKind == TypeKind.Delegate) CheckBorrowedCopy(sym, v.Initializer.Value, v);
+                    if (_captures.TryGetValue(sym, out var framed))
+                    {
+                        // Captured by a heap closure: the variable lives in the scope's frame.
+                        if (v.Initializer != null) Line($"{framed} = {Expr(v.Initializer.Value, top: true)};");
                         continue;
                     }
                     var text = Decl(sym.Type, sym.Name, l);
@@ -2320,6 +2365,9 @@ internal sealed partial class CEmitter
             case LambdaExpressionSyntax lam:
                 return Lambda(lam);
 
+            case ConditionalAccessExpressionSyntax ca:
+                return ConditionalInvoke(ca) ?? Unsupported(ca, "?. other than x?.Invoke(...) on an event or a delegate");
+
             case QueryExpressionSyntax query:
                 return Unsupported(query, "a query whose result is kept: E# builds no sequences, so consume it right away with foreach or a call such as (query).Sum()");
 
@@ -2378,6 +2426,9 @@ internal sealed partial class CEmitter
                     return top ? rs : $"({rs})";
                 }
                 if (a.IsKind(SyntaxKind.CoalesceAssignmentExpression)) return CoalesceAssignment(a);
+                if (Model(a).GetSymbolInfo(a.Left).Symbol is IEventSymbol assignedEvent) return EventAssignment(a, assignedEvent);
+                if (a.IsKind(SyntaxKind.SimpleAssignmentExpression) && Model(a).GetSymbolInfo(a.Left).Symbol is ILocalSymbol { Type.TypeKind: TypeKind.Delegate } assignedLocal)
+                    CheckBorrowedCopy(assignedLocal, a.Right, a);
                 if (WrittenProperty(a.Left) is { } wp) return PropertyAssignment(wp, a);
                 if (a.Kind() != SyntaxKind.SimpleAssignmentExpression &&
                     Model(a).GetSymbolInfo(a).Symbol is IMethodSymbol { MethodKind: MethodKind.UserDefinedOperator } op)
@@ -2522,6 +2573,13 @@ internal sealed partial class CEmitter
         }
 
         static bool IsDelegate(ITypeSymbol? t) => t?.TypeKind == TypeKind.Delegate;
+        if (isEquality && (IsNullConstant(b.Left) || IsNullConstant(b.Right)) &&
+            Model(b).GetSymbolInfo(IsNullConstant(b.Left) ? b.Right : b.Left).Symbol is IEventSymbol testedEvent)
+        {
+            // An event is null when it has no handlers.
+            var place = EventPlace(IsNullConstant(b.Left) ? b.Right : b.Left, testedEvent);
+            return place == null ? "0" : $"(({place}).live {(b.IsKind(SyntaxKind.EqualsExpression) ? "==" : "!=")} 0)";
+        }
         if (b.OperatorToken.Text is "==" or "!=" &&
             (IsInterfaceType(Model(b).GetTypeInfo(b.Left).Type) || IsInterfaceType(Model(b).GetTypeInfo(b.Right).Type) ||
              IsDelegate(Model(b).GetTypeInfo(b.Left).Type) || IsDelegate(Model(b).GetTypeInfo(b.Right).Type)))
@@ -3007,10 +3065,25 @@ internal sealed partial class CEmitter
         {
             _usesAlloc = true;
             var freed = inv.ArgumentList.Arguments[0].Expression;
+            if (Model(freed).GetSymbolInfo(freed).Symbol is IEventSymbol freedEvent)
+                return EventPlace(freed, freedEvent) is { } evPlace ? $"es_event_clear(&({evPlace}))" : "0";
             var target = Expr(freed, top: true);
+            if (Model(freed).GetTypeInfo(freed).Type is { TypeKind: TypeKind.Delegate } freedDelegate)
+            {
+                // A delegate: drop its reference to its heap closure (null env: nothing to free).
+                _usesClosures = true;
+                var dp = $"_fp{++_temp}";
+                return $"({{ {CType(freedDelegate, freed)} *{dp} = &({target}); es_closure_release({dp}->env); *{dp} = ({CType(freedDelegate, freed)}){{0}}; }})";
+            }
             if (IsInterfaceType(Model(freed).GetTypeInfo(freed).Type))
                 return $"(free({target}.obj), {target} = ({CType(Model(freed).GetTypeInfo(freed).Type!, freed)}){{0}})";
             return $"(free({target}), {target} = NULL)";
+        }
+
+        if (m.ContainingType is { Name: "Heap" } && m.Name == "LiveClosures" && m.ContainingNamespace?.ToDisplayString() == "ESharp.Platform")
+        {
+            _usesClosures = true;
+            return "es_closures_live";
         }
 
         if (m.ContainingType is { Name: "Cast" } && m.ContainingNamespace?.ToDisplayString() == "ESharp.Platform"
@@ -3031,6 +3104,8 @@ internal sealed partial class CEmitter
         {
             // f(x) and f.Invoke(x) call through the function pointer.
             var callee = inv.Expression is MemberAccessExpressionSyntax { Name.Identifier.Text: "Invoke" } inva ? inva.Expression : inv.Expression;
+            if (Model(callee).GetSymbolInfo(callee).Symbol is IEventSymbol raised)
+                return EventRaise(raised, callee, inv.ArgumentList, m, inv);
             var d = Expr(callee);
             if (!IsSimple(callee))
             {
@@ -3297,12 +3372,13 @@ internal sealed partial class CEmitter
         var dt = CType(del, lam);
         var (locals, usesThis) = FindCaptures(lam);
         if (locals.Count == 0 && !usesThis) return $"(({dt}){{ {FuncName(m)}, NULL }})";
+        if (IsHeapLambda(lam)) return HeapLambda(lam, m, dt);
 
         SyntaxNode? p = lam.Parent;
         while (p is ParenthesizedExpressionSyntax or CastExpressionSyntax or ConditionalExpressionSyntax) p = p.Parent;
         var allowed = p is ArgumentSyntax || p is EqualsValueClauseSyntax { Parent: VariableDeclaratorSyntax { Parent: VariableDeclarationSyntax { Parent: LocalDeclarationStatementSyntax } } };
         if (!allowed)
-            return Unsupported(lam, "lambda that captures a local or 'this' and is not an argument or a local variable's initializer; it only lives as long as the method that made it, so it cannot be returned or stored");
+            return Unsupported(lam, "lambda that captures a local or 'this' here: a borrowed (stack) closure must be an argument or a local variable's initializer, and a stored (heap) closure must be stored in a field, a static, an array element, a property or an event, returned, passed to an [Owned] parameter, or held in a local that is one of these or freed with Heap.Free");
 
         var fields = new List<string>();
         var inits = new List<string>();

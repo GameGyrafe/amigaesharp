@@ -44,6 +44,7 @@ Execute RunOne language language 39
 Execute RunOne collections collections 20
 Execute RunOne inherit inherit 24
 Execute RunOne lambdas lambdas 16
+Execute RunOne closures closures 20
 Execute RunOne linq linq 37
 Execute RunOne refs refs 18
 Execute RunOne patterns patterns 23

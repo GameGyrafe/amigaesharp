@@ -58,6 +58,7 @@
     <Compile Include="..\..\samples\inherit\Inherit.cs" Link="Samples\Inherit\Inherit.cs" />
     <Compile Include="..\..\samples\linq\Linq.cs" Link="Samples\Linq\Linq.cs" />
     <Compile Include="..\..\samples\lambdas\Lambdas.cs" Link="Samples\Lambdas\Lambdas.cs" />
+    <Compile Include="..\..\samples\closures\Closures.cs" Link="Samples\Closures\Closures.cs" />
     <Compile Include="..\..\samples\collections\Collections.cs" Link="Samples\Collections.cs" />
     <Compile Include="..\..\samples\controls\Controls.cs" Link="Samples\Controls.cs" />
     <Compile Include="..\..\samples\timing\Timing.cs" Link="Samples\Timing.cs" />

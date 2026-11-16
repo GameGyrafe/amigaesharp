@@ -12,7 +12,7 @@ namespace ESharp.Analyzers;
 /// again inside the compiler, so the compiler never sees out-of-subset code.
 /// </summary>
 [DiagnosticAnalyzer(LanguageNames.CSharp)]
-public sealed class SubsetAnalyzer : DiagnosticAnalyzer
+public sealed partial class SubsetAnalyzer : DiagnosticAnalyzer
 {
     public const string AllowFloatProperty = "build_property.ESharpAllowFloat";
 
@@ -50,6 +50,9 @@ public sealed class SubsetAnalyzer : DiagnosticAnalyzer
             SyntaxKind.MethodDeclaration, SyntaxKind.OperatorDeclaration);
         context.RegisterSyntaxNodeAction(CheckArrayVariable, SyntaxKind.VariableDeclarator);
         context.RegisterSyntaxNodeAction(CheckArrayAssignment, SyntaxKind.SimpleAssignmentExpression);
+        context.RegisterSyntaxNodeAction(CheckBorrowedDelegate, SyntaxKind.IdentifierName);
+        context.RegisterSyntaxNodeAction(CheckDelegateTypeArguments, SyntaxKind.GenericName, SyntaxKind.InvocationExpression);
+        context.RegisterCompilationStartAction(Closures.Start);
     }
 
     private const string ArrayAdvice =

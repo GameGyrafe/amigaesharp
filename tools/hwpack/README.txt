@@ -69,7 +69,7 @@ in an emulator. Your run is the first on real hardware.
          Protect RunAll RunOne +s
          Protect #? +e
    - Type:  Execute RunAll
-   First hwinfo runs, then the programs one after the other (35 runs of 34 programs). Each one writes results/NAME.txt (what it
+   First hwinfo runs, then the programs one after the other (36 runs of 35 programs). Each one writes results/NAME.txt (what it
    printed) and results/NAME.sum (its counts); RunAll collects them into SUMMARY.txt, which starts with a
    machine report (hwinfo: CPU, FPU, chipset, Kickstart and library versions, chip and fast RAM), then one line per
    program, then the start and finish times, then every line that needs a look. Several programs open a screen or
@@ -96,7 +96,7 @@ in an emulator. Your run is the first on real hardware.
    the last lines of SUMMARY.txt list those programs. FAIL is the thing to report; a count difference is a
    note, and sometimes expected (below). Emulator counts:
      phase2 32, memory 19, generics 24, properties 18, operators 20, language 39, collections 20, inherit 24,
-     lambdas 16, linq 37, refs 18, patterns 23, objects 21 (and 21 again with the arguments SEED=42 auto, which
+     lambdas 16, closures 20, linq 37, refs 18, patterns 23, objects 21 (and 21 again with the arguments SEED=42 auto, which
      RunAll passes as AmigaDOS arguments), names 12, dates 19, interrupts 14, timing 10, fonts 8, iff 10,
      controls 12, keys 8, asl 3, screen 23, aga 6, assets 17, rtg 5, sound 21, dbuffer 30, textspeed 1,
      cards 15, rummy 28.
