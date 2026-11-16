@@ -226,7 +226,7 @@ public unsafe class GtText : GtGadget
 /// <see cref="Close"/> releases the system objects in the right order (window, gadgets, visual info, screen lock) and frees the
 /// gadgets that were added; free the window itself afterwards. Events come through GadTools' own message calls. On the host nothing is
 /// shown: <see cref="HostClick"/>, <see cref="HostType"/> and <see cref="HostClose"/> drive the window the way a person would.
-/// No menus, no hooks, no keyboard shortcuts (an underscore in a label is shown as is).
+/// No menus, no GadTools/Intuition callback hooks (the event hooks below are plain virtual methods), no keyboard shortcuts (an underscore in a label is shown as is).
 /// <para>
 /// A program may also derive its own window from it (<c>class Greeter : GtWindow</c>, marked <see cref="ExtensibleAttribute"/>):
 /// add the gadgets in the constructor, override <see cref="OnClicked"/>, <see cref="OnChanged"/> and <see cref="OnCloseRequest"/>,
@@ -546,7 +546,7 @@ public unsafe class GtWindow
     /// <summary>
     /// Hands one event (from <see cref="Wait"/>) to the window's hooks: <see cref="OnClicked"/>, <see cref="OnChanged"/> or
     /// <see cref="OnCloseRequest"/>. False when it was a close request that was accepted (stop waiting), true otherwise. A pull loop
-    /// can use it for the events it does not handle itself.
+    /// can use it for the events it does not handle itself. Pass events from this window's own <see cref="Wait"/> (not checked).
     /// </summary>
     public bool Dispatch(GuiEvent e)
     {

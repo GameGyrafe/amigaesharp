@@ -141,6 +141,36 @@ Dos.PutStr(Ok == 11 ? ""all ok\n"" : ""some failed\n"");";
         Assert.Contains(r.Diagnostics, d => d.Id == "ES0007" && d.GetMessage().Contains("'" + name + "'") && d.GetMessage().Contains("[Extensible]"));
     }
 
+    [Theory]
+    [InlineData("ESharp")]
+    [InlineData("ESharp.Platform")]
+    public void A_program_in_a_library_namespace_may_derive_from_its_own_classes_but_not_from_closed_library_ones(string ns)
+    {
+        // Library classes are recognised by where they are declared (the compiler's lib/ sources or the assemblies), not by namespace.
+        var own = $@"namespace {ns};
+public class Base {{ public virtual int F() {{ return 1; }} }}
+public class Mid : Base {{ public override int F() {{ return 2; }} }}
+public sealed class Leaf : Mid {{ public override int F() {{ return base.F() + 1; }} }}
+public static class P {{ [EntryPoint] public static void Main() {{ Base b = new Leaf(); Dos.PutStr(b.F() == 3 ? ""ok\n"" : ""FAIL\n""); Heap.Free(ref b); }} }}";
+        var c = CompileOk("using ESharp;\nusing ESharp.Platform;\n" + own);
+        if (HasGcc)
+        {
+            var (code, output) = RunWithHostGcc(c);
+            Assert.Equal(0, code);
+            Assert.Equal("ok\n", output);
+        }
+        var bad = Compile($"using ESharp;\nusing ESharp.Platform;\nnamespace {ns};\npublic class B : GtButton {{ }}\npublic static class P {{ [EntryPoint] public static void Main() {{ }} }}");
+        Assert.Contains(bad.Diagnostics, d => d.Id == "ES0007" && d.GetMessage().Contains("'GtButton'"));
+    }
+
+    [Fact]
+    public void An_implicit_base_constructor_with_optional_parameters_is_ES0099_not_skipped()
+    {
+        // C# binds the implicit base() to Base(int n = 5); the emitter would not run it, so it is reported instead.
+        var r = Compile(Program("public class Base { public int N; public Base(int n = 5) { N = n; } }\npublic class D : Base { public D() { } }", "D d = new D(); Heap.Free(ref d);"));
+        Assert.Contains(r.Diagnostics, d => d.Id == "ES0099" && d.GetMessage().Contains("optional parameters"));
+    }
+
     [Fact]
     public void Deriving_from_GtWindow_on_sdl_says_that_the_class_is_Amiga_only()
     {

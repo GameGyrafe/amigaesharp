@@ -202,6 +202,11 @@ public static class EsCompiler
                     value = _allowFloat ? "true" : "false";
                     return true;
                 }
+                if (key == SubsetAnalyzer.LibrarySourcesProperty)
+                {
+                    value = LibrarySources.PathPrefixes;
+                    return true;
+                }
                 value = "";
                 return false;
             }

@@ -16,6 +16,9 @@ public sealed partial class SubsetAnalyzer : DiagnosticAnalyzer
 {
     public const string AllowFloatProperty = "build_property.ESharpAllowFloat";
 
+    /// <summary>Set by the compiler, which parses E#'s library as source: the path prefixes of those files, separated by ';'.</summary>
+    public const string LibrarySourcesProperty = "build_property.ESharpLibrarySources";
+
     public override ImmutableArray<DiagnosticDescriptor> SupportedDiagnostics => Descriptors.SubsetRules;
 
     public override void Initialize(AnalysisContext context)
@@ -204,7 +207,7 @@ public sealed partial class SubsetAnalyzer : DiagnosticAnalyzer
                 return;
             }
             // E#'s own library is source in esharp build but a referenced assembly in the IDE: the same rule both ways, by attribute.
-            if (IsESharpLibraryType(baseType))
+            if (IsESharpLibraryType(c, baseType))
             {
                 if (!IsExtensible(baseType))
                 {
@@ -293,14 +296,17 @@ public sealed partial class SubsetAnalyzer : DiagnosticAnalyzer
 
     /// <summary>
     /// A type of E#'s own library: from the ESharp.Platform / ESharp.Runtime assemblies (IDE, host projects), or, where the compiler
-    /// parses the library as source together with the program, declared in its namespaces (ESharp, ESharp.Platform).
+    /// parses the library as source together with the program, declared in one of the library's source files. The compiler names
+    /// those by path prefix in the <see cref="LibrarySourcesProperty"/> option (lib/Runtime/ and lib/Platform/); the IDE does not set it.
     /// </summary>
-    private static bool IsESharpLibraryType(INamedTypeSymbol type)
+    private static bool IsESharpLibraryType(SyntaxNodeAnalysisContext c, INamedTypeSymbol type)
     {
         var assembly = type.OriginalDefinition.ContainingAssembly?.Name;
         if (assembly == "ESharp.Platform" || assembly == "ESharp.Runtime") return true;
-        var ns = type.ContainingNamespace?.ToDisplayString();
-        return ns == "ESharp" || ns == "ESharp.Platform";
+        if (!c.Options.AnalyzerConfigOptionsProvider.GlobalOptions.TryGetValue(LibrarySourcesProperty, out var prefixes) || string.IsNullOrEmpty(prefixes))
+            return false;
+        var list = prefixes.Split(new[] { ';' }, System.StringSplitOptions.RemoveEmptyEntries);
+        return type.OriginalDefinition.DeclaringSyntaxReferences.Any(r => list.Any(p => r.SyntaxTree.FilePath.StartsWith(p, System.StringComparison.Ordinal)));
     }
 
     /// <summary>The library class is marked <c>[ESharp.Extensible]</c>: programs may derive from it.</summary>

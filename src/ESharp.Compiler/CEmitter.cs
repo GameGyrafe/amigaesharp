@@ -865,12 +865,16 @@ internal sealed partial class CEmitter
             if (init != null && init.IsKind(SyntaxKind.ThisConstructorInitializer)) return;
             for (var b = BaseClass(ctor.ContainingType); b != null; b = BaseClass(b))
             {
-                // Base field initializers run too (ImplicitInits): what they use is walked like any used field.
-                foreach (var member in b.GetMembers())
-                    if (member is IFieldSymbol { IsStatic: false } or IPropertySymbol { IsStatic: false }) _usedSymbols.Add(member);
+                // Base field initializers run too (ImplicitInits): their expressions are walked like those of any used field.
+                foreach (var (member, _, _) in FieldInits(b)) _usedSymbols.Add(member);
                 var explicitCtors = b.InstanceConstructors.Where(k => !k.IsImplicitlyDeclared).ToList();
                 if (explicitCtors.Count == 0) continue;
-                Add(explicitCtors.FirstOrDefault(k => k.Parameters.Length == 0));
+                var none = explicitCtors.FirstOrDefault(k => k.Parameters.Length == 0);
+                // C# also binds an implicit base() to a constructor whose parameters are all optional; the emitter does not (ImplicitInits).
+                if (none == null)
+                    Unsupported((SyntaxNode?)init ?? ctor.DeclaringSyntaxReferences.FirstOrDefault()?.GetSyntax() ?? ctor.ContainingType.DeclaringSyntaxReferences.First().GetSyntax(),
+                        $"implicit base constructor of '{b.Name}' with optional parameters; call it with ': base(...)' and the arguments");
+                else Add(none);
                 break;
             }
         }
