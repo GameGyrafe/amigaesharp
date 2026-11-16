@@ -26,7 +26,7 @@ class RoundTrip(unittest.TestCase):
         for p, (d, f) in files.items():
             w.add_file(p, d, f)
         w.mkdir("emptydir")
-        return w.finish(bootable=True), files
+        return w.finish(), files
 
     def check(self, ofs):
         img, files = self.build(ofs)
@@ -44,10 +44,38 @@ class RoundTrip(unittest.TestCase):
         self.assertTrue(got["emptydir"].is_dir)
         self.assertTrue(got["deep/er"].is_dir)
         # protection of a script: s set, e allowed; rwed all allowed (bits 0-3 clear)
-        self.assertEqual(got["RunAll"].prot, 0x10)
+        self.assertEqual(got["RunAll"].prot, 0x40)
         self.assertEqual(got["prog"].prot, 0)
         # boot block checksum
         self.assertEqual(mkadf._bootsum(img[:1024]), 0xFFFFFFFF)
+
+    def test_protection_bits(self):
+        # dos/dos.h: FIBB_ARCHIVE 4, PURE 5, SCRIPT 6, HOLD 7; rwed are inverted (set = denied). List order: h s p a r w e d
+        self.assertEqual(mkadf.flags_from_protect(0x60), "-sp-rwed")
+        self.assertEqual(mkadf.flags_from_protect(0x50), "-s-arwed")
+        self.assertEqual(mkadf.flags_from_protect(0x10), "---arwed")
+        self.assertEqual(mkadf.flags_from_protect(0x80), "h---rwed")
+        self.assertEqual(mkadf.flags_from_protect(0x0F), "--------")
+        self.assertEqual(mkadf.protect_from_flags("sp"), 0x60 | 0x0F)
+        self.assertEqual(mkadf.protect_from_flags("arwed"), 0x10)
+        for p in (0, 0x40, 0x50, 0xF5):
+            self.assertEqual(mkadf.protect_from_flags(mkadf.flags_from_protect(p).replace("-", "")), p)
+
+    def test_check_finds_bitmap_errors(self):
+        w = mkadf.AdfWriter()
+        w.add_file("a", b"x" * 2000)
+        img = bytearray(w.finish())
+        self.assertEqual(mkadf.AdfReader(bytes(img)).check(), [])
+        bad = bytearray(img)
+        # mark a used block free again (and fix the bitmap checksum): check must notice
+        blk = mkadf.BITMAP * 512
+        used = [b for b in range(2, mkadf.NBLOCKS) if not w.free[b] and b not in (mkadf.ROOT, mkadf.BITMAP)][0]
+        i = used - 2
+        off = blk + 4 + 4 * (i // 32)
+        v = int.from_bytes(bad[off:off + 4], "big") | (1 << (i % 32))
+        bad[off:off + 4] = v.to_bytes(4, "big")
+        bad[blk:blk + 4] = mkadf.checksum_block(bytes(bad[blk:blk + 512]), 0).to_bytes(4, "big")
+        self.assertTrue(any("marked free" in p for p in mkadf.AdfReader(bytes(bad)).check()))
 
     def test_ffs(self):
         self.check(False)
@@ -102,6 +130,11 @@ class RoundTrip(unittest.TestCase):
             r = run("create", "-", adf2, "--from-adf", adf + ":sub=moved", "--bootblock-from", adf)
             self.assertEqual(r.returncode, 0, r.stderr)
             self.assertEqual(run("cat", adf2, "moved/p").stdout, "prog")
+            # empty source path with a destination: the whole disk goes under dest/
+            adf3 = os.path.join(t, "o3.adf")
+            r = run("create", "-", adf3, "--from-adf", adf + ":=dest")
+            self.assertEqual(r.returncode, 0, r.stderr)
+            self.assertEqual(run("cat", adf3, "dest/sub/p").stdout, "prog")
 
 
 if __name__ == "__main__":

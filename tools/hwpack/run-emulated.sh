@@ -14,7 +14,7 @@
 #   --out <dir>     keep the run directory here (default: a new temporary directory, printed at the end)
 #   Floppy modes (stock A1200, Kickstart 3.1, NO hard disk, chip RAM only; the pack is read back from the .adf afterwards with mkadf.py):
 #   --floppy <hwtest.adf>        DF0 = your Workbench disk (--wb; a throwaway copy with one added S:User-Startup that runs the pack from DF1),
-#                                DF1 = a copy of the pack disk. Needs a pack dir only for nothing: pass the .adf instead of a pack dir.
+#                                DF1 = a copy of the pack disk. No pack dir is needed in the floppy modes (the .adf is the pack).
 #   --boot-floppy <hwtest-boot.adf>  DF0 = the bootable pack disk alone (a copy whose startup-sequence has one more line, the done marker).
 #   --floppy-speed N             floppy drive speed in percent (default 0 = turbo, to keep the run short; 100 = real speed, about 3x longer)
 #   In both modes your own files are never written: copies in the run directory take the results.
@@ -43,6 +43,7 @@ here="$(cd "$(dirname "$0")" && pwd)"
 mkadf() { python3 -I "$here/mkadf.py" "$@"; }
 if [ -n "$floppy$bootfloppy" ]; then
   [ -f "$rom" ] || { echo "need --rom <Kickstart 3.1 A1200 ROM> (or ESHARP_KICKSTART)" >&2; exit 2; }
+  [ -z "$floppy" ] || [ -z "$bootfloppy" ] || { echo "--floppy and --boot-floppy are two different modes: pick one" >&2; exit 2; }
   [ -z "$floppy" ] || [ -f "$wb" ] || { echo "--floppy needs --wb <Workbench 3.1 disk .adf> (or ESHARP_WORKBENCH)" >&2; exit 2; }
   case "$profile" in stock) : "${fast:=0}";; fast8) : "${fast:=8}";; *) echo "unknown profile $profile (stock, fast8)" >&2; exit 2;; esac
   run="${out:-$(mktemp -d)}"; mkdir -p "$run"; run="$(cd "$run" && pwd)"
@@ -70,7 +71,7 @@ floppy_drive_1 = $run/df1.adf"
   else
     # DF0: the bootable pack disk, its startup-sequence plus a done marker line.
     mkadf cat "$bootfloppy" S/Startup-Sequence > "$run/startup"
-    printf '%s\nEcho done >SYS:done\n' "$(sed 's/^Execute RunAll$/'"$cmd"'/' "$run/startup")" > "$run/startup2"
+    printf '%s\nEcho done >SYS:done\n' "$(CMD="$cmd" awk '$0 == "Execute RunAll" { print ENVIRON["CMD"]; next } { print }' "$run/startup")" > "$run/startup2"
     mkadf create - "$run/df0.adf" --name-from "$bootfloppy" --bootblock-from "$bootfloppy" --from-adf "$bootfloppy:" \
       --file S/Startup-Sequence="$run/startup2" --protect 'S/Startup-Sequence=srwed' >/dev/null
     data="$run/df0.adf"
@@ -90,8 +91,13 @@ floppy_drive_0 = $run/df0.adf"
   kill $pid 2>/dev/null || true; wait $pid 2>/dev/null || true
   elapsed=$(( $(date +%s) - start ))
   echo "floppy mode (drive speed $floppy_speed), profile $profile: A1200, 2 MB chip, $fast MB fast, no hard disk, accuracy 1; $desc; wall time ${elapsed}s; run directory $run"
-  rm -rf "$run/results-disk"; mkadf extract "$data" "$run/results-disk" || echo "(the disk image has problems: see above)"
-  if [ $finished = 1 ]; then mkadf cat "$data" SUMMARY.txt; else echo "RunAll did not finish within ${timeout}s"; mkadf cat "$data" results/PROGRESS.txt 2>/dev/null || true; exit 1; fi
+  # Keep only our results: the Workbench copy (df0.adf) and, for the boot disk, the AmigaOS files are never left behind.
+  rm -rf "$run/results-disk"
+  if [ -n "$floppy" ]; then mkadf extract "$data" "$run/results-disk" || echo "(the disk image has problems: see above)"
+  else mkadf extract "$data" "$run/results-disk" SUMMARY.txt results || echo "(the disk image has problems: see above)"; fi
+  mkadf check "$data" | tail -1 || true
+  rm -f "$run/df0.adf"   # a Workbench copy, or the boot disk with its AmigaOS files
+  if [ $finished = 1 ]; then cat "$run/results-disk/SUMMARY.txt"; else echo "RunAll did not finish within ${timeout}s"; cat "$run/results-disk/results/PROGRESS.txt" 2>/dev/null || true; exit 1; fi
   exit 0
 fi
 [ -f "$pack/RunAll" ] || { echo "$pack is not a built pack (no RunAll): run tools/hwpack/build.sh first" >&2; exit 2; }

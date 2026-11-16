@@ -11,10 +11,12 @@ in an emulator. Your run is the first on real hardware.
 1b. The floppy image (obj/hwtest.adf)
    tools/hwpack/build.sh also writes the whole pack as ONE 880 KB AmigaDOS floppy image, hwtest.adf (FFS, volume
    HWTEST, a data disk: only E# files, no AmigaOS files, not bootable; about 660 KB used, 220 KB left for results).
-   a) A real Amiga 1200 with only a floppy drive (no hard disk, no fast RAM; often Kickstart 3.0):
+   a) A real Amiga 1200 with only a floppy drive (no hard disk, no fast RAM; often Kickstart 3.0). A stock A1200 has ONE
+      floppy drive: use the bootable variant in d) (one disk, no swapping). The Workbench-disk way below was run in the
+      emulator with TWO drives (Workbench in DF0, pack in DF1); the one-drive version of it is NOT VERIFIED (steps further down).
       - Write hwtest.adf to a double-density disk with a Greaseweazle or KryoFlux (or put it on a USB stick for a Gotek
         running FlashFloppy and select it there). A PC floppy drive cannot write Amiga disks.
-      - Boot your own Workbench 3.x floppy. Insert the pack disk in the same drive (or DF1:), open a Shell
+      - Boot your own Workbench 3.x floppy. With a second drive insert the pack disk in DF1:, open a Shell
         (Workbench disk, System drawer) and type:   CD HWTEST:   then   Execute RunAll
         Do not write-protect the pack disk: the results are written to it (results drawer and SUMMARY.txt).
       - Before RunAll, so that diskfont.library does not stop with an "insert volume FONTS:" requester (the Workbench
@@ -22,6 +24,20 @@ in an emulator. Your run is the first on real hardware.
       - The Workbench disk's startup makes T: and ENV: in RAM:, which RunAll needs. Its Libs drawer has the libraries
         asl, diskfont, iffparse and lowlevel, so the ok counts in section 3 apply; with a different boot disk some
         programs print "not installed" lines (section 3).
+      - ONE DRIVE (NOT VERIFIED, not run even in the emulator): after the Workbench 3.1 startup the Workbench disk is needed again
+        for every C: command and every library, so first load what the scripts use into RAM while the Workbench disk is still
+        in DF0, in the Shell:
+            Resident C:Execute PURE
+            Resident C:Date PURE
+            Resident C:Type PURE
+            Resident C:Delete PURE
+            Resident C:Assign PURE
+            Resident C:MakeDir PURE
+            Copy Libs/asl.library Libs/diskfont.library Libs/iffparse.library Libs/lowlevel.library RAM:Libs   (MakeDir RAM:Libs first)
+            Assign LIBS: RAM:Libs ADD
+        then swap the Workbench disk for the pack disk and CD HWTEST: ; Execute RunAll. If a requester still asks for the
+        Workbench disk, put it back, answer, and tell us which command it was (it needs a Resident line too). The bootable
+        variant in d) avoids all of this.
       - Afterwards read results/ and SUMMARY.txt off the disk (copy them to a hard disk or read the image back with
         tools/hwpack/mkadf.py: python3 -I mkadf.py extract <image> <folder>). With a Greaseweazle or KryoFlux read the disk
         into an .adf first.
@@ -40,11 +56,11 @@ in an emulator. Your run is the first on real hardware.
       results-disk/ (everything on the pack disk afterwards).
    d) Bootable variant, for your own use only: build.sh <image> --boot-wb <your Workbench 3.x disk 2 .adf> also writes
       obj/hwtest-boot.adf, the pack plus ONLY the few AmigaOS files needed to boot and run it (C:Execute, Date, Delete,
-      Type, Assign, MakeDir and four libraries, read from YOUR Workbench disk at build time) and a startup-sequence we
-      wrote. Boot it alone in DF0: it runs RunAll and leaves a shell. THIS DISK HOLDS COPYRIGHTED AMIGAOS FILES: use it
+      Type, Assign, MakeDir, SetPatch and four libraries, read from YOUR Workbench disk at build time, boot block included, so build.sh needs --boot-wb for it) and a
+      startup-sequence we wrote. build.sh refuses to write it anywhere that git does not ignore. Boot it alone in DF0: it runs SetPatch (copied from your disk, as a real Workbench does), then RunAll, and leaves a shell. THIS DISK HOLDS COPYRIGHTED AMIGAOS FILES: use it
       yourself, never share it, attach it to a report or commit it (obj/ is git-ignored). Emulated:
         tools/hwpack/run-emulated.sh --boot-floppy obj/hwtest-boot.adf --rom <rom>
-      The pack disk with 880 KB has room for results, but the boot variant has only about 130 KB left: if the disk fills up
+      The pack disk with 880 KB has room for results, but the boot variant has only about 108 KB left: if the disk fills up
       during the run, delete README.txt on it (or use the two-disk way in a)).
 
 2. Run it
@@ -91,10 +107,11 @@ in an emulator. Your run is the first on real hardware.
      controls   12 with lowlevel.library in LIBS: (9 without it); the joystick line depends on what is plugged in
      keys       9 if you press a key while it waits (it waits about ten seconds)
      fonts      7 without diskfont.library, 8 with it, 10 with it and a disk font such as ruby in FONTS:
-     dates      19; when you boot a Workbench disk first (the floppy way in 1b) the Workbench locale may be active and one line,
-                "FAIL the division sign is not a letter" (ToUpper of 0xF7), appears: 18 ok and 1 FAIL. It was seen in FS-UAE
-                with the Workbench 3.1 disk booted (not with the bootable pack disk, which has no locale); the cause is the locale
-                tables, not yet checked on a real machine. Report it either way.
+     dates      19. The "accented letters fold too" line (0xE9 and 0xC4) follows the language rules of utility.library: with
+                locale.library running (the Workbench startup runs IPrefs) it follows the user's locale, so a language driver
+                that is not Latin-1 could fail it. It passed in the emulator both with the plain ROM and after the Workbench
+                3.1 startup (default locale). The sample also prints an "info: ToUpper(0xF7) = ..." line: 0xF7 (the ROM) or
+                another value under a locale; it is information, not a check.
      iff, asl   one line saying "not installed" and no ok lines if iffparse.library / asl.library is not in LIBS:
      timing     one fewer ok and a "note" line if the machine is not real time; 60 frames per second on NTSC
      rtg        runs more checks on a machine with an RTG card

@@ -7,19 +7,20 @@ file extension, directory and data blocks; OFS and FFS). MIT licence, Gyrafe Sof
 from any other tool.
 
   mkadf.py create <dir> <out.adf> [--name HWTEST] [--ofs] [--protect PATTERN=FLAGS ...]
-                  [--bootable] [--bootblock-from SRC.adf] [--name-from SRC.adf] [--from-adf SRC.adf:PATH[=DESTPATH] ...] [--mkdir PATH ...] [--file DEST=LOCALFILE ...]
+                  [--bootblock-from SRC.adf] [--name-from SRC.adf] [--from-adf SRC.adf:PATH[=DESTPATH] ...] [--mkdir PATH ...] [--file DEST=LOCALFILE ...]
   mkadf.py ls <adf>                         list the whole disk (protection bits, sizes)
   mkadf.py extract <adf> <dest dir> [PATH ...]   copy files (default: everything) out of the image
   mkadf.py cat <adf> <PATH>                 write one file to stdout
-  mkadf.py check <adf>                      verify checksums and the bitmap
+  mkadf.py check <adf>                      verify checksums, and that the bitmap marks exactly the blocks the tree uses
 
 Protection FLAGS use the letters AmigaDOS prints: h s p a r w e d (a letter present = that bit is on; for r w e d
 "on" means the action is allowed). Files without a --protect rule get "rwed" (what a new file has). A script needs
 "srwed", a program "rwed" (e is on). PATTERN is an fnmatch pattern matched against the path relative to the disk root
 (case-insensitive, "/" separated) or just the file name; the first matching rule wins.
 
---bootable writes the standard boot block code (it only starts dos.library; the disk still needs S/Startup-sequence
-and the commands it uses). --from-adf copies a file or a whole directory from another image (read, never modified).
+--bootblock-from takes the boot block code (bytes 12 to 1023) from another disk, normally your own Workbench disk, so the
+image boots (the disk still needs S/Startup-sequence and the commands it uses); this tool holds no boot code of its own.
+Dates are written as local time (AmigaDOS keeps local time; TZ=UTC gives reproducible images). --from-adf copies a file or a whole directory from another image (read, never modified).
 """
 import fnmatch
 import os
@@ -36,26 +37,21 @@ T_HEADER, T_DATA, T_LIST = 2, 8, 16
 ST_ROOT, ST_USERDIR, ST_FILE = 1, 2, -3
 AMIGA_EPOCH = 252460800  # 1978-01-01 in Unix seconds
 
-# Standard boot code (documented: FindResident("dos.library"), return its init entry in a0). Starts at byte 12.
-BOOTCODE = bytes.fromhex("43FA0018" "4EAEFFA0" "4A80" "670A" "2040" "20680016" "7000" "4E75" "70FF" "4E75") + b"dos.library\0"
-
 
 class AdfError(Exception):
     pass
 
 
-def _upper(ch, intl):
-    if "a" <= ch <= "z":
-        return ch.upper()
-    if intl and (0xE0 <= ord(ch) <= 0xFE) and ord(ch) != 0xF7:
-        return chr(ord(ch) - 32)
-    return ch
+def _upper(ch):
+    # Non-international hashing (DOS\\0 and DOS\\1 disks, the only ones this writer makes). DOS\\2/\\3 disks would also
+    # fold the Latin-1 letters 0xE0-0xFE (except 0xF7); the reader walks the hash tables and never hashes, so it does not need that.
+    return ch.upper() if "a" <= ch <= "z" else ch
 
 
-def name_hash(name, intl=False):
+def name_hash(name):
     h = len(name)
     for ch in name:
-        h = (h * 13 + ord(_upper(ch, intl))) & 0x7FF
+        h = (h * 13 + ord(_upper(ch))) & 0x7FF
     return h % HT_SIZE
 
 
@@ -77,7 +73,8 @@ def _bootsum(b):
 
 
 def _amiga_date(t):
-    t = int(t) - AMIGA_EPOCH
+    # AmigaDOS stores local time: shift the Unix time by the local UTC offset (set TZ=UTC for reproducible images).
+    t = int(t) + time.localtime(int(t)).tm_gmtoff - AMIGA_EPOCH
     if t < 0:
         t = 0
     days, rem = divmod(t, 86400)
@@ -91,7 +88,7 @@ def protect_from_flags(flags):
     if bad:
         raise AdfError("bad protection letters %r" % "".join(sorted(bad)))
     p = 0
-    bits = {"s": 4, "p": 5, "a": 6, "h": 7}
+    bits = {"a": 4, "p": 5, "s": 6, "h": 7}  # dos/dos.h: FIBB_ARCHIVE 4, FIBB_PURE 5, FIBB_SCRIPT 6, FIBB_HOLD 7
     for letter, bit in bits.items():
         if letter in flags:
             p |= 1 << bit
@@ -103,7 +100,7 @@ def protect_from_flags(flags):
 
 def flags_from_protect(p):
     out = ""
-    for letter, bit in (("h", 7), ("s", 4), ("p", 5), ("a", 6)):
+    for letter, bit in (("h", 7), ("s", 6), ("p", 5), ("a", 4)):
         out += letter if p & (1 << bit) else "-"
     for letter, bit in (("r", 3), ("w", 2), ("e", 1), ("d", 0)):
         out += "-" if p & (1 << bit) else letter
@@ -252,12 +249,10 @@ class AdfWriter:
             self._seal(blk_no)
         self._link(parent, name, hdr)
 
-    def finish(self, bootable=False):
-        # boot block
+    def finish(self):
+        # boot block (no boot code here: the code comes from the user's own disk, see --bootblock-from)
         boot = self.img[0:2 * BSIZE]
         boot[0:4] = b"DOS" + bytes([1 if not self.ofs else 0])
-        if bootable:
-            boot[12:12 + len(BOOTCODE)] = BOOTCODE
         struct.pack_into(">I", boot, 4, 0)
         struct.pack_into(">I", boot, 8, ROOT)
         struct.pack_into(">I", boot, 4, (~_bootsum(bytes(boot))) & 0xFFFFFFFF)
@@ -310,6 +305,7 @@ class AdfReader:
         self.ofs = not (self.flags & 1)
         self.intl = bool(self.flags & 6)
         self.problems = []
+        self.used = {0, 1, ROOT}  # blocks reachable from the root (plus the boot blocks), filled by entries()
         self.volume = self._name(self._b(ROOT))
 
     def _b(self, n):
@@ -329,6 +325,7 @@ class AdfReader:
     def entries(self):
         """All files and directories, depth first, as Entry objects with paths relative to the root."""
         out = []
+        self.used = {0, 1, ROOT}
         self._verify(ROOT, self._b(ROOT))
         self._walk(ROOT, "", out, set())
         return out
@@ -342,6 +339,7 @@ class AdfReader:
                     self.problems.append("block %d: loop in a hash chain" % n)
                     break
                 seen.add(n)
+                self.used.add(n)
                 e = self._b(n)
                 self._verify(n, e)
                 typ = struct.unpack_from(">i", e, 0)[0]
@@ -368,12 +366,14 @@ class AdfReader:
                 raise AdfError("extension chain too long")
             b = self._b(n)
             self._verify(n, b)
+            self.used.add(n)
             cnt = struct.unpack_from(">I", b, 8)[0]
             for i in range(min(cnt, HT_SIZE)):
                 ptrs.append(struct.unpack_from(">I", b, 308 - 4 * i)[0])
             n = struct.unpack_from(">I", b, 504)[0]
         out = bytearray()
         for p in ptrs:
+            self.used.add(p)
             blk = self._b(p)
             if self.ofs:
                 self._verify(p, blk)
@@ -387,10 +387,19 @@ class AdfReader:
 
     def check(self):
         self.entries()
-        # bitmap: every block used by the tree must be marked used (a light check)
-        bm = self._b(struct.unpack_from(">I", self._b(ROOT), 316)[0])
+        # bitmap (one bitmap block covers a DD disk): checksum, then used (clear bit) against the blocks the tree references
+        bn = struct.unpack_from(">I", self._b(ROOT), 316)[0]
+        self.used.add(bn)
+        bm = self._b(bn)
         if checksum_block(bm, 0) != struct.unpack_from(">I", bm, 0)[0]:
             self.problems.append("bitmap block: bad checksum")
+        for blk in range(2, NBLOCKS):
+            i = blk - 2
+            free = bool(struct.unpack_from(">I", bm, 4 + 4 * (i // 32))[0] >> (i % 32) & 1)
+            if blk in self.used and free:
+                self.problems.append("block %d is in use but marked free in the bitmap" % blk)
+            elif blk not in self.used and not free:
+                self.problems.append("block %d is marked used in the bitmap but nothing references it" % blk)
         return self.problems
 
 
@@ -416,7 +425,7 @@ def _flags_for(path, rules):
 
 
 def cmd_create(argv):
-    name, ofs, bootable, bootfrom = "HWTEST", False, False, None
+    name, ofs, bootfrom = "HWTEST", False, None
     protect, from_adf, mkdirs, files = [], [], [], []
     pos = []
     i = 0
@@ -426,8 +435,6 @@ def cmd_create(argv):
             name = argv[i + 1]; i += 2
         elif a == "--ofs":
             ofs = True; i += 1
-        elif a == "--bootable":
-            bootable = True; i += 1
         elif a == "--bootblock-from":
             bootfrom = argv[i + 1]; i += 2
         elif a == "--name-from":
@@ -467,7 +474,8 @@ def cmd_create(argv):
             low = e.path.lower()
             if not want or low == want or low.startswith(want + "/"):
                 hit = True
-                target = (dest.strip("/") + e.path[len(want):]) if dest else e.path
+                rel = e.path[len(want):].lstrip("/")
+                target = "/".join(x for x in (dest.strip("/"), rel) if x) if dest else e.path
                 if e.is_dir:
                     dirs.append(target)
                 else:
@@ -484,7 +492,7 @@ def cmd_create(argv):
     for path, data, flags in plan.values():
         fl = _flags_for(path, explicit) or flags or "rwed"
         w.add_file(path, data, fl)
-    img = bytearray(w.finish(bootable))
+    img = bytearray(w.finish())
     if bootfrom:
         # keep the other disk's boot code (bytes 12..1023), then recompute our boot block checksum
         old = AdfReader(bootfrom).img[:2 * BSIZE]

@@ -67,11 +67,13 @@ python3 -I "$here/mkadf.py" create "$out" "$adf" --name HWTEST --protect 'RunAll
   || { echo "The pack does not fit on one 880 KB floppy. Drop the biggest programs (cards, rummy, ...) from 'samples' above and from tools/hwpack/RunAll." >&2; exit 1; }
 if [ -n "$bootwb" ]; then
   bootadf="${out%/}-boot.adf"
+  # The bootable image holds AmigaOS files: refuse to write it anywhere git does not ignore (obj/ is ignored).
+  git check-ignore -q -- "$bootadf" || { echo "refusing to write $bootadf: it holds AmigaOS files and is not git-ignored (use an outdir under obj/)" >&2; exit 1; }
   # Only what the scripts and programs use that Kickstart 3.1 does not hold in ROM: the C: commands RunAll/RunOne and our startup call
-  # (Execute, Date, Delete, Type, Assign, MakeDir) and the libraries the programs open from LIBS: (asl, diskfont, iffparse, lowlevel).
-  from=(); for f in C/Execute C/Date C/Delete C/Type C/Assign C/MakeDir Libs/asl.library Libs/diskfont.library Libs/iffparse.library Libs/lowlevel.library; do
+  # (Execute, Date, Delete, Type, Assign, MakeDir, SetPatch) and the libraries the programs open from LIBS: (asl, diskfont, iffparse, lowlevel).
+  from=(); for f in C/Execute C/Date C/Delete C/Type C/Assign C/MakeDir C/SetPatch Libs/asl.library Libs/diskfont.library Libs/iffparse.library Libs/lowlevel.library; do
     from+=(--from-adf "$bootwb:$f"); done
-  python3 -I "$here/mkadf.py" create "$out" "$bootadf" --name HWTEST --bootable --protect 'RunAll=srwed' --protect 'RunOne=srwed' \
+  python3 -I "$here/mkadf.py" create "$out" "$bootadf" --name HWTEST --bootblock-from "$bootwb" --protect 'RunAll=srwed' --protect 'RunOne=srwed' \
     --protect 'S/Startup-Sequence=srwed' "${from[@]}" --file S/Startup-Sequence="$here/boot-startup" \
     || { echo "The pack plus the AmigaOS files does not fit on one floppy." >&2; exit 1; }
   echo "$bootadf holds AmigaOS files from your Workbench disk: for your own use only, never commit or share it."
