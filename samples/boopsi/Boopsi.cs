@@ -72,8 +72,16 @@ public static unsafe class Program
         text.Init(Stringa.TextVal, $"Ami{"ga"}");     // a temporary string: the object keeps its own copy
         Check(text.Create(), "a strgclass object is created");
         Check(text.Get(Stringa.TextVal) == "Amiga", "the string gadget holds its starting text");
+        int copies = text.StringCopies;
+        for (int i = 0; i < 10; i++) text.Set(Stringa.TextVal, $"text {i}");
         text.Set(Stringa.TextVal, "E# on BOOPSI");
         Check(text.Get(Stringa.TextVal) == "E# on BOOPSI", "a new text reads back");
+        Check(text.StringCopies <= copies, "setting a text again frees the copy of the one before");
+
+        BoopsiObject full = new BoopsiObject("frameiclass");
+        bool fit = true;
+        for (int i = 0; i < 13; i++) fit = fit && full.Init(Ia.Width, 10 + i);
+        Check(fit && !full.Init(Ia.Height, 5) && !full.Create(), "a refused starting attribute makes Create fail");
 
         BoopsiObject missing = new BoopsiObject("no-such-class");
         Check(!missing.Create() && missing.Address == null, "an unknown class gives no object");
@@ -84,6 +92,22 @@ public static unsafe class Program
         Heap.Free(ref text);
         missing.Dispose();
         Heap.Free(ref missing);
+        full.Dispose();
+        Heap.Free(ref full);
+
+        // One owner per object: a second owner and a cycle are refused; a kept object disposed by the program leaves its owner.
+        BoopsiObject a = new BoopsiObject("frameiclass");
+        BoopsiObject b = new BoopsiObject("frameiclass");
+        BoopsiObject c = new BoopsiObject("frameiclass");
+        BoopsiObject d = new BoopsiObject("frameiclass");
+        Check(a.Keep(c) && !b.Keep(c) && !c.Keep(a) && !a.Keep(a) && c.HasOwner, "a kept object has one owner (no second owner, no cycle)");
+        Check(b.Keep(d) && d.Keep(a) && !a.Keep(b), "no cycle further up either");
+        c.Dispose();
+        Heap.Free(ref c);
+        Check(a.Create() && b.Create() && BoopsiObject.Live == 2, "objects that keep others are created");
+        b.Dispose();                // disposes d, which disposes a (kept by d)
+        Heap.Free(ref b);
+        Check(BoopsiObject.Live == 0, "disposing an owner disposes what it keeps, down the chain");
         Check(BoopsiObject.Live == 0 && prop == null, "the objects are disposed and freed");
     }
 
@@ -186,7 +210,17 @@ public static unsafe class Program
         entry.Init(Ga.RelVerify, true);
         entry.Init(Ga.Id, 3);
         Check(win.Add(entry) && entry.Keep(editHook), "a string gadget with an edit hook is added");
-        Check(BoopsiObject.Live == 5, "five system objects are live");
+        BoopsiObject quitFrame = new BoopsiObject("frameiclass");
+        quitFrame.Init(Ia.FrameType, Ia.FrameButton);
+        quitFrame.Create();
+        BoopsiObject quit = new BoopsiObject("frbuttonclass");
+        quit.Init(Ga.Left, x + 130);
+        quit.Init(Ga.Top, y + 8);
+        quit.Init(Ga.Image, quitFrame);
+        quit.Init(Ga.Text, "Quit");
+        quit.Init(Ga.RelVerify, true);
+        Check(win.Add(quit) && quit.Keep(quitFrame), "a Quit button without an id of its own is added");
+        Check(BoopsiObject.Live == 7, "seven system objects are live");
 
         int clicks = 0;
         int lastTop = -1;
@@ -199,6 +233,8 @@ public static unsafe class Program
             else Say("slider released");
         };
         entry.Notify += e => { accepted++; Say($"text accepted: {entry.Get(Stringa.TextVal)}"); };
+        // A Quit button: closing the window from its own handler is put off until the handler has returned.
+        quit.Notify += e => { Say("quit"); win.Close(); };
 
         if (wait)
         {
@@ -212,9 +248,17 @@ public static unsafe class Program
             Dos.FlushOutput();
             win.Run();
             Dos.PutStr($"events: {clicks} click(s), {updates} slider update(s), last position {lastTop}, {accepted} Return(s), {keys} key(s) in the edit hook\n");
-            Dos.PutStr($"slider: {slider.Get(Pga.Top)}, text: {entry.Get(Stringa.TextVal)}\n");
             Check(clicks >= 1, "a click on the button arrived");
-            Check(updates >= 1 && lastTop == slider.Get(Pga.Top), "the slider's moves arrived and match its position");
+            if (win.IsOpen)        // ended with the close gadget (Quit has closed the window and freed the gadgets already)
+            {
+                Dos.PutStr($"slider: {slider.Get(Pga.Top)}, text: {entry.Get(Stringa.TextVal)}\n");
+                Check(updates >= 1 && lastTop == slider.Get(Pga.Top), "the slider's moves arrived and match its position");
+            }
+        }
+        else
+        {
+            bool more = win.Dispatch(new BoopsiEvent(BoopsiEventKind.GadgetUp, quit, 0, 0));
+            Check(!more && !win.IsOpen && BoopsiObject.Live == 0, "Quit closes the window once its handler has returned");
         }
 
         win.Close();

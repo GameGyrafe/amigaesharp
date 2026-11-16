@@ -714,28 +714,32 @@ internal sealed partial class CEmitter
             // object of a class of our own (its class pointer is known), then call the class's dispatcher as DoMethodA does.
             result.AppendLine("#include <intuition/classes.h>");
             result.AppendLine("#include <utility/hooks.h>");
+            result.AppendLine("#include <proto/dos.h>");
             result.AppendLine("static IPTR es_probe_dispatch(struct Hook *h, Object *o, Msg msg) { return CALLHOOKPKT((struct Hook *)((Class *)h)->cl_Super, o, msg); }");
-            result.AppendLine("static int es_oclass_offset;");
+            result.AppendLine("static int es_oclass_offset;   /* 0: not found out yet, -1: not found (no DoMethod then), else the offset */");
+            result.AppendLine("static int es_oclass_probe(void)");
+            result.AppendLine("{");
+            result.AppendLine("    Class *cl = MakeClass(NULL, (ClassID)\"rootclass\", NULL, 0, 0);");
+            result.AppendLine("    if (cl == NULL) return 0;   /* out of memory: try again next time */");
+            result.AppendLine("    cl->cl_Dispatcher.h_Entry = (HOOKFUNC)es_probe_dispatch;");
+            result.AppendLine("    Object *o = NewObjectA(cl, NULL, NULL);");
+            result.AppendLine("    int found = 0;");
+            result.AppendLine("    if (o != NULL)");
+            result.AppendLine("    {");
+            result.AppendLine("        found = -1;");
+            result.AppendLine("        for (int k = 1; k <= 4 && found < 0; k++)");
+            result.AppendLine("            if (*(Class **)((char *)o - k * (int)sizeof(void *)) == cl) found = k * (int)sizeof(void *);");
+            result.AppendLine("        DisposeObject(o);");
+            result.AppendLine("    }");
+            result.AppendLine("    FreeClass(cl);");
+            result.AppendLine("    if (found < 0) PutStr((CONST_STRPTR)\"E#: DoMethod cannot find the class of a BOOPSI object on this AROS (unknown object layout); methods return 0\\n\");");
+            result.AppendLine("    return found;");
+            result.AppendLine("}");
             result.AppendLine("static uintptr_t es_domethod(void *obj, void *msg)");
             result.AppendLine("{");
             result.AppendLine("    if (obj == NULL) return 0;");
-            result.AppendLine("    if (es_oclass_offset == 0)");
-            result.AppendLine("    {");
-            result.AppendLine("        es_oclass_offset = (int)sizeof(void *);");
-            result.AppendLine("        Class *cl = MakeClass(NULL, (ClassID)\"rootclass\", NULL, 0, 0);");
-            result.AppendLine("        if (cl != NULL)");
-            result.AppendLine("        {");
-            result.AppendLine("            cl->cl_Dispatcher.h_Entry = (HOOKFUNC)es_probe_dispatch;");
-            result.AppendLine("            Object *o = NewObjectA(cl, NULL, NULL);");
-            result.AppendLine("            if (o != NULL)");
-            result.AppendLine("            {");
-            result.AppendLine("                for (int k = 1; k <= 4; k++)");
-            result.AppendLine("                    if (*(Class **)((char *)o - k * (int)sizeof(void *)) == cl) { es_oclass_offset = k * (int)sizeof(void *); break; }");
-            result.AppendLine("                DisposeObject(o);");
-            result.AppendLine("            }");
-            result.AppendLine("            FreeClass(cl);");
-            result.AppendLine("        }");
-            result.AppendLine("    }");
+            result.AppendLine("    if (es_oclass_offset == 0) es_oclass_offset = es_oclass_probe();");
+            result.AppendLine("    if (es_oclass_offset <= 0) return 0;");
             result.AppendLine("    Class *c = *(Class **)((char *)obj - es_oclass_offset);");
             result.AppendLine("    return (uintptr_t)CALLHOOKPKT((struct Hook *)c, obj, msg);");
             result.AppendLine("}");
@@ -3265,7 +3269,11 @@ internal sealed partial class CEmitter
         if (m.ContainingType is { Name: "Cast" } && m.ContainingNamespace?.ToDisplayString() == "ESharp.Platform"
             && m.Name is "ObjectToPtr" or "PtrToObject" && m.IsGenericMethod && inv.ArgumentList.Arguments.Count == 1)
         {
-            // A class reference is a plain pointer in C: reinterpret (for h_Data, user data slots and the like).
+            // A class reference is a plain pointer in C: reinterpret (for h_Data, user data slots and the like). Interfaces are
+            // { obj, vt } pairs and delegates { fn, env }: no single pointer.
+            var targ = m.TypeArguments[0];
+            if (!IsHeapClass(targ) || targ.SpecialType == SpecialType.System_String)
+                return Unsupported(inv, $"Cast.{m.Name} with {targ.ToDisplayString()}: only classes (not interfaces, delegates, arrays or strings) are one pointer");
             var arg = Expr(inv.ArgumentList.Arguments[0].Expression, top: true);
             return m.Name == "ObjectToPtr" ? $"((void *)({arg}))" : $"(({CType(m.TypeArguments[0], inv)})({arg}))";
         }

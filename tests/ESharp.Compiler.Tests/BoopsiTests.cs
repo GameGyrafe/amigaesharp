@@ -155,6 +155,8 @@ static inline void *NewObjectA(void *cl, const void *id, void *tags)
     ShimObj *o = calloc(1, sizeof(ShimObj));
     strcpy(o->cls, known[k]);
     shim_set(o, tags);
+    /* struct Gadget's GadgetID (x86-64 offset 64, Layout.g.cs) from GA_ID, as gadgetclass does. */
+    for (int i = 0; i < o->n; i++) if (o->tag[i] == 2147680272u) *(uint16_t *)(o->head + 64) = (uint16_t)o->val[i];
     shim_live++;
     return o;
 }
@@ -256,12 +258,14 @@ Dos.PutStr($""{Heap.LiveClosures()}\n"");";
         Assert.DoesNotContain("FAIL", output);
         Assert.Contains("boopsi: all ok\n", output);
         // Objects outside a window, and a kept hook: disposed by their owners.
-        Assert.Contains("[dispose propgclass]\n[dispose strgclass]\nok the objects are disposed and freed", output);
-        // The window shows images before the gadgets they surround, takes the gadgets out before it closes, and disposes after that:
-        // the button before the frame it keeps.
-        var close = output[output.IndexOf("[remove frbuttonclass]", StringComparison.Ordinal)..];
-        Assert.StartsWith("[remove frbuttonclass]\n[remove propgclass]\n[remove strgclass]\n[close window]\n[free drawinfo]\n[unlock screen]\n" +
-                          "[dispose frbuttonclass]\n[dispose frameiclass]\n[dispose propgclass]\n[dispose frameiclass]\n[dispose strgclass]\n", close);
+        Assert.True(output.Contains("ok an unknown class gives no object\n[dispose propgclass]\n[dispose strgclass]\n", StringComparison.Ordinal) && output.Contains("[dispose frameiclass]\n[dispose frameiclass]\nok disposing an owner", StringComparison.Ordinal), output);
+        // The Quit button's handler closes the window; that waits until the handler has returned (no use after free under the
+        // sanitizers). Then: the gadgets out, the window closed, every object disposed (a button before the frame it keeps), and only
+        // then the DrawInfo and the screen lock.
+        var close = output[output.IndexOf("event: quit\n", StringComparison.Ordinal)..];
+        Assert.StartsWith("event: quit\n[remove frbuttonclass]\n[remove propgclass]\n[remove strgclass]\n[remove frbuttonclass]\n[close window]\n" +
+                          "[dispose frbuttonclass]\n[dispose frameiclass]\n[dispose propgclass]\n[dispose frameiclass]\n[dispose strgclass]\n" +
+                          "[dispose frbuttonclass]\n[dispose frameiclass]\n[free drawinfo]\n[unlock screen]\nok Quit closes the window", close);
         Assert.True(output.IndexOf("[draw frameiclass]", StringComparison.Ordinal) < output.IndexOf("[add strgclass]", StringComparison.Ordinal), output);
     }
 
@@ -301,5 +305,109 @@ Dos.PutStr($""{Heap.LiveClosures()}\n"");";
         Assert.Contains("Es_ESharp_Platform_Hook_Dispatch_HOOK", r.C!);
         Assert.Contains("static inline uintptr_t es_domethod(void *obj, void *msg) { return (uintptr_t)IDoMethodA((Object *)obj, (Msg)msg); }", r.C!);
         Assert.Contains("CALLHOOKPKT((struct Hook *)c, obj, msg)", r.C!);
+    }
+
+    [Fact]
+    public void Keep_refuses_a_second_owner_and_cycles_and_a_kept_object_disposed_by_the_program_leaves_its_owner()
+    {
+        if (!HasGcc) return;
+        const string body = @"
+BoopsiObject a = new BoopsiObject(""frameiclass"");
+BoopsiObject b = new BoopsiObject(""frameiclass"");
+BoopsiObject c = new BoopsiObject(""frameiclass"");
+BoopsiWindow w = new BoopsiWindow();
+bool r1 = a.Keep(c), r2 = b.Keep(c), r3 = c.Keep(a), r4 = w.AddImage(c), r5 = a.Keep(a);
+Hook h = new Hook((o, m) => 0);
+bool r6 = a.Keep(h), r7 = b.Keep(h);
+a.Create(); b.Create(); c.Create();
+c.Dispose();          // taken off a's list
+Heap.Free(ref c);
+h.Dispose();          // taken off a's list too
+Heap.Free(ref h);
+a.Dispose();
+Heap.Free(ref a);
+b.Dispose();
+Heap.Free(ref b);
+Heap.Free(ref w);
+Dos.PutStr($""{r1} {r2} {r3} {r4} {r5} {r6} {r7} {BoopsiObject.Live} {Heap.LiveClosures()}\n"");";
+        var c = CompileOk(Program("", body).Replace("public static class P", "public static unsafe class P"), HostC);
+        var (code, output) = RunShimmed(c, HasSanitizers);
+        Assert.True(code == 0, output);
+        Assert.EndsWith("True False False False False True False 0 0\n", output);
+        Assert.Equal(3, output.Split("[dispose frameiclass]").Length - 1);   // each object once
+    }
+
+    [Theory]
+    [InlineData("interface IFoo { } class A : IFoo { }", "IFoo i = new A(); void* p = Cast.ObjectToPtr(i);")]
+    [InlineData("class A { }", "void* p = null; System.Action f = Cast.PtrToObject<System.Action>(p);")]
+    [InlineData("class A { }", "void* p = null; string s = Cast.PtrToObject<string>(p);")]
+    public void Cast_object_pointers_are_only_for_classes(string types, string body)
+    {
+        var src = Prelude + types + " public static unsafe class P { [EntryPoint] public static void Main() { " + body + " } }";
+        var r = Compile(src, M68k);
+        Assert.Contains(r.Diagnostics, d => d.Id is "ES0099" or "ES0014" && (d.Id == "ES0014" || d.GetMessage().Contains("only classes")));
+    }
+
+    [Theory]
+    [InlineData(16, "r=1 slot=30 1")]   // the nightly's aligned struct _Object: the class 16 bytes before the object
+    [InlineData(8, "r=1 slot=30 1")]    // the SDK's layout
+    [InlineData(48, "r=0 slot=7 0")]    // not found within 32 bytes: DoMethod does nothing (and says so once), no crash
+    public void AROS_DoMethod_finds_the_class_pointer_or_refuses(int offset, string expected)
+    {
+        if (!HasGcc) return;
+        const string body = @"
+BoopsiObject o = new BoopsiObject(""propgclass"");
+o.Init(Pga.Top, 30);
+o.Create();
+nuint slot = 7;
+nuint r = o.DoMethod(Om.Get, Pga.Top.Tag, (nuint)(&slot));
+nuint r2 = o.DoMethod(Om.Get, Pga.Top.Tag, (nuint)(&slot));
+Dos.PutStr($""r={(int)r} slot={(int)slot} {(int)r2}\n"");
+o.Dispose();
+Heap.Free(ref o);";
+        var c = CompileOk(Program("", body).Replace("public static class P", "public static unsafe class P"), HostC);
+        Assert.Contains("static int es_oclass_probe(void)", c);
+        // Take the AROS branch of es_domethod with host gcc: a small intuition with classes whose objects keep the class pointer
+        // OFFSET bytes before them.
+        var shim = $@"#pragma once
+#include <stdio.h>
+#include <stdlib.h>
+#include <stdint.h>
+#define SHIM_OFF {offset}
+typedef uintptr_t IPTR;
+typedef void Object;
+typedef void *Msg;
+typedef const char *ClassID;
+typedef const char *CONST_STRPTR;
+struct Hook {{ void *succ, *pred; IPTR (*h_Entry)(struct Hook *, Object *, Msg); void *h_SubEntry; void *h_Data; }};
+typedef IPTR (*HOOKFUNC)(struct Hook *, Object *, Msg);
+typedef struct IClass {{ struct Hook cl_Dispatcher; uint32_t cl_Reserved; struct IClass *cl_Super; }} Class;
+#define CALLHOOKPKT(h, o, m) (((struct Hook *)(h))->h_Entry((struct Hook *)(h), (Object *)(o), (Msg)(m)))
+static IPTR shim_root(struct Hook *h, Object *o, Msg m) {{ (void)h; (void)o; (void)m; return 0; }}
+static Class shim_rootclass = {{ {{ NULL, NULL, shim_root, NULL, NULL }}, 0, NULL }};
+static IPTR shim_top;
+static IPTR shim_prop(struct Hook *h, Object *o, Msg m) {{ (void)h; (void)o; IPTR *x = m; if (x[0] == 260) {{ *(IPTR *)x[2] = shim_top; return 1; }} return 0; }}
+static Class shim_propclass = {{ {{ NULL, NULL, shim_prop, NULL, NULL }}, 0, &shim_rootclass }};
+static inline Class *MakeClass(ClassID id, ClassID super, Class *sp, uint32_t isz, uint32_t f) {{ (void)id; (void)super; (void)sp; (void)isz; (void)f; Class *c = calloc(1, sizeof(Class)); c->cl_Super = &shim_rootclass; return c; }}
+static inline void FreeClass(Class *c) {{ free(c); }}
+static inline void *NewObjectA(void *cl, const void *id, void *tags)
+{{
+    char *block = calloc(1, 128);
+    Object *o = block + 64;
+    *(Class **)((char *)o - SHIM_OFF) = cl != NULL ? (Class *)cl : &shim_propclass;
+    for (IPTR *t = tags; t != NULL && t[0] != 0; t += 2) shim_top = t[1];
+    (void)id;
+    return o;
+}}
+static inline void DisposeObject(void *o) {{ free((char *)o - 64); }}
+static inline uint16_t RemoveGList(void *w, void *g, int32_t n) {{ (void)w; (void)g; (void)n; return 0; }}
+static inline uintptr_t GetAttr(uint32_t id, void *o, void *s) {{ (void)id; (void)o; *(uintptr_t *)s = shim_top; return 1; }}
+";
+        var src = "#define __AROS__ 1\n" + c.Replace("#include <intuition/classes.h>", "").Replace("#include <utility/hooks.h>", "");
+        var (code, output) = RunWithHostGcc(src, new Dictionary<string, string> { ["proto/intuition.h"] = shim, ["clib/alib_protos.h"] = "" });
+        Assert.True(code == 0, output);
+        Assert.EndsWith(expected + "\n", output);
+        var note = "E#: DoMethod cannot find the class";
+        Assert.Equal(offset == 48 ? 1 : 0, output.Split(note).Length - 1);   // said once, not per call
     }
 }

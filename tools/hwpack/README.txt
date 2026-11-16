@@ -100,7 +100,7 @@ in an emulator. Your run is the first on real hardware.
      phase2 32, memory 19, generics 24, properties 18, operators 20, language 39, collections 20, inherit 24,
      lambdas 16, closures 20, linq 37, refs 18, patterns 23, objects 21 (and 21 again with the arguments SEED=42 auto, which
      RunAll passes as AmigaDOS arguments), names 12, dates 19, interrupts 14, timing 10, fonts 8, iff 10,
-     controls 12, keys 8, asl 3, boopsi 29, screen 23, aga 6, assets 17, rtg 5, sound 21, dbuffer 30, textspeed 1,
+     controls 12, keys 8, asl 3, boopsi 37, screen 23, aga 6, assets 17, rtg 5, sound 21, dbuffer 30, textspeed 1,
      cards 15, rummy 28.
    hello, mainargs (run with the arguments ONE "two words" RC=3: it lists the three arguments and ends with
    return code 3, which is not an error) and trace print text, not ok lines (trace also sends 9 lines to the
@@ -130,11 +130,11 @@ in an emulator. Your run is the first on real hardware.
       asl    RunAll ran the allocation checks only. Type  Echo >RAM:asl-open x  then  asl . A file requester opens
              on a blue screen; click Cancel, run it again and pick a
              file and OK. Both must close the requester without trouble. Then  Delete RAM:asl-open .   yes / no
-      boopsi RunAll ran it without waiting. Type  boopsi WAIT . A window "E# BOOPSI" opens with a framed Hello button,
+      boopsi RunAll ran it without waiting. Type  boopsi WAIT . A window "E# BOOPSI" opens with framed Hello and Quit buttons,
              a slider and a text field holding "Amiga". Click Hello, drag the slider knob, click into the text field,
              type " 1200" and press Return, then click the close gadget. It prints an "event:" line for each thing you
-             did and an "events: ..." summary (the number of keys the edit hook saw included), then 31 ok. Do the gadgets
-             look and react right?                                                                     yes / no
+             did and an "events: ..." summary (the number of keys the edit hook saw included), then 38 ok. Quit
+             instead of the close gadget also ends it (fewer ok lines then). Do the gadgets look and react right?   yes / no
       keys   RunAll ran it without a key press. Type  keys , wait for the blank screen and press A within ten
              seconds: it prints a "pressed key ... typed ..." line (your keymap; Shift+A types 65). Send that
              line, and say what keyboard (original, USB adapter, THEA1200 input) you used.             note it

@@ -354,6 +354,10 @@ internal sealed partial class CEmitter
         foreach (var m in _hookEntries)
             sb.Append($"\\t.text\\n\\t.even\\n\\t.globl _{HookM68kEntry(m)}\\n_{HookM68kEntry(m)}:\\n\\tmove.l a1,-(sp)\\n\\tmove.l a2,-(sp)\\n\\tmove.l a0,-(sp)\\n\\tjsr _{HookName(m)}\\n\\tlea 12(sp),sp\\n\\trts\\n");
         Line("#if defined(__mc68000__)");
+        // The entry calls C with the caller's registers: a small-data (a4-relative) build would see input.device's a4, not ours.
+        Line("#if defined(__baserel__)");
+        Line("#error \"[HookEntry] entries need a large-data build (no -fbaserel / -resident)\"");
+        Line("#endif");
         Line($"__asm__(\"{sb}\");");
         Line("#endif");
     }

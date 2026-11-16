@@ -17,12 +17,13 @@ public static unsafe class Cast
     public static extern string PtrToString(byte* p);
 
     /// <summary>The address of a class object, for a system slot that holds a pointer (a hook's h_Data, a user-data attribute).
-    /// It does not keep the object alive or count as an owner. Emitter intrinsic: <c>(void *)o</c>.</summary>
-    public static extern void* ObjectToPtr<T>(T o) where T : class;
+    /// It does not keep the object alive or count as an owner. Emitter intrinsic: <c>(void *)o</c>; <typeparamref name="T"/> must be
+    /// a class (not an interface, delegate or array: ES0099). Platform-internal for now (the MUI wrappers may need it).</summary>
+    internal static extern void* ObjectToPtr<T>(T o) where T : class;
 
-    /// <summary>The object whose address <see cref="ObjectToPtr"/> gave. The pointer must come from there and the object must not
-    /// have been freed: nothing is checked. Emitter intrinsic: <c>(T *)p</c>.</summary>
-    public static extern T PtrToObject<T>(void* p) where T : class;
+    /// <summary>The object whose address <see cref="ObjectToPtr"/> gave. Unchecked on the Amiga: a pointer that did not come from there, an
+    /// object of another class or a freed object is not detected (the host throws). Emitter intrinsic: <c>(T *)p</c>.</summary>
+    internal static extern T PtrToObject<T>(void* p) where T : class;
 #else
     private static readonly System.Collections.Generic.Dictionary<string, ulong> ToNative = new();
     private static readonly System.Collections.Generic.Dictionary<ulong, string> FromNative = new();
@@ -48,7 +49,7 @@ public static unsafe class Cast
     private static readonly System.Collections.Generic.Dictionary<ulong, object> NativeToObj = new();
     private static ulong _nextObject = 0x10000;
 
-    public static void* ObjectToPtr<T>(T o) where T : class
+    internal static void* ObjectToPtr<T>(T o) where T : class
     {
         if (!ObjToNative.TryGetValue(o, out var address))
         {
@@ -60,7 +61,7 @@ public static unsafe class Cast
         return (void*)address;
     }
 
-    public static T PtrToObject<T>(void* p) where T : class { return (T)NativeToObj[(ulong)p]; }
+    internal static T PtrToObject<T>(void* p) where T : class { return (T)NativeToObj[(ulong)p]; }
 #endif
 }
 
