@@ -86,6 +86,12 @@ or the packages, and none will be. Without `--kickstart <rom>` (or `ESHARP_KICKS
 replacement, which runs most samples but is not the tested target; the test matrix is Kickstart 3.1 (40.069) on `--model A1200`.
 Use a ROM you own, keep it outside the repository and never commit it.
 
+**Workbench icon.** An Amiga build (`m68k`, `os4`, `morphos`, `aros`) also writes `<name>.info` next to the program: a Tool icon
+(classic image for every Amiga OS plus the colour image for OS 3.5 and later) so the program shows in a Workbench window and
+starts by double-click. Properties in the project's csproj set it: `EsStackSize` (bytes, default 65536), `EsToolTypes`
+(`SEED=42;AUTO`; `Args` reads them on a Workbench start) and `EsIcon` (a PNG instead of the default E# picture, icon-sized, 32 to 64 pixels, up to 256 x 256 is accepted but huge on Workbench 3.1;
+`none` writes no icon). Only literal values are read (no `$(...)`, `Condition` or `Directory.Build.props`). Copy the `.info` together with the program.
+
 `esharp new` writes a csproj that references **AmigaESharp.Sdk** (the runtime, the platform contracts with their host
 fakes, and the subset analyzer) at the tool's own version. The installed tool needs no checkout for `new`, `build`,
 `run`, `test`, `assets`, `addr` and `os4vm`. A checkout is still needed to build the `esharp-amiga-toolchain` and

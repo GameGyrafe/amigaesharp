@@ -556,9 +556,91 @@ internal sealed partial class CEmitter
         }
         if (UsesArgs)
         {
-            // Args: main keeps argc/argv (a Workbench start has argc 0); argument 0 is the program name, so Args counts from 1.
+            // Args: main keeps argc/argv; argument 0 is the program name, so Args counts from 1.
+            // A Workbench start has argc 0 and argv pointing at the WBStartup message (the C startup code of every Amiga target does this):
+            // the program icon's tool types then stand in for the command line (issue #84). "KEY=VALUE" and "SWITCH" tool types are the
+            // words Args.Value/Has already look for; a tool type in parentheses is switched off in the icon and is skipped.
             result.AppendLine("static int es_argc;");
             result.AppendLine("static char **es_argv;");
+            result.AppendLine("#define ES_WB_MAX 64");
+            result.AppendLine("static char *es_wb_args[ES_WB_MAX + 2];");
+            result.AppendLine("static char es_wb_buf[2048];");
+            // Workbench's own tool types (they steer how Workbench starts the program) are not program arguments.
+            result.AppendLine("static int es_tt_is_workbench(const char *s)");
+            result.AppendLine("{");
+            result.AppendLine("    static const char *const names[] = { \"TOOLPRI\", \"STARTPRI\", \"DONOTWAIT\", \"TOOLWINDOW\", NULL };");
+            result.AppendLine("    for (int k = 0; names[k] != NULL; k++)");
+            result.AppendLine("    {");
+            result.AppendLine("        const char *n = names[k]; const char *p = s;");
+            result.AppendLine("        while (*n != 0 && *p != 0 && (*p == *n || *p == *n + 32)) { p++; n++; }");
+            result.AppendLine("        if (*n == 0 && (*p == 0 || *p == '=')) return 1;");
+            result.AppendLine("    }");
+            result.AppendLine("    return 0;");
+            result.AppendLine("}");
+            // The words are copied into a static buffer (quotes around a value removed, as a Shell does), so the DiskObject can be freed at once.
+            result.AppendLine("static int es_wb_n; static unsigned es_wb_used;");
+            result.AppendLine("static int es_wb_add(const char *src)   /* 0 when full */");
+            result.AppendLine("{");
+            result.AppendLine("    if (es_wb_n >= ES_WB_MAX + 1) return 0;   /* more tool types than that are dropped */");
+            result.AppendLine("    unsigned len = 0, eq = 0;");
+            result.AppendLine("    while (src[len] != 0) { if (src[len] == '=' && eq == 0) eq = len + 1; len++; }");
+            result.AppendLine("    unsigned from = 0, to = len;   /* NAME=\"two words\" loses its quotes, as in a Shell line */");
+            result.AppendLine("    if (eq != 0 && len - eq >= 2 && src[eq] == '\"' && src[len - 1] == '\"') { from = eq + 1; to = len - 1; }");
+            result.AppendLine("    unsigned out = from != 0 ? eq + (to - from) : len;");
+            result.AppendLine("    if (es_wb_used + out + 1 > sizeof es_wb_buf) return 0;");
+            result.AppendLine("    char *dst = es_wb_buf + es_wb_used; unsigned o = 0;");
+            result.AppendLine("    if (from != 0) { for (unsigned i = 0; i < eq; i++) dst[o++] = src[i]; for (unsigned i = from; i < to; i++) dst[o++] = src[i]; }");
+            result.AppendLine("    else for (unsigned i = 0; i < len; i++) dst[o++] = src[i];");
+            result.AppendLine("    dst[o++] = 0;");
+            result.AppendLine("    es_wb_args[es_wb_n++] = dst; es_wb_used += o;");
+            result.AppendLine("    return 1;");
+            result.AppendLine("}");
+            result.AppendLine("static __attribute__((unused)) void es_args_from_tooltypes(const char *name, char *const *tt)");
+            result.AppendLine("{");
+            result.AppendLine("    es_wb_n = 0; es_wb_used = 0;");
+            result.AppendLine("    es_wb_add(name != NULL ? name : \"\");   /* argument 0 is the program name */");
+            result.AppendLine("    for (; tt != NULL && *tt != NULL; tt++)");
+            result.AppendLine("        if ((*tt)[0] != 0 && (*tt)[0] != '(' && !es_tt_is_workbench(*tt) && !es_wb_add(*tt)) break;");
+            result.AppendLine("    es_wb_args[es_wb_n] = NULL;");
+            result.AppendLine("    es_argc = es_wb_n;");
+            result.AppendLine("    es_argv = es_wb_args;");
+            result.AppendLine("}");
+            result.AppendLine("#if defined(__AMIGA__) || defined(__amigaos__) || defined(__amigaos4__) || defined(__MORPHOS__) || defined(__AROS__)");
+            // icon.library is on the Workbench disk (not in ROM) on a classic Amiga, but Workbench has it open when it starts a program, so
+            // it is opened only here, in a Workbench start. The usual base names are renamed so the C startup code does not open it itself.
+            result.AppendLine("#define IconBase es_IconBase");
+            result.AppendLine("#define IIcon es_IIcon");
+            result.AppendLine("#include <proto/exec.h>");
+            result.AppendLine("#include <proto/dos.h>");
+            result.AppendLine("#include <proto/icon.h>");
+            result.AppendLine("#include <workbench/startup.h>");
+            result.AppendLine("#include <workbench/workbench.h>");
+            result.AppendLine("struct Library *es_IconBase;");
+            result.AppendLine("#if defined(__amigaos4__)");
+            result.AppendLine("struct IconIFace *es_IIcon;");
+            result.AppendLine("#endif");
+            result.AppendLine("static void es_args_from_workbench(struct WBStartup *wb)");
+            result.AppendLine("{");
+            result.AppendLine("    if (wb == NULL || wb->sm_NumArgs < 1 || wb->sm_ArgList == NULL || wb->sm_ArgList[0].wa_Name == NULL) return;");
+            result.AppendLine("    es_IconBase = OpenLibrary((CONST_STRPTR)\"icon.library\", 39);");
+            result.AppendLine("    if (es_IconBase == NULL) return;");
+            result.AppendLine("#if defined(__amigaos4__)");
+            result.AppendLine("    es_IIcon = (struct IconIFace *)GetInterface(es_IconBase, \"main\", 1, NULL);");
+            result.AppendLine("    if (es_IIcon != NULL)");
+            result.AppendLine("#endif");
+            result.AppendLine("    {");
+            result.AppendLine("        BPTR old = CurrentDir(wb->sm_ArgList[0].wa_Lock);");
+            result.AppendLine("        struct DiskObject *dob = GetDiskObject((CONST_STRPTR)wb->sm_ArgList[0].wa_Name);");
+            result.AppendLine("        CurrentDir(old);");
+            result.AppendLine("        if (dob != NULL) { es_args_from_tooltypes((const char *)wb->sm_ArgList[0].wa_Name, (char *const *)dob->do_ToolTypes); FreeDiskObject(dob); }");
+            result.AppendLine("    }");
+            result.AppendLine("#if defined(__amigaos4__)");
+            result.AppendLine("    if (es_IIcon != NULL) { DropInterface((struct Interface *)es_IIcon); es_IIcon = NULL; }");
+            result.AppendLine("#endif");
+            result.AppendLine("    CloseLibrary(es_IconBase);");
+            result.AppendLine("    es_IconBase = NULL;");
+            result.AppendLine("}");
+            result.AppendLine("#endif");
             result.AppendLine("static __attribute__((unused)) int32_t es_args_count(void) { return es_argc > 1 ? (int32_t)es_argc - 1 : 0; }");
             result.AppendLine("static __attribute__((unused)) const char *es_args_get(int32_t i) { return i >= 0 && i < es_args_count() ? es_argv[i + 1] : NULL; }");
         }
@@ -1737,7 +1819,14 @@ internal sealed partial class CEmitter
         Line(UsesArgs ? "int main(int argc, char **argv)" : "int main(void)");
         Line("{");
         _indent++;
-        if (UsesArgs) Line("es_argc = argc; es_argv = argv;");
+        if (UsesArgs)
+        {
+            Line("#if defined(__AMIGA__) || defined(__amigaos__) || defined(__amigaos4__) || defined(__MORPHOS__) || defined(__AROS__)");
+            Line("if (argc == 0) es_args_from_workbench((struct WBStartup *)argv); else { es_argc = argc; es_argv = argv; }");
+            Line("#else");
+            Line("es_argc = argc; es_argv = argv;");
+            Line("#endif");
+        }
         if ((_usesBounds || _usesAlloc) && _atExit.Count > 0) Line("es_exit_hook = es_run_atexit;");
         // Static field initializers that are not C constants, then the static constructors, run once at start-up, in the order the types
         // appear (C# runs them lazily, before a type is first used).

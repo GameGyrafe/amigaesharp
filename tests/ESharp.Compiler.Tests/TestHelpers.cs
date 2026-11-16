@@ -73,12 +73,12 @@ public static class P
     {
         var dir = Path.Combine(Path.GetTempPath(), "esharp-test-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(Path.Combine(dir, "proto"));
-        if (extraHeaders != null) foreach (var (name, text) in extraHeaders) File.WriteAllText(Path.Combine(dir, name), text);
+        if (extraHeaders != null) foreach (var (name, text) in extraHeaders) { Directory.CreateDirectory(Path.GetDirectoryName(Path.Combine(dir, name))!); File.WriteAllText(Path.Combine(dir, name), text); }
         File.WriteAllText(Path.Combine(dir, "proto", "dos.h"),
-            "#include <stdio.h>\nstatic inline long PutStr(const char *s) { return fputs(s, stdout) < 0; }\n");
+            "#pragma once\n#include <stdio.h>\nstatic inline long PutStr(const char *s) { return fputs(s, stdout) < 0; }\n");
         // A tiny exec.library: AllocVec/FreeVec on calloc, with a 2 MB "chip" pool tracked by flags.
         File.WriteAllText(Path.Combine(dir, "proto", "exec.h"),
-            "#include <stdlib.h>\n#include <stdint.h>\n#include <stddef.h>\n" +
+            "#pragma once\n#include <stdlib.h>\n#include <stdint.h>\n#include <stddef.h>\n" +
             "#define MEMF_CHIP 2UL\n" +
             "typedef struct { uint32_t size; uint32_t chip; } EsHdr;\n" +
             "static uint32_t es_chip_used;\n" +

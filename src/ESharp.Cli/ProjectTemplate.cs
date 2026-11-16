@@ -90,6 +90,12 @@ public static class Program
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
     <!-- The same symbol the esharp test host build defines, so #if HOST code behaves alike. -->
     <DefineConstants>$(DefineConstants);HOST</DefineConstants>
+    <!-- Workbench icon: esharp build writes <name>.info next to an Amiga program (stack size, tool types that Args reads on a
+         Workbench start, the picture). All optional; remove the comment marks to use them. EsIcon none writes no icon.
+    <EsStackSize>65536</EsStackSize>
+    <EsToolTypes>SEED=42;AUTO</EsToolTypes>
+    <EsIcon>icon.png</EsIcon>
+    -->
   </PropertyGroup>
 
   <ItemGroup>
@@ -122,6 +128,12 @@ public static class Program
     <!-- The E# source tree. Set ESHARP_ROOT or edit this line if you move it. -->
     <ESharpRoot Condition=""'$(ESharpRoot)' == '' and '$(ESHARP_ROOT)' != ''"">$(ESHARP_ROOT)</ESharpRoot>
     <ESharpRoot Condition=""'$(ESharpRoot)' == ''"">{rootValue}</ESharpRoot>
+    <!-- Workbench icon: esharp build writes <name>.info next to an Amiga program (stack size, tool types that Args reads on a
+         Workbench start, the picture). All optional; remove the comment marks to use them. EsIcon none writes no icon.
+    <EsStackSize>65536</EsStackSize>
+    <EsToolTypes>SEED=42;AUTO</EsToolTypes>
+    <EsIcon>icon.png</EsIcon>
+    -->
   </PropertyGroup>
 
   <ItemGroup>

@@ -34,9 +34,12 @@ buildone() {   # <source dir> <name>
   [ "$name" = trace ] && extra="--trace"   # the trace sample needs TRACE to write to the serial port
   dotnet run --project src/ESharp.Cli -- build "$dir" --target m68k --docker "$image" $extra >/dev/null
   local exe
-  exe="$(find "$dir/obj/m68k" -maxdepth 1 -type f ! -name '*.c' ! -name '*.o' ! -name run | head -1)"
+  exe="$(find "$dir/obj/m68k" -maxdepth 1 -type f ! -name '*.c' ! -name '*.o' ! -name '*.info' ! -name run | head -1)"
   [ -n "$exe" ] || { echo "no executable for $name"; exit 1; }
   cp "$exe" "$out/$name"
+  # The Workbench icon `esharp build` wrote next to the program (issue #84): the pack's programs show and start by double-click.
+  [ -f "$exe.info" ] && cp "$exe.info" "$out/$name.info"
+  return 0
 }
 
 if [ $adfonly = 0 ]; then
@@ -73,7 +76,11 @@ if [ -n "$bootwb" ]; then
   # (Execute, Date, Delete, Type, Assign, MakeDir, SetPatch) and the libraries the programs open from LIBS: (asl, diskfont, iffparse, lowlevel).
   from=(); for f in C/Execute C/Date C/Delete C/Type C/Assign C/MakeDir C/SetPatch Libs/asl.library Libs/diskfont.library Libs/iffparse.library Libs/lowlevel.library; do
     from+=(--from-adf "$bootwb:$f"); done
-  python3 -I "$here/mkadf.py" create "$out" "$bootadf" --name HWTEST --bootblock-from "$bootwb" --protect 'RunAll=srwed' --protect 'RunOne=srwed' \
+  # The bootable image has about 108 KB free without icons and the icons (37 files of 2 KB, 5 blocks each) need about 120 KB, so it
+  # is written from a copy of the pack without the .info files; the one-disk pack above and the pack drawer keep them.
+  noicons="$(mktemp -d)"; trap 'rm -rf "$noicons"' EXIT
+  cp -r "$out"/. "$noicons"/; rm -f "$noicons"/*.info
+  python3 -I "$here/mkadf.py" create "$noicons" "$bootadf" --name HWTEST --bootblock-from "$bootwb" --protect 'RunAll=srwed' --protect 'RunOne=srwed' \
     --protect 'S/Startup-Sequence=srwed' "${from[@]}" --file S/Startup-Sequence="$here/boot-startup" \
     || { echo "The pack plus the AmigaOS files does not fit on one floppy." >&2; exit 1; }
   echo "$bootadf holds AmigaOS files from your Workbench disk: for your own use only, never commit or share it."
