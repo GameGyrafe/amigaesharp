@@ -794,7 +794,8 @@ internal sealed partial class CEmitter
                 var more = false;
                 foreach (var f in _usedSymbols.ToList())
                 {
-                    if (!f.IsStatic || !walkedFields.Add(f)) continue;
+                    // Instance field and auto-property initializers too: they run in the class's field-init function and may hold lambdas.
+                    if (!walkedFields.Add(f)) continue;
                     foreach (var r in f.DeclaringSyntaxReferences)
                     {
                         var decl = r.GetSyntax();

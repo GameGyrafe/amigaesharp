@@ -63,6 +63,8 @@ public sealed partial class SubsetAnalyzer
             case ReturnStatementSyntax:
             case ArrowExpressionClauseSyntax:
                 return "returned";
+            case AnonymousFunctionExpressionSyntax lam when lam.ExpressionBody == node:
+                return "returned (from a lambda)";
             case InitializerExpressionSyntax:
                 return "stored in an array";
             case ArgumentSyntax { Parent: TupleExpressionSyntax }:

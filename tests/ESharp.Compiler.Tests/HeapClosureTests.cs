@@ -733,6 +733,157 @@ Heap.Free(ref Held);
         Assert.Equal(OkLines("the local was made a heap closure"), output);
         Assert.Equal(0, code);
     }
+
+    // ---- re-review probes (PR #83, second round)
+
+    private const string Probe2_getter = @"using ESharp;
+using ESharp.Platform;
+public class Btn { public event System.Action? Clicked; public void Click() { Clicked?.Invoke(); } public void Dispose() { Heap.Free(ref Clicked); } }
+public class Holder
+{
+    System.Action? _h;
+    public void Make() { int x = 41; _h = () => x++; }
+    public System.Action GetH() { return _h!; }
+    public void Dispose() { Heap.Free(ref _h); }
+}
+public static class P
+{
+    [EntryPoint]
+    public static void Main()
+    {
+        var h = new Holder(); h.Make();
+        var b = new Btn();
+        b.Clicked += h.GetH();
+        b.Click();
+        b.Dispose();      // event releases its reference
+        h.Dispose(); Heap.Free(ref h); Heap.Free(ref b);
+        Dos.PutStr(Heap.LiveClosures() == 0 ? ""clean\n"" : ""LIVE MISMATCH\n"");
+    }
+}
+";
+    private const string Probe2_lamret = @"using ESharp;
+using ESharp.Platform;
+public class Btn { public event System.Action? Clicked; public void Click() { Clicked?.Invoke(); } public void Dispose() { Heap.Free(ref Clicked); } }
+public class Holder { public System.Action? Run; public System.Action Q { get; set; } public void Dispose() { Heap.Free(ref Run); } }
+public delegate System.Action Wrap(System.Action a);
+public delegate System.Action Mk();
+public static class P
+{
+    static System.Action? Held;
+    static System.Action? Other;
+    static bool Flag = true;
+    static int Hits;
+    static void Smash() { int a = 1, b = 2, c = 3, d = 4; int[] z = new int[8]; for (int i = 0; i < 8; i++) z[i] = 0x5A5A5A5A; Dos.PutStr(a+b+c+d+z[3] > 0 ? """" : ""z""); }
+    static void Keep(System.Action p) { System.Func<System.Action> f = () => p; Held = f(); } static void Make() { int y = 41; Keep(() => Hits = ++y); }
+    [EntryPoint]
+    public static void Main() { Other = null; Flag = Flag; Hits = 0; Make(); Smash(); Held!(); Dos.PutStr(Hits == 42 ? ""ran\n"" : ""BAD VALUE\n""); Heap.Free(ref Held); Dos.PutStr(Heap.LiveClosures() == 0 ? ""clean\n"" : ""LIVE LEAK\n""); }
+}
+";
+    private const string Probe2_mkd = @"using ESharp;
+using ESharp.Platform;
+public class Btn { public event System.Action? Clicked; public void Click() { Clicked?.Invoke(); } public void Dispose() { Heap.Free(ref Clicked); } }
+public class Holder { public System.Action? Run; public System.Action Q { get; set; } public void Dispose() { Heap.Free(ref Run); } }
+public delegate System.Action Wrap(System.Action a);
+public delegate System.Action Mk();
+public static class P
+{
+    static System.Action? Held;
+    static System.Action? Other;
+    static bool Flag = true;
+    static int Hits;
+    static void Smash() { int a = 1, b = 2, c = 3, d = 4; int[] z = new int[8]; for (int i = 0; i < 8; i++) z[i] = 0x5A5A5A5A; Dos.PutStr(a+b+c+d+z[3] > 0 ? """" : ""z""); }
+    static void Keep(System.Action p) { Mk f = () => p; Held = f(); } static void Make() { int y = 41; Keep(() => Hits = ++y); }
+    [EntryPoint]
+    public static void Main() { Other = null; Flag = Flag; Hits = 0; Make(); Smash(); Held!(); Dos.PutStr(Hits == 42 ? ""ran\n"" : ""BAD VALUE\n""); Heap.Free(ref Held); Dos.PutStr(Heap.LiveClosures() == 0 ? ""clean\n"" : ""LIVE LEAK\n""); }
+}
+";
+    private const string Probe2_wrapq = @"using ESharp;
+using ESharp.Platform;
+public class Btn { public event System.Action? Clicked; public void Click() { Clicked?.Invoke(); } public void Dispose() { Heap.Free(ref Clicked); } }
+public class Holder { public System.Action? Run; public System.Action Q { get; set; } public void Dispose() { Heap.Free(ref Run); } }
+public delegate System.Action Wrap(System.Action a);
+public delegate System.Action Mk();
+public static class P
+{
+    static System.Action? Held;
+    static System.Action? Other;
+    static bool Flag = true;
+    static int Hits;
+    static void Smash() { int a = 1, b = 2, c = 3, d = 4; int[] z = new int[8]; for (int i = 0; i < 8; i++) z[i] = 0x5A5A5A5A; Dos.PutStr(a+b+c+d+z[3] > 0 ? """" : ""z""); }
+    static void Make() { int x = 41; Wrap w = q => q; System.Action a = () => Hits = ++x; Held = w(a); }
+    [EntryPoint]
+    public static void Main() { Other = null; Flag = Flag; Hits = 0; Make(); Smash(); Held!(); Dos.PutStr(Hits == 42 ? ""ran\n"" : ""BAD VALUE\n""); Heap.Free(ref Held); Dos.PutStr(Heap.LiveClosures() == 0 ? ""clean\n"" : ""LIVE LEAK\n""); }
+}
+";
+    private const string Probe2_pinit = @"using ESharp;
+using ESharp.Platform;
+public class Holder { public System.Action Q { get; set; } = () => { }; public System.Action F = () => { }; }
+public static class P
+{
+    static System.Action S { get; set; } = () => Dos.PutStr(""s\n"");
+    [EntryPoint]
+    public static void Main() { var h = new Holder(); h.Q(); h.F(); S(); Heap.Free(ref h); Dos.PutStr(""ran\n""); }
+}
+";
+
+    [Fact]
+    public void Adding_a_call_that_returns_a_kept_delegate_takes_a_reference_instead_of_stealing_one()
+    {
+        if (!HasGcc) return;
+        var r = Compile(Probe2_getter);
+        Assert.True(r.Success, string.Join("\n", r.Diagnostics));
+        Assert.Contains(r.Diagnostics, d => d.Id == "ES0013" && d.GetMessage().Contains("GetH"));   // the possible leak is flagged
+        var (code, output) = HasSanitizers ? RunSanitized(r.C!) : RunWithHostGcc(r.C!);
+        Assert.Equal("clean\n", output);
+        Assert.Equal(0, code);
+    }
+
+    [Fact]
+    public void Adding_a_call_that_always_returns_a_new_lambda_hands_the_reference_over()
+    {
+        if (!HasGcc) return;
+        const string members = @"
+public class B { public event System.Action Ev; public void Fire() { Ev?.Invoke(); } public void Drop() { Heap.Free(ref Ev); } }
+static int Hits;
+static System.Action Make(int k) => k > 0 ? () => Hits += k : Other(k);
+static System.Action Other(int k) { if (k == 0) return null; return () => Hits -= k; }
+";
+        const string body = @"
+B b = new B();
+b.Ev += Make(2);
+b.Ev += Make(-1);
+b.Fire();
+Check(Hits == 3, ""both handlers ran"");
+b.Drop(); Heap.Free(ref b);
+Check(Heap.LiveClosures() == 0, ""the event held the only references"");
+";
+        var r = Compile(Program(members + Check, body));
+        Assert.DoesNotContain(r.Diagnostics, d => d.Id == "ES0013");
+        var (code, output) = Run(members, body);
+        Assert.Equal(OkLines("both handlers ran", "the event held the only references"), output);
+        Assert.Equal(0, code);
+    }
+
+    [Theory]
+    [InlineData("lamret")]   // Func<Action> f = () => p; Held = f();
+    [InlineData("mkd")]      // the same with a user delegate type
+    [InlineData("wrapq")]    // Wrap w = q => q; Held = w(a);
+    public void A_borrowed_delegate_returned_from_an_expression_bodied_lambda_is_ES0012(string probe)
+    {
+        var source = probe switch { "lamret" => Probe2_lamret, "mkd" => Probe2_mkd, _ => Probe2_wrapq };
+        var r = Compile(source);
+        Assert.False(r.Success);
+        Assert.Contains("ES0012", ErrorIds(r));
+    }
+
+    [Fact]
+    public void Lambdas_in_instance_field_and_property_initializers_compile_and_run()
+    {
+        if (!HasGcc) return;
+        var (code, output) = RunProgram(Probe2_pinit);
+        Assert.Equal("s\nran\n", output);
+        Assert.Equal(0, code);
+    }
 }
 
 /// <summary>What samples/closures prints.</summary>

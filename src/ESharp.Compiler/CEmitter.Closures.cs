@@ -283,6 +283,51 @@ internal sealed partial class CEmitter
     }
 
     /// <summary>
+    /// A call whose result is a reference the caller owns: a method of the program (not virtual, abstract, an interface member, extern
+    /// or a delegate call) whose every return value is a new lambda, null, or a call that is fresh by the same rule (followed through
+    /// ?:, ?? and switch expressions). Anything else (a method returning a field, a parameter or a local) is not: the conservative
+    /// answer, because handing over a reference the call did not give is a use after free, while taking an extra one is at worst a leak.
+    /// </summary>
+    private bool IsFreshCall(InvocationExpressionSyntax inv, HashSet<IMethodSymbol> seen)
+    {
+        if (Model(inv).GetSymbolInfo(inv).Symbol is not IMethodSymbol m) return false;
+        if (m.MethodKind is not (MethodKind.Ordinary or MethodKind.LocalFunction) || m.IsVirtual || m.IsAbstract || m.IsOverride || m.IsExtern
+            || IsInterfaceType(m.ContainingType) || !seen.Add(m.OriginalDefinition)) return false;
+        var decl = m.OriginalDefinition.DeclaringSyntaxReferences.FirstOrDefault()?.GetSyntax();
+        if (decl == null) return false;
+        var (block, arrow) = BodyOf(decl);
+        var values = new List<ExpressionSyntax>();
+        if (arrow != null) values.Add(arrow.Expression);
+        else if (block != null)
+        {
+            foreach (var r in block.DescendantNodes().OfType<ReturnStatementSyntax>())
+            {
+                if (FunctionOf(r) != decl) continue;   // a return inside a nested lambda or local function
+                if (r.Expression == null) return false;
+                values.Add(r.Expression);
+            }
+        }
+        if (values.Count == 0) return false;
+        return values.All(v => FreshValue(v, seen));
+    }
+
+    private bool FreshValue(ExpressionSyntax v, HashSet<IMethodSymbol> seen)
+    {
+        v = Strip(v);
+        return v switch
+        {
+            LambdaExpressionSyntax => true,
+            _ when IsNullConstant(v) => true,
+            InvocationExpressionSyntax inv => IsFreshCall(inv, seen),
+            CastExpressionSyntax c => FreshValue(c.Expression, seen),
+            ConditionalExpressionSyntax c => FreshValue(c.WhenTrue, seen) && FreshValue(c.WhenFalse, seen),
+            BinaryExpressionSyntax { RawKind: (int)SyntaxKind.CoalesceExpression } b => FreshValue(b.Left, seen) && FreshValue(b.Right, seen),
+            SwitchExpressionSyntax sw => sw.Arms.All(a => FreshValue(a.Expression, seen)),
+            _ => false,
+        };
+    }
+
+    /// <summary>
     /// Whether an event's += gets a reference of its own to hand over (a new lambda, a call's result) or must take one (a variable,
     /// field, property or element that keeps its own). Null (after ES0099) when the branches of ?: or ?? differ.
     /// </summary>
@@ -292,8 +337,13 @@ internal sealed partial class CEmitter
         switch (e)
         {
             case LambdaExpressionSyntax:
-            case InvocationExpressionSyntax:
                 return true;
+            case InvocationExpressionSyntax inv:
+                if (IsFreshCall(inv, new HashSet<IMethodSymbol>(SymbolEqualityComparer.Default))) return true;
+                // The event takes a reference of its own; if the call made a new closure, the caller's one leaks.
+                _diagnostics.Add(Diagnostic.Create(ESharp.Analyzers.Descriptors.ClosureNeverFreed, inv.GetLocation(),
+                    $"The event takes its own reference to the delegate '{inv}' returns, because that method does not always return a new lambda; if it made a new closure, that reference is never freed (store the result in a variable, add it, and Heap.Free the variable)"));
+                return false;
             case CastExpressionSyntax cast:
                 return IsFreshDelegate(cast.Expression);
             case ConditionalExpressionSyntax c:
