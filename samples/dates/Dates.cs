@@ -62,7 +62,10 @@ public static class Program
         Check(Strings.CompareIgnoreCase("AmigaOS", "AMIGA500", 5) == 0, "a length compares only the start");
         Check(Strings.ToUpper('q') == 'Q' && Strings.ToLower('Q') == 'q' && Strings.ToUpper('1') == '1', "ToUpper and ToLower");
         Check(Strings.ToUpper(0xE9) == 0xC9 && Strings.ToLower(0xC4) == 0xE4, "accented letters fold too");
-        Check(Strings.ToUpper(0xF7) == 0xF7, "the division sign is not a letter");
+        // Characters next to the letter ranges do not fold under any language driver. (0xF7, the division sign, is left out of the
+        // checks: with locale.library running its answer is the locale's, and the Workbench startup runs IPrefs.)
+        Check(Strings.ToUpper('{') == '{' && Strings.ToLower('@') == '@', "characters next to the letters do not fold");
+        Dos.PutStr($"info: ToUpper(0xF7) = 0x{Strings.ToUpper(0xF7):X2} (0xF7 under the ROM utility.library, the locale's rule once IPrefs has run)\n");
         Date.Close();
     }
 }

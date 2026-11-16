@@ -61,6 +61,9 @@ dotnet run --project tools/BindGen -- compare <aros include dir> <fd dir> lowlev
 tools/BindGen/layouts.sh                                  # re-measure struct offsets (tools/BindGen/structs.txt) for m68k and AROS into src/ESharp.Platform/Layout.g.cs (docker)
 tools/hwpack/build.sh <m68k image>                       # build the real-hardware test pack into obj/hwtest (run with Execute RunAll on the Amiga; README.txt in the pack)
 tools/hwpack/run-emulated.sh obj/hwtest --rom <rom> --wb <Workbench 3.1 disk .adf> [--profile fast8]   # the whole pack in FS-UAE (A1200, accuracy 1, 2 MB chip), prints SUMMARY.txt
+tools/hwpack/build.sh <m68k image> [--boot-wb <Workbench 3.x disk 2 .adf>] [--adf-only]   # also obj/hwtest.adf (one 880 KB floppy, our files only); --boot-wb adds obj/hwtest-boot.adf with a few AmigaOS files from YOUR disk (own use only, never share)
+tools/hwpack/run-emulated.sh --floppy obj/hwtest.adf --rom <rom> --wb <Workbench 3.1 disk .adf>   # floppy mode: stock A1200, no hard disk, DF0 Workbench copy + DF1 pack disk; --boot-floppy obj/hwtest-boot.adf runs the bootable disk alone
+python3 -I tools/hwpack/test_mkadf.py                      # tests of tools/hwpack/mkadf.py (ADF writer and reader)
 docker build -t esharp-amiga-toolchain docker && docker/smoke-test.sh    # combined toolchain image
 docker build -t esharp-sdl docker/sdl && docker/sdl/smoke-test.sh   # gcc + static SDL 3.4.20 (Linux x86-64) for the sdl target; offscreen/dummy drivers
 dotnet run --project src/ESharp.Cli -- run samples/cards --target sdl --docker esharp-sdl --headless --input "click 60,145;key 9" --screenshot shot.png   # sdl, headless in the image: --input X,Y are the game's screen pixels (keys are X11 codes, as for FS-UAE), replayed after SHOT; the shot is the game's own frame
