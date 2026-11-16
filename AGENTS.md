@@ -42,6 +42,7 @@ dotnet run --project src/ESharp.Cli -- run samples/timing --docker <image> --hea
 dotnet run --project src/ESharp.Cli -- test samples/dbuffer --target m68k --docker <image> --model A1200 --kickstart <rom>   # double buffer: Video.EnableDoubleBuffer/Flip (screen buffers, offscreen-bitmap fallback); also --target sdl, --target os4; run --headless --screenshot shot.png for the last frame
 dotnet run --project src/ESharp.Cli -- addr samples/trace 0 e4 --docker <image>   # crash address (hunk 0, hex offset) -> C# file:line, using obj/m68k/<name>.o that every m68k build writes (docs/DEBUGGING.md)
 dotnet run --project src/ESharp.Cli -- run samples/lambdas --docker <image> --headless --model A1200   # capturing lambdas and delegates
+dotnet run --project src/ESharp.Cli -- test samples/closures --target m68k --docker <image> --model A1200 --kickstart <rom>   # heap closures (stored, returned) and events, Heap.Free and the Heap.LiveClosures leak check; also --target sdl, os4
 dotnet run --project src/ESharp.Cli -- run samples/linq --docker <image> --headless --model A1200   # LINQ over arrays, turned into loops
 dotnet run --project src/ESharp.Cli -- test samples/interrupts --target m68k --docker <image> --model A1200 --kickstart <rom>   # [InlineAsm] (68020 and PowerPC code, C# fallback) and [Interrupt] VBlank servers (Interrupts.AddVBlank)
 dotnet run --project src/ESharp.Cli -- run samples/refs --docker <image> --headless --model A1200   # ref locals and returns, foreach over Vec and struct enumerators

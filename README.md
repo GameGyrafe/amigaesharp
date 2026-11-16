@@ -53,8 +53,8 @@ Early, and honest about it (details and dates in [docs/STATUS.md](docs/STATUS.md
   (hosted); the `sdl` desktop target headless and under Xvfb.
 - **Not verified:** any real Amiga hardware (the 68k builds, the PowerPC builds, RTG), MorphOS (builds only), AROS i386,
   Windows beyond CI (CI runs the tests, emit-only builds and a package round trip on Windows, but not Docker or FS-UAE there), and the SDL target on macOS and Windows. Hardware test reports are very welcome (see [CONTRIBUTING.md](CONTRIBUTING.md)).
-- **Known gaps:** capturing lambdas stored in fields and user classes that derive from platform classes (reported as `ES0099`,
-  never miscompiled), floating point is off by default, no exceptions/async/reflection, no source-level debugger for the Amiga
+- **Known gaps:** user classes that derive from platform classes (reported as `ES0099`, never miscompiled); stored capturing
+  lambdas and events work, but there is no garbage collector, so a stored closure is freed with `Heap.Free` (docs/STATUS.md); floating point is off by default, no exceptions/async/reflection, no source-level debugger for the Amiga
   build (host builds can be debugged under .NET; see [docs/DEBUGGING.md](docs/DEBUGGING.md)). Open work is in the
   [issues](https://github.com/GameGyrafe/amigaesharp/issues).
 

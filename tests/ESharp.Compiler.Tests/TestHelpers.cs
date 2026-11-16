@@ -47,7 +47,29 @@ public static class P
     }
 
     /// <summary>Compiles generated C with the host gcc against a shim of proto/dos.h (plus any <paramref name="extraHeaders"/>, relative path to text) and runs it.</summary>
-    public static (int exitCode, string output) RunWithHostGcc(string c, System.Collections.Generic.IReadOnlyDictionary<string, string>? extraHeaders = null, params string[] programArgs)
+    public static (int exitCode, string output) RunWithHostGcc(string c, System.Collections.Generic.IReadOnlyDictionary<string, string>? extraHeaders = null, params string[] programArgs) =>
+        RunWithHostGccFlags(c, "", extraHeaders, programArgs);
+
+    /// <summary>True when the host compiler builds and runs a program with AddressSanitizer and LeakSanitizer (gcc or clang on Linux).</summary>
+    public static bool HasSanitizers { get; } = HasGcc && Probe();
+
+    private static bool Probe()
+    {
+        try
+        {
+            var (code, output) = RunWithHostGccFlags("#include <stdio.h>\nint main(void) { puts(\"x\"); return 0; }\n", "-fsanitize=address,undefined", null);
+            return code == 0 && output == "x\n";
+        }
+        catch { return false; }
+    }
+
+    /// <summary>
+    /// Runs generated C with AddressSanitizer, LeakSanitizer and UBSan: a use after free, a double free or a block still
+    /// allocated at exit fails the run (the exit code is not 0 and the report is in the output).
+    /// </summary>
+    public static (int exitCode, string output) RunSanitized(string c) => RunWithHostGccFlags(c, "-fsanitize=address,undefined -fno-sanitize-recover=all -g", null);
+
+    private static (int exitCode, string output) RunWithHostGccFlags(string c, string flags, System.Collections.Generic.IReadOnlyDictionary<string, string>? extraHeaders, params string[] programArgs)
     {
         var dir = Path.Combine(Path.GetTempPath(), "esharp-test-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(Path.Combine(dir, "proto"));
@@ -72,17 +94,19 @@ public static class P
         File.WriteAllText(cFile, c);
         var exe = Path.Combine(dir, "prog");
 
-        var cc = Process.Start(new ProcessStartInfo(Cc, $"-std=gnu11 -fwrapv -Wall -Werror -I\"{dir}\" -o \"{exe}\" \"{cFile}\"")
+        var cc = Process.Start(new ProcessStartInfo(Cc, $"-std=gnu11 -fwrapv -Wall -Werror {flags} -I\"{dir}\" -o \"{exe}\" \"{cFile}\"")
         { RedirectStandardError = true })!;
         var err = cc.StandardError.ReadToEnd();
         cc.WaitForExit();
         Assert.True(cc.ExitCode == 0, Cc + " failed:\n" + err + "\n" + c);
 
-        var psi = new ProcessStartInfo(exe) { RedirectStandardOutput = true };
+        var psi = new ProcessStartInfo(exe) { RedirectStandardOutput = true, RedirectStandardError = flags.Length > 0 };
         foreach (var a in programArgs) psi.ArgumentList.Add(a);
         var run = Process.Start(psi)!;
+        var stderrTask = flags.Length > 0 ? run.StandardError.ReadToEndAsync() : null;
         var output = run.StandardOutput.ReadToEnd();
         run.WaitForExit();
+        if (stderrTask != null) output += stderrTask.Result;
         // A native Windows C runtime writes text-mode CRLF; the expected texts use LF.
         return (run.ExitCode, output.Replace("\r\n", "\n"));
     }

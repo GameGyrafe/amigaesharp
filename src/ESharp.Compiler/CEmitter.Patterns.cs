@@ -56,6 +56,7 @@ internal sealed partial class CEmitter
         if (subject.StartsWith('"')) return null;   // a string literal is never null (and gcc's -Waddress says so)
         if (IsInterfaceType(type)) return $"({subject}.obj != NULL)";
         if (IsHeapClass(type) || type.SpecialType == SpecialType.System_String) return $"({subject} != NULL)";
+        if (type.TypeKind == TypeKind.Delegate) return $"({subject}.fn != NULL)";
         return null;
     }
 
@@ -70,7 +71,7 @@ internal sealed partial class CEmitter
             return Unsupported(at, "type test");
         }
         if (value is LiteralExpressionSyntax nullLit && nullLit.IsKind(SyntaxKind.NullLiteralExpression))
-            return IsInterfaceType(type) ? $"({subject}.obj == NULL)" : $"({subject} == NULL)";
+            return IsInterfaceType(type) ? $"({subject}.obj == NULL)" : type.TypeKind == TypeKind.Delegate ? $"({subject}.fn == NULL)" : $"({subject} == NULL)";
         if (type.SpecialType == SpecialType.System_String)
             return IsNullConstant(value) ? $"({subject} == NULL)" : StrEq(subject, Expr(value, top: true));   // "x" matches by the characters
         if (Model(value).GetTypeInfo(value).Type?.SpecialType == SpecialType.System_String)
