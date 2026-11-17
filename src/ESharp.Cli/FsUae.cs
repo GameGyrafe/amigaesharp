@@ -1,6 +1,7 @@
 using System;
 using System.Diagnostics;
 using System.IO;
+using System.Linq;
 using System.Threading;
 
 namespace ESharp.Cli;
@@ -11,7 +12,7 @@ namespace ESharp.Cli;
 /// </summary>
 internal static class FsUae
 {
-    public static int Run(string exe, bool headless, TimeSpan timeout, string? kickstart, string model = "A1200", string? fsuaePath = null, string? screenshot = null, string? input = null, string? serial = null, string? programArgs = null)
+    public static int Run(string exe, bool headless, TimeSpan timeout, string? kickstart, string model = "A1200", string? fsuaePath = null, string? screenshot = null, string? input = null, string? serial = null, string? programArgs = null, string? muiDrawer = null, string? workbench = null)
     {
         var name = Path.GetFileName(exe);
         var runDir = Path.Combine(Path.GetDirectoryName(Path.GetFullPath(exe))!, "run");
@@ -26,9 +27,10 @@ internal static class FsUae
         // AmigaDOS wants the redirection right after the command name, before the program's own arguments.
         if (Os4Vm.ProgramArgsError(programArgs) is { } argsError) { Console.Error.WriteLine($"esharp: {argsError}"); return 1; }
         var line = string.IsNullOrWhiteSpace(programArgs) ? "" : " " + programArgs.Trim();
-        File.WriteAllText(Path.Combine(dh0, "S", "Startup-sequence"), headless
+        var pre = muiDrawer == null ? "" : string.Concat(Mui.StartupLines().Select(l => l + "\n"));
+        File.WriteAllText(Path.Combine(dh0, "S", "Startup-sequence"), pre + (headless
             ? $"dh0:{name} >dh0:out.txt{line}\necho done >dh0:done\n"
-            : $"dh0:{name}{line}\n");
+            : $"dh0:{name}{line}\n"));
 
         var config = Path.Combine(runDir, "run.fs-uae");
         File.WriteAllText(config,
@@ -37,6 +39,7 @@ internal static class FsUae
             $"kickstart_file = {(kickstart ?? "internal")}\n" +
             $"hard_drive_0 = {dh0}\n" +
             "hard_drive_0_label = DH0\n" +
+            (muiDrawer != null ? Mui.ConfigLines(muiDrawer, workbench!) : "") +
             (serial != null ? $"serial_port = {Path.GetFullPath(serial)}\n" : "") +
             "window_width = 640\nwindow_height = 480\nfullscreen = 0\n");
 

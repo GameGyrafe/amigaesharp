@@ -52,6 +52,10 @@ Run options (build options also apply; run is m68k, os4 or sdl):
                     screendump, --serial collects the kernel debug lines such as Trace; --input goes through the
                     QEMU monitor, see below)
   --timeout <sec>   Headless time limit (default 120; AROS needs ~20 s to boot)
+  --mui <3.8|5>     m68k (FS-UAE) only: mount MUI 3.8 or 5 from the per-user cache (or set ESHARP_MUI); get it first with
+                    bash <esharp folder>/mui/fetch-mui.sh <3.8|5> (tools/mui/ in a checkout; shareware, never shipped)
+  --workbench <adf> With --mui: your own Workbench 3.x disk 2 (or ESHARP_WORKBENCH), mounted read-only as DF0: for C: and the
+                    system libraries MUI opens (asl, commodities, icon, ...); never copied
   --kickstart <rom> Use a real Kickstart ROM instead of FS-UAE's built-in AROS replacement
                     (or set ESHARP_KICKSTART)
   --model <name>    Amiga model for FS-UAE: A1200 (default), A500, A500+, A600 (below the minimum spec)
@@ -121,6 +125,7 @@ Targets:
         var amigaOnly = new List<string>();   // options that only matter with --target m68k
         string path = ".";
         string? programArgs = null;
+        string? muiOption = null, workbenchOption = null;
         var buildArgs = new List<string>();
         for (var i = 0; i < args.Length; i++)
         {
@@ -128,6 +133,8 @@ Targets:
             {
                 case "--timeout" when i + 1 < args.Length && int.TryParse(args[i + 1], out timeout): i++; break;
                 case "--args" when i + 1 < args.Length: programArgs = args[++i]; break;
+                case "--mui" when i + 1 < args.Length: amigaOnly.Add("--mui"); muiOption = args[++i]; break;
+                case "--workbench" when i + 1 < args.Length: amigaOnly.Add("--workbench"); workbenchOption = args[++i]; break;
                 case "--kickstart" when i + 1 < args.Length: amigaOnly.Add("--kickstart"); kickstart = args[++i]; break;
                 case "--model" when i + 1 < args.Length: amigaOnly.Add("--model"); model = args[++i]; break;
                 case "--fsuae" when i + 1 < args.Length: amigaOnly.Add("--fsuae"); fsuae = args[++i]; break;
@@ -153,6 +160,9 @@ Targets:
         }
 
         if (Os4Vm.ProgramArgsError(programArgs) is { } testArgsError) return Fail(testArgsError);
+        if ((muiOption ?? workbenchOption) != null && (sdl || os4)) return Fail(MuiTargetError(sdl ? "sdl" : "os4"));
+        string? muiDrawer = null, workbench = null;
+        if (amiga && MuiDrawer(muiOption, workbenchOption, out muiDrawer, out workbench) is { } testMuiError) return Fail(testMuiError);
         if (SyncAssets(path) is { } assetError) return Fail(assetError);
 
         var files = CollectSources(path);
@@ -191,7 +201,7 @@ Targets:
             var saved = Console.Out;
             int runRc;
             Console.SetOut(captured);
-            try { runRc = FsUae.Run(exe, true, TimeSpan.FromSeconds(timeout), kickstart, model, fsuae, null, null, null, programArgs); }
+            try { runRc = FsUae.Run(exe, true, TimeSpan.FromSeconds(timeout), kickstart, model, fsuae, null, null, null, programArgs, muiDrawer, workbench); }
             finally { Console.SetOut(saved); }
             Console.Write(captured.ToString());
             if (runRc != 0) return Fail("the Amiga run failed (see above)");
@@ -569,12 +579,15 @@ Targets:
         string? input = null;
         string? serial = null;
         string? programArgs = null;
+        string? muiOption = null, workbenchOption = null;
         var buildArgs = new List<string>();
         for (var i = 0; i < args.Length; i++)
         {
             switch (args[i])
             {
                 case "--headless": headless = true; break;
+                case "--mui" when i + 1 < args.Length: muiOption = args[++i]; break;
+                case "--workbench" when i + 1 < args.Length: workbenchOption = args[++i]; break;
                 case "--args" when i + 1 < args.Length: programArgs = args[++i]; break;
                 case "--timeout" when i + 1 < args.Length && int.TryParse(args[i + 1], out timeout): i++; break;
                 case "--kickstart" when i + 1 < args.Length: kickstart = args[++i]; break;
@@ -590,6 +603,7 @@ Targets:
         var targetIndex = buildArgs.IndexOf("--target");
         var targetName = targetIndex >= 0 && targetIndex + 1 < buildArgs.Count ? buildArgs[targetIndex + 1] : "m68k";
         if (buildArgs.Contains("--emit-only")) return Fail("--emit-only cannot be combined with run");
+        if ((muiOption ?? workbenchOption) != null && targetName != "m68k") return Fail(MuiTargetError(targetName));
         if (string.Equals(targetName, "sdl", StringComparison.OrdinalIgnoreCase))
         {
             var sdlRc = Build(buildArgs.ToArray(), out var sdlExe);
@@ -616,10 +630,33 @@ Targets:
             if (!File.Exists(kickstart)) return Fail($"Kickstart ROM not found: {kickstart}");
         }
 
+        if (MuiDrawer(muiOption, workbenchOption, out var muiDrawer, out var workbench) is { } muiError) return Fail(muiError);
         var rc = Build(buildArgs.ToArray(), out var exe);
         if (rc != 0 || exe == null) return rc;
         if (Os4Vm.ProgramArgsError(programArgs) is { } argsError) return Fail(argsError);
-        return FsUae.Run(exe, headless, TimeSpan.FromSeconds(timeout), kickstart, model, fsuae, screenshot, input, serial, programArgs);
+        return FsUae.Run(exe, headless, TimeSpan.FromSeconds(timeout), kickstart, model, fsuae, screenshot, input, serial, programArgs, muiDrawer, workbench);
+    }
+
+    private static string MuiTargetError(string target) => target switch
+    {
+        "os4" => "--mui is for the m68k FS-UAE path only: the AmigaOS 4.1 VM has MUI 5 installed (ESHARP_OS4_VM)",
+        "aros" => "--mui is for the m68k FS-UAE path only: AROS has Zune, its own MUI implementation",
+        _ => $"--mui is for the m68k FS-UAE path only (target {target})",
+    };
+
+    /// <summary>The MUI drawer for <c>--mui</c> (or ESHARP_MUI) from the cache: null drawer with null error when MUI is not asked for.</summary>
+    private static string? MuiDrawer(string? option, string? workbenchOption, out string? drawer, out string? workbench)
+    {
+        drawer = workbench = null;
+        var text = option ?? Environment.GetEnvironmentVariable("ESHARP_MUI");
+        if (string.IsNullOrEmpty(text))
+            return workbenchOption != null ? "--workbench is only used with --mui" : null;
+        var version = Mui.ParseVersion(text);
+        if (version == null) return $"--mui takes 3.8 or 5, not '{text}'";
+        drawer = Mui.Resolve(version, Mui.CacheRoot(), out var error);
+        if (error != null) return error;
+        workbench = Mui.ResolveWorkbench(workbenchOption, out error);
+        return error;
     }
 
     /// <summary>The image a build's <c>--docker [image]</c> option names, or null without the option.</summary>
