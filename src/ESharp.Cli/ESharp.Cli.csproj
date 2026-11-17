@@ -15,6 +15,7 @@
     <Title>E# (Amiga E#) command line</Title>
     <Description>The esharp command: compiles a restricted subset of C# to C and builds it into native Amiga programs (68020+ AmigaOS 3.1, AmigaOS 4 and MorphOS PowerPC, AROS) or an SDL 3 desktop build; runs them in FS-UAE, and runs the same source on the PC as a test host.</Description>
     <PackageReadmeFile>README.md</PackageReadmeFile>
+    <PackageIcon>icon.png</PackageIcon>
   </PropertyGroup>
 
   <ItemGroup>
@@ -33,6 +34,7 @@
     <!-- the MUI option tells the user to run this script when MUI is not cached, so it ships in the tool package (the MUI archive itself never does). -->
     <None Include="..\..\tools\mui\fetch-mui.sh;..\..\tools\mui\README.md" Link="mui\%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
     <None Include="..\PackageReadme.md" Pack="true" PackagePath="README.md" />
+    <None Include="..\icon.png" Pack="true" PackagePath="icon.png" />
   </ItemGroup>
 
   <!-- ESharp.Runtime, ESharp.Platform and ESharp.Target.Host (built with HOST) go to host/ in the output and in the tool
