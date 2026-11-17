@@ -2,7 +2,7 @@
 
 E# compiles a restricted subset of C# to C and builds it into native Amiga code (68020+, AmigaOS 4
 PowerPC, MorphOS PowerPC). Same `.cs` source also runs under plain dotnet as a test host. Read
-`README.md`, then `docs/PROJECT_CONTEXT.md` (design and roadmap) and `docs/STATUS.md` (what works
+`README.md`, then `docs/GUIDE.md` (how to use it: install, subset, platform APIs, assets, icons, MUI, emulators), `docs/ARCHITECTURE.md` (how it is built, where to add a feature), `docs/PROJECT_CONTEXT.md` (design and roadmap) and `docs/STATUS.md` (what works
 today, what is verified, what is not). Keep `docs/STATUS.md` honest: say "not verified" for anything
 you have not actually run.
 
