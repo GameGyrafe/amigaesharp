@@ -681,13 +681,15 @@ The generic notifications are `WhenChanged(attr, handler)` for int, bool and str
 
 **Core changes.** `BoopsiObject` gained internal virtual steps that the MUI classes override: how the system object is made and disposed, the tree in `Create`, what else the object owns, a refused `Dispose`, and the host's notification. `KeepString` is now internal. The host fake: `Mui.HostAvailable`, `HostPress`, `HostType`, `HostCloseRequest`. Notifications fire on every `Set`, and only the classes the wrappers use are known.
 
+**Negative trigger values.** `WhenEquals(IntAttr, value)` keeps the trigger as a pointer-sized value, sign-extended as `Set` widens an int. It was a 32-bit value, so on 64-bit targets (AROS x86-64, the dotnet host) a notification on -1 or any other negative value never fired. samples/mui checks it with a lone slider from -10 to 10.
+
 **Emitter fixes on the way:**
 1. An override in a library class was left out of the class's function table when nothing named it. `BoopsiObject.Create` calls the virtual `CreateAll` that `MuiObject` overrides, so the slot was null, and on AmigaOS 4 the program jumped to address 0. Now the overrides of reached members are reached in every class that is constructed. A BOOPSI-only program still does not pull in MUI.
 2. An object initializer can set properties that have a setter body (`new MuiText("x") { Frame = MuiFrame.Text }`), also after constructor arguments. The setters run in order.
 
 Verified:
 - `dotnet test`: 559 tests, 557 passed, 2 skipped (the SDK-backed BindGen ones), 0 failed. `MuiTests` has 12:
-  - samples/mui as generated C, run with host gcc under ASan/UBSan/LSan against a fake muimaster.library: all ok, 22 objects made and 22 disposed (each once, children before parents, never by intuition's DisposeObject), 4 group changes, no leak, the library closed.
+  - samples/mui as generated C, run with host gcc under ASan/UBSan/LSan against a fake muimaster.library: all ok, 23 objects made and 23 disposed (each once, children before parents, never by intuition's DisposeObject), 4 group changes, no leak, the library closed.
   - The skip line when muimaster.library does not open.
   - samples/mui on dotnet, default and WAIT.
   - The sample compiles for m68k, AROS, os4 and morphos with the per-target calls and no MUI header.
@@ -696,16 +698,16 @@ Verified:
   - A library override in the function table, and none of MUI in a BOOPSI-only program.
   - Setter properties in object initializers, run with gcc.
 - AmigaOS 4.1 in the QEMU VM (MUI 5):
-  - `esharp test samples/mui --target os4`: host 30 ok, OS4 30 ok, and they agree on every check.
+  - `esharp test samples/mui --target os4`: host 32 ok, OS4 32 ok, and they agree on every check (re-run after the negative-trigger fix).
   - `run --screenshot`: the screenshot was looked at. It shows the window with the text, Hello and Quit, the framed "Settings" group with slider (42), string, cycle (Three) and check mark, the gauge at "99 %" and the list with its second line selected.
   - `run --args WAIT --input "click 562,360;click 655,406;click 566,591;click 653,360"`: Hello pressed (handler ran), the slider paged to 43, list line 2 picked, Quit from its handler. 31 ok, no FAIL.
 - Hosted AROS x86-64 (Zune, in esharp-aros-hosted):
-  - `tools/aros-hosted/aros-hosted.sh mui --docker esharp-aros-hosted --wait 0 --shot shot.png`: 30 ok, 0 traps. The screenshot was looked at and shows the same window in Zune's look. With the default 2 s wait the shot came after the window had closed again.
+  - `tools/aros-hosted/aros-hosted.sh mui --docker esharp-aros-hosted --wait 0 --shot shot.png`: 30 ok, 0 traps. After the negative-trigger fix, `--wait 0` again: 32 ok, 0 traps, all ok. The screenshot was looked at and shows the same window in Zune's look. With the default 2 s wait the shot came after the window had closed again.
   - `--args WAIT --input "click 300,163;click 400,189;click 297,298;click 393,163"`: the same events as on OS4 (Hello, slider 43, list line 2, Quit). All ok.
 - A1200, Kickstart 3.1 (40.069) in FS-UAE, without MUI: `esharp run samples/mui --model A1200 --kickstart <rom>` prints `skip: MUI not installed` and exits 0. No regressions on the same machine: `esharp test samples/boopsi --target m68k` (37 ok on host and Amiga, they agree), and `samples/gui` with the AGENTS.md input line (7 ok).
 - MorphOS: builds. Not run.
 
-Not verified: m68k with MUI (classic MUI 3.8 or 5 in the emulator) is pending the `--mui` emulator setup (PR #92). The m68k register calls into muimaster.library have not run against a real MUI yet, only built. Also not verified:
+Not verified: m68k with MUI (classic MUI 3.8 or 5 in the emulator) is pending the `--mui` emulator setup (PR #92), tracked in #95. The m68k register calls into muimaster.library have not run against a real MUI yet, only built. Also not verified:
 - MorphOS runs.
 - Real hardware. samples/mui is not in the hardware pack.
 - `Mui.Request` (a requester waits for the user: not in the self-test).

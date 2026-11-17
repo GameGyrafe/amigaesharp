@@ -183,10 +183,10 @@ static __attribute__((unused)) uintptr_t DoMethodA(void *obj, void *msg)
         Assert.True(code == 0, output);
         Assert.DoesNotContain("FAIL", output);
         Assert.Contains("mui: all ok\n", output);
-        // MUI disposes the tree: never intuition's DisposeObject. The lone Text, the object taken out of the open window (a group
-        // told before and after, twice) and the application with the 19 objects in it: 22 made (the unknown class is not), 22 disposed.
+        // MUI disposes the tree: never intuition's DisposeObject. The lone Text and Slider, the object taken out of the open window (a
+        // group told before and after, twice) and the application with the 19 objects in it: 23 made (the unknown class is not), 23 disposed.
         Assert.DoesNotContain("[intuition DisposeObject", output);
-        Assert.Contains("[shim: 22 made, 22 disposed, 4 group changes]", output);
+        Assert.Contains("[shim: 23 made, 23 disposed, 4 group changes]", output);
         // The application goes last, after its window, which goes after its root group (children first).
         var tree = output[output.IndexOf("ok the window closes\n", StringComparison.Ordinal)..];
         Assert.True(tree.IndexOf("[dispose Group.mui]", StringComparison.Ordinal) < tree.IndexOf("[dispose Window.mui]", StringComparison.Ordinal)

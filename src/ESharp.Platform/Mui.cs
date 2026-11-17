@@ -234,7 +234,7 @@ internal sealed unsafe class MuiNotification
 {
     internal MuiNotification? Next;
     internal uint Attr;
-    internal uint Trigger;                 // MuiId.EveryTime, or the value that triggers it
+    internal nuint Trigger;                // MuiId.EveryTime, or the value that triggers it, widened as Set widens it (sign-extended)
     internal bool Registered;
     internal Action<int>? OnInt;
     internal Action<bool>? OnBool;
@@ -597,10 +597,10 @@ public unsafe class MuiObject : BoopsiObject
     {
         MuiNotification n = new MuiNotification();
         n.OnPlain = handler;
-        return AddNote(n, a.Tag, (uint)value);
+        return AddNote(n, a.Tag, (nuint)(nint)value);
     }
 
-    private bool AddNote(MuiNotification n, uint attr, uint trigger)
+    private bool AddNote(MuiNotification n, uint attr, nuint trigger)
     {
         if (!n.IsValid)
         {
@@ -640,7 +640,7 @@ public unsafe class MuiObject : BoopsiObject
     internal override void HostChanged(uint tag, nuint value)
     {
         for (MuiNotification? n = _notes; n != null; n = n.Next)
-            if (n.Attr == tag && (n.Trigger == MuiId.EveryTime || (nuint)n.Trigger == value)) n.Fire(value);
+            if (n.Attr == tag && (n.Trigger == MuiId.EveryTime || n.Trigger == value)) n.Fire(value);
     }
 #endif
 }

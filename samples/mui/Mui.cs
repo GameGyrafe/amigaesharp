@@ -60,7 +60,17 @@ public static unsafe class Program
         Heap.Free(ref text);
         missing.Dispose();
         Heap.Free(ref missing);
-        Check(Mui.Live == 0, "the lone object is disposed");
+        // A negative trigger value: on 64-bit targets it must be widened with its sign, as the value MUI compares it with is.
+        MuiSlider level = new MuiSlider(-10, 10, 0);
+        int below = 0;
+        level.WhenEquals(Muia.NumericValue, -3, () => below++);
+        Check(level.Create(), "a slider from -10 to 10 is made on its own");
+        level.Value = -3;
+        level.Value = 3;
+        Check(below == 1 && level.Value == 3, "a notification on a negative value fires for that value only");
+        level.Dispose();
+        Heap.Free(ref level);
+        Check(Mui.Live == 0, "the lone objects are disposed");
     }
 
     static void Window(bool wait)
