@@ -990,7 +990,7 @@ Open work as of 2026-11-14 (the GitHub issues are the live list; the v1 tracker 
 - **Bindings (#19, #40):** GadTools wrappers (v1), the BOOPSI core with hooks (#40 part 1, see "BOOPSI core and hooks") and the MUI wrappers on it (#40 part 2, see "MUI wrappers") are done. Open: MUI custom classes (#93), ReAction (last, if at all).
 - **Small gaps (#72):** `string.IndexOf`, `Args` on the host, `esharp test --args`, os4 `--args`.
 - **Display design (not implemented):** [design/DISPLAY.md](design/DISPLAY.md) proposes logical coordinates with an integer scale, mode choice that follows the Workbench's monitor family (MODE option, asl screen-mode requester), 256 colours with a shared palette, a gradient pen (copper on AGA), window mode on the Workbench and multi-scale art. Nothing in it is built or verified yet; it waits for the maintainer's approval.
-- **v2:** AROS i386 (#4), E# library source packages on NuGet (#31), user classes deriving from platform classes (#42: done for `GtWindow`, see "Classes derived from platform classes"). Capturing lambdas stored in fields and events (#41): done (PR #83), see "Heap closures and events".
+- **v2:** AROS i386 (#4: toolchain, target and hosted runs done, see "AROS i386"; open: the mui sample crash on hosted i386, native pc-i386), E# library source packages on NuGet (#31), user classes deriving from platform classes (#42: done for `GtWindow`, see "Classes derived from platform classes"). Capturing lambdas stored in fields and events (#41): done (PR #83), see "Heap closures and events".
 - Smaller follow-ups: `esharp test` for morphos and aros and the Amiga program's return code (today only the ok/FAIL lines are compared; the os4 pipe hides it); OS4 sound on real hardware; the chip budget report only covers constant sizes ([MEMORY.md](MEMORY.md)).
 
 Done and no longer "next": the emulator side of the phase 1 gate (AROS replacement and Kickstart 3.1; 2.04 was also run, historically), the NuGet packages (on nuget.org since 0.1.1), the card demo and rummy, os4 runs in the VM, the `sdl` target, hosted AROS runs, double buffering.
@@ -1203,6 +1203,8 @@ CPU and OS are separate axes. `AMIGA` is defined for every Amiga-family target; 
 | `m68k` (default) | `m68k-amigaos-gcc` 6.5.0b | AMIGA M68K AMIGAOS3 |
 | `os4` | `ppc-amigaos-gcc` 11.5.0 | AMIGA PPC AMIGAOS4 |
 | `morphos` | `ppc-morphos-gcc` 15.2.0 | AMIGA PPC MORPHOS |
+| `aros` | `x86_64-aros-gcc` 9.1.0 | AMIGA X86_64 AROS |
+| `aros-i386` | `i386-aros-gcc` 6.5.0 (esharp-aros-i386) | AMIGA I386 AROS |
 
 PowerPC notes: both PPC targets are big-endian, so asset formats need no change. `[ChipRam]` is a no-op on PPC (chip memory is allocated at run time there). `[InlineAsm]` takes PowerPC code in `Ppc`; without it the PPC targets run the method's C# body. `[AmigaLib]` offsets are 68k library vectors; the PPC targets call through the same `proto/*.h` names, so the emitter output is identical. Not yet covered: WarpOS/PowerUP (no prebuilt toolchain found) and AROS.
 
@@ -1364,6 +1366,64 @@ Not verified / found:
 - Workbench 3.x with NewIcons installed (the colour image on 3.1): not verified. NewIcons was not fetched (no per-user fetch script was
   added; its archive terms were not checked).
 - A PNG icon's NewIcons image on a real system, MorphOS, OS 3.5/3.9, real hardware.
+
+## AROS i386 (`--target aros-i386`, issue #4)
+
+**Toolchain image `esharp-aros-i386` (`docker/aros-i386`).** Multi-stage: Ubuntu 24.04 by digest, the AROS sources at commit
+`656d2825b63dce8e3acca5e139197864169dc209` (2026-11-15, the last commit before the linux-i386 nightly 20261116 was configured; git checks
+the sha), AROS's own `configure --target=linux-i386` and `make crosstools` then `make sdk`. The tarballs the crosstools rules would download
+(gcc 6.5.0, binutils 2.32, gmp 6.3.0, mpfr 4.2.2, mpc 1.4.1, isl 0.25: the AROS defaults for i386) are fetched first and checked by sha256.
+The final stage keeps `/opt/i386-aros` only: `i386-aros-gcc` 6.5.0 and the SDK in `/opt/i386-aros/sdk` (`--sysroot`). Image 1.3 GB. Build time
+on this host (32 cores, shared, 16 jobs), `docker build --no-cache`: 817 s in all, of which crosstools 580 s and the SDK 60 s. Too long and
+too big for a CI job, so it is built locally and not in CI. The SDK headers were compared with the hosted nightly's `Developer/include`: the
+18164 headers the SDK has are all in the nightly, and after dropping the lines with build paths only 3 differ (`proto/cardres.h`,
+`proto/ramdrive.h`, `proto/translator.h`: different generated forms); the nightly has 293 more, from contrib (AHI, ReAction classes,
+expat, freetype2 and others). E# includes none of these 296, so for the libraries E# uses the two match.
+The nightly's own configure line passes `--with-aros-toolchain=yes`, which means a prebuilt toolchain; with it `make crosstools` builds nothing, so the image leaves it out.
+
+**Target.** `aros-i386` defines `AMIGA`, `AROS`, `I386` (not `X86_64`), 32-bit pointers. The struct offsets are measured, not assumed:
+`tools/BindGen/layouts.sh` now measures three tables (AROS x86-64, AROS i386, m68k) and `Layout.g.cs` has an `#elif I386` table. 53 of the
+229 values differ from m68k (i386 aligns LONGs and pointers to 4 bytes where m68k uses 2: Window, IntuiMessage, IOAudio, timerequest,
+InputEvent, TextFont, NewGadget, Interrupt, RastPort, DBufInfo, GfxBase and ExecBase offsets), so the m68k table could not have been reused.
+The rest of the AROS platform code already used `sizeof(void *)`, `nuint` and the AROS SDK macros (`AROS_LC` for MUI, plain C hooks, the
+BOOPSI class-pointer probe), which are right for i386 as they are. CLI: `--target aros-i386`, `--docker` without a name means
+`esharp-aros-i386`, `--mui` refused as for `aros`; the VS Code template's image prompt names it.
+
+**Hosted i386 runtime.** `docker/aros-hosted` takes `--build-arg AROS_ARCH=i386` (tag `esharp-aros-hosted-i386`, 1.32 GB): the
+`AROS-20261116-linux-i386-system` nightly (sha256 `ffeb6e7bf6407911631e793399c5f0c6e62ed2c81fcbc20c943116b86a87dcca`), `libc6:i386` and the
+i386 X11/ALSA libraries the hosted kernel loads; `--build-context archive=<folder>` as for x86_64. `tools/aros-hosted/aros-hosted.sh --arch
+i386` (or an image name with `i386`) runs `obj/aros-i386/<sample>`.
+
+**A fix found on the way (all AROS targets).** Generated C wrote its out-of-memory and index messages to stdio's `stderr`, so every
+program with heap objects opened posixc.library. On hosted i386 AROS a program that has posixc.library open and creates a Zune Application
+crashes in the C library's exit code (`__stdc_program_end` / `__callexitfuncs`); reproduced in a 20-line C program, so it is an AROS problem,
+not E#. On AROS the messages now go through dos.library (`ErrorOutput()`, else `Output()`), so no E# program opens posixc.library; other
+targets keep `stderr`. New test `Aros_error_messages_use_dos_library_not_stderr` (runs the helpers with the host gcc).
+
+**Verified (this branch):**
+- `docker/aros-i386/smoke-test.sh`: hello builds as `ELF 32-bit LSB relocatable, Intel 80386` and prints `Hello from E#!` on hosted i386
+  (0 traps). `docker/aros-hosted/smoke-test.sh esharp-aros-hosted-i386` passes too.
+- All 42 samples built with `--target aros-i386 --docker esharp-aros-i386` and run on hosted i386 AROS in `esharp-aros-hosted-i386`, next to
+  the same samples built with `--target aros` on hosted x86-64: the ok and FAIL counts are equal for 41 of them (642 ok on i386, 646 on
+  x86-64; the only FAIL on both is rtg's known `the native screen is not RTG`): language 39, boopsi 37, linq 37, phase2 32, rummy 31,
+  dbuffer 30, generics 24, inherit 24, patterns 23, screen 23, objects 21, sound 21, closures 20, collections 20, operators 20, dates 19,
+  memory 19, properties 18, refs 18, assets 17, cards 16, lambdas 16, interrupts 14, names 12, iff 10, timing 10, controls 9, fonts 8,
+  keys 8, aga 3, asl 3, textspeed 1, rtg 6 (+1 known FAIL); hello, hwinfo, mainargs, muicheck (`muimaster.library 19.81`) and trace run to
+  the end without ok lines; gui, guiclass and wbstart wait for input on both arches (gui 2 ok, guiclass 3 ok before that).
+- With input on hosted i386: `gui --input "click 208,74;click 47,37"` 7 ok (Hello, reply, close); `boopsi --args WAIT --input "click
+  75,57;click 220,84;click 47,37"` 38 ok (button, slider page to 55, close). `cards --shot --input "click 400,300"`: the screenshot was
+  looked at and shows the 640x400 table with the HD cards, the card back and the sprite.
+- **mui on hosted i386: not passing.** It prints its 28 checks up to `SHOT` and then crashes in the program's own task (bus error, a PC
+  outside every loaded module), 3 of 3 runs. A copy with `Trace.Line` in every check, or the same binary with exec's mungwall on, passes all
+  32 checks and ends cleanly, so it depends on timing or memory layout; not found yet. (Before the posixc fix it also crashed at exit.)
+- Intermittent traps in the Workbench task (Wanderer) after a program has ended, on hosted i386 only: also with a program that only waits
+  5 s (1 of 14 runs), so it is the nightly, not E#; the program's own output and checks are complete in those runs.
+- x86-64 unchanged: every sample still builds with `--target aros`; on hosted x86-64 mui 32 ok and boopsi 37 ok; `esharp-aros-hosted`
+  rebuilt from the changed Dockerfile (default `AROS_ARCH`) passes its smoke test.
+- m68k on Kickstart 3.1 (A1200, real ROM): `esharp test samples/language` 39 ok and `samples/boopsi` 37 ok, host and Amiga agree.
+- `dotnet test`: 586 passed, 2 skipped (the SDK-backed BindGen ones), 0 failed; after merging main (#102, NewIcons) 599 passed, 2 skipped, 0 failed, and on hosted i386 hello, language 39, boopsi 37, cards 16 re-run unchanged.
+
+**Not verified:** native pc-i386 (the boot ISO in QEMU), real i386 hardware, CI building the image (it is not in CI).
 
 ## Hosted AROS in a Docker image (issue #75)
 

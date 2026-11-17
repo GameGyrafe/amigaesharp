@@ -107,8 +107,6 @@ static inline __attribute__((unused)) void *OpenLibrary(const void *n, uint32_t 
 static inline __attribute__((unused)) void CloseLibrary(void *l) { (void)l; printf("[close library]\n"); }
 static inline __attribute__((unused)) uint32_t Wait(uint32_t s) { return s; }
 static inline __attribute__((unused)) void Delay(int32_t t) { (void)t; }
-static inline __attribute__((unused)) void *Output(void) { return NULL; }
-static inline __attribute__((unused)) int32_t Flush(void *f) { (void)f; fflush(stdout); return 1; }
 static inline __attribute__((unused)) void *NewObjectA(void *cl, const void *id, void *tags) { (void)cl; (void)id; (void)tags; return NULL; }
 static inline __attribute__((unused)) void DisposeObject(void *o) { (void)o; printf("[intuition DisposeObject of a MUI object]\n"); }
 static inline __attribute__((unused)) uintptr_t SetAttrsA(void *obj, void *tags)
@@ -237,6 +235,7 @@ static __attribute__((unused)) uintptr_t DoMethodA(void *obj, void *msg)
     [Theory]
     [InlineData("m68k", "jsr -30(%%a6)")]
     [InlineData("aros", "AROS_LC2(APTR, MUI_NewObjectA")]
+    [InlineData("aros-i386", "AROS_LC2(APTR, MUI_NewObjectA")]
     [InlineData("os4", "(IExec->EmulateTags)((APTR)((uint8_t *)es_MUIMasterBase - (lvo))")]
     [InlineData("morphos", "(*MyEmulHandle->EmulCallDirectOS)(-(lvo))")]
     public void Mui_sample_compiles_for_every_amiga_target_without_a_MUI_header(string target, string call)

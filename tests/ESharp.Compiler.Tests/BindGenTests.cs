@@ -293,12 +293,13 @@ public class BindGenTests
     {
         string path = Path.Combine(Repo(), "src", "ESharp.Platform", "Layout.g.cs");
         string text = File.ReadAllText(path).Replace("\r\n", "\n");
-        var (aros, m68k) = LayoutWriter.Read(text);
+        var (aros, i386, m68k) = LayoutWriter.Read(text);
         Assert.NotEmpty(aros);
-        Assert.Equal(text, LayoutWriter.Write(aros, m68k));
-        // Every item of structs.txt is measured for both targets, in the spec's order.
+        Assert.Equal(text, LayoutWriter.Write(aros, i386, m68k));
+        // Every item of structs.txt is measured for every target, in the spec's order.
         var spec = LayoutWriter.SpecNames(File.ReadAllText(Path.Combine(Repo(), "tools", "BindGen", "structs.txt")));
         Assert.Equal(spec, aros.Select(e => e.Name));
+        Assert.Equal(spec, i386.Select(e => e.Name));
         Assert.Equal(spec, m68k.Select(e => e.Name));
     }
 
@@ -306,10 +307,13 @@ public class BindGenTests
     public void Layout_writer_takes_measured_lines_and_refuses_mismatched_targets()
     {
         var a = LayoutWriter.ParseMeasured("WidgetSize = 48\nWidgetFlag = 4294967295u\n");
+        var i = LayoutWriter.ParseMeasured("WidgetSize = 24\nWidgetFlag = 4294967295u\n");
         var m = LayoutWriter.ParseMeasured("WidgetSize = 22\nWidgetFlag = 4294967295u\n");
-        string text = LayoutWriter.Write(a, m);
-        Assert.Contains("#if X86_64\n    public const int WidgetSize = 48;\n    public const uint WidgetFlag = 4294967295u;\n#else\n    public const int WidgetSize = 22;\n", text);
-        Assert.Throws<InvalidOperationException>(() => LayoutWriter.Write(a, LayoutWriter.ParseMeasured("WidgetSize = 22\n")));
+        string text = LayoutWriter.Write(a, i, m);
+        Assert.Contains("#if X86_64\n    public const int WidgetSize = 48;\n    public const uint WidgetFlag = 4294967295u;\n#elif I386\n    public const int WidgetSize = 24;\n" +
+            "    public const uint WidgetFlag = 4294967295u;\n#else\n    public const int WidgetSize = 22;\n", text);
+        Assert.Throws<InvalidOperationException>(() => LayoutWriter.Write(a, i, LayoutWriter.ParseMeasured("WidgetSize = 22\n")));
+        Assert.Throws<InvalidOperationException>(() => LayoutWriter.Write(a, LayoutWriter.ParseMeasured("WidgetSize = 24\n"), m));
         Assert.Throws<FormatException>(() => LayoutWriter.ParseMeasured("WidgetSize = ?\n"));
     }
 

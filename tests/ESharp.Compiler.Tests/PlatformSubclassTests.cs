@@ -108,10 +108,11 @@ Dos.PutStr(Ok == 11 ? ""all ok\n"" : ""some failed\n"");";
     [Theory]
     [InlineData("m68k")]
     [InlineData("aros")]
+    [InlineData("aros-i386")]
     [InlineData("os4")]
     public void Guiclass_sample_compiles_for_amiga_targets_with_the_overrides_in_the_class_table(string target)
     {
-        var options = target switch { "aros" => Targets.Aros.ToOptions(), "os4" => Targets.Os4.ToOptions(), _ => Targets.M68k.ToOptions() };
+        var options = Targets.Find(target)!.ToOptions();
         var r = EsCompiler.Compile(new[] { new SourceFile("GuiClass.cs", File.ReadAllText(SamplePath)) }, options);
         Assert.True(r.Success, string.Join("\n", r.Diagnostics));
         var c = r.C!;

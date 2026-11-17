@@ -79,7 +79,11 @@ public static class P
         Directory.CreateDirectory(Path.Combine(dir, "proto"));
         if (extraHeaders != null) foreach (var (name, text) in extraHeaders) { Directory.CreateDirectory(Path.GetDirectoryName(Path.Combine(dir, name))!); File.WriteAllText(Path.Combine(dir, name), text); }
         File.WriteAllText(Path.Combine(dir, "proto", "dos.h"),
-            "#pragma once\n#include <stdio.h>\nstatic inline long PutStr(const char *s) { return fputs(s, stdout) < 0; }\n");
+            "#pragma once\n#include <stdio.h>\nstatic inline long PutStr(const char *s) { return fputs(s, stdout) < 0; }\n" +
+            // Output and Flush (Dos.FlushOutput), and the error output the AROS branch of the generated C writes its messages to.
+            "static inline void *ErrorOutput(void) { return stderr; }\nstatic inline void *Output(void) { return stdout; }\n" +
+            "static inline long FPuts(void *f, const void *s) { return fputs((const char *)s, (FILE *)f) < 0; }\n" +
+            "static inline long Flush(void *f) { return fflush((FILE *)f) == 0; }\n");
         // A tiny exec.library: AllocVec/FreeVec on calloc, with a 2 MB "chip" pool tracked by flags.
         File.WriteAllText(Path.Combine(dir, "proto", "exec.h"),
             "#pragma once\n#include <stdlib.h>\n#include <stdint.h>\n#include <stddef.h>\n" +

@@ -78,6 +78,15 @@ public static class Targets
         "x86_64-aros-gcc", "--sysroot=/opt/x86_64-aros -O2 -fwrapv");
 
     /// <summary>
+    /// AROS on 32-bit x86 (i386 ABI, as the linux-i386 hosted and pc-i386 native builds): 32-bit pointers, so the
+    /// 32-bit struct layouts apply (measured for i386, see Layout.g.cs). Built in the esharp-aros-i386 image (docker/aros-i386).
+    /// </summary>
+    public static readonly TargetInfo ArosI386 = new(
+        "aros-i386", "AROS on i386 (32-bit pointers)",
+        new[] { "AMIGA", "I386", "AROS" },
+        "i386-aros-gcc", "--sysroot=/opt/i386-aros/sdk -O2 -fwrapv");
+
+    /// <summary>
     /// A desktop build through SDL 3 (Linux x86-64 in the esharp-sdl image; SDL is linked statically). Defines SDL and
     /// no CPU or OS symbol: the C is plain C99 plus SDL, so the same source should build on macOS and Windows too (not verified).
     /// </summary>
@@ -86,7 +95,7 @@ public static class Targets
         new[] { "SDL" },
         "gcc", "-O2 -fwrapv", pkgConfig: "sdl3");
 
-    public static IReadOnlyList<TargetInfo> All { get; } = new[] { M68k, Os4, MorphOs, Aros, Sdl };
+    public static IReadOnlyList<TargetInfo> All { get; } = new[] { M68k, Os4, MorphOs, Aros, ArosI386, Sdl };
 
     public static TargetInfo? Find(string name) =>
         All.FirstOrDefault(t => string.Equals(t.Name, name, StringComparison.OrdinalIgnoreCase));

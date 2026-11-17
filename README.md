@@ -50,8 +50,8 @@ Early, and honest about it (details and dates in [docs/STATUS.md](docs/STATUS.md
   lambdas, LINQ over arrays, patterns, tuples, ...), the platform layer (video, blitter, input, sound, timing, files, assets, GadTools windows,
   BOOPSI objects and hooks, MUI windows with notifications to C# lambdas (MUI where it is installed), IFF, fonts), and more than thirty samples including a card game and rummy. Unit tests run the generated C with a host gcc.
 - **Verified on an emulator:** classic 68k in FS-UAE on an A1200 with Kickstart 3.1; AmigaOS 4.1 in a QEMU Pegasos II VM; AROS x86-64
-  (hosted); the `sdl` desktop target headless and under Xvfb.
-- **Not verified:** any real Amiga hardware (the 68k builds, the PowerPC builds, RTG), MorphOS (builds only), AROS i386,
+  and i386 (hosted); the `sdl` desktop target headless and under Xvfb.
+- **Not verified:** any real Amiga hardware (the 68k builds, the PowerPC builds, RTG), MorphOS (builds only), AROS on native PCs (x86-64 and i386),
   Windows beyond CI (CI runs the tests, emit-only builds and a package round trip on Windows, but not Docker or FS-UAE there), and the SDL target on macOS and Windows. Hardware test reports are very welcome (see [CONTRIBUTING.md](CONTRIBUTING.md)).
 - **Known gaps:** user classes that derive from platform classes (reported as `ES0099`, never miscompiled); stored capturing
   lambdas and events work, but there is no garbage collector, so a stored closure is freed with `Heap.Free` (docs/STATUS.md); floating point is off by default, no exceptions/async/reflection, no source-level debugger for the Amiga
@@ -86,7 +86,7 @@ or the packages, and none will be. Without `--kickstart <rom>` (or `ESHARP_KICKS
 replacement, which runs most samples but is not the tested target; the test matrix is Kickstart 3.1 (40.069) on `--model A1200`.
 Use a ROM you own, keep it outside the repository and never commit it.
 
-**Workbench icon.** An Amiga build (`m68k`, `os4`, `morphos`, `aros`) also writes `<name>.info` next to the program: a Tool icon
+**Workbench icon.** An Amiga build (`m68k`, `os4`, `morphos`, `aros`, `aros-i386`) also writes `<name>.info` next to the program: a Tool icon
 (classic image for every Amiga OS, the colour image for OS 3.5 and later, OS 4, MorphOS and AROS, and a NewIcons image in the
 tool types for Workbench 3.0/3.1 with NewIcons installed) so the program shows in a Workbench window and
 starts by double-click. Properties in the project's csproj set it: `EsStackSize` (bytes, default 65536), `EsToolTypes`
@@ -139,12 +139,18 @@ dotnet run --project src/ESharp.Cli -- run samples/cards --target sdl --docker e
 dotnet run --project src/ESharp.Cli -- test samples/cards --target sdl --docker esharp-sdl  # headless: host and SDL agree
 ```
 
-The `aros` target runs on hosted AROS x86-64 (AROS as a Linux process, headless under Xvfb) in a pinned image:
+The `aros` target runs on hosted AROS x86-64 (AROS as a Linux process, headless under Xvfb) in a pinned image, and
+`aros-i386` on hosted i386 AROS with its own toolchain image, built from the AROS sources ([docker/aros-i386](docker/aros-i386/README.md)):
 
 ```bash
 docker build -t esharp-aros-hosted docker/aros-hosted   # downloads the AROS nightly, checks its sha256 (docker/aros-hosted/README.md)
 dotnet run --project src/ESharp.Cli -- build samples/cards --target aros --docker esharp-amiga-toolchain
 tools/aros-hosted/aros-hosted.sh cards --docker esharp-aros-hosted --shot shot.png --input "click 400,300"
+
+docker build -t esharp-aros-i386 docker/aros-i386       # i386-aros-gcc + the AROS i386 SDK (about 14 minutes, 1.3 GB)
+docker build --build-arg AROS_ARCH=i386 -t esharp-aros-hosted-i386 docker/aros-hosted
+dotnet run --project src/ESharp.Cli -- build samples/cards --target aros-i386 --docker esharp-aros-i386
+tools/aros-hosted/aros-hosted.sh cards --arch i386 --docker esharp-aros-hosted-i386 --shot shot.png --input "click 400,300"
 ```
 
 | Target | Symbols | Runs on | Status |
@@ -153,6 +159,7 @@ tools/aros-hosted/aros-hosted.sh cards --docker esharp-aros-hosted --shot shot.p
 | `os4` | `AMIGA PPC AMIGAOS4` | AmigaOS 4.1 FE PowerPC (QEMU pegasos2 VM you provide; `tools/os4vm/README.md`) | runs in the VM (`esharp run/test --target os4`); real hardware not tried |
 | `morphos` | `AMIGA PPC MORPHOS` | MorphOS PowerPC | builds only |
 | `aros` | `AMIGA X86_64 AROS` | AROS x86-64 (hosted) | runs on hosted AROS; not on native hardware |
+| `aros-i386` | `AMIGA I386 AROS` | AROS i386 (hosted) | runs on hosted i386 AROS; not on native hardware |
 | `sdl` | `SDL` | Linux desktop through SDL 3 | runs (headless and under Xvfb; macOS/Windows not tried) |
 
 The Amiga-only APIs (GadTools `Gui`, BOOPSI, MUI, `Asl`, `Iff`, `Fonts`, `Joystick`) do not exist on `sdl` (error ES0102).
@@ -163,7 +170,7 @@ The Amiga-only APIs (GadTools `Gui`, BOOPSI, MUI, `Asl`, `Iff`, `Fonts`, `Joysti
 that builds the same source under .NET against the E# runtime and loads the subset analyzer, and a `.vscode/` folder
 with `tasks.json` (build for m68k, run in FS-UAE, run on the host, check the subset), `launch.json` (debug the host run
 with the coreclr debugger, so logic can be stepped through; the Amiga build cannot be debugged yet) and
-`extensions.json`. The ES0001-ES0010 subset errors show as you type and in `dotnet build`. ES0101 (a library call newer than the target's libraries; opt in with `[RequiresLib("lib", version)]`) is reported only by `esharp build`/`run`/`test` for the m68k and aros targets, not in the IDE or the host build. With the installed tool
+`extensions.json`. The ES0001-ES0010 subset errors show as you type and in `dotnet build`. ES0101 (a library call newer than the target's libraries; opt in with `[RequiresLib("lib", version)]`) is reported only by `esharp build`/`run`/`test` for the m68k, aros and aros-i386 targets, not in the IDE or the host build. With the installed tool
 the csproj references the AmigaESharp.Sdk package and the tasks call `esharp`. When the CLI runs from a checkout
 (`dotnet run --project src/ESharp.Cli -- new ...`), or with `esharp new <name> --source [dir]`, the csproj and the tasks
 point at that checkout instead (found from the CLI's location, or `ESHARP_ROOT`; edit `ESharpRoot` in the csproj if you

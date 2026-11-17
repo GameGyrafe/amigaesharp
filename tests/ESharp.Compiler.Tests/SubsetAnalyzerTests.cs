@@ -129,6 +129,7 @@ public class SubsetAnalyzerTests
     {
         Assert.Equal(40, ESharp.Analyzers.LibraryVersions.For(Targets.M68k.Defines));
         Assert.Equal(51, ESharp.Analyzers.LibraryVersions.For(Targets.Aros.Defines));
+        Assert.Equal(51, ESharp.Analyzers.LibraryVersions.For(Targets.ArosI386.Defines));
         Assert.Null(ESharp.Analyzers.LibraryVersions.For(Targets.Os4.Defines));
         Assert.Null(ESharp.Analyzers.LibraryVersions.For(Targets.MorphOs.Defines));
         Assert.Null(ESharp.Analyzers.LibraryVersions.For(Targets.Sdl.Defines));

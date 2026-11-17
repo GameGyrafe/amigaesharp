@@ -279,7 +279,7 @@ static void __attribute__((destructor)) es_t_report(void) { printf(""open %d dis
     public void The_Workbench_start_code_is_in_the_Amiga_C_and_not_in_sdl()
     {
         var src = Prelude + ArgsProgram;
-        foreach (var t in new[] { Targets.M68k, Targets.Os4, Targets.MorphOs, Targets.Aros })
+        foreach (var t in new[] { Targets.M68k, Targets.Os4, Targets.MorphOs, Targets.Aros, Targets.ArosI386 })
         {
             var r = EsCompiler.Compile(new[] { new SourceFile("P.cs", src) }, t.ToOptions());
             Assert.True(r.Success, string.Join("\n", r.Diagnostics));

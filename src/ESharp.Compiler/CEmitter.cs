@@ -363,7 +363,12 @@ internal sealed partial class CEmitter
             result.AppendLine("{");
             result.AppendLine("    if ((uint32_t)i >= (uint32_t)n)");
             result.AppendLine("    {");
+            result.AppendLine("#if defined(__AROS__)");
+            result.AppendLine("        es_errstr(file); es_errstr(\"(\"); es_errint(line); es_errstr(\"): index \"); es_errint(i);");
+            result.AppendLine("        es_errstr(\" out of range 0..\"); es_errint((long)n - 1); es_errstr(\"\\n\");");
+            result.AppendLine("#else");
             result.AppendLine("        fprintf(stderr, \"%s(%d): index %ld out of range 0..%ld\\n\", file, line, (long)i, (long)n - 1);");
+            result.AppendLine("#endif");
             result.AppendLine("        es_fatal();");
             result.AppendLine("    }");
             result.AppendLine("    return i;");
@@ -539,7 +544,7 @@ internal sealed partial class CEmitter
             result.AppendLine("static void *es_new(size_t n)");
             result.AppendLine("{");
             result.AppendLine("    void *p = calloc(1, n);");
-            result.AppendLine("    if (p == NULL) { fputs(\"out of memory\\n\", stderr); es_fatal(); }");
+            result.AppendLine("    if (p == NULL) { es_errstr(\"out of memory\\n\"); es_fatal(); }");
             result.AppendLine("    return p;");
             result.AppendLine("}");
             result.AppendLine("#define ES_NEW(T) ((T *)es_new(sizeof(T)))");
@@ -1986,8 +1991,29 @@ static __attribute__((unused)) void *MUI_MakeObjectA(int32_t type, uintptr_t *pa
     // The runtime's own fatal errors (index out of range, out of memory) end with exit(20), which skips the code after
     // the entry point; es_fatal first runs the [AtExit] methods through a hook that main installs (once), so
     // for example interrupt servers come off exec's chain before their code is unloaded.
-    private static void AppendFatalHelper(StringBuilder result)
+    private void AppendFatalHelper(StringBuilder result)
     {
+        // Error messages: stdio's stderr elsewhere. On AROS, dos.library: stderr is posixc.library's, and on hosted i386 AROS
+        // (nightly 20261116) a program that has posixc.library open and makes a Zune Application crashes in the C library's exit
+        // code (reproduced in plain C), so an E# program does not open posixc.library at all. Only for Amiga targets: the sdl
+        // target's C stays free of Amiga headers.
+        if (IsDefined("AMIGA"))
+        {
+            result.AppendLine("#ifdef __AROS__");
+            result.AppendLine("#include <proto/dos.h>");
+            result.AppendLine("static __attribute__((unused)) void es_errstr(const char *s) { __typeof__(ErrorOutput()) f = ErrorOutput(); if (!f) f = Output(); if (f) { FPuts(f, (CONST_STRPTR)s); Flush(f); } }");
+            result.AppendLine("static __attribute__((unused)) void es_errint(long v)");
+            result.AppendLine("{");
+            result.AppendLine("    char b[24]; int i = 23; unsigned long u = v < 0 ? 0ul - (unsigned long)v : (unsigned long)v;");
+            result.AppendLine("    b[i] = 0;");
+            result.AppendLine("    do { b[--i] = (char)('0' + u % 10); u /= 10; } while (u != 0);");
+            result.AppendLine("    if (v < 0) b[--i] = '-';");
+            result.AppendLine("    es_errstr(b + i);");
+            result.AppendLine("}");
+            result.AppendLine("#else");
+        }
+        result.AppendLine("static __attribute__((unused)) void es_errstr(const char *s) { fputs(s, stderr); }");
+        if (IsDefined("AMIGA")) result.AppendLine("#endif");
         result.AppendLine("static void (*es_exit_hook)(void);");
         result.AppendLine("static void es_fatal(void)");
         result.AppendLine("{");

@@ -13,6 +13,7 @@ internal static class Offsets
     {
         ["m68k"] = ("m68k-amigaos-gcc", "-noixemul -m68020"),
         ["aros"] = ("x86_64-aros-gcc", "--sysroot=/opt/x86_64-aros"),
+        ["aros-i386"] = ("i386-aros-gcc", "--sysroot=/opt/i386-aros/sdk"),
         ["os4"] = ("ppc-amigaos-gcc", "-D__USE_INLINE__"),
         ["morphos"] = ("ppc-morphos-gcc", "-noixemul"),
     };

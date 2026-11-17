@@ -183,7 +183,7 @@ public static class Program
     {{
       ""id"": ""dockerImage"",
       ""type"": ""promptString"",
-      ""description"": ""Docker image with the Amiga cross compiler (esharp-amiga-toolchain has all targets)"",
+      ""description"": ""Docker image with the Amiga cross compiler (esharp-amiga-toolchain: m68k, os4, morphos, aros; esharp-aros-i386: aros-i386)"",
       ""default"": {Q(DefaultImage)}
     }}
   ]
