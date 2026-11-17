@@ -1343,7 +1343,7 @@ public static unsafe class P
     {
         var opts = Targets.Find(target)!.ToOptions(debug: true);
         string c = CompileOk(Program("public class Box { public int V; }",
-            "int[] a = new int[4]; Box b = new Box(); b.V = a[1]; Dos.PutInt(b.V);"), opts);
+            "int[] a = new int[4]; Box b = new Box(); b.V = a[1]; Dos.PutInt(b.V);"), opts).Replace("\r\n", "\n");   // AppendLine is CRLF on Windows
         int start = c.IndexOf("#ifdef __AROS__\n#include <proto/dos.h>\n", StringComparison.Ordinal);
         Assert.True(start >= 0, "the AROS error helpers");
         int end = c.IndexOf("#else\n", start, StringComparison.Ordinal);
