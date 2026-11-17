@@ -8,8 +8,8 @@
 # (the one the linux-i386 nightly of AROS_NIGHTLY was built from; git checks the sha), and every tarball the AROS
 # crosstools rules would download (gcc, binutils, gmp, mpfr, mpc, isl) by sha256 (the build fails on a mismatch).
 # Configured as --target=linux-i386, the target of that nightly, so the headers and ABI match the hosted i386 AROS that
-# docker/aros-hosted runs (AROS_ARCH=i386). About 10 minutes with 16 jobs on a 32-core host (crosstools ~9 minutes, the SDK
-# ~1 minute); the final stage (1.3 GB) keeps only the toolchain and the SDK.
+# docker/aros-hosted runs (AROS_ARCH=i386). About 14 minutes with 16 jobs on a 32-core host (crosstools ~10 minutes, the
+# SDK ~1 minute); the final stage (1.3 GB) keeps only the toolchain and the SDK.
 #
 # Licences: AROS is under the AROS Public License (LICENSE in /opt/i386-aros). gcc and binutils are GPL build tools
 # here; programs link only AROS's APL startup and libraries plus libgcc (GCC runtime library exception).

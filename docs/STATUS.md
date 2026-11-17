@@ -1299,8 +1299,8 @@ Verified:
 the sha), AROS's own `configure --target=linux-i386` and `make crosstools` then `make sdk`. The tarballs the crosstools rules would download
 (gcc 6.5.0, binutils 2.32, gmp 6.3.0, mpfr 4.2.2, mpc 1.4.1, isl 0.25: the AROS defaults for i386) are fetched first and checked by sha256.
 The final stage keeps `/opt/i386-aros` only: `i386-aros-gcc` 6.5.0 and the SDK in `/opt/i386-aros/sdk` (`--sysroot`). Image 1.3 GB. Build time
-on this host (32 cores, 16 jobs): crosstools 523 s, SDK 53 s, about 11.5 minutes with the package and download steps. Too long and too big
-for a CI job, so it is built locally and not in CI. The SDK headers equal the hosted nightly's `Developer/include` (only generated-file
+on this host (32 cores, shared, 16 jobs), `docker build --no-cache`: 817 s in all, of which crosstools 580 s and the SDK 60 s. Too long and
+too big for a CI job, so it is built locally and not in CI. The SDK headers equal the hosted nightly's `Developer/include` (only generated-file
 comments with build paths differ). The nightly's own configure line passes `--with-aros-toolchain=yes`, which means a prebuilt toolchain; with
 it `make crosstools` builds nothing, so the image leaves it out.
 
@@ -1346,8 +1346,7 @@ targets keep `stderr`. New test `Aros_error_messages_use_dos_library_not_stderr`
 - m68k on Kickstart 3.1 (A1200, real ROM): `esharp test samples/language` 39 ok and `samples/boopsi` 37 ok, host and Amiga agree.
 - `dotnet test`: 586 passed, 2 skipped (the SDK-backed BindGen ones), 0 failed.
 
-**Not verified:** native pc-i386 (the boot ISO in QEMU), real i386 hardware, the toolchain image built with no Docker cache from scratch in
-one go (the measured build reused the package layer of a first attempt that stopped at configure), CI building the image.
+**Not verified:** native pc-i386 (the boot ISO in QEMU), real i386 hardware, CI building the image (it is not in CI).
 
 ## Hosted AROS in a Docker image (issue #75)
 

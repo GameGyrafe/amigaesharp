@@ -146,7 +146,7 @@ docker build -t esharp-aros-hosted docker/aros-hosted   # downloads the AROS nig
 dotnet run --project src/ESharp.Cli -- build samples/cards --target aros --docker esharp-amiga-toolchain
 tools/aros-hosted/aros-hosted.sh cards --docker esharp-aros-hosted --shot shot.png --input "click 400,300"
 
-docker build -t esharp-aros-i386 docker/aros-i386       # i386-aros-gcc + the AROS i386 SDK (about 10 minutes, 1.3 GB)
+docker build -t esharp-aros-i386 docker/aros-i386       # i386-aros-gcc + the AROS i386 SDK (about 14 minutes, 1.3 GB)
 docker build --build-arg AROS_ARCH=i386 -t esharp-aros-hosted-i386 docker/aros-hosted
 dotnet run --project src/ESharp.Cli -- build samples/cards --target aros-i386 --docker esharp-aros-i386
 tools/aros-hosted/aros-hosted.sh cards --arch i386 --docker esharp-aros-hosted-i386 --shot shot.png --input "click 400,300"
