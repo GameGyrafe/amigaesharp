@@ -378,7 +378,6 @@ public unsafe class BoopsiObject
         return InitRaw(a.Tag, value == null ? (nuint)0 : (nuint)value.Address);
     }
 
-    /// <summary>A hook attribute: the hook must outlive the object (<see cref="Keep(Hook)"/> it).</summary>
     /// <summary>A hook attribute: the hook must outlive the object (<see cref="Keep(Hook)"/> it). Refused (and Create fails) for a hook without memory.</summary>
     public bool Init(HookAttr a, Hook? value)
     {
@@ -400,25 +399,55 @@ public unsafe class BoopsiObject
     }
 
     /// <summary>Makes the system object from the class and the starting attributes. False if the class is missing, an attribute was refused, or memory ran out.</summary>
-    public bool Create()
+    public bool Create() { return CreateAll(); }
+
+    // The MUI wrappers make a whole tree here (children first where the parent takes them as starting attributes).
+    internal virtual bool CreateAll() { return CreateSelf(); }
+
+    // A starting attribute could not be given: Create fails.
+    internal void FailInit() { if (!_created) _initFailed = true; }
+
+    internal bool CreateSelf()
     {
         if (_created || _initFailed) return false;
         nuint* tags = _init.End();
         if (tags == null) return false;
 #if AMIGA
         BoopsiNative.es_boopsi_prepare();
-        _handle = Intuition.NewObjectA(null, _className, (void*)tags);
+        _handle = NewSystem(_className, tags);
         if (_handle == null) return false;
 #else
-        if (!HostKnows(Cast.PtrToString(_className))) return false;
+        if (!HostKnowsClass(Cast.PtrToString(_className))) return false;
         _handle = Cast.ObjectToPtr(this);
         _hostCount = 0;
         for (int i = 0; tags[i] != 0; i += 2) HostStore((uint)tags[i], tags[i + 1]);
 #endif
         _created = true;
         _live++;
+        AfterCreate();
         return true;
     }
+
+    // Hooks for the classes built on this one (the MUI wrappers): how the system object is made and disposed, what happens right
+    // after Create, what else the object owns, and whether Dispose may run now.
+#if AMIGA
+    internal virtual void* NewSystem(byte* className, nuint* tags) { return Intuition.NewObjectA(null, className, (void*)tags); }
+
+    internal virtual void DisposeSystem() { Intuition.DisposeObject(_handle); }
+#else
+    internal virtual bool HostKnowsClass(string name) { return HostKnows(name); }
+
+    internal virtual void DisposeSystem() { }
+
+    /// <summary>Host: an attribute was set (the MUI fake raises its notifications here).</summary>
+    internal virtual void HostChanged(uint tag, nuint value) { }
+#endif
+
+    internal virtual void AfterCreate() { }
+
+    internal virtual void DisposeOwned() { }
+
+    internal virtual bool RefuseDispose() { return false; }
 
     // ---------------------------------------------------------- attributes of a live object
 
@@ -470,6 +499,7 @@ public unsafe class BoopsiObject
         else Intuition.SetAttrsA(_handle, (void*)list);
 #else
         HostStore(tag, value);
+        HostChanged(tag, value);
 #endif
         return true;
     }
@@ -612,13 +642,12 @@ public unsafe class BoopsiObject
     /// </summary>
     public void Dispose()
     {
+        if (RefuseDispose()) return;
         if (Window != null) Window.Detach(this);
         if (OwnerObject != null) OwnerObject.Unkeep(this);
         if (_created)
         {
-#if AMIGA
-            Intuition.DisposeObject(_handle);
-#endif
+            DisposeSystem();
             _live--;
         }
         _created = false;
@@ -646,6 +675,7 @@ public unsafe class BoopsiObject
             Heap.Free(ref h);
             h = next;
         }
+        DisposeOwned();
         FreeStrings();
         Heap.Free(ref Notify);
     }
@@ -655,7 +685,7 @@ public unsafe class BoopsiObject
     // ---------------------------------------------------------- strings
 
     // A copy the object owns. Each block: the next block's address, the attribute's tag (0: not an attribute), then the characters.
-    private byte* KeepString(string? s, uint tag)
+    internal byte* KeepString(string? s, uint tag)
     {
         if (s == null) return null;
 #if AMIGA
@@ -675,7 +705,7 @@ public unsafe class BoopsiObject
 #endif
     }
 
-    private bool IsOurCopy(byte* p)
+    internal bool IsOurCopy(byte* p)
     {
 #if AMIGA
         for (byte* b = _strings; b != null; b = *(byte**)b)

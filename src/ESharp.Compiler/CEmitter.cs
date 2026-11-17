@@ -184,7 +184,9 @@ internal sealed partial class CEmitter
         if (type == null || GetAttribute(type, "LibraryBaseAttribute") is not { } a) return null;
         string lib = (string)a.ConstructorArguments[0].Value!, name = (string)a.ConstructorArguments[1].Value!, ctype = (string)a.ConstructorArguments[2].Value!;
         _bases[name] = ctype;
-        _headers.Add($"proto/{lib}.h");
+        // muimaster.library: no header (the MUI SDK's are not used); the emitter defines its calls itself (MuiMasterCalls).
+        if (lib == "muimaster") _usesMuiMaster = true;
+        else _headers.Add($"proto/{lib}.h");
         return "es_" + name;
     }
 
@@ -350,6 +352,7 @@ internal sealed partial class CEmitter
             result.AppendLine("#define ES_SETBASE_CyberGfxBase(l) (es_CyberGfxBase = (__typeof__(es_CyberGfxBase))(l))");
             result.AppendLine("#endif");
         }
+        if (_usesMuiMaster) result.Append(MuiMasterCalls);
         result.AppendLine();
         if (_usesBounds)
         {
@@ -774,6 +777,86 @@ internal sealed partial class CEmitter
 
     private readonly HashSet<string> _natives = new();
 
+    private bool _usesMuiMaster;
+
+    /// <summary>
+    /// The muimaster.library calls of ESharp.Platform's MuiMaster class, by vector (bias 30, the AROS fd), with no MUI header: the
+    /// 68k registers on m68k, the 68k jump table through EmulateTags on AmigaOS 4, the emulation registers on MorphOS, AROS's own
+    /// library call macros on AROS. Another compiler (the tests' host gcc) gets them from es_muimaster_shim.h.
+    /// </summary>
+    internal const string MuiMasterCalls = """
+/* muimaster.library by vector (bias 30): no MUI header is used. */
+#if defined(__amigaos4__)
+#include <proto/exec.h>
+#include <exec/emulation.h>
+#define ES_MUI_CALL(lvo, ...) (IExec->EmulateTags)((APTR)((uint8_t *)es_MUIMasterBase - (lvo)), ET_RegisterA6, es_MUIMasterBase, __VA_ARGS__, TAG_DONE)
+static __attribute__((unused)) void *MUI_NewObjectA(const void *cls, void *tags) { return (void *)ES_MUI_CALL(30, ET_RegisterA0, cls, ET_RegisterA1, tags); }
+static __attribute__((unused)) void MUI_DisposeObject(void *obj) { ES_MUI_CALL(36, ET_RegisterA0, obj); }
+static __attribute__((unused)) int32_t MUI_RequestA(void *app, void *win, uint32_t flags, const void *title, const void *gadgets, const void *format, void *parms)
+{ return (int32_t)ES_MUI_CALL(42, ET_RegisterD0, app, ET_RegisterD1, win, ET_RegisterD2, flags, ET_RegisterA0, title, ET_RegisterA1, gadgets, ET_RegisterA2, format, ET_RegisterA3, parms); }
+static __attribute__((unused)) int32_t MUI_Error(void) { return (int32_t)(IExec->EmulateTags)((APTR)((uint8_t *)es_MUIMasterBase - 66), ET_RegisterA6, es_MUIMasterBase, TAG_DONE); }
+static __attribute__((unused)) void *MUI_MakeObjectA(int32_t type, uintptr_t *parms) { return (void *)ES_MUI_CALL(120, ET_RegisterD0, type, ET_RegisterA0, parms); }
+#elif defined(__MORPHOS__)
+#include <emul/emulinterface.h>
+#include <emul/emulregs.h>
+#define ES_MUI_CALL(lvo) ((REG_A6 = (ULONG)es_MUIMasterBase), (*MyEmulHandle->EmulCallDirectOS)(-(lvo)))
+static __attribute__((unused)) void *MUI_NewObjectA(const void *cls, void *tags) { REG_A0 = (ULONG)cls; REG_A1 = (ULONG)tags; return (void *)ES_MUI_CALL(30); }
+static __attribute__((unused)) void MUI_DisposeObject(void *obj) { REG_A0 = (ULONG)obj; ES_MUI_CALL(36); }
+static __attribute__((unused)) int32_t MUI_RequestA(void *app, void *win, uint32_t flags, const void *title, const void *gadgets, const void *format, void *parms)
+{ REG_D0 = (ULONG)app; REG_D1 = (ULONG)win; REG_D2 = flags; REG_A0 = (ULONG)title; REG_A1 = (ULONG)gadgets; REG_A2 = (ULONG)format; REG_A3 = (ULONG)parms; return (int32_t)ES_MUI_CALL(42); }
+static __attribute__((unused)) int32_t MUI_Error(void) { return (int32_t)ES_MUI_CALL(66); }
+static __attribute__((unused)) void *MUI_MakeObjectA(int32_t type, uintptr_t *parms) { REG_D0 = (ULONG)type; REG_A0 = (ULONG)parms; return (void *)ES_MUI_CALL(120); }
+#elif defined(__AROS__)
+#include <aros/libcall.h>
+static __attribute__((unused)) void *MUI_NewObjectA(const void *cls, void *tags)
+{ return (void *)AROS_LC2(APTR, MUI_NewObjectA, AROS_LCA(const void *, cls, A0), AROS_LCA(void *, tags, A1), struct Library *, es_MUIMasterBase, 5, MUIMaster); }
+static __attribute__((unused)) void MUI_DisposeObject(void *obj) { AROS_LC1NR(void, MUI_DisposeObject, AROS_LCA(void *, obj, A0), struct Library *, es_MUIMasterBase, 6, MUIMaster); }
+static __attribute__((unused)) int32_t MUI_RequestA(void *app, void *win, uint32_t flags, const void *title, const void *gadgets, const void *format, void *parms)
+{
+    return (int32_t)AROS_LC7(LONG, MUI_RequestA, AROS_LCA(void *, app, D0), AROS_LCA(void *, win, D1), AROS_LCA(ULONG, flags, D2), AROS_LCA(const void *, title, A0),
+        AROS_LCA(const void *, gadgets, A1), AROS_LCA(const void *, format, A2), AROS_LCA(void *, parms, A3), struct Library *, es_MUIMasterBase, 7, MUIMaster);
+}
+static __attribute__((unused)) int32_t MUI_Error(void) { return (int32_t)AROS_LC0(LONG, MUI_Error, struct Library *, es_MUIMasterBase, 11, MUIMaster); }
+static __attribute__((unused)) void *MUI_MakeObjectA(int32_t type, uintptr_t *parms)
+{ return (void *)AROS_LC2(APTR, MUI_MakeObjectA, AROS_LCA(LONG, type, D0), AROS_LCA(IPTR *, (IPTR *)parms, A0), struct Library *, es_MUIMasterBase, 20, MUIMaster); }
+#elif defined(__mc68000__)
+#define ES_MUI_CLOBBER "d1", "memory", "cc"
+static __attribute__((unused)) void *MUI_NewObjectA(const void *cls, void *tags)
+{
+    register void *a6 __asm("a6") = es_MUIMasterBase; register const void *a0 __asm("a0") = cls; register void *a1 __asm("a1") = tags; register void *d0 __asm("d0");
+    __asm volatile("jsr -30(%%a6)" : "=r"(d0), "+r"(a0), "+r"(a1) : "r"(a6) : ES_MUI_CLOBBER);
+    return d0;
+}
+static __attribute__((unused)) void MUI_DisposeObject(void *obj)
+{
+    register void *a6 __asm("a6") = es_MUIMasterBase; register void *a0 __asm("a0") = obj; register void *a1 __asm("a1"); register void *d0 __asm("d0");
+    __asm volatile("jsr -36(%%a6)" : "=r"(d0), "+r"(a0), "=r"(a1) : "r"(a6) : ES_MUI_CLOBBER);
+}
+static __attribute__((unused)) int32_t MUI_RequestA(void *app, void *win, uint32_t flags, const void *title, const void *gadgets, const void *format, void *parms)
+{
+    register void *a6 __asm("a6") = es_MUIMasterBase; register void *d0 __asm("d0") = app; register void *d1 __asm("d1") = win; register uint32_t d2 __asm("d2") = flags;
+    register const void *a0 __asm("a0") = title; register const void *a1 __asm("a1") = gadgets; register const void *a2 __asm("a2") = format; register void *a3 __asm("a3") = parms;
+    __asm volatile("jsr -42(%%a6)" : "+r"(d0), "+r"(d1), "+r"(a0), "+r"(a1) : "r"(a6), "r"(d2), "r"(a2), "r"(a3) : "memory", "cc");
+    return (int32_t)(intptr_t)d0;
+}
+static __attribute__((unused)) int32_t MUI_Error(void)
+{
+    register void *a6 __asm("a6") = es_MUIMasterBase; register int32_t d0 __asm("d0"); register void *a0 __asm("a0"); register void *a1 __asm("a1");
+    __asm volatile("jsr -66(%%a6)" : "=r"(d0), "=r"(a0), "=r"(a1) : "r"(a6) : ES_MUI_CLOBBER);
+    return d0;
+}
+static __attribute__((unused)) void *MUI_MakeObjectA(int32_t type, uintptr_t *parms)
+{
+    register void *a6 __asm("a6") = es_MUIMasterBase; register int32_t d0 __asm("d0") = type; register uintptr_t *a0 __asm("a0") = parms; register void *a1 __asm("a1");
+    __asm volatile("jsr -120(%%a6)" : "+r"(d0), "+r"(a0), "=r"(a1) : "r"(a6) : ES_MUI_CLOBBER);
+    return (void *)d0;
+}
+#else
+#include <es_muimaster_shim.h>
+#endif
+
+""";
+
     private bool UsesArgs => _natives.Contains("es_args_count") || _natives.Contains("es_args_get");
 
     private bool IsDefined(string symbol) =>
@@ -973,6 +1056,19 @@ internal sealed partial class CEmitter
                 }
                 foreach (var m in atExit)
                     if (!reachable.Contains(m.OriginalDefinition) && ClassUsed(m)) { Add(m); more = true; }
+                // An override in a library class runs when the base member is called on an object of that class, which no expression
+                // names (BoopsiObject.Create calls the virtual CreateAll, a MUI wrapper overrides it): reach the overrides of reached
+                // members in the classes that are constructed (a constructor of the class, or of a class derived from it, is reached).
+                foreach (var t in types)
+                {
+                    if (t.TypeKind != TypeKind.Class || !t.InstanceConstructors.Any(k => reachable.Contains(k.OriginalDefinition))) continue;
+                    foreach (var m in t.GetMembers().OfType<IMethodSymbol>())
+                    {
+                        if (!m.IsOverride || reachable.Contains(m.OriginalDefinition)) continue;
+                        for (var o = m.OverriddenMethod; o != null; o = o.OverriddenMethod)
+                            if (reachable.Contains(o.OriginalDefinition)) { Add(m); more = true; break; }
+                    }
+                }
                 if (!more) break;
             }
             if (work.Count == 0) continue;
@@ -3029,6 +3125,10 @@ internal sealed partial class CEmitter
             {
                 if (item is AssignmentExpressionSyntax { Left: IdentifierNameSyntax field } a && IsInitializable(Model(a).GetSymbolInfo(field).Symbol))
                     sets.Append($"{temp}->{MemberPath(type, Model(a).GetSymbolInfo(field).Symbol!.ContainingType, field.Identifier.Text)} = {Expr(a.Right, top: true)}; ");
+                else if (item is AssignmentExpressionSyntax { Left: IdentifierNameSyntax prop } pa && pa.IsKind(SyntaxKind.SimpleAssignmentExpression)
+                         && Model(pa).GetSymbolInfo(prop).Symbol is IPropertySymbol { IsStatic: false, IsIndexer: false, SetMethod: { } setter })
+                    // A property with a setter body (new Text { Frame = 3 }): its setter runs on the new object, in initializer order.
+                    sets.Append($"{InstanceCall(setter, temp, new[] { Expr(pa.Right, top: true) })}; ");
                 else
                     Unsupported(item, "object initializer element");
             }
@@ -3353,7 +3453,7 @@ internal sealed partial class CEmitter
         if (HasAttribute(m, "NativeAttribute")) _natives.Add(m.Name);
         var lib = GetAttribute(m, "AmigaLibAttribute");
         if (lib != null) UseBase(m.ContainingType);
-        if (lib != null)
+        if (lib != null && lib.ConstructorArguments[0].Value is not "muimaster")
             _headers.Add(lib.ConstructorArguments[0].Value is "alib" ? "clib/alib_protos.h" : $"proto/{lib.ConstructorArguments[0].Value}.h");
 
         var argList = inv.ArgumentList.Arguments.Select(a => Argument(a, m));

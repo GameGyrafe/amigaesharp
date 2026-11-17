@@ -96,6 +96,8 @@ public static class EsCompiler
         "Exec", "Intuition", "Graphics", "CyberGfx", "Utility", "TimerDevice", "Keymap", "Layout", "DosLib",
         "BoopsiObject", "BoopsiWindow", "BoopsiEvent", "BoopsiEventKind", "Hook", "HookFunc", "IntAttr", "BoolAttr", "StrAttr", "PtrAttr",
         "ObjAttr", "HookAttr", "Ga", "Pga", "Stringa", "Ica", "Ia", "Om",
+        "Mui", "MuiMaster", "MuiObject", "MuiApplication", "MuiWindow", "MuiGroup", "MuiText", "MuiLabel", "MuiButton", "MuiCheckMark",
+        "MuiString", "MuiCycle", "MuiSlider", "MuiGauge", "MuiRectangle", "MuiListview", "Muia", "MuiFrame",
     };
 
     private static IEnumerable<Diagnostic> AmigaOnlyHints(IEnumerable<Diagnostic> errors, string target)
