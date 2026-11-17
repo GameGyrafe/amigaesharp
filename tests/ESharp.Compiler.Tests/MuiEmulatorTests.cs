@@ -66,7 +66,29 @@ public class MuiEmulatorTests
         Assert.Contains("Assign LOCALE: MUI:Locale ADD", lines);
         Assert.Contains("Assign IMAGES: MUI:Images", lines);
         Assert.Contains("Assign ENV: RAM:Env", lines);
-        Assert.True(Array.IndexOf(lines.ToArray(), "Assign LIBS: DF0:Libs ADD") < Array.IndexOf(lines.ToArray(), "Assign LIBS: MUI:Libs ADD"));
+        // LIBS: replaces the boot's LIBS: (DH0:, where the program lies): a program named mui hid MUI 3.8's LIBS:mui/ classes.
+        Assert.Contains("Assign LIBS: DF0:Libs", lines);
+        Assert.DoesNotContain("Assign LIBS: DF0:Libs ADD", lines);
+        Assert.True(Array.IndexOf(lines.ToArray(), "Assign LIBS: DF0:Libs") < Array.IndexOf(lines.ToArray(), "Assign LIBS: MUI:Libs ADD"));
+        Assert.Equal("Stack 65536", lines[^1]);   // the icon's default stack: MUI 5 stops on a requester below 32000 bytes
+        Assert.Equal("Stack 40000", Mui.StartupLines(40000)[^1]);
+    }
+
+    [Fact]
+    public void TheStartupStackComesFromTheProgramsIcon()
+    {
+        var dir = Path.Combine(Path.GetTempPath(), "esharp-muistack-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(dir);
+        try
+        {
+            var exe = Path.Combine(dir, "prog");
+            Assert.Equal(IconStep.DefaultStackSize, FsUae.IconStackSize(exe));   // no icon
+            File.WriteAllBytes(exe + ".info", IconStep.Build(new IconStep.Settings(32768, Array.Empty<string>(), null, false)));
+            Assert.Equal(32768, FsUae.IconStackSize(exe));
+            File.WriteAllBytes(exe + ".info", new byte[] { 1, 2, 3 });
+            Assert.Equal(IconStep.DefaultStackSize, FsUae.IconStackSize(exe));   // not an icon
+        }
+        finally { Directory.Delete(dir, true); }
     }
 
     [Fact]

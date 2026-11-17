@@ -60,18 +60,29 @@ internal static class Mui
     /// from the Workbench disk's LIBS:, so the user's own Workbench disk (DF0:, read-only) supplies C: and LIBS:; ENV: goes to
     /// RAM: (MUI keeps its settings there). Then MUI's own drawers (the volume MUI:) are added: LIBS: (muimaster.library
     /// and the classes), LOCALE: and IMAGES:.
+    /// <para>
+    /// LIBS: is replaced, not added to: the boot volume has no Libs drawer, so the boot assigns LIBS: to DH0: itself, where the
+    /// program lies. MUI 3.8 opens its external classes as LIBS:mui/&lt;class&gt;, and a program named mui (samples/mui) made that
+    /// path a file: the search stopped there, Gauge.mui did not load and the window could not be made.
+    /// </para>
+    /// <para>
+    /// The last line gives the program the stack its icon asks for (<paramref name="stackSize"/>, EsStackSize), as a start from
+    /// Workbench would. The boot shell's 4096 bytes are below what MUI wants: MUI 5 opens a "raise the stack size" requester and
+    /// waits for a click.
+    /// </para>
     /// </summary>
-    public static IReadOnlyList<string> StartupLines() => new[]
+    public static IReadOnlyList<string> StartupLines(int stackSize = IconStep.DefaultStackSize) => new[]
     {
         "DF0:C/Assign C: DF0:C",
         "Makedir RAM:T",
         "Assign T: RAM:T",
-        "Assign LIBS: DF0:Libs ADD",
+        "Assign LIBS: DF0:Libs",
         "Makedir RAM:Env",
         "Assign ENV: RAM:Env",
         "Assign LIBS: MUI:Libs ADD",
         "Assign LOCALE: MUI:Locale ADD",
         "Assign IMAGES: MUI:Images",
+        $"Stack {stackSize}",
     };
 
     /// <summary>FS-UAE config lines: the MUI drawer read-only as the volume MUI:, the user's Workbench disk read-only as DF0:.</summary>
