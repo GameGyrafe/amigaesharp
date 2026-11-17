@@ -54,8 +54,8 @@ as assemblies (`host/` next to `esharp.dll`, and in the Sdk package).
 4. **Entry point and chip budget** checks (`[EntryPoint]`, `ChipBudget.cs`).
 5. **Lowering and emission** (`CEmitter`): generics are monomorphised, classes become C structs with vtables, lambdas that
    capture become stack or reference-counted heap closures, LINQ over arrays becomes fused loops, patterns become tests, and
-   `[AmigaLib]` calls become library calls per target (`jsr -N(a6)` on m68k, `proto/*.h` interface calls on the PowerPC and AROS
-   targets). `#line` directives keep errors and crash addresses mappable to C# lines (`esharp addr`).
+   `[AmigaLib]` calls become calls by name with `proto/<lib>.h` included, on every target (the m68k register call comes from
+   the toolchain's inline headers). `#line` directives keep errors and crash addresses mappable to C# lines (`esharp addr`).
 6. **C compiler**, normally inside a pinned Docker image (`--docker`), with the target's flags from `Targets.cs`.
 
 **Emitter gaps are reported as `ES0099`, never miscompiled.** If the emitter cannot translate something it says so; prefer adding
