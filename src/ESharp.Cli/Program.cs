@@ -53,7 +53,7 @@ Run options (build options also apply; run is m68k, os4 or sdl):
                     QEMU monitor, see below)
   --timeout <sec>   Headless time limit (default 120; AROS needs ~20 s to boot)
   --mui <3.8|5>     m68k (FS-UAE) only: mount MUI 3.8 or 5 from the per-user cache (or set ESHARP_MUI); get it first with
-                    tools/mui/fetch-mui.sh <3.8|5> (shareware, never shipped; tools/mui/README.md)
+                    bash <esharp folder>/mui/fetch-mui.sh <3.8|5> (tools/mui/ in a checkout; shareware, never shipped)
   --workbench <adf> With --mui: your own Workbench 3.x disk 2 (or ESHARP_WORKBENCH), mounted read-only as DF0: for C: and the
                     system libraries MUI opens (asl, commodities, icon, ...); never copied
   --kickstart <rom> Use a real Kickstart ROM instead of FS-UAE's built-in AROS replacement

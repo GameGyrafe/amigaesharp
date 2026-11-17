@@ -13,6 +13,16 @@ internal static class Mui
 {
     public const string FetchScript = "tools/mui/fetch-mui.sh";
 
+    /// <summary>
+    /// The fetch script to tell the user about: the copy shipped in the tool package (mui/ next to esharp.dll, which a checkout
+    /// build also has), else the repository path. Run with bash, so it does not depend on the executable bit surviving packing.
+    /// </summary>
+    public static string FetchCommand(string? baseDir = null)
+    {
+        var shipped = Path.Combine(baseDir ?? AppContext.BaseDirectory, "mui", "fetch-mui.sh");
+        return File.Exists(shipped) ? $"bash \"{shipped}\"" : FetchScript;
+    }
+
     /// <summary>Normalises a <c>--mui</c> value: "3.8" or "5" (also "5.0"); null for anything else.</summary>
     public static string? ParseVersion(string? text) => text?.Trim() switch
     {
@@ -40,7 +50,7 @@ internal static class Mui
     {
         var drawer = DrawerPath(version, cacheRoot);
         if (File.Exists(Path.Combine(drawer, "Libs", "muimaster.library"))) { error = null; return drawer; }
-        error = $"MUI {version} is not in the cache ({cacheRoot}). Download it once with: {FetchScript} {version}   (MUI is shareware: it is fetched per user and never shipped; see tools/mui/README.md)";
+        error = $"MUI {version} is not in the cache ({cacheRoot}). Download it once with: {FetchCommand()} {version}   (MUI is shareware: it is fetched per user and never shipped; the script and its README come with the esharp tool, mui folder)";
         return null;
     }
 

@@ -30,6 +30,8 @@
     <EmbeddedResource Include="..\..\tools\os4vm\estype.c" LogicalName="estype.c" />
     <!-- `esharp os4vm` runs the VM helper script from the tool's own folder (it finds estype.c next to it). -->
     <None Include="..\..\tools\os4vm\os4vm.py;..\..\tools\os4vm\estype.c;..\..\tools\os4vm\README.md" Link="os4vm\%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+    <!-- the MUI option tells the user to run this script when MUI is not cached, so it ships in the tool package (the MUI archive itself never does). -->
+    <None Include="..\..\tools\mui\fetch-mui.sh;..\..\tools\mui\README.md" Link="mui\%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
     <None Include="..\PackageReadme.md" Pack="true" PackagePath="README.md" />
   </ItemGroup>
 

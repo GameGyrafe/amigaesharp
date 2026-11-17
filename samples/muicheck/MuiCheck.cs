@@ -15,7 +15,8 @@ public static unsafe class Program
 #if AMIGA
         void* mui = Exec.OpenLibrary("muimaster.library", 0);
         if (mui == null) { Dos.PutStr("muimaster.library: not installed\n"); return; }
-        ushort* v = (ushort*)((byte*)mui + 20);                   // struct Library: lib_Version, lib_Revision
+        int off = sizeof(void*) == 8 ? 38 : 20;                       // struct Library: lib_Version, lib_Revision (64-bit pointers on AROS x86-64)
+        ushort* v = (ushort*)((byte*)mui + off);
         Dos.PutStr("muimaster.library ");
         Dos.PutInt(v[0]);
         Dos.PutStr(".");

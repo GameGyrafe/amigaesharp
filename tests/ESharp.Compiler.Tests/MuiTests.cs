@@ -42,7 +42,8 @@ public class MuiTests
         {
             var missing = Mui.Resolve("3.8", root, out var error);
             Assert.Null(missing);
-            Assert.Contains("fetch-mui.sh 3.8", error);
+            Assert.Contains("fetch-mui.sh", error);
+            Assert.Contains(" 3.8   (MUI is shareware", error);
 
             var libs = Path.Combine(Mui.DrawerPath("3.8", root), "Libs");
             Directory.CreateDirectory(libs);
@@ -96,6 +97,28 @@ public class MuiTests
             finally { File.Delete(adf); }
         }
         finally { Environment.SetEnvironmentVariable("ESHARP_WORKBENCH", prev); }
+    }
+
+    [Fact]
+    public void FetchCommandPrefersTheShippedScript()
+    {
+        var dir = Path.Combine(Path.GetTempPath(), "es-mui-" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            Assert.Equal(Mui.FetchScript, Mui.FetchCommand(dir));   // not shipped here: the repository path
+            Directory.CreateDirectory(Path.Combine(dir, "mui"));
+            var script = Path.Combine(dir, "mui", "fetch-mui.sh");
+            File.WriteAllText(script, "#!/bin/sh\n");
+            Assert.Equal("bash \"" + script + "\"", Mui.FetchCommand(dir));
+        }
+        finally { try { Directory.Delete(dir, true); } catch (IOException) { } }
+    }
+
+    [Fact]
+    public void ToolPackageShipsTheFetchScript()
+    {
+        var csproj = File.ReadAllText(FindRepoFile(Path.Combine("src", "ESharp.Cli", "ESharp.Cli.csproj")));
+        Assert.Contains("fetch-mui.sh", csproj);
     }
 
     [Fact]

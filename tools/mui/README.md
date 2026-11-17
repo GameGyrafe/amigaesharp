@@ -5,6 +5,7 @@ run on a real Kickstart 3.0/3.1 A1200:
 
 ```bash
 tools/mui/fetch-mui.sh 3.8        # or 5; once per user and version
+# installed tool: bash <folder of esharp.dll>/mui/fetch-mui.sh 3.8 (the package ships the script; esharp prints the exact command)
 esharp run samples/muicheck --docker <image> --headless --model A1200 --kickstart <rom> --mui 3.8 --workbench <Workbench disk 2 .adf>
 ```
 
