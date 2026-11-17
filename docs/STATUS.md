@@ -1374,9 +1374,11 @@ the sha), AROS's own `configure --target=linux-i386` and `make crosstools` then 
 (gcc 6.5.0, binutils 2.32, gmp 6.3.0, mpfr 4.2.2, mpc 1.4.1, isl 0.25: the AROS defaults for i386) are fetched first and checked by sha256.
 The final stage keeps `/opt/i386-aros` only: `i386-aros-gcc` 6.5.0 and the SDK in `/opt/i386-aros/sdk` (`--sysroot`). Image 1.3 GB. Build time
 on this host (32 cores, shared, 16 jobs), `docker build --no-cache`: 817 s in all, of which crosstools 580 s and the SDK 60 s. Too long and
-too big for a CI job, so it is built locally and not in CI. The SDK headers equal the hosted nightly's `Developer/include` (only generated-file
-comments with build paths differ). The nightly's own configure line passes `--with-aros-toolchain=yes`, which means a prebuilt toolchain; with
-it `make crosstools` builds nothing, so the image leaves it out.
+too big for a CI job, so it is built locally and not in CI. The SDK headers were compared with the hosted nightly's `Developer/include`: the
+18164 headers the SDK has are all in the nightly, and after dropping the lines with build paths only 3 differ (`proto/cardres.h`,
+`proto/ramdrive.h`, `proto/translator.h`: different generated forms); the nightly has 293 more, from contrib (AHI, ReAction classes,
+expat, freetype2 and others). E# includes none of these 296, so for the libraries E# uses the two match.
+The nightly's own configure line passes `--with-aros-toolchain=yes`, which means a prebuilt toolchain; with it `make crosstools` builds nothing, so the image leaves it out.
 
 **Target.** `aros-i386` defines `AMIGA`, `AROS`, `I386` (not `X86_64`), 32-bit pointers. The struct offsets are measured, not assumed:
 `tools/BindGen/layouts.sh` now measures three tables (AROS x86-64, AROS i386, m68k) and `Layout.g.cs` has an `#elif I386` table. 53 of the

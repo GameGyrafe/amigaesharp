@@ -3,7 +3,7 @@
 # tools/aros-hosted/aros-hosted.sh <sample> --docker esharp-aros-hosted   (docs: docker/aros-hosted/README.md)
 #
 #   docker build -t esharp-aros-hosted docker/aros-hosted && docker/aros-hosted/smoke-test.sh
-#   docker build --build-arg AROS_ARCH=i386 -t esharp-aros-hosted-i386 docker/aros-hosted && docker/aros-hosted/smoke-test.sh i386
+#   docker build --build-arg AROS_ARCH=i386 -t esharp-aros-hosted-i386 docker/aros-hosted && docker/aros-hosted/smoke-test.sh esharp-aros-hosted-i386
 #
 # AROS_ARCH picks the hosted build: x86_64 (default, the "aros" target) or i386 (the "aros-i386" target: a 32-bit Linux
 # program, so the image also gets the i386 C library and the X11/ALSA libraries it loads).

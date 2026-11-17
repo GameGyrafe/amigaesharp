@@ -29,7 +29,8 @@ i386, and the image's `AROS_HOSTED_ARCH` must agree. Without `--docker`, the scr
 - Base image: `debian:bookworm-slim` by digest.
 - Nightly, x86_64: `20261114`, sha256 `e05fecb5...4cb7`; i386: `20261116` (`AROS-20261116-linux-i386-system.tar.bz2`),
   sha256 `ffeb6e7b...dcca`, the nightly built from AROS commit `656d2825` that `docker/aros-i386` builds its toolchain from
-  (the SDK headers match that nightly's `Developer/include`). Build args `AROS_DATE` and `AROS_SHA256` override the pin of
+  (the SDK headers match that nightly's `Developer/include` for every library E# uses; 3 unused protos differ
+  and the nightly has 293 more contrib headers, see `docs/STATUS.md`). Build args `AROS_DATE` and `AROS_SHA256` override the pin of
   the chosen arch; the build fails if the sha256 differs.
   Another nightly: `--build-arg AROS_DATE=<yyyymmdd> --build-arg AROS_SHA256=<sha256 of its archive>`.
 - SourceForge rotates nightlies. To build from a local copy of `AROS-<date>-linux-<arch>-system.tar.bz2`, put it in a
