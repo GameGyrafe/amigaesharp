@@ -54,6 +54,9 @@ public enum IconType : byte { Disk = 1, Drawer = 2, Tool = 3, Project = 4, Garba
 /// field set to 8: found by trying it on AmigaOS 4.1, whose Workbench drops the whole icon when an uncompressed image is packed at
 /// fewer bits per pixel (3 for a 7-colour image) and shows it with 8. Readers that do not know the colour part stop after the classic
 /// data and ignore it. The palette-size field in FACE is the largest palette in bytes minus 1.</para>
+///
+/// <para><b>NewIcons part (Workbench 3.x with NewIcons).</b> A palette image kept in extra tool types after the program's own (see
+/// <see cref="ESharp.Assets.NewIcons"/>). <see cref="Read"/> takes them out of <see cref="ToolTypes"/> again.</para>
 /// </summary>
 public sealed class DiskObject
 {
@@ -73,6 +76,10 @@ public sealed class DiskObject
     public IconPicture? Classic { get; set; }
     /// <summary>The OS 3.5+ colour image (up to 256 colours), or null for a classic-only icon.</summary>
     public IconPicture? Colour { get; set; }
+    /// <summary>The NewIcons image (Workbench 3.x with NewIcons; see <see cref="ESharp.Assets.NewIcons"/>), written as tool types after <see cref="ToolTypes"/>, or null for none.</summary>
+    public IconPicture? NewIcons { get; set; }
+    /// <summary>The NewIcons selected image; null writes the normal one darkened.</summary>
+    public IconPicture? NewIconsSelected { get; set; }
 
     // Gadget flags: highlight by complementing the image, and "the render field is an image".
     private const ushort GadgetFlags = 0x0004;
@@ -93,6 +100,8 @@ public sealed class DiskObject
         if (Type is IconType.Drawer or IconType.Disk or IconType.Garbage)
             throw new NotSupportedException("E# writes tool and project icons only (no drawer record)");
         var c = Classic;
+        var toolTypes = new List<string>(ToolTypes);
+        if (NewIcons != null) toolTypes.AddRange(ESharp.Assets.NewIcons.Encode(NewIcons, NewIconsSelected));
         W16(Magic); W16(1);
         // Gadget: next gadget, left, top, width, height, flags, activation, type, render, select render, text, mutual exclude, special info, id, user data.
         W32(0); W16(0); W16(0); W16(c?.Width ?? 0); W16(c?.Height ?? 0);
@@ -100,7 +109,7 @@ public sealed class DiskObject
         W32(c != null ? 1 : 0); W32(0); W32(0); W32(0); W32(0); W16(0); W32(1);
         m.WriteByte((byte)Type); m.WriteByte(0);
         W32(DefaultTool != null ? 1 : 0);
-        W32(ToolTypes.Count > 0 ? 1 : 0);
+        W32(toolTypes.Count > 0 ? 1 : 0);
         W32(CurrentX); W32(CurrentY);
         W32(0);                                  // drawer data: none
         W32(ToolWindow != null ? 1 : 0);
@@ -123,10 +132,10 @@ public sealed class DiskObject
                 }
         }
         if (DefaultTool != null) Str(DefaultTool);
-        if (ToolTypes.Count > 0)
+        if (toolTypes.Count > 0)
         {
-            W32((ToolTypes.Count + 1) * 4);
-            foreach (var t in ToolTypes) Str(t);
+            W32((toolTypes.Count + 1) * 4);
+            foreach (var t in toolTypes) Str(t);
         }
         if (ToolWindow != null) Str(ToolWindow);
 
@@ -218,7 +227,11 @@ public sealed class DiskObject
         if (hasTypes)
         {
             var table = S32();
-            for (var i = 0; i < table / 4 - 1; i++) o.ToolTypes.Add(Str());
+            var all = new List<string>();
+            for (var i = 0; i < table / 4 - 1; i++) all.Add(Str());
+            var ni = ESharp.Assets.NewIcons.Decode(all, out var rest);
+            o.ToolTypes.AddRange(rest);
+            if (ni is { } images) { o.NewIcons = images.Normal; o.NewIconsSelected = images.Selected; }
         }
         if (window) o.ToolWindow = Str();
 
