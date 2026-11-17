@@ -7,8 +7,8 @@ using ESharp.Assets;
 if (args.Length != 1) { Console.Error.WriteLine("usage: PackageIcon <out.png>"); return 2; }
 
 const int Size = 256, Ss = 4, Bands = 8;
-const double Cx = 108, Cy = 106, R = 98;              // ball
-const double ShX = 134, ShY = 130, ShR = 96, ShSoft = 16; // shadow: offset down-right, soft edge
+const double Cx = 128, Cy = 128, R = 92;              // ball, centred on the canvas
+const double ShX = 140, ShY = 138, ShR = 90, ShSoft = 14; // shadow: offset down-right, soft edge, inside the canvas
 const double Tilt = 20 * Math.PI / 180, Spin = 12 * Math.PI / 180;
 var (lx, ly, lz) = Norm(-0.55, -0.65, 0.52);          // light from upper left, towards the viewer
 
@@ -33,7 +33,7 @@ for (var py = 0; py < Size; py++)
                 // shadow: grey, alpha falls off smoothly at the edge
                 var sd = Math.Sqrt((x - ShX) * (x - ShX) + (y - ShY) * (y - ShY));
                 var t = Math.Clamp((ShR + ShSoft / 2 - sd) / ShSoft, 0, 1);
-                if (t > 0) { a = 0.38 * t * t * (3 - 2 * t); r = g = b = 70; }
+                if (t > 0) { a = 0.32 * t * t * (3 - 2 * t); r = g = b = 70; }
 
                 var dx = (x - Cx) / R;
                 var dy = (y - Cy) / R;
