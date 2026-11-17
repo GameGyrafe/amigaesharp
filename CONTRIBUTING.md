@@ -1,7 +1,7 @@
 # Contributing to E#
 
 Thanks for your interest. E# compiles a restricted subset of C# to C and builds it into native Amiga code (68020+, with AROS as a second family). Everything useful starts with reading
-[README.md](README.md), [docs/PROJECT_CONTEXT.md](docs/PROJECT_CONTEXT.md) (design and roadmap) and [docs/STATUS.md](docs/STATUS.md) (what works, what is verified, what is not).
+[README.md](README.md), [docs/GUIDE.md](docs/GUIDE.md), [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md), [docs/PROJECT_CONTEXT.md](docs/PROJECT_CONTEXT.md) (design and roadmap) and [docs/STATUS.md](docs/STATUS.md) (what works, what is verified, what is not).
 Work is tracked in the [issues](https://github.com/GameGyrafe/amigaesharp/issues) (v1 tracker #6, v2 epic #5); issues labelled `good first issue` are a good place to start once some are marked.
 
 ## Ground rules
@@ -25,7 +25,7 @@ dotnet test                                              # unit tests, including
 dotnet run --project src/ESharp.Cli -- build samples/hello --emit-only
 ```
 
-Building for the Amiga and running in an emulator needs Docker (the toolchain images are pinned by digest) and FS-UAE; see the README. Update a pinned toolchain deliberately and re-run `docker/smoke-test.sh`.
+Building for the Amiga and running in an emulator needs Docker (the toolchain images are pinned by digest) and FS-UAE; see the [guide](docs/GUIDE.md#building). Update a pinned toolchain deliberately and re-run `docker/smoke-test.sh`.
 
 ## Pull requests
 

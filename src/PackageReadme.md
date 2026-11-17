@@ -29,7 +29,7 @@ esharp run --docker amigadev/crosstools:m68k-amigaos@sha256:32ec76dac03a642203f0
 Building for the Amiga needs Docker (or a cross compiler on PATH); running needs FS-UAE (and Xvfb for `--headless`).
 Use your own Kickstart ROM with `--kickstart <rom>`; otherwise FS-UAE's built-in AROS ROM replacement is used.
 
-Documentation, samples and the status of each target: https://github.com/GameGyrafe/amigaesharp
+Documentation, samples and the status of each target: https://github.com/GameGyrafe/amigaesharp (the guide is docs/GUIDE.md in the repository)
 
 ## Homage
 
