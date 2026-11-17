@@ -594,6 +594,12 @@ internal sealed partial class CEmitter
             result.AppendLine("    }");
             result.AppendLine("    return 0;");
             result.AppendLine("}");
+            result.AppendLine("static int es_tt_is_newicons_marker(const char *s)");
+            result.AppendLine("{");
+            result.AppendLine("    const char *m = \"*** DON'T EDIT THE FOLLOWING LINES!! ***\";");
+            result.AppendLine("    while (*m != 0 && *s == *m) { s++; m++; }");
+            result.AppendLine("    return *m == 0 && *s == 0;");
+            result.AppendLine("}");
             // The words are copied into a static buffer (quotes around a value removed, as a Shell does), so the DiskObject can be freed at once.
             result.AppendLine("static int es_wb_n; static unsigned es_wb_used;");
             result.AppendLine("static int es_wb_add(const char *src)   /* 0 when full */");
@@ -616,8 +622,15 @@ internal sealed partial class CEmitter
             result.AppendLine("{");
             result.AppendLine("    es_wb_n = 0; es_wb_used = 0;");
             result.AppendLine("    es_wb_add(name != NULL ? name : \"\");   /* argument 0 is the program name */");
+            // A NewIcons image (issue #101) is a marker tool type and then IM1=/IM2= lines of picture data: none of it is an argument.
+            result.AppendLine("    int ni = 0;   /* after the NewIcons marker */");
             result.AppendLine("    for (; tt != NULL && *tt != NULL; tt++)");
-            result.AppendLine("        if ((*tt)[0] != 0 && (*tt)[0] != '(' && !es_tt_is_workbench(*tt) && !es_wb_add(*tt)) break;");
+            result.AppendLine("    {");
+            result.AppendLine("        const char *s = *tt;");
+            result.AppendLine("        if (s[0] == '*' && es_tt_is_newicons_marker(s)) { ni = 1; continue; }");
+            result.AppendLine("        if (ni && s[0] == 'I' && s[1] == 'M' && (s[2] == '1' || s[2] == '2') && s[3] == '=') continue;");
+            result.AppendLine("        if (s[0] != 0 && s[0] != '(' && !es_tt_is_workbench(s) && !es_wb_add(s)) break;");
+            result.AppendLine("    }");
             result.AppendLine("    es_wb_args[es_wb_n] = NULL;");
             result.AppendLine("    es_argc = es_wb_n;");
             result.AppendLine("    es_argv = es_wb_args;");

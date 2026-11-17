@@ -1288,9 +1288,83 @@ Verified:
   through the QEMU monitor, screendumps looked at) and the window shows `arguments 2, SEED 42, AUTO yes`; re-run after the review fixes with the same result. What the first try taught: OS4's Workbench dropped the whole icon when the colour image was packed at 3 bits per pixel with Depth 3; one byte per pixel with the depth field 8 is accepted (and the FACE palette field is the largest palette in bytes minus 1).
   The stack size on OS4 was not read back (the sample's probe is m68k only).
 - Built with the reworked C (static buffer, release code, `.info` written each time): `samples/wbstart` for m68k, os4 and aros; `samples/mainargs` for morphos and aros. `samples/wbstart` for morphos stops at the same gadtools pointer-type errors as `samples/gui` (Gui is not ported to morphos); none of its errors mention the icon or Workbench-start code.
-- Not verified: MorphOS and AROS Workbench start (the C compiles; nothing was run there: hosted AROS has no Workbench in the harness), real hardware, Workbench 3.1 showing the
+- Not verified: MorphOS and AROS Workbench start (the C compiles; nothing was run there: hosted AROS has no Workbench in the harness; issue #101 below adds Wanderer to the harness), real hardware, Workbench 3.1 showing the
   colour image (it reads the classic one only; GlowIcons/OS 3.5+ were not available), OS 3.5/3.9, a stack size larger than the Workbench default taking effect on OS4, a drawer
   icon for a program folder, how the colour image looks on MorphOS/AROS.
+
+### NewIcons image; the icon on AROS and OS4 (issue #101)
+
+Every E# icon now also carries a **NewIcons** image (NewIcons is a freeware add-on that gives Workbench 3.0/3.1 colour icons): after the
+program's own tool types (`EsToolTypes`) come the marker tool type `*** DON'T EDIT THE FOLLOWING LINES!! ***`, the `IM1=` lines (normal image)
+and the `IM2=` lines (selected image: the same pixels at two thirds brightness). The classic image and the OS 3.5 `FORM ICON` are written as
+before. Our own encoder and decoder (`src/ESharp.Assets/NewIcons.cs`), written from the format facts (described in the class comment), with
+AROS's icon.library NewIcons reader as the reference for the exact encoding (no code or comment text taken): a 5-character header (transparency,
+width and height + 0x21, colour count as two 6-bit digits), the palette as RGB bytes, then the pixels at just enough bits per pixel, all as 7-bit
+groups in printable characters (0x20-0x6F, 0xA1-0xD0) with 0xD1-0xFF as runs of zero groups. A reader drops the bits left at a line end, so each
+line holds a whole number of values and its padding is less than one value. E#'s own limits: lines of at most 127 characters, pictures up to
+93 x 93 (a larger PNG gets no NewIcons image), at most 32 colours (the default art has 7; a PNG is reduced again with the same colour reduction
+and unused entries dropped). The default icon is 3570 bytes with 15 NewIcons lines (was about 2 KB). `EsNewIcons` `false` in the csproj leaves
+the lines out; `DiskObject.Read` takes them out of `ToolTypes` again (into `NewIcons` / `NewIconsSelected`).
+
+**Hardware pack floppy:** with the NewIcons lines the pack no longer fitted on one floppy (`mkadf.py: disk full`), so `tools/hwpack/build.sh`
+now writes `hwtest.adf` from a copy whose icons went through `tools/hwpack/stripni.py` (removes the marker and the IM lines, standard library
+only; the result is byte-identical to the icon written with `EsNewIcons` false, checked by a unit test). The pack drawer keeps the full icons.
+Re-run (`--adf-only --boot-wb <wb>`, 38 programs, 39 icons): `hwtest.adf` 865 KB used, 14 KB free; `hwtest-boot.adf` (no icons) 853 KB used,
+26 KB free.
+
+**Args on a Workbench start** skips the marker and every `IM1=`/`IM2=` tool type after it (an `IM1=...` before the marker is the program's
+own and is kept); AROS's icon.library, which turns a NewIcons-only icon's marker into an empty tool type and removes the IM lines, gives an
+empty word, skipped as before. So the program sees only its real tool types on every OS.
+
+**Hosted AROS harness:** `tools/aros-hosted/aros-hosted.sh` has two new options: `--files <dir>` copies a folder into a drawer `SYS:ESTest`
+(with a drawer icon taken from the copied AROS tree, so Wanderer shows it), and `--wanderer` starts no program from S:Startup-Sequence:
+the program and its `.info` go into `SYS:ESTest`, AROS boots on to Wanderer, and `--input` / `--shot` run after `--wait` seconds (default 25).
+`xinput.py` gained `dbl x,y` (double-click) and `sleep s`.
+
+What each system shows (default E# icon, 48 x 32):
+
+| System | Image shown | Tool types the program gets |
+|---|---|---|
+| Workbench 3.1 (no NewIcons) | classic 4-colour image | `SEED=42`, `AUTO` (NewIcons lines skipped by E#) |
+| Workbench 3.x with NewIcons | NewIcons image (expected; not verified) | the same |
+| AmigaOS 4.1 | colour image (FORM ICON); NewIcons-only icon: colour image too | `SEED=42`, `AUTO` |
+| AROS (Wanderer) | colour image (FORM ICON); NewIcons-only icon: colour image from the NewIcons lines | not verified (see below) |
+
+Verified:
+- `dotnet test`: 588 passed, 0 failed, 2 skipped (590). New `NewIconsTests` (13, with `stripni.py` run through python3 when it is there): the default icon written by `IconStep` read back by an independent decoder in the test
+  (it walks the characters the way icon.library readers do, so a padding that would make an extra value fails) for both images, pixels and
+  palette; random pictures (1 x 1 to 93 x 93, 2 to 32 colours, transparent colour 0, 2, 3 or none) round trip; every NewIcons line at most 127
+  characters, starting `IM1=`/`IM2=`, with no zero byte and only the allowed characters; the size and colour limits refused; a 64 x 64 PNG
+  with more than 32 colours reduced to at most 32 with transparency kept; `EsNewIcons` false and a bad value; Args on a Workbench start
+  (generated C built and run with the host gcc): the real lines of the default icon after `SEED=42`, `IM1=mine`, `AUTO` give exactly those 3
+  words, and the AROS form (an empty marker) gives `SEED=42` alone.
+- A1200, Kickstart 3.1 (40.069), Workbench 3.1 disk 2 in DF0, FS-UAE 3.2.35, `samples/wbstart` (m68k) with its new icon in a directory hard
+  disk: the DH0 window shows the E# icon (classic image), a double-click starts it and the window shows `arguments 2, SEED 42, AUTO yes,
+  stack 32768` (screenshots looked at; scripted mouse through XTEST).
+- AmigaOS 4.1 (QEMU pegasos2): `samples/wbstart` (os4) and its icon on a CD `ESTEST`: the window shows the colour E# icon, a double-click
+  starts it, `arguments 2, SEED 42, AUTO yes` (screendumps looked at). A second icon on the same CD written with only the NewIcons image
+  (FORM ICON left out) also shows the colour E# plate, and started from it the program gets `arguments 2, SEED 42, AUTO yes`.
+- Hosted AROS x86-64 (image `esharp-aros-hosted`, nightly 20261114, icon.library 44.11): a throwaway C probe built with the toolchain's
+  `x86_64-aros-gcc` (not committed) calls `GetDiskObject` and `GetIconTagList` and `IconControl` on three icons of `samples/wbstart`:
+  (a) as built (FORM ICON and NewIcons): colour image 48 x 32, palette 7, transparent colour 0, selected image present, first colours
+  000000, 0E1C46, 3B72DC and a pixel checksum equal to E#'s own picture; the tool types are all 17 (AROS leaves the NewIcons lines in place
+  when the icon has a colour image). (b) NewIcons only: the same width, height, palette 7, colours and checksum, decoded by AROS from our
+  NewIcons lines, frameless (as AROS marks NewIcons), tool types `SEED=42`, `AUTO`, `` (3). (c) FORM ICON only (`EsNewIcons` false): the same image,
+  tool types 2. Both API calls agree.
+- Wanderer (`aros-hosted.sh wbstart --docker esharp-aros-hosted --wanderer`, scripted double-clicks on System, the ESTest drawer):
+  the drawer shows the colour E# plate for the icon as built and for the NewIcons-only icon (screenshots looked at). AROS's own Calculator
+  started from an E# icon (its program renamed next to our `.info`) opens normally.
+
+Not verified / found:
+- **A program built with the toolchain image's AROS compiler crashes when Wanderer starts it** (exec `RemHead`, address error, in the
+  program's task before any E# code matters): `samples/wbstart`, an E# program whose `Main` only calls `Dos.Delay`, the same with the
+  Workbench argument code taken out of the C, and a plain C `main` that calls `Delay` all crash; the same plain C program run from the
+  Shell works, and AROS's own Calculator started from Wanderer works, also with an E# icon. So the C startup of the `x86_64-aros-gcc`
+  toolchain (amigadev/crosstools) does not handle a Workbench start on this nightly; not caused by the icon and not fixed here.
+  The Workbench-start `Args` path is therefore not verified on AROS.
+- Workbench 3.x with NewIcons installed (the colour image on 3.1): not verified. NewIcons was not fetched (no per-user fetch script was
+  added; its archive terms were not checked).
+- A PNG icon's NewIcons image on a real system, MorphOS, OS 3.5/3.9, real hardware.
 
 ## AROS i386 (`--target aros-i386`, issue #4)
 

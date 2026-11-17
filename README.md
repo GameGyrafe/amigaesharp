@@ -87,10 +87,11 @@ replacement, which runs most samples but is not the tested target; the test matr
 Use a ROM you own, keep it outside the repository and never commit it.
 
 **Workbench icon.** An Amiga build (`m68k`, `os4`, `morphos`, `aros`, `aros-i386`) also writes `<name>.info` next to the program: a Tool icon
-(classic image for every Amiga OS plus the colour image for OS 3.5 and later) so the program shows in a Workbench window and
+(classic image for every Amiga OS, the colour image for OS 3.5 and later, OS 4, MorphOS and AROS, and a NewIcons image in the
+tool types for Workbench 3.0/3.1 with NewIcons installed) so the program shows in a Workbench window and
 starts by double-click. Properties in the project's csproj set it: `EsStackSize` (bytes, default 65536), `EsToolTypes`
-(`SEED=42;AUTO`; `Args` reads them on a Workbench start) and `EsIcon` (a PNG instead of the default E# picture, icon-sized, 32 to 64 pixels, up to 256 x 256 is accepted but huge on Workbench 3.1;
-`none` writes no icon). Only literal values are read (no `$(...)`, `Condition` or `Directory.Build.props`). Copy the `.info` together with the program.
+(`SEED=42;AUTO`; `Args` reads them on a Workbench start, without the NewIcons lines) and `EsIcon` (a PNG instead of the default E# picture, icon-sized, 32 to 64 pixels, up to 256 x 256 is accepted but huge on Workbench 3.1;
+`none` writes no icon), `EsNewIcons` (`false` leaves the NewIcons image out; a PNG gets it only up to 93 x 93, at most 32 colours). Only literal values are read (no `$(...)`, `Condition` or `Directory.Build.props`). Copy the `.info` together with the program.
 
 `esharp new` writes a csproj that references **AmigaESharp.Sdk** (the runtime, the platform contracts with their host
 fakes, and the subset analyzer) at the tool's own version. The installed tool needs no checkout for `new`, `build`,

@@ -66,7 +66,11 @@ echo "$samples Summary" > "$out/samples.txt"
 git rev-parse --short HEAD > "$out/BUILD" 2>/dev/null || echo unknown > "$out/BUILD"
 # The floppy image(s). mkadf.py is our own writer (python3 standard library only); it stops with "disk full" if the pack does not fit.
 adf="${out%/}.adf"
-python3 -I "$here/mkadf.py" create "$out" "$adf" --name HWTEST --protect 'RunAll=srwed' --protect 'RunOne=srwed' \
+# The icons on the floppy go without their NewIcons image (issue #101): with it they need about 55 KB more than the disk has free.
+# The pack drawer keeps the full icons.
+adfdir="$(mktemp -d)"; trap 'rm -rf "$adfdir"' EXIT
+cp -r "$out"/. "$adfdir"/; python3 -I "$here/stripni.py" "$adfdir"/*.info
+python3 -I "$here/mkadf.py" create "$adfdir" "$adf" --name HWTEST --protect 'RunAll=srwed' --protect 'RunOne=srwed' \
   || { echo "The pack does not fit on one 880 KB floppy. Drop the biggest programs (cards, rummy, ...) from 'samples' above and from tools/hwpack/RunAll." >&2; exit 1; }
 if [ -n "$bootwb" ]; then
   bootadf="${out%/}-boot.adf"
@@ -83,7 +87,7 @@ if [ -n "$bootwb" ]; then
     from+=(--from-adf "$bootwb:$f"); done
   # The bootable image has about 108 KB free without icons and the icons (37 files of 2 KB, 5 blocks each) need about 120 KB, so it
   # is written from a copy of the pack without the .info files; the one-disk pack above and the pack drawer keep them.
-  noicons="$(mktemp -d)"; trap 'rm -rf "$noicons"' EXIT
+  noicons="$(mktemp -d)"; trap 'rm -rf "$noicons" "$adfdir"' EXIT
   cp -r "$out"/. "$noicons"/; rm -f "$noicons"/*.info
   python3 -I "$here/mkadf.py" create "$noicons" "$bootadf" --name HWTEST --bootblock-from "$bootwb" --protect 'RunAll=srwed' --protect 'RunOne=srwed' \
     --protect 'S/Startup-Sequence=srwed' "${from[@]}" --file S/Startup-Sequence="$here/boot-startup" \

@@ -21,6 +21,8 @@ tools/aros-hosted/aros-hosted.sh cards --docker esharp-aros-hosted --shot shot.p
 read-only, copies the image's pristine AROS tree for each run (S:Startup-Sequence is never patched in place) and prints
 the program's output. `--arch i386` runs `obj/aros-i386/<sample>`; without `--arch` an image name containing `i386` means
 i386, and the image's `AROS_HOSTED_ARCH` must agree. Without `--docker`, the script still works on an extracted archive (`AROS_HOSTED=<dir>`).
+`--files <dir>` copies a folder into a drawer `SYS:ESTest`; `--wanderer` starts no program at boot but puts it and its `.info` into
+`SYS:ESTest` and boots on to Wanderer, then runs `--input` (`click`, `dbl`, `sleep`, `key`) and `--shot` after `--wait` seconds (issue #101).
 
 ## Pins
 

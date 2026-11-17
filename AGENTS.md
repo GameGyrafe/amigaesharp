@@ -11,7 +11,7 @@ you have not actually run.
 ```bash
 dotnet test                                     # unit tests, incl. generated C built and run with host gcc
 dotnet run --project src/ESharp.Cli -- build samples/hello --emit-only
-dotnet run --project src/ESharp.Cli -- build samples/hello --target m68k --docker <image>   # also writes obj/m68k/hello.info (Workbench Tool icon; csproj properties EsStackSize, EsToolTypes, EsIcon; Amiga targets only, not --emit-only; src/ESharp.Assets/Icon*.cs, src/ESharp.Cli/IconStep.cs)
+dotnet run --project src/ESharp.Cli -- build samples/hello --target m68k --docker <image>   # also writes obj/m68k/hello.info (Workbench Tool icon with a NewIcons image in the tool types; csproj properties EsStackSize, EsToolTypes, EsIcon, EsNewIcons; Amiga targets only, not --emit-only; src/ESharp.Assets/Icon*.cs and NewIcons.cs, src/ESharp.Cli/IconStep.cs)
 dotnet run --project src/ESharp.Cli -- build samples/hello --target m68k --docker <image>   # os4, morphos too
 dotnet run --project src/ESharp.Cli -- run samples/hello --docker <image> --headless        # m68k in FS-UAE
 dotnet run --project src/ESharp.Cli -- assets samples/screen                                # PNG -> Assets.g.cs   # also automatic in build/run when stale (mtime); --force rebuilds
@@ -25,6 +25,7 @@ dotnet run --project src/ESharp.Cli -- run samples/inherit --docker <image> --he
 dotnet run --project src/ESharp.Cli -- build samples/linq --target aros --docker amigadev/crosstools@sha256:9c4e978301da6b6584d68d4014caa1fa9e2689529e79e71f7190d40d1cb62e50   # AROS x86-64: builds; the pure samples run on hosted AROS (see docs/STATUS.md)
 docker build -t esharp-aros-hosted docker/aros-hosted && docker/aros-hosted/smoke-test.sh   # hosted AROS x86-64 nightly (pinned by date and sha256) + Xvfb in an image; --build-context archive=<folder> builds from a local archive (docker/aros-hosted/README.md)
 tools/aros-hosted/aros-hosted.sh cards --docker esharp-aros-hosted --shot shot.png --input "click 400,300"   # same, in the image: no AROS tree on the host, a fresh copy of the tree per run (needs a --target aros build)
+tools/aros-hosted/aros-hosted.sh wbstart --docker esharp-aros-hosted --wanderer --wait 30 --input "dbl 45,135;sleep 5;dbl 368,150;sleep 5" --shot shot.png   # boot on to Wanderer with the program and its .info in a drawer SYS:ESTest (System, then ESTest opened by double-click); --files <dir> adds a folder to that drawer (also without --wanderer); programs from the toolchain crash when Wanderer starts them (docs/STATUS.md, issue #101)
 AROS_HOSTED=<extracted hosted AROS dir> tools/aros-hosted/aros-hosted.sh cards --shot shot.png --input "click 400,300"   # run a --target aros sample on hosted AROS under Xvfb (needs the nightly archive; re-run on the 20261106 nightly: cards passes with a screenshot and a scripted click; the 20261104 nightly has been rotated out)
 docker build -t esharp-aros-i386 docker/aros-i386 && docker/aros-i386/smoke-test.sh   # AROS i386 toolchain: i386-aros-gcc 6.5.0 + SDK built from the AROS sources (pinned commit, ~14 min with 16 jobs, 1.3 GB; local only, not in CI; docker/aros-i386/README.md)
 dotnet run --project src/ESharp.Cli -- build samples/cards --target aros-i386 --docker esharp-aros-i386   # AROS i386 (32-bit pointers, I386 symbol, its own Layout.g.cs table)

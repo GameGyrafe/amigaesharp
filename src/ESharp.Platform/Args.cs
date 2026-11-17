@@ -4,7 +4,7 @@ namespace ESharp.Platform;
 /// The program's command-line arguments, without the program name: <c>Game SEED 42 AUTO</c> from a Shell gives Count 3. They are the
 /// C <c>argv</c> words (the startup code splits the line at spaces and keeps "quoted text" together). A program started from
 /// Workbench gets its icon's tool types instead (<c>SEED=42</c>, <c>AUTO</c>; a value in quotes loses them as in a Shell; an entry in parentheses is switched
-/// off and skipped, as are empty ones and Workbench's own TOOLPRI, STARTPRI, DONOTWAIT and TOOLWINDOW (WINDOW and the like are the program's own); at most 64 words and about 2 KB in all, the rest is dropped). Matching of names is ASCII case-insensitive, as AmigaDOS does.
+/// off and skipped, as are empty ones, Workbench's own TOOLPRI, STARTPRI, DONOTWAIT and TOOLWINDOW (WINDOW and the like are the program's own) and the NewIcons image lines (the marker and the IM1=/IM2= lines after it); at most 64 words and about 2 KB in all, the rest is dropped). Matching of names is ASCII case-insensitive, as AmigaDOS does.
 /// <c>esharp run --args "SEED 42"</c> passes a line to the program in FS-UAE, on SDL and in the os4 VM; on the dotnet host Args is the real command line
 /// (<c>HostSet</c> overrides it for tests).
 /// </summary>
