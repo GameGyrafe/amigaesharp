@@ -1,11 +1,15 @@
 #!/bin/bash
-# Run an E# sample (built with --target aros) on the hosted AROS x86-64 build, headless under Xvfb.
+# Run an E# sample (built with --target aros or --target aros-i386) on a hosted AROS build, headless under Xvfb.
 #
 #   AROS_HOSTED=<dir of the extracted AROS-*-linux-x86_64-system archive> \
-#   tools/aros-hosted/aros-hosted.sh <sample> [--shot out.png] [--wait N] [--log] [--input "click 400,300;key 9"] [--args "WAIT"]
+#   tools/aros-hosted/aros-hosted.sh <sample> [--arch x86_64|i386] [--shot out.png] [--wait N] [--log] [--input "click 400,300;key 9"] [--args "WAIT"]
 #
 # Or, with no local AROS tree, inside the esharp-aros-hosted image (docker/aros-hosted/README.md): add --docker <image>.
 # Every run then copies the image's pristine tree, so nothing is patched in place. Same options.
+#
+# --arch picks the build and the program: x86_64 (default) runs samples/<sample>/obj/aros/<sample>, i386 runs
+# obj/aros-i386/<sample> (hosted linux-i386 AROS, a 32-bit Linux program). With --docker and no --arch, an image whose name
+# contains i386 (esharp-aros-hosted-i386) means i386. Inside an image, its AROS_HOSTED_ARCH must match.
 #
 # Prints the program's output. With --shot, waits for the program to print SHOT, then saves a
 # screenshot of the X root. --input is a script for xinput.py (click x,y / key keycode) run after SHOT.
@@ -14,14 +18,22 @@
 set -u
 here=$(cd "$(dirname "$0")" && pwd); root=$(cd "$here/../.." && pwd)
 s=${1:?sample name}; shift
-shot=""; wait=2; input=""; log=0; image=""; pargs=""
+shot=""; wait=2; input=""; log=0; image=""; pargs=""; arch=""
 while [ $# -gt 0 ]; do case $1 in
   --shot) shot=$2; shift 2;; --wait) wait=$2; shift 2;; --input) input=$2; shift 2;; --log) log=1; shift;;
-  --docker) image=$2; shift 2;; --args) pargs=$2; shift 2;; *) echo "bad arg $1"; exit 2;; esac; done
+  --docker) image=$2; shift 2;; --args) pargs=$2; shift 2;; --arch) arch=$2; shift 2;; *) echo "bad arg $1"; exit 2;; esac; done
+if [ -z "$arch" ]; then
+  if [ -n "$image" ]; then case $image in *i386*) arch=i386;; *) arch=x86_64;; esac
+  else arch=${AROS_HOSTED_ARCH:-x86_64}; fi
+fi
+case $arch in x86_64) target=aros;; i386) target=aros-i386;; *) echo "--arch is x86_64 or i386, not $arch"; exit 2;; esac
+if [ -z "$image" ] && [ -n "${AROS_HOSTED_ARCH:-}" ] && [ "$AROS_HOSTED_ARCH" != "$arch" ]; then
+  echo "this image runs hosted AROS $AROS_HOSTED_ARCH, not $arch (use the esharp-aros-hosted image built with AROS_ARCH=$arch)"; exit 2
+fi
 if [ -n "$image" ]; then
   # Re-run this script in the image: the repo is mounted read-only, screenshots go to a mounted folder.
-  [ -f "$root/samples/$s/obj/aros/$s" ] || { echo "build it first: esharp build samples/$s --target aros --docker <image>"; exit 1; }
-  args=("$s" --wait "$wait"); mounts=(-v "$root:/repo:ro")
+  [ -f "$root/samples/$s/obj/$target/$s" ] || { echo "build it first: esharp build samples/$s --target $target --docker <image>"; exit 1; }
+  args=("$s" --arch "$arch" --wait "$wait"); mounts=(-v "$root:/repo:ro")
   [ -n "$input" ] && args+=(--input "$input"); [ "$log" = 1 ] && args+=(--log); [ -n "$pargs" ] && args+=(--args "$pargs")
   if [ -n "$shot" ]; then
     od=$(cd "$(dirname "$shot")" && pwd); mounts+=(-v "$od:/out"); args+=(--shot "/out/$(basename "$shot")")
@@ -34,7 +46,7 @@ if [ -n "${AROS_HOSTED_COPY:-}" ]; then
 else
   A=${AROS_HOSTED:?set AROS_HOSTED to the extracted hosted AROS directory (or pass --docker <image>)}
 fi
-bin="$root/samples/$s/obj/aros/$s"; [ -f "$bin" ] || { echo "build it first: esharp build samples/$s --target aros --docker <image>"; exit 1; }
+bin="$root/samples/$s/obj/$target/$s"; [ -f "$bin" ] || { echo "build it first: esharp build samples/$s --target $target --docker <image>"; exit 1; }
 cd "$A" || exit 1
 cp "$bin" "./$s"; chmod +x "$s"
 python3 -I - "$s" "$pargs" <<'P'

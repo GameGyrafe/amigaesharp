@@ -186,8 +186,6 @@ static inline __attribute__((unused)) void CloseWindow(void *w) { printf(""[clos
 static inline __attribute__((unused)) void *GetMsg(void *p) { (void)p; return NULL; }
 static inline __attribute__((unused)) void *WaitPort(void *p) { (void)p; printf(""[WaitPort would hang]\n""); exit(3); }
 static inline __attribute__((unused)) void ReplyMsg(void *m) { (void)m; }
-static inline __attribute__((unused)) void *Output(void) { return NULL; }
-static inline __attribute__((unused)) int32_t Flush(void *f) { (void)f; fflush(stdout); return 1; }
 ";
 
     private const string UtilityShim = @"#pragma once
@@ -297,6 +295,7 @@ Dos.PutStr($""{Heap.LiveClosures()}\n"");";
     [Theory]
     [InlineData("m68k")]
     [InlineData("aros")]
+    [InlineData("aros-i386")]
     [InlineData("os4")]
     [InlineData("morphos")]
     public void Boopsi_sample_compiles_for_every_amiga_target(string target)

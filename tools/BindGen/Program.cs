@@ -16,7 +16,7 @@ using System.Text;
 //   bindgen facts <sdk-include-or-fd-dir> <lib>                         list name, vector, first version
 //   bindgen offsets <spec> <target> --docker <image> | --cc <compiler> [--cflags "..."]
 //                                   measure struct offsets with the target's C compiler
-//   bindgen layout <aros-offsets.txt> <m68k-offsets.txt> [out.cs]       write Layout.g.cs from two measured lists
+//   bindgen layout <aros-offsets.txt> <aros-i386-offsets.txt> <m68k-offsets.txt> [out.cs]   write Layout.g.cs from three measured lists
 //   bindgen compare <sdk-include-dir> <fd-dir> <lib...>                 where the AROS headers and the classic fd files disagree
 //
 // <fd-dir> is ndk/lib/fd of the m68k toolchain; --include is an include dir with clib/<lib>_protos.h (the classic
@@ -34,7 +34,7 @@ internal static class Cli
     {
         if (args.Length >= 3 && args[0] == "offsets") return Offsets.Run(args.Skip(1).ToArray());
         if (args.Length >= 4 && args[0] == "compare") return Compare(args[1], args[2], args.Skip(3).ToArray());
-        if (args.Length >= 3 && args[0] == "layout") return Layout(args.Skip(1).ToArray());
+        if (args.Length >= 4 && args[0] == "layout") return Layout(args.Skip(1).ToArray());
         if (args.Length < 3) return Usage();
         var (pos, opt) = Options(args.Skip(1).ToArray());
         if (pos.Count < 2) return Usage();
@@ -137,8 +137,9 @@ internal static class Cli
 
     private static int Layout(string[] args)
     {
-        var text = LayoutWriter.Write(LayoutWriter.ParseMeasured(File.ReadAllText(args[0])), LayoutWriter.ParseMeasured(File.ReadAllText(args[1])));
-        if (args.Length > 2) File.WriteAllText(args[2], text); else Console.Write(text);
+        var text = LayoutWriter.Write(LayoutWriter.ParseMeasured(File.ReadAllText(args[0])), LayoutWriter.ParseMeasured(File.ReadAllText(args[1])),
+            LayoutWriter.ParseMeasured(File.ReadAllText(args[2])));
+        if (args.Length > 3) File.WriteAllText(args[3], text); else Console.Write(text);
         return 0;
     }
 

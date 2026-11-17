@@ -34,10 +34,11 @@ Usage:
   esharp --version                  Print the version
 
 Build options:
-  --target <name>   m68k (default), os4, morphos, aros or sdl (desktop, SDL 3)
+  --target <name>   m68k (default), os4, morphos, aros, aros-i386 or sdl (desktop, SDL 3)
   -o <dir>          Output directory (default: obj next to the sources)
   --emit-only       Stop after writing the C file
-  --docker [image]  Run the C compiler inside the toolchain image (default: esharp-amiga-toolchain; esharp-sdl for sdl)
+  --docker [image]  Run the C compiler inside the toolchain image (default: esharp-amiga-toolchain; esharp-sdl for sdl,
+                    esharp-aros-i386 for aros-i386)
   --cc <compiler>   Override the target's C compiler
   --cflags <flags>  Override the target's C compiler flags
   --allow-float     Permit float/double
@@ -81,7 +82,7 @@ Test options (esharp test; a program prints ""ok NAME"" / ""FAIL NAME"" lines):
   Exit code is non-zero on any FAIL, crash, build error or host/Amiga difference.
 
 Targets:
-" + string.Join("\n", Targets.All.Select(t => $"  {t.Name,-9} {t.Description}")) + "\n";
+" + string.Join("\n", Targets.All.Select(t => $"  {t.Name,-10} {t.Description}")) + "\n";
 
     private static int Main(string[] args)
     {
@@ -475,7 +476,7 @@ Targets:
                 proc.WaitForExit();
                 // 125: docker itself failed, usually an image that is not there (esharp-amiga-toolchain and esharp-sdl are built locally).
                 if (proc.ExitCode == 125 && docker != null)
-                    return Fail($"docker could not run image '{docker}' (exit code 125). esharp-amiga-toolchain and esharp-sdl are built from docker/ and docker/sdl in the E# repository (https://github.com/GameGyrafe/amigaesharp); for m68k you can also pass --docker {ProjectTemplate.DefaultImage}");
+                    return Fail($"docker could not run image '{docker}' (exit code 125). esharp-amiga-toolchain, esharp-sdl and esharp-aros-i386 are built from docker/, docker/sdl and docker/aros-i386 in the E# repository (https://github.com/GameGyrafe/amigaesharp); for m68k you can also pass --docker {ProjectTemplate.DefaultImage}");
                 if (proc.ExitCode != 0) return Fail($"{cc} failed with exit code {proc.ExitCode}");
             }
             catch (System.ComponentModel.Win32Exception)
@@ -640,7 +641,7 @@ Targets:
     private static string MuiTargetError(string target) => target switch
     {
         "os4" => "--mui is for the m68k FS-UAE path only: the AmigaOS 4.1 VM has MUI 5 installed (ESHARP_OS4_VM)",
-        "aros" => "--mui is for the m68k FS-UAE path only: AROS has Zune, its own MUI implementation",
+        "aros" or "aros-i386" => "--mui is for the m68k FS-UAE path only: AROS has Zune, its own MUI implementation",
         _ => $"--mui is for the m68k FS-UAE path only (target {target})",
     };
 
@@ -667,8 +668,12 @@ Targets:
         return i + 1 < buildArgs.Count && !buildArgs[i + 1].StartsWith("-") ? buildArgs[i + 1] : DefaultImage(target);
     }
 
-    /// <summary>The image <c>--docker</c> without a name uses: esharp-sdl for the sdl target, else the Amiga toolchain.</summary>
-    internal static string DefaultImage(TargetInfo target) => target.IsAmiga ? "esharp-amiga-toolchain" : "esharp-sdl";
+    /// <summary>
+    /// The image <c>--docker</c> without a name uses: esharp-sdl for the sdl target, esharp-aros-i386 for aros-i386 (its own image,
+    /// docker/aros-i386: the i386 AROS toolchain is built from the AROS sources), else the Amiga toolchain.
+    /// </summary>
+    internal static string DefaultImage(TargetInfo target) =>
+        target == Targets.ArosI386 ? "esharp-aros-i386" : target.IsAmiga ? "esharp-amiga-toolchain" : "esharp-sdl";
 
     private static string ShellQuote(string s) =>
         s.Length > 0 && s.All(c => char.IsLetterOrDigit(c) || "-_./=+:,".Contains(c)) ? s : "'" + s.Replace("'", "'\\''") + "'";

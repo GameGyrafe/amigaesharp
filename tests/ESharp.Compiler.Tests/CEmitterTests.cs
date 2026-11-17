@@ -1116,10 +1116,11 @@ Clock.Close();";
     [Theory]
     [InlineData("m68k")]
     [InlineData("aros")]
+    [InlineData("aros-i386")]
     public void Gui_sample_compiles_with_a_private_gadtools_base_and_releases_in_order(string target)
     {
         var path = Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "..", "samples", "gui", "Gui.cs");
-        var options = target == "aros" ? Targets.Aros.ToOptions() : Targets.M68k.ToOptions();
+        var options = Targets.Find(target)!.ToOptions();
         var r = EsCompiler.Compile(new[] { new SourceFile("Gui.cs", File.ReadAllText(path)) }, options);
         Assert.True(r.Success, string.Join("\n", r.Diagnostics));
         var c = r.C!;
@@ -1139,6 +1140,7 @@ Clock.Close();";
     [Theory]
     [InlineData("m68k")]
     [InlineData("aros")]
+    [InlineData("aros-i386")]
     public void GtWindow_Run_with_a_handler_emits_no_null_forgiving_operator(string target)
     {
         var src = @"
@@ -1163,7 +1165,7 @@ public static unsafe class P
         if (win.Open()) { win.Run(h); win.Close(); }
     }
 }";
-        var options = target == "aros" ? Targets.Aros.ToOptions() : Targets.M68k.ToOptions();
+        var options = Targets.Find(target)!.ToOptions();
         var r = EsCompiler.Compile(new[] { new SourceFile("P.cs", src) }, options);
         Assert.True(r.Success, string.Join("\n", r.Diagnostics));
         Assert.Contains("Clicked(", r.C!);
@@ -1327,6 +1329,48 @@ public static unsafe class P
         Assert.Equal(20, span.exitCode);
 
         Assert.DoesNotContain("ES_IDX", CompileOk(P(Arr("3"))));
+    }
+
+    /// <summary>
+    /// On AROS the bounds and out-of-memory messages go through dos.library, not stdio's stderr: stderr is posixc.library's, and on
+    /// hosted i386 AROS a program with posixc.library open that makes a Zune Application crashed in the C library's exit code. The
+    /// AROS helpers run here against a small dos.library shim that writes to stdout.
+    /// </summary>
+    [Theory]
+    [InlineData("aros")]
+    [InlineData("aros-i386")]
+    public void Aros_error_messages_use_dos_library_not_stderr(string target)
+    {
+        var opts = Targets.Find(target)!.ToOptions(debug: true);
+        string c = CompileOk(Program("public class Box { public int V; }",
+            "int[] a = new int[4]; Box b = new Box(); b.V = a[1]; Dos.PutInt(b.V);"), opts);
+        int start = c.IndexOf("#ifdef __AROS__\n#include <proto/dos.h>\n", StringComparison.Ordinal);
+        Assert.True(start >= 0, "the AROS error helpers");
+        int end = c.IndexOf("#else\n", start, StringComparison.Ordinal);
+        string aros = c.Substring(start, end - start);
+        Assert.Contains("ErrorOutput()", aros);
+        Assert.DoesNotContain("stderr", aros);
+        Assert.Contains("es_errstr(\"out of memory\\n\")", c);
+        Assert.Contains("es_errstr(\" out of range 0..\"); es_errint((long)n - 1);", c);
+        if (!HasGcc) return;
+        string helpers = aros.Replace("#ifdef __AROS__\n#include <proto/dos.h>\n", "");
+        var run = RunWithHostGcc(@"#include <stdio.h>
+typedef void *BPTR;
+typedef const unsigned char *CONST_STRPTR;
+static BPTR ErrorOutput(void) { return NULL; }
+static BPTR Output(void) { return (BPTR)stdout; }
+static void FPuts(BPTR f, CONST_STRPTR s) { fputs((const char *)s, (FILE *)f); }
+static void Flush(BPTR f) { fflush((FILE *)f); }
+" + helpers + @"
+int main(void)
+{
+    es_errstr(""f.cs(""); es_errint(12); es_errstr(""): index ""); es_errint(-7); es_errstr("" out of range 0..""); es_errint(0); es_errint(-2147483647L - 1);
+    es_errstr(""\n"");
+    return 0;
+}
+");
+        Assert.Equal(0, run.exitCode);
+        Assert.Equal("f.cs(12): index -7 out of range 0..0-2147483648\n", run.output);
     }
 
     [Fact]

@@ -15,6 +15,7 @@ public class DoubleBufferTests
     [InlineData("m68k")]
     [InlineData("os4")]
     [InlineData("aros")]
+    [InlineData("aros-i386")]
     public void Dbuffer_sample_compiles_with_screen_buffers_and_the_offscreen_fallback(string target)
     {
         var options = Targets.Find(target)!.ToOptions();

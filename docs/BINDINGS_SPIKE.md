@@ -86,7 +86,7 @@ generation beyond candidates, a unit test (needs an SDK path, so it would skip b
 `tools/BindGen offsets <spec> <target> --docker <image>` writes a C file of `offsetof`/`sizeof` constants for the
 fields listed in `tools/BindGen/structs.txt` (our own list), compiles it to assembly with the target's own
 compiler and headers (nothing is linked or run) and reads the numbers back. `tools/BindGen/layouts.sh` does this
-for m68k and AROS x86-64 and writes `src/ESharp.Platform/Layout.g.cs`; `Gfx.cs` and `Sound.cs` now take their
+for m68k, AROS x86-64 and AROS i386 (since issue #4: its own `#elif I386` table, from the esharp-aros-i386 image) and writes `src/ESharp.Platform/Layout.g.cs`; `Gfx.cs` and `Sound.cs` now take their
 Window, Screen, IntuiMessage, BitMap and IOAudio offsets from it instead of hand-typed tables. Verified: the
 measured values equal every hand-written value on both targets (23 on m68k, 21 on AROS; the AROS table had no
 `io_Device`/`io_Unit`, which nothing uses), the generated C for all 18 samples on m68k and AROS is byte-for-byte
