@@ -25,6 +25,13 @@ public static unsafe class Exec
     [AmigaLib("exec", -384)]
     public static extern void* WaitPort(void* port);
 
+    /// <summary>exec.library Wait(), LVO -318: sleeps until one of the signals is set; the signals that were set (and are now cleared).</summary>
+    [AmigaLib("exec", -318)]
+    public static extern uint Wait(uint signalSet);
+
+    /// <summary>Signal bit of Ctrl-C (SIGBREAKF_CTRL_C).</summary>
+    public const uint SigBreakCtrlC = 1u << 12;
+
     /// <summary>exec.library ReplyMsg(), LVO -378.</summary>
     [AmigaLib("exec", -378)]
     public static extern void ReplyMsg(void* message);

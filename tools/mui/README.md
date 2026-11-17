@@ -29,6 +29,14 @@ Workbench disk's `LIBS:`, and a bare emulated boot has no `C:Assign`. So `--mui`
 (`--workbench <adf>` or `ESHARP_WORKBENCH`), mounted read-only as `DF0:` and never copied. The generated startup then
 assigns `C:`, `T:` and `LIBS:` from it, `ENV:` to `RAM:Env`, and adds what MUI's installer would: the unpacked drawer is the
 read-only volume `MUI:` with `Assign LIBS: MUI:Libs ADD`, `Assign LOCALE: MUI:Locale ADD` and `Assign IMAGES: MUI:Images`.
+Last, `Stack` gives the program the stack its icon asks for (`EsStackSize`, default 65536), as a start from Workbench would.
+
+Two things this startup gets right on purpose (both seen with samples/mui):
+- `LIBS:` is replaced by the Workbench disk's `Libs`, not added to. The boot volume has no `Libs` drawer, so the boot assigns
+  `LIBS:` to `DH0:`, where the program lies. MUI 3.8 loads external classes such as `Gauge.mui` as `LIBS:mui/<class>`, and a
+  program named `mui` made that path a file, so the class did not load and no window could be made.
+- The stack: the boot shell's 4096 bytes are below what MUI wants. MUI 5 then opens a "raise the stack size" requester and
+  waits for a click, so a headless run never ends.
 Without the Workbench disk, `muimaster.library` does not open (tried: Libs copied into the boot volume, still "not installed").
 
 ```bash

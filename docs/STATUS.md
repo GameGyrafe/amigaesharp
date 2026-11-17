@@ -609,7 +609,7 @@ Not verified: hosted AROS and MorphOS runs of guiclass (AROS only as generated C
 
 ## BOOPSI core and hooks (samples/boopsi, issue #40 part 1)
 
-The BOOPSI layer under the later MUI wrappers (decisions of #19: GadTools, then this core, then MUI; pull loop plus handlers; the owner frees the tree). MUI itself is not in this part.
+The BOOPSI layer under the MUI wrappers (decisions of #19: GadTools, then this core, then MUI; pull loop plus handlers; the owner frees the tree). MUI itself is part 2, see "MUI wrappers".
 
 **Bindings** (facts only: names, vectors from the classic fd files, `bindgen gen ... intuition utility --check src/ESharp.Platform` reports 0 problems): intuition `NewObjectA`, `DisposeObject`, `SetAttrsA`, `GetAttr`, `SetGadgetAttrsA`, `AddGList`, `RemoveGList`, `RefreshGList`, `DrawImage`, `GetScreenDrawInfo`, `FreeScreenDrawInfo`; utility `CallHookPkt`. `DoMethodA` is no library vector, so it is an emitter-defined `[Native]` (`es_domethod`): amiga.lib on m68k, `IDoMethodA` on AmigaOS 4, the SDK macro on MorphOS, and on AROS a call of the class dispatcher whose class pointer is found once at run time (see below). Tag values, method numbers and the `struct Hook` and `Window` border offsets are measured into Layout.g.cs (`tools/BindGen/structs.txt`).
 
@@ -640,6 +640,96 @@ Verified (after the review fixes):
 
 Not verified / not done: real hardware; MorphOS runs; custom BOOPSI classes (MakeClass with a C# dispatcher: the `[HookEntry]` entry is what a dispatcher needs, but no class is built here); `groupgclass`/`modelclass`/`icclass` interconnection (ICA_TARGET to another object) and ICA_MAP; images other than frameiclass; gadget refresh after the window is covered (smart refresh, no refresh events asked for); more than 13 starting attributes; several windows; hooks called while the program is in the middle of something that is not reentrant (the hook's closure runs on the caller's task: on input.device for an edit hook).
 
+## MUI wrappers (samples/mui, issue #40 part 2)
+
+MUI on the BOOPSI core. MUI is third-party shareware, so all MUI facts here (class names, attribute and method numbers, special values, message layouts) come from the AROS Zune headers (AROS Public License), and the muimaster.library vectors come from the AROS fd file. Nothing is taken from the MUI distribution, and no MUI header is included on any target.
+
+**Library.** `Mui.Open()` opens muimaster.library version 19 (MUI 3.8) or newer as an optional base. It returns false when MUI is missing, so a program says so and stops (the sample prints `skip: MUI not installed` and exits 0). `Mui.Close()` closes the library only when no MUI object is left. `MuiMaster` (`[LibraryBase("muimaster", ...)]`) declares `MUI_NewObjectA` (-30), `MUI_DisposeObject` (-36), `MUI_RequestA` (-42), `MUI_Error` (-66) and `MUI_MakeObjectA` (-120). `bindgen check <AROS fd dir> src/ESharp.Platform muimaster` gives 5 declarations, 0 problems. The emitter does not include `proto/muimaster.h` for these. It writes the calls itself, by vector, per target:
+- m68k: `jsr -N(a6)` with the fd registers.
+- AmigaOS 4: the 68k jump table through `IExec->EmulateTags` (the OS4 interface layout of MUI is not in the AROS sources, so it is not guessed).
+- MorphOS: the emulation registers and `EmulCallDirectOS`.
+- AROS: AROS's own `AROS_LC` macros.
+
+`Mui.Request` wraps MUI_RequestA. Custom classes are not done (`MUI_CreateCustomClass` and the rest): they do not come cheaply from `[Extensible]`, so they are follow-up issue #93.
+
+**Classes.** `MuiObject : BoopsiObject` takes any MUI class by name. `Init`, `Set` and `Get` work as on the core, with the typed catalogue `Muia` (MUIA_* with their value types) and `MuiFrame`. The wrappers are:
+- `MuiApplication` (title and base name; commodities and ARexx off) and `MuiWindow` (title, `Content`, `Id`, `Open`/`Close`/`IsOpen`, `OnCloseRequest`).
+- `MuiGroup` (`Horizontal`, `Columns`, `Frame`, `Title`, `Add`).
+- `MuiText`, `MuiLabel`, `MuiButton` (MUI_MakeObject button, `OnPressed`), `MuiCheckMark` (MUI_MakeObject checkmark, `Selected`, `OnToggled`).
+- `MuiString` (`Contents`, `OnChanged`, `OnAcknowledged`), `MuiCycle` (`Active`, `OnActiveChanged`; the entry labels are copies the object keeps), `MuiSlider` (`Value`, `OnValueChanged`).
+- `MuiGauge` (`Current`, `InfoText`), `MuiRectangle` (space, or `Gap(n)` through MUI_MakeObject HSpace).
+- `MuiListview`: a Listview with a List of strings that MUI copies: `Add`, `Clear`, `Count`, `Active`, `Entry`, `OnActiveChanged`.
+
+The generic notifications are `WhenChanged(attr, handler)` for int, bool and string attributes, and `WhenEquals(attr, value, handler)`.
+
+**Notifications.** Each one is a `MUIM_Notify` on the object itself with `MUIM_CallHook`, a struct Hook of its own and `MUIV_TriggerValue`. The hook entry is a `[HookEntry]` method, so it uses the core's per-target entries. h_Data points at the notification object, which holds the C# delegate (an `[Owned]` parameter, so a capturing lambda becomes a heap closure the notification owns). MUI calls the hooks on the program's own task: inside `MUIM_Application_NewInput` (`Run`, `Step`), or inside the `Set` that changed the attribute. That is how the self-test drives them. So a handler may allocate, print and set other objects. The rules from the core still apply:
+- `MuiApplication.Quit()` is the way out of a handler.
+- A `Dispose` of a MUI object inside a handler is refused with a one-time message, and the object stays usable. MUI is still inside that object's method when the hook returns.
+- A window's close gadget quits the application unless the window has its own `OnCloseRequest` handler.
+- `Run` is NewInput plus `Exec.Wait` (new binding, LVO -318) on the returned signals and Ctrl-C.
+
+**Ownership.** Ownership follows MUI:
+- An object added to a group (OM_ADDMEMBER; MUIM_Group_InitChange/ExitChange around it only while its window is open) belongs to the group. A window's content (MUIA_Window_RootObject) belongs to the window, a listview's list (MUIA_Listview_List) to the listview, and a window added to the application (OM_ADDMEMBER) to the application.
+- `Create()` on the application makes the whole tree: a starting-attribute child first, then the parent, then the members.
+- The program disposes only the root: `app.Dispose(); Heap.Free(ref app);` runs one MUI_DisposeObject. MUI disposes the children, then the C# side frees every wrapper, its string copies and its notifications (hooks and closures) without disposing anything a second time.
+- An object that is in no tree is disposed by itself, with MUI_DisposeObject.
+- A group member or a window that the program disposes is first taken out of its parent (OM_REMMEMBER; a window is closed first).
+- A window's content and a listview's list cannot be disposed on their own (refused with a message).
+- If a parent cannot be made, the children it was given as starting attributes count as gone. That is a leak at worst, never a second dispose, because whether MUI disposed them is not known.
+- `HasOwner`, `Keep` and `BoopsiWindow.Add` see the MUI parent, so an object has one owner.
+- `Mui.Live` counts the MUI objects that are made and not yet disposed.
+
+**Core changes.** `BoopsiObject` gained internal virtual steps that the MUI classes override: how the system object is made and disposed, the tree in `Create`, what else the object owns, a refused `Dispose`, and the host's notification. `KeepString` is now internal. The host fake: `Mui.HostAvailable`, `HostPress`, `HostType`, `HostCloseRequest`. Notifications fire on every `Set`, and only the classes the wrappers use are known.
+
+**Negative trigger values.** `WhenEquals(IntAttr, value)` keeps the trigger as a pointer-sized value, sign-extended as `Set` widens an int. It was a 32-bit value, so on 64-bit targets (AROS x86-64, the dotnet host) a notification on -1 or any other negative value never fired. samples/mui checks it with a lone slider from -10 to 10.
+
+**Emitter fixes on the way:**
+1. An override in a library class was left out of the class's function table when nothing named it. `BoopsiObject.Create` calls the virtual `CreateAll` that `MuiObject` overrides, so the slot was null, and on AmigaOS 4 the program jumped to address 0. Now the overrides of reached members are reached in every class that is constructed. A BOOPSI-only program still does not pull in MUI.
+2. An object initializer can set properties that have a setter body (`new MuiText("x") { Frame = MuiFrame.Text }`), also after constructor arguments. The setters run in order.
+
+Verified:
+- `dotnet test`: 559 tests, 557 passed, 2 skipped (the SDK-backed BindGen ones), 0 failed. `MuiTests` has 12:
+  - samples/mui as generated C, run with host gcc under ASan/UBSan/LSan against a fake muimaster.library: all ok, 23 objects made and 23 disposed (each once, children before parents, never by intuition's DisposeObject), 4 group changes, no leak, the library closed.
+  - The skip line when muimaster.library does not open.
+  - samples/mui on dotnet, default and WAIT.
+  - The sample compiles for m68k, AROS, os4 and morphos with the per-target calls and no MUI header.
+  - The vectors in the C# declarations, the m68k `jsr` offsets, the AROS call numbers and the MorphOS calls agree with the fd bias.
+  - ES0102 on sdl.
+  - A library override in the function table, and none of MUI in a BOOPSI-only program.
+  - Setter properties in object initializers, run with gcc.
+- AmigaOS 4.1 in the QEMU VM (MUI 5):
+  - `esharp test samples/mui --target os4`: host 32 ok, OS4 32 ok, and they agree on every check (re-run after the negative-trigger fix).
+  - `run --screenshot`: the screenshot was looked at. It shows the window with the text, Hello and Quit, the framed "Settings" group with slider (42), string, cycle (Three) and check mark, the gauge at "99 %" and the list with its second line selected.
+  - `run --args WAIT --input "click 562,360;click 655,406;click 566,591;click 653,360"`: Hello pressed (handler ran), the slider paged to 43, list line 2 picked, Quit from its handler. 31 ok, no FAIL.
+- Hosted AROS x86-64 (Zune, in esharp-aros-hosted):
+  - `tools/aros-hosted/aros-hosted.sh mui --docker esharp-aros-hosted --wait 0 --shot shot.png`: 30 ok, 0 traps. After the negative-trigger fix, `--wait 0` again: 32 ok, 0 traps, all ok. The screenshot was looked at and shows the same window in Zune's look. With the default 2 s wait the shot came after the window had closed again.
+  - `--args WAIT --input "click 300,163;click 400,189;click 297,298;click 393,163"`: the same events as on OS4 (Hello, slider 43, list line 2, Quit). All ok.
+- A1200, Kickstart 3.1 (40.069) in FS-UAE, without MUI: `esharp run samples/mui --model A1200 --kickstart <rom>` prints `skip: MUI not installed` and exits 0. No regressions on the same machine: `esharp test samples/boopsi --target m68k` (37 ok on host and Amiga, they agree), and `samples/gui` with the AGENTS.md input line (7 ok).
+- A1200 in FS-UAE with classic MUI (`esharp test samples/mui --target m68k --model A1200 --kickstart <rom> --mui V --workbench <Workbench disk 2 .adf>`, issue #95), re-run after the startup fix below:
+  - Kickstart 3.1 (40.069), Workbench 3.1 disk 2, MUI 3.8 (muimaster 19.35): host 32 ok, Amiga 32 ok, they agree on every check.
+  - Kickstart 3.1, MUI 5.0-20210831 (muimaster 21.227): host 32 ok, Amiga 32 ok, they agree.
+  - Kickstart 3.0 (39.106), Workbench 3.0 disk 2, MUI 3.8: host 32 ok, Amiga 32 ok, they agree.
+  - Kickstart 3.0, MUI 5: host 32 ok, Amiga 32 ok, they agree. (Kickstart 3.0 is not in the test matrix; this is what happened, not a support promise.)
+  - `run --screenshot` (Kickstart 3.1, MUI 3.8 and MUI 5): the screenshots were looked at. Both show the window on the Workbench screen with the text, Hello and Quit, the "Settings" group (slider 42, string, cycle Three, check mark), the gauge at "99 %" and the list with its second line selected. Under MUI 5 the window came out narrow, with a scroll bar on the right (no MUI settings saved in ENV:).
+  - `dotnet test` after the fix: 577 tests, 575 passed, 2 skipped (the SDK-backed BindGen ones), 0 failed (MuiEmulatorTests checks the LIBS: order and the `Stack` line, and reads the stack from a written icon).
+  - So the m68k register calls into muimaster.library, the m68k `[HookEntry]` hooks, the 32-bit tag and message layouts and MUIM_Notify/CallHook work against a real MUI. The wrappers needed no change.
+  - Cause of the earlier failures, both in the `--mui` startup of the emulator run, not in the wrappers:
+    1. MUI 3.8, 9 FAIL (the application could not be made, so "the window opens" and the checks that need the window failed): the boot volume has no Libs drawer, so the boot assigns LIBS: to DH0:, where the program lies, and the startup only added the Workbench disk's and MUI's Libs to it. MUI 3.8 loads its external classes as `LIBS:mui/<class>` (Gauge.mui is one). In samples/mui the program file is named `mui`, so `LIBS:mui/Gauge.mui` met a file in the first LIBS: directory and the search stopped there: the gauge, so the root group, so the window and the application could not be made. The same sample built under another name passed, and so did the same name run from a drawer. Now the startup replaces LIBS: with the Workbench disk's Libs, then adds MUI:Libs.
+    2. MUI 5, no end within 120 s: a "MUI warning" requester (seen on a screenshot) said the stack of 4096 bytes is below the recommended 32000 and waited for "Continue nevertheless" or "Exit immediately". The boot shell runs the program with its 4096 bytes. Now the startup sets `Stack` to the stack the program's icon asks for (EsStackSize, default 65536), as a start from Workbench would.
+  - Re-run on the other MUI targets after the fix: `esharp test samples/mui --target os4` host 32 ok, OS4 32 ok, they agree; hosted AROS (`aros-hosted.sh mui --wait 0`) 32 ok, 0 traps, all ok.
+  - A program started from a shell with the default stack of 4096 bytes would show that MUI 5 requester on a real Amiga too: start MUI programs from their icon or raise the shell's stack.
+
+Not verified:
+- MorphOS runs.
+- Real hardware. samples/mui is not in the hardware pack.
+- `Mui.Request` (a requester waits for the user: not in the self-test).
+- A button press driven by the program. MUIA_Pressed cannot be set, so buttons were only pressed by scripted clicks.
+- Typing into the string on a target (`OnAcknowledged` ran on the host only).
+- Several windows.
+- Disposing a window while the application runs.
+- `MuiRectangle()` without `Gap`.
+- MUI custom classes (#93).
+
 ## Classic MUI in the emulator (`esharp run|test --mui 3.8|5`, samples/muicheck, issue #40)
 
 MUI is shareware whose licence allows only verbatim copies of the whole archive, so nothing of it is in the repo or the packages. `tools/mui/fetch-mui.sh 3.8|5` downloads the official archive from the MUI project's GitHub releases (`amiga-mui/muidev`: tag `3.8`, `mui38usr.lha`; tag `MUI-5.0-20210831`, `MUI-5.0-20210831-os3.lha`), checks a pinned sha256, and unpacks it with the toolchain image's `lha` (no network) into `${ESHARP_MUI_CACHE:-${XDG_CACHE_HOME:-~/.cache}/esharp/mui}/<version>`. `esharp run` and `esharp test` (m68k, FS-UAE) take `--mui 3.8|5` (or `ESHARP_MUI`) and `--workbench <adf>` (or `ESHARP_WORKBENCH`): the unpacked drawer is mounted read-only as the volume `MUI:`, the user's own Workbench 3.x disk 2 read-only as `DF0:`, and the generated startup assigns `C:`, `T:`, `LIBS:` (Workbench disk, then `MUI:Libs ADD`), `ENV:` (RAM:Env), `LOCALE:` and `IMAGES:` before the program. A bare Kickstart does not work: `muimaster.library` (3.8: v19.35, 5: v21.227) opens asl, commodities, icon, locale, iffparse and others from the Workbench disk, and a bare boot has no `C:Assign`; with MUI's Libs only copied into the boot volume, OpenLibrary failed. `--target os4`, `aros` and `sdl` reject `--mui` (OS4 has MUI 5 installed, AROS has Zune). `samples/muicheck` opens `muimaster.library` and prints its version (offset of `lib_Version` chosen by pointer size). The fetch script ships in the tool package (`mui/` next to `esharp.dll`; the error message prints that path), the MUI archive never does. tools/mui/README.md has the details.
@@ -648,7 +738,9 @@ Verified (A1200, FS-UAE 3.2.35, headless; `esharp run samples/muicheck ... --kic
 
 Also verified: `samples/muicheck` on the AmigaOS 4.1 VM (`--target os4`, MUI 5 installed) prints `muimaster.library 21.210`, and on hosted AROS x86-64 (`--target aros`, Zune, `tools/aros-hosted/aros-hosted.sh muicheck --docker esharp-aros-hosted`) prints `muimaster.library 19.81`. The built tool folder contains `mui/fetch-mui.sh` (checked in a Release build; the packed `.nupkg` was not inspected here, CI's packages job covers the pack).
 
-Not verified: opening a MUI window or any object (only the library opens; MUI preferences, patterns and images were not exercised), registered MUI, MUI 4, a Workbench disk other than 3.0/3.1 disk 2, Windows or macOS (the fetch script needs bash, curl, sha256sum and docker), `--mui` with `--input` or screenshots.
+The startup replaces LIBS: with the Workbench disk's Libs before it adds MUI:Libs (with ADD, the boot's LIBS: on DH0: stayed first, and a program named like a LIBS: drawer, `mui`, hid MUI 3.8's external classes) and ends with `Stack <EsStackSize>` (the boot shell's 4096 bytes made MUI 5 stop on a "raise the stack size" requester). samples/mui opens its window with MUI 3.8 and 5 on Kickstart 3.1 and 3.0, see "MUI wrappers".
+
+Not verified: MUI preferences and patterns (none are saved in ENV:), registered MUI, MUI 4, a Workbench disk other than 3.0/3.1 disk 2, Windows or macOS (the fetch script needs bash, curl, sha256sum and docker), `--mui` with `--input` or screenshots.
 
 ## Hardware test pack (tools/hwpack, samples/hwinfo; issue #7)
 
@@ -894,7 +986,7 @@ Open work as of 2026-11-14 (the GitHub issues are the live list; the v1 tracker 
 - **Real hardware (#7):** nothing has run on a real Amiga yet. The hardware test pack (`tools/hwpack`) is ready; reports from an original A1200, an accelerated A1200 or an FPGA machine are the most valuable thing anyone can add. PowerPC real hardware and MorphOS runs are also not done (MorphOS only builds; QEMU `pegasos2` could boot it, not tried).
 - **Debugging (#14):** the host build can be stepped through under .NET and the Amiga build has serial `Trace` and `esharp addr`; a source-level debugger for the Amiga build is open.
 - **Windows (#11):** CI now runs a `windows` job (windows-latest, PR head): `dotnet test` (439 passed, 2 skipped, 0 failed; the runner has a MinGW gcc, so the generated-C tests run there and only the Docker/VM/SDK-dependent tests skip), emit-only builds of `samples/hello` and `samples/cards`, `esharp test samples/linq`, a clean `git status` afterwards, and a package round trip against the PR's own packages (`dotnet pack`, install the tool from the folder into a tool path, a nuget.config with the local feed, version and PackageReference checked, NU1603 fails the step, `esharp new`, `dotnet run`, `esharp test`, `esharp build --emit-only`). A `.gitattributes` keeps the working tree LF (the runner has `core.autocrlf=true`), and the native test output is read CRLF-tolerant. Still needs a person on a real Windows machine: Docker Desktop with `--docker` builds, FS-UAE for Windows, VS Code, and Windows with a different (or no) C compiler. `tools/aros-hosted` is Linux-only. macOS was checked, see "VS Code support".
-- **Bindings (#19, #40):** GadTools wrappers (v1) and the BOOPSI core with hooks (#40 part 1, see "BOOPSI core and hooks") are done; MUI on top of the core is #40's next part.
+- **Bindings (#19, #40):** GadTools wrappers (v1), the BOOPSI core with hooks (#40 part 1, see "BOOPSI core and hooks") and the MUI wrappers on it (#40 part 2, see "MUI wrappers") are done. Open: MUI custom classes (#93), ReAction (last, if at all).
 - **Small gaps (#72):** `string.IndexOf`, `Args` on the host, `esharp test --args`, os4 `--args`.
 - **Display design (not implemented):** [design/DISPLAY.md](design/DISPLAY.md) proposes logical coordinates with an integer scale, mode choice that follows the Workbench's monitor family (MODE option, asl screen-mode requester), 256 colours with a shared palette, a gradient pen (copper on AGA), window mode on the Workbench and multi-scale art. Nothing in it is built or verified yet; it waits for the maintainer's approval.
 - **v2:** AROS i386 (#4), E# library source packages on NuGet (#31), user classes deriving from platform classes (#42: done for `GtWindow`, see "Classes derived from platform classes"). Capturing lambdas stored in fields and events (#41): done (PR #83), see "Heap closures and events".

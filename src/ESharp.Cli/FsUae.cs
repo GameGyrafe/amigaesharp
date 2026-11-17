@@ -27,7 +27,7 @@ internal static class FsUae
         // AmigaDOS wants the redirection right after the command name, before the program's own arguments.
         if (Os4Vm.ProgramArgsError(programArgs) is { } argsError) { Console.Error.WriteLine($"esharp: {argsError}"); return 1; }
         var line = string.IsNullOrWhiteSpace(programArgs) ? "" : " " + programArgs.Trim();
-        var pre = muiDrawer == null ? "" : string.Concat(Mui.StartupLines().Select(l => l + "\n"));
+        var pre = muiDrawer == null ? "" : string.Concat(Mui.StartupLines(IconStackSize(exe)).Select(l => l + "\n"));
         File.WriteAllText(Path.Combine(dh0, "S", "Startup-sequence"), pre + (headless
             ? $"dh0:{name} >dh0:out.txt{line}\necho done >dh0:done\n"
             : $"dh0:{name}{line}\n"));
@@ -120,6 +120,18 @@ internal static class FsUae
             if (xvfb is { HasExited: false }) xvfb.Kill();
             xvfb?.Dispose();
         }
+    }
+
+    /// <summary>The stack size in the icon the build wrote next to the program (EsStackSize), or the default without one.</summary>
+    internal static int IconStackSize(string exe)
+    {
+        var info = exe + ".info";
+        try
+        {
+            if (File.Exists(info) && ESharp.Assets.DiskObject.Read(File.ReadAllBytes(info)).StackSize is var s and >= 4096) return s;
+        }
+        catch (Exception e) when (e is InvalidDataException or IOException or ArgumentException or IndexOutOfRangeException) { }
+        return IconStep.DefaultStackSize;
     }
 
     private static void PrintSerial(string? serial)

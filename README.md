@@ -48,7 +48,7 @@ Early, and honest about it (details and dates in [docs/STATUS.md](docs/STATUS.md
 
 - **Works and is tested:** the compiler (a large part of C# 12: structs, classes with inheritance, generics, interfaces,
   lambdas, LINQ over arrays, patterns, tuples, ...), the platform layer (video, blitter, input, sound, timing, files, assets, GadTools windows,
-  IFF, fonts), and more than thirty samples including a card game and rummy. Unit tests run the generated C with a host gcc.
+  BOOPSI objects and hooks, MUI windows with notifications to C# lambdas (MUI where it is installed), IFF, fonts), and more than thirty samples including a card game and rummy. Unit tests run the generated C with a host gcc.
 - **Verified on an emulator:** classic 68k in FS-UAE on an A1200 with Kickstart 3.1; AmigaOS 4.1 in a QEMU Pegasos II VM; AROS x86-64
   (hosted); the `sdl` desktop target headless and under Xvfb.
 - **Not verified:** any real Amiga hardware (the 68k builds, the PowerPC builds, RTG), MorphOS (builds only), AROS i386,
@@ -154,7 +154,7 @@ tools/aros-hosted/aros-hosted.sh cards --docker esharp-aros-hosted --shot shot.p
 | `aros` | `AMIGA X86_64 AROS` | AROS x86-64 (hosted) | runs on hosted AROS; not on native hardware |
 | `sdl` | `SDL` | Linux desktop through SDL 3 | runs (headless and under Xvfb; macOS/Windows not tried) |
 
-The Amiga-only APIs (GadTools `Gui`, `Asl`, `Iff`, `Fonts`, `Joystick`) do not exist on `sdl` (error ES0102).
+The Amiga-only APIs (GadTools `Gui`, BOOPSI, MUI, `Asl`, `Iff`, `Fonts`, `Joystick`) do not exist on `sdl` (error ES0102).
 
 ### Editing in VS Code
 
