@@ -14,6 +14,8 @@ tools/aros-hosted/aros-hosted.sh cards --docker esharp-aros-hosted --shot shot.p
 `aros-hosted.sh <sample> --docker esharp-aros-hosted [--shot f.png] [--input "..."] [--wait N] [--log]` mounts the repo
 read-only, copies the image's pristine AROS tree for each run (S:Startup-Sequence is never patched in place) and prints
 the program's output. Without `--docker`, the script still works on an extracted archive (`AROS_HOSTED=<dir>`).
+`--files <dir>` copies a folder into a drawer `SYS:ESTest`; `--wanderer` starts no program at boot but puts it and its `.info` into
+`SYS:ESTest` and boots on to Wanderer, then runs `--input` (`click`, `dbl`, `sleep`, `key`) and `--shot` after `--wait` seconds (issue #101).
 
 ## Pins
 

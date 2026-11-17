@@ -78,7 +78,39 @@ public static class IconArt
             }
             ci[i] = (byte)best;
         }
-        var planar = Planar.Convert(img, 64, aga: true);
+        return (new IconPicture(img.Width, img.Height, ci, ClassicPalette), ColourImage(img, 64));
+    }
+
+    /// <summary>
+    /// The NewIcons picture for a PNG icon (null when the PNG is larger than <see cref="NewIcons.MaxSize"/> pixels each way): the
+    /// colour image again, reduced to at most <see cref="NewIcons.MaxColours"/> colours with the same colour reduction, unused entries dropped.
+    /// </summary>
+    public static IconPicture? NewIconsFromPng(byte[] png)
+    {
+        var img = Png.Read(png);
+        if (img.Width > NewIcons.MaxSize || img.Height > NewIcons.MaxSize) return null;
+        // ColourImage may add one entry (opaque black next to transparency), so ask for one colour less when that happens.
+        var p = Compact(ColourImage(img, NewIcons.MaxColours));
+        return p.Palette.Length <= NewIcons.MaxColours ? p : Compact(ColourImage(img, NewIcons.MaxColours - 1));
+    }
+
+    // The same picture with only the palette entries that pixels use (entry 0 kept, it may be the transparent one), in their order.
+    private static IconPicture Compact(IconPicture p)
+    {
+        var used = new bool[p.Palette.Length];
+        used[0] = true;
+        foreach (var i in p.Indices) used[i] = true;
+        var map = new byte[p.Palette.Length]; var palette = new List<uint>();
+        for (var i = 0; i < used.Length; i++) if (used[i]) { map[i] = (byte)palette.Count; palette.Add(p.Palette[i]); }
+        return new IconPicture(p.Width, p.Height, p.Indices.Select(i => map[i]).ToArray(), palette.ToArray(),
+            p.TransparentIndex >= 0 ? map[p.TransparentIndex] : -1);
+    }
+
+    // Up to maxColours colours (plus one, see below) with colour 0 transparent when the PNG has transparency.
+    private static IconPicture ColourImage(RgbaImage img, int maxColours)
+    {
+        var n = img.Width * img.Height;
+        var planar = Planar.Convert(img, maxColours, aga: true);
         var palette = planar.Palette24.Take(1 << planar.Depth).ToArray();
         var indices = planar.Indices;
         var transparent = img.Rgba.Where((_, i) => i % 4 == 3).Any(a => a < 128);
@@ -93,6 +125,6 @@ public static class IconArt
                 if (img.Rgba[i * 4 + 3] >= 128 && indices[i] == 0) { indices[i] = black; moved = true; }
             if (moved) palette = palette.Append(0x000000u).ToArray();
         }
-        return (new IconPicture(img.Width, img.Height, ci, ClassicPalette), new IconPicture(img.Width, img.Height, indices, palette, transparent ? 0 : -1));
+        return new IconPicture(img.Width, img.Height, indices, palette, transparent ? 0 : -1);
     }
 }
