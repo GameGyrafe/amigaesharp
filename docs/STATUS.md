@@ -1418,7 +1418,7 @@ targets keep `stderr`. New test `Aros_error_messages_use_dos_library_not_stderr`
 - x86-64 unchanged: every sample still builds with `--target aros`; on hosted x86-64 mui 32 ok and boopsi 37 ok; `esharp-aros-hosted`
   rebuilt from the changed Dockerfile (default `AROS_ARCH`) passes its smoke test.
 - m68k on Kickstart 3.1 (A1200, real ROM): `esharp test samples/language` 39 ok and `samples/boopsi` 37 ok, host and Amiga agree.
-- `dotnet test`: 586 passed, 2 skipped (the SDK-backed BindGen ones), 0 failed.
+- `dotnet test`: 586 passed, 2 skipped (the SDK-backed BindGen ones), 0 failed; after merging main (#102, NewIcons) 599 passed, 2 skipped, 0 failed, and on hosted i386 hello, language 39, boopsi 37, cards 16 re-run unchanged.
 
 **Not verified:** native pc-i386 (the boot ISO in QEMU), real i386 hardware, CI building the image (it is not in CI).
 
