@@ -14,6 +14,7 @@
     <Title>E# (Amiga E#) host libraries and subset analyzer</Title>
     <Description>Reference this from the host project of an E# game: the E# runtime and Amiga platform contracts with their managed host fakes (built with HOST), so the same source builds, runs and is unit tested under plain dotnet, and the E# subset analyzer (ES0001-ES0010) for the editor and dotnet build. Use with the esharp tool (AmigaESharp.Tool).</Description>
     <PackageReadmeFile>README.md</PackageReadmeFile>
+    <PackageIcon>icon.png</PackageIcon>
     <IncludeBuildOutput>false</IncludeBuildOutput>
     <IncludeSymbols>false</IncludeSymbols>
     <NoWarn>$(NoWarn);NU5128</NoWarn>
@@ -25,6 +26,7 @@
     <ProjectReference Include="..\ESharp.Target.Host\ESharp.Target.Host.csproj" PrivateAssets="all" />
     <ProjectReference Include="..\ESharp.Analyzers\ESharp.Analyzers.csproj" ReferenceOutputAssembly="false" PrivateAssets="all" />
     <None Include="..\PackageReadme.md" Pack="true" PackagePath="README.md" />
+    <None Include="..\icon.png" Pack="true" PackagePath="icon.png" />
   </ItemGroup>
 
   <Target Name="EsPackHostLibs" DependsOnTargets="ResolveProjectReferences">

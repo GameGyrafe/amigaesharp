@@ -53,6 +53,7 @@ dotnet run --project src/ESharp.Cli -- test samples/patterns --target m68k --doc
 dotnet run --project src/ESharp.Cli -- run samples/gui --target os4 --docker esharp-amiga-toolchain --input "click 208,101;click 57,45"   # os4 (QEMU VM, ESHARP_OS4_VM): --input through the QEMU monitor; key N is an Amiga raw code there (docs/STATUS.md)
 dotnet run --project src/ESharp.Cli -- test samples/controls                                # run on the host (ok/FAIL lines, non-zero exit on FAIL); add --target m68k --docker <image> [--kickstart <rom>] [--model A1200] to also run in FS-UAE and compare
 dotnet run --project tools/CardArt -- samples/cards/cards.png                               # redraw the card sprite sheet
+dotnet run --project tools/PackageIcon -- src/icon.png                                      # redraw the NuGet package icon (procedural checkered ball, 256x256, deterministic)
 dotnet run --project tools/BindGen -- check <sdk include dir> src/ESharp.Platform   # compare our [AmigaLib] vectors/arg counts with an SDK you provide (AROS include dir; not committed)
 dotnet run --project tools/BindGen -- gen <fd dir> exec dos graphics --include <include dir> --out <dir>   # C# bindings from fd files + prototypes (NDK or AROS form); add --docs, --namespace N
 dotnet run --project tools/BindGen -- gen <fd dir> exec dos graphics intuition gadtools lowlevel keymap utility diskfont iffparse asl timer --include <include dir> --check src/ESharp.Platform   # hand-written vs generated: problems (exit 1) and notes
