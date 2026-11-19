@@ -23,6 +23,20 @@ public static class P
     public static string[] ErrorIds(CompileResult r) =>
         r.Diagnostics.Where(d => d.Severity == DiagnosticSeverity.Error).Select(d => d.Id).Distinct().ToArray();
 
+    /// <summary>
+    /// The C of an AROS build without E#'s own Workbench start entry (issue #107), for tests that build AROS C with the host gcc against
+    /// a small shim of their own for something else (the entry needs aros/startup.h and the dos and Workbench headers).
+    /// </summary>
+    public static string WithoutArosWorkbenchStart(string c)
+    {
+        const string start = "#if defined(__AROS__)\n#include <proto/exec.h>\n#include <proto/dos.h>\n#include <aros/startup.h>\n";
+        const string end = "ADD2SET(es_aros_wbstart, PROGRAM_ENTRIES, -50)\n#endif\n";
+        var from = c.IndexOf(start, StringComparison.Ordinal);
+        var to = c.IndexOf(end, StringComparison.Ordinal);
+        Assert.True(from >= 0 && to > from, "no AROS Workbench start entry in the C");
+        return c.Remove(from, to + end.Length - from);
+    }
+
     public static string CompileOk(string source, CompileOptions? options = null)
     {
         var r = Compile(source, options);

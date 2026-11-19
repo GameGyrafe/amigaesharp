@@ -367,7 +367,7 @@ nuint r2 = o.DoMethod(Om.Get, Pga.Top.Tag, (nuint)(&slot));
 Dos.PutStr($""r={(int)r} slot={(int)slot} {(int)r2}\n"");
 o.Dispose();
 Heap.Free(ref o);";
-        var c = CompileOk(Program("", body).Replace("public static class P", "public static unsafe class P"), HostC);
+        var c = WithoutArosWorkbenchStart(CompileOk(Program("", body).Replace("public static class P", "public static unsafe class P"), HostC));
         Assert.Contains("static __attribute__((unused)) int es_oclass_probe(void)", c);
         // Take the AROS branch of es_domethod with host gcc: a small intuition with classes whose objects keep the class pointer
         // OFFSET bytes before them.
