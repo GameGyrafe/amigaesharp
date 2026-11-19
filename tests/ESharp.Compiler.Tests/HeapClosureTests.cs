@@ -719,6 +719,108 @@ static void Freed(int k) { System.Action a = () => k++; Keep(a, 0); Keep(a, 1); 
     }
 
     [Fact]
+    public void Issue110_review_a_local_borrowed_by_a_stack_lambda_and_then_given_away_does_not_leak()
+    {
+        if (!HasGcc) return;
+        // a is captured only by lambdas on the stack: no frame holds it. Given to Keep after the borrowing call it is handed over;
+        // still called by a stack local after Drop it keeps its own and is freed by the caller.
+        const string members = @"
+static System.Action Kept;
+static void Keep([Owned] System.Action a) { Kept = a; }
+static void Drop([Owned] System.Action a) { Heap.Free(ref a); }
+static void Run(System.Action f) { f(); }
+";
+        const string body = @"
+int base0 = Heap.LiveClosures();
+int t = 0;
+System.Action a = () => t++;
+Run(() => a());
+Keep(a);
+Kept();
+Heap.Free(ref Kept);
+Check(t == 2 && Heap.LiveClosures() == base0, ""a borrowed capture before the hand-over leaves nothing behind"");
+System.Action b = () => t += 10;
+System.Action c = () => b();
+Drop(b);
+c();
+Heap.Free(ref b);
+Check(t == 12 && Heap.LiveClosures() == base0, ""a stack local still calling it keeps the caller's reference"");
+";
+        var (code, output) = Run(members, body);
+        Assert.Equal(OkLines("a borrowed capture before the hand-over leaves nothing behind", "a stack local still calling it keeps the caller's reference"), output);
+        Assert.Equal(0, code);
+    }
+
+    [Fact]
+    public void Issue110_review_a_free_or_store_on_another_branch_does_not_leak()
+    {
+        if (!HasGcc) return;
+        const string members = @"
+static System.Action Kept;
+static void Keep([Owned] System.Action a) { Kept = a; }
+static void FreeOrKeep(bool x, int k) { System.Action c = () => N += k; if (x) Heap.Free(ref c); else Keep(c); }
+static int Pick(int x, int k) { System.Action c = () => N += k; switch (x) { case 1: Keep(c); return 1; default: Heap.Free(ref c); return 0; } }
+public class Holder
+{
+    System.Action _f;
+    System.Action _g;
+    public bool K;
+    public System.Action Inner { set { _g = value; } }
+    public System.Action Both { set { if (K) _f = value; else Inner = value; } }
+    public void Go() { if (_f != null) _f(); if (_g != null) _g(); }
+    public void Dispose() { Heap.Free(ref _f); Heap.Free(ref _g); }
+}
+static int N;
+";
+        const string body = @"
+int base0 = Heap.LiveClosures();
+FreeOrKeep(true, 1);
+FreeOrKeep(false, 2);
+Kept();
+Heap.Free(ref Kept);
+Pick(1, 4); Kept(); Heap.Free(ref Kept);
+Pick(0, 8);
+Check(N == 6 && Heap.LiveClosures() == base0, ""Heap.Free on one branch, a hand-over on the other"");
+int t = 0;
+Holder h = new Holder();
+h.K = true;
+h.Both = () => t++;
+h.K = false;
+h.Both = () => t += 10;
+h.Go();
+h.Dispose();
+Heap.Free(ref h);
+Check(t == 11 && Heap.LiveClosures() == base0, ""a setter storing value on one branch and passing it on on the other"");
+";
+        var (code, output) = Run(members, body);
+        Assert.Equal(OkLines("Heap.Free on one branch, a hand-over on the other", "a setter storing value on one branch and passing it on on the other"), output);
+        Assert.Equal(0, code);
+        var c = CompileOk(Program(members + Check, body));
+        Assert.DoesNotContain("es_closure_retain(_ho", c);
+    }
+
+    [Fact]
+    public void Issue110_review_ES0013_for_borrowed_captures_and_frees_on_another_branch()
+    {
+        const string members = @"
+static System.Action[] Kept = new System.Action[2];
+static void Keep([Owned] System.Action a, int i) { Kept[i] = a; }
+static void Run(System.Action f) { f(); }
+static void Borrowed(int k) { System.Action a = () => k++; Run(() => a()); Keep(a, 0); Keep(a, 1); }
+static void Branch(bool x, int k) { System.Action b = () => k++; if (x) Heap.Free(ref b); else { Keep(b, 0); b(); } }
+static void BothFree(bool x, int k) { System.Action d = () => k++; if (x) { Keep(d, 0); d(); Heap.Free(ref d); } else Heap.Free(ref d); }
+// Not covered (docs/STATUS.md): a free under a condition of its own on the hand-over's path silences the warning.
+static void Cond(bool y, int k) { System.Action e = () => k++; Keep(e, 0); e(); if (y) Heap.Free(ref e); }
+";
+        var r = Compile(Program(members, ""));
+        Assert.True(r.Success, string.Join("\n", r.Diagnostics));
+        var es13 = r.Diagnostics.Where(d => d.Id == "ES0013").Select(d => d.GetMessage()).ToList();
+        Assert.Equal(2, es13.Count);
+        Assert.Contains(es13, m => m.StartsWith("'a' is given"));
+        Assert.Contains(es13, m => m.StartsWith("'b' is given"));
+    }
+
+    [Fact]
     public void Nested_frames_release_their_own_delegates()
     {
         if (!HasGcc) return;
