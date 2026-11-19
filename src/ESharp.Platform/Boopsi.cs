@@ -289,6 +289,12 @@ internal static unsafe class BoopsiNative
 
     /// <summary>Called at each Create: on AROS it finds out once, on the program's own task, where an object keeps its class (see es_domethod).</summary>
     [Native] public static extern void es_boopsi_prepare();
+
+    /// <summary>DoSuperMethodA: the message to the superclass of <paramref name="cls"/> (in a class dispatcher).</summary>
+    [Native] public static extern nuint es_dosupermethod(void* cls, void* obj, void* msg);
+
+    /// <summary>INST_DATA: an object's instance data for class <paramref name="cls"/> (cl_InstOffset bytes into the object).</summary>
+    [Native] public static extern void* es_inst_data(void* cls, void* obj);
 }
 #endif
 
@@ -421,6 +427,7 @@ public unsafe class BoopsiObject
         _handle = Cast.ObjectToPtr(this);
         _hostCount = 0;
         for (int i = 0; tags[i] != 0; i += 2) HostStore((uint)tags[i], tags[i + 1]);
+        HostCreated(tags);
 #endif
         _created = true;
         _live++;
@@ -441,6 +448,15 @@ public unsafe class BoopsiObject
 
     /// <summary>Host: an attribute was set (the MUI fake raises its notifications here).</summary>
     internal virtual void HostChanged(uint tag, nuint value) { }
+
+    /// <summary>Host: the object was made with these starting attributes (a MUI custom class sees them here, as in OM_NEW).</summary>
+    internal virtual void HostCreated(nuint* tags) { }
+
+    /// <summary>Host: an attribute is read; true if the object answers it itself (a MUI custom class's OM_GET).</summary>
+    internal virtual bool HostGet(uint tag, out nuint value) { value = 0; return false; }
+
+    /// <summary>Host: a method was sent; true if the object handled it itself (a MUI custom class's own methods).</summary>
+    internal virtual bool HostMethod(nuint* msg, out nuint result) { result = 0; return false; }
 #endif
 
     internal virtual void AfterCreate() { }
@@ -530,6 +546,7 @@ public unsafe class BoopsiObject
         value = slot;
         return true;
 #else
+        if (HostGet(tag, out value)) return true;
         for (int i = 0; i < _hostCount; i++)
         {
             if (_hostTags[i] == tag) { value = _hostValues[i]; return true; }
@@ -560,6 +577,8 @@ public unsafe class BoopsiObject
         return BoopsiNative.es_domethod(_handle, msg);
 #else
         nuint* m = (nuint*)msg;
+        nuint handled = 0;
+        if (HostMethod(m, out handled)) return handled;
         if ((uint)m[0] == BTag.OmGet)
         {
             nuint v = 0;

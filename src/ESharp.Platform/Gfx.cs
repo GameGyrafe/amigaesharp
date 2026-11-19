@@ -91,6 +91,8 @@ public static unsafe class Graphics
     [AmigaLib("graphics", -60)] public static extern void Text(void* rastPort, string text, int count);
     [AmigaLib("graphics", -54)] public static extern int TextLength(void* rastPort, string text, int count);
     [AmigaLib("graphics", -240)] public static extern void Move(void* rastPort, int x, int y);
+    /// <summary>graphics.library Draw(): a line in the A pen from the pen position (<see cref="Move"/>) to x, y.</summary>
+    [AmigaLib("graphics", -246)] public static extern void Draw(void* rastPort, int x, int y);
     [AmigaLib("graphics", -270)] public static extern void WaitTOF();
     /// <summary>graphics.library InitRastPort(): a rast port with default pens and modes and no layer (drawing through it is not clipped).</summary>
     [AmigaLib("graphics", -198)] public static extern void InitRastPort(void* rastPort);

@@ -775,6 +775,25 @@ internal sealed partial class CEmitter
             result.AppendLine("#endif");
             result.AppendLine();
         }
+        if (_natives.Contains("es_dosupermethod") || _natives.Contains("es_inst_data"))
+        {
+            // A class dispatcher's two helpers (MUI custom classes): the superclass's dispatcher and the instance data. DoSuperMethodA
+            // is amiga.lib on m68k, a macro on MorphOS and the intuition interface on AmigaOS 4; on AROS the superclass's dispatcher is
+            // called directly (cl_Super is known, so the object layout that es_domethod probes for is not needed).
+            result.AppendLine("#include <proto/intuition.h>");
+            result.AppendLine("#include <intuition/classes.h>");
+            result.AppendLine("#if defined(__amigaos4__)");
+            result.AppendLine("static inline __attribute__((unused)) uintptr_t es_dosupermethod(void *cl, void *obj, void *msg) { return (uintptr_t)IDoSuperMethodA((Class *)cl, (Object *)obj, (Msg)msg); }");
+            result.AppendLine("#elif defined(__AROS__)");
+            result.AppendLine("#include <utility/hooks.h>");
+            result.AppendLine("static inline __attribute__((unused)) uintptr_t es_dosupermethod(void *cl, void *obj, void *msg) { return (uintptr_t)CALLHOOKPKT((struct Hook *)((Class *)cl)->cl_Super, obj, msg); }");
+            result.AppendLine("#else");
+            result.AppendLine("#include <clib/alib_protos.h>");
+            result.AppendLine("static inline __attribute__((unused)) uintptr_t es_dosupermethod(void *cl, void *obj, void *msg) { return (uintptr_t)DoSuperMethodA((Class *)cl, (Object *)obj, (Msg)msg); }");
+            result.AppendLine("#endif");
+            result.AppendLine("static inline __attribute__((unused)) void *es_inst_data(void *cl, void *obj) { return (void *)((uint8_t *)obj + ((Class *)cl)->cl_InstOffset); }");
+            result.AppendLine();
+        }
         // Non-Amiga targets: [Native] calls named es_std_* are standard C (stdio, stdlib, time), es_sdl_* need SDL 3. The C runtime is
         // pasted in whole (its functions are static and marked unused), so a program that only prints needs no SDL at all.
         var usesSdl = _natives.Any(n => n.StartsWith("es_sdl_", StringComparison.Ordinal));
@@ -814,6 +833,10 @@ static __attribute__((unused)) int32_t MUI_RequestA(void *app, void *win, uint32
 { return (int32_t)ES_MUI_CALL(42, ET_RegisterD0, app, ET_RegisterD1, win, ET_RegisterD2, flags, ET_RegisterA0, title, ET_RegisterA1, gadgets, ET_RegisterA2, format, ET_RegisterA3, parms); }
 static __attribute__((unused)) int32_t MUI_Error(void) { return (int32_t)(IExec->EmulateTags)((APTR)((uint8_t *)es_MUIMasterBase - 66), ET_RegisterA6, es_MUIMasterBase, TAG_DONE); }
 static __attribute__((unused)) void *MUI_MakeObjectA(int32_t type, uintptr_t *parms) { return (void *)ES_MUI_CALL(120, ET_RegisterD0, type, ET_RegisterA0, parms); }
+static __attribute__((unused)) void MUI_Redraw(void *obj, uint32_t flags) { ES_MUI_CALL(102, ET_RegisterA0, obj, ET_RegisterD0, flags); }
+static __attribute__((unused)) void *MUI_CreateCustomClass(void *base, const void *super, void *supermcc, int32_t size, void *dispatcher)
+{ return (void *)ES_MUI_CALL(108, ET_RegisterA0, base, ET_RegisterA1, super, ET_RegisterA2, supermcc, ET_RegisterD0, size, ET_RegisterA3, dispatcher); }
+static __attribute__((unused)) int32_t MUI_DeleteCustomClass(void *mcc) { return (int16_t)ES_MUI_CALL(114, ET_RegisterA0, mcc) != 0; }   /* a BOOL: the low word */
 #elif defined(__MORPHOS__)
 #include <emul/emulinterface.h>
 #include <emul/emulregs.h>
@@ -824,6 +847,10 @@ static __attribute__((unused)) int32_t MUI_RequestA(void *app, void *win, uint32
 { REG_D0 = (ULONG)app; REG_D1 = (ULONG)win; REG_D2 = flags; REG_A0 = (ULONG)title; REG_A1 = (ULONG)gadgets; REG_A2 = (ULONG)format; REG_A3 = (ULONG)parms; return (int32_t)ES_MUI_CALL(42); }
 static __attribute__((unused)) int32_t MUI_Error(void) { return (int32_t)ES_MUI_CALL(66); }
 static __attribute__((unused)) void *MUI_MakeObjectA(int32_t type, uintptr_t *parms) { REG_D0 = (ULONG)type; REG_A0 = (ULONG)parms; return (void *)ES_MUI_CALL(120); }
+static __attribute__((unused)) void MUI_Redraw(void *obj, uint32_t flags) { REG_A0 = (ULONG)obj; REG_D0 = flags; ES_MUI_CALL(102); }
+static __attribute__((unused)) void *MUI_CreateCustomClass(void *base, const void *super, void *supermcc, int32_t size, void *dispatcher)
+{ REG_A0 = (ULONG)base; REG_A1 = (ULONG)super; REG_A2 = (ULONG)supermcc; REG_D0 = (ULONG)size; REG_A3 = (ULONG)dispatcher; return (void *)ES_MUI_CALL(108); }
+static __attribute__((unused)) int32_t MUI_DeleteCustomClass(void *mcc) { REG_A0 = (ULONG)mcc; return (int16_t)ES_MUI_CALL(114) != 0; }
 #elif defined(__AROS__)
 #include <aros/libcall.h>
 static __attribute__((unused)) void *MUI_NewObjectA(const void *cls, void *tags)
@@ -837,6 +864,15 @@ static __attribute__((unused)) int32_t MUI_RequestA(void *app, void *win, uint32
 static __attribute__((unused)) int32_t MUI_Error(void) { return (int32_t)AROS_LC0(LONG, MUI_Error, struct Library *, es_MUIMasterBase, 11, MUIMaster); }
 static __attribute__((unused)) void *MUI_MakeObjectA(int32_t type, uintptr_t *parms)
 { return (void *)AROS_LC2(APTR, MUI_MakeObjectA, AROS_LCA(LONG, type, D0), AROS_LCA(IPTR *, (IPTR *)parms, A0), struct Library *, es_MUIMasterBase, 20, MUIMaster); }
+static __attribute__((unused)) void MUI_Redraw(void *obj, uint32_t flags)
+{ AROS_LC2NR(void, MUI_Redraw, AROS_LCA(void *, obj, A0), AROS_LCA(ULONG, flags, D0), struct Library *, es_MUIMasterBase, 17, MUIMaster); }
+static __attribute__((unused)) void *MUI_CreateCustomClass(void *base, const void *super, void *supermcc, int32_t size, void *dispatcher)
+{
+    return (void *)AROS_LC5(APTR, MUI_CreateCustomClass, AROS_LCA(void *, base, A0), AROS_LCA(const void *, super, A1), AROS_LCA(void *, supermcc, A2),
+        AROS_LCA(ULONG, size, D0), AROS_LCA(void *, dispatcher, A3), struct Library *, es_MUIMasterBase, 18, MUIMaster);
+}
+static __attribute__((unused)) int32_t MUI_DeleteCustomClass(void *mcc)
+{ return (int32_t)AROS_LC1(BOOL, MUI_DeleteCustomClass, AROS_LCA(void *, mcc, A0), struct Library *, es_MUIMasterBase, 19, MUIMaster); }
 #elif defined(__mc68000__)
 #define ES_MUI_CLOBBER "d1", "memory", "cc"
 static __attribute__((unused)) void *MUI_NewObjectA(const void *cls, void *tags)
@@ -868,6 +904,24 @@ static __attribute__((unused)) void *MUI_MakeObjectA(int32_t type, uintptr_t *pa
     register void *a6 __asm("a6") = es_MUIMasterBase; register int32_t d0 __asm("d0") = type; register uintptr_t *a0 __asm("a0") = parms; register void *a1 __asm("a1");
     __asm volatile("jsr -120(%%a6)" : "+r"(d0), "+r"(a0), "=r"(a1) : "r"(a6) : ES_MUI_CLOBBER);
     return (void *)d0;
+}
+static __attribute__((unused)) void MUI_Redraw(void *obj, uint32_t flags)
+{
+    register void *a6 __asm("a6") = es_MUIMasterBase; register void *a0 __asm("a0") = obj; register uint32_t d0 __asm("d0") = flags; register void *a1 __asm("a1");
+    __asm volatile("jsr -102(%%a6)" : "+r"(d0), "+r"(a0), "=r"(a1) : "r"(a6) : ES_MUI_CLOBBER);
+}
+static __attribute__((unused)) void *MUI_CreateCustomClass(void *base, const void *super, void *supermcc, int32_t size, void *dispatcher)
+{
+    register void *a6 __asm("a6") = es_MUIMasterBase; register void *a0 __asm("a0") = base; register const void *a1 __asm("a1") = super;
+    register void *a2 __asm("a2") = supermcc; register int32_t d0 __asm("d0") = size; register void *a3 __asm("a3") = dispatcher;
+    __asm volatile("jsr -108(%%a6)" : "+r"(d0), "+r"(a0), "+r"(a1) : "r"(a6), "r"(a2), "r"(a3) : ES_MUI_CLOBBER);
+    return (void *)d0;
+}
+static __attribute__((unused)) int32_t MUI_DeleteCustomClass(void *mcc)
+{
+    register void *a6 __asm("a6") = es_MUIMasterBase; register void *a0 __asm("a0") = mcc; register void *a1 __asm("a1"); register int32_t d0 __asm("d0");
+    __asm volatile("jsr -114(%%a6)" : "=r"(d0), "+r"(a0), "=r"(a1) : "r"(a6) : ES_MUI_CLOBBER);
+    return (int16_t)d0 != 0;   /* a BOOL: the low word */
 }
 #else
 #include <es_muimaster_shim.h>
