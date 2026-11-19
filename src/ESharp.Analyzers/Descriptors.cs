@@ -63,6 +63,10 @@ public static class Descriptors
         "ES0102", "Amiga-only API",
         "'{0}' is Amiga-only and does not exist on target '{1}'; put the code in #if AMIGA");
 
+    public static readonly DiagnosticDescriptor LibraryInternal = Error(
+        "ES0103", "Internal library member",
+        "'{0}' is internal to E#'s library and cannot be used from a program (the dotnet host build rejects it too)");
+
     public static readonly DiagnosticDescriptor ReferenceField = Error(
         "ES0010", "Structs cannot hold references",
         "Field '{0}' of struct '{1}' is a reference type; E# structs have value semantics only");
@@ -108,5 +112,5 @@ public static class Descriptors
         System.Collections.Immutable.ImmutableArray.Create(
             Exceptions, Linq, FloatingPoint, AsyncAwait, Dynamic, Reflection,
             HeapClass, Generics, Interfaces, SlowArithmetic, LibraryTooOld, ReferenceField, FixedArrays,
-            BorrowedDelegate, ClosureNeverFreed, DelegateTypeArgument);
+            BorrowedDelegate, ClosureNeverFreed, DelegateTypeArgument, LibraryInternal);
 }

@@ -345,7 +345,8 @@ Dos.PutStr($""{r1} {r2} {r3} {r4} {r5} {r6} {r7} {BoopsiObject.Live} {Heap.LiveC
     public void Cast_object_pointers_are_only_for_classes(string types, string body)
     {
         var src = Prelude + types + " public static unsafe class P { [EntryPoint] public static void Main() { " + body + " } }";
-        var r = Compile(src, M68k);
+        // The intrinsics are internal to the library (ES0103 for a program), so this source is compiled as a library file.
+        var r = EsCompiler.Compile(new[] { new SourceFile("lib/Platform/CastTest.cs", src) }, M68k);
         Assert.Contains(r.Diagnostics, d => d.Id is "ES0099" or "ES0014" && (d.Id == "ES0014" || d.GetMessage().Contains("only classes")));
     }
 

@@ -1444,3 +1444,15 @@ and runs it in the image.
 - **Default build (no `--build-context`, `docker build --no-cache -t ... docker/aros-hosted`):** built from the SourceForge download (about 4.5 minutes,
   the sha256 check printed OK); the smoke test against that image passes (hello prints `Hello from E#!`, 0 traps, image tree unpatched).
 - **Not verified:** gui, asl and keys in the image, a different nightly date.
+
+## Internal library members are not reachable from programs (issue #91)
+
+`esharp build` compiles the library and the program as one assembly, so C# let a program call `internal` library members (for example `Cast.ObjectToPtr`),
+also from a program class declared in `namespace ESharp.Platform`; the dotnet host build rejected the same code. New analyzer error **ES0103** ("'X' is
+internal to E#'s library"): a file that is not a library file (library files are found by the `lib/Runtime/`, `lib/Platform/` path prefixes of the
+`ESharpLibrarySources` option, never by namespace) refers to a symbol declared in library source that, or whose containing type, is `internal` or
+`private protected`. It is active only where the library is source (the compiler); in the IDE and the host build the library is metadata and C# already errors,
+so those paths are unchanged. The platform's own internal use is not affected. The existing `Cast` intrinsic tests now compile their source as a library file.
+
+- Tests (`LibraryInternalTests`): a direct call of `Cast.ObjectToPtr`, a call from a class in `namespace ESharp.Platform`, an internal type (`DosLib`, m68k), the
+  library's own internal use and the public surface (accepted), a program member with the same name as a library internal (accepted).

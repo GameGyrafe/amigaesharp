@@ -47,7 +47,7 @@ with `tasks.json` (build for m68k, run in FS-UAE, run on the host, check the sub
 with the coreclr debugger, so logic can be stepped through; the Amiga build cannot be debugged at source level yet) and
 `extensions.json`. The ES0001-ES0010 subset errors show as you type and in `dotnet build`. ES0101 (a library call newer than
 the target's libraries; opt in with `[RequiresLib("lib", version)]`) is reported only by `esharp build`/`run`/`test` for the
-m68k, aros and aros-i386 targets, not in the IDE or the host build.
+m68k, aros and aros-i386 targets, not in the IDE or the host build. ES0103 (a program uses an `internal` or `private protected` member of E#'s library, or a member of an internal library type) is reported by `esharp build`/`run`/`test`; the IDE and the host build already reject the same code with C# error CS0117/CS0122, because there the library is a referenced assembly.
 
 With the installed tool the csproj references the AmigaESharp.Sdk package and the tasks call `esharp`. When the CLI runs
 from a checkout (`dotnet run --project src/ESharp.Cli -- new ...`), or with `esharp new <name> --source [dir]`, the csproj
