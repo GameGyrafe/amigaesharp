@@ -345,7 +345,8 @@ Dos.PutStr($""{r1} {r2} {r3} {r4} {r5} {r6} {r7} {BoopsiObject.Live} {Heap.LiveC
     public void Cast_object_pointers_are_only_for_classes(string types, string body)
     {
         var src = Prelude + types + " public static unsafe class P { [EntryPoint] public static void Main() { " + body + " } }";
-        var r = Compile(src, M68k);
+        // The intrinsics are internal to the library (ES0103 for a program), so this source is compiled as a library file.
+        var r = EsCompiler.Compile(new[] { new SourceFile("CastTest.cs", src) }, new CompileOptions { Defines = M68k.Defines, UserFilesAreLibrary = true });
         Assert.Contains(r.Diagnostics, d => d.Id is "ES0099" or "ES0014" && (d.Id == "ES0014" || d.GetMessage().Contains("only classes")));
     }
 
@@ -366,7 +367,7 @@ nuint r2 = o.DoMethod(Om.Get, Pga.Top.Tag, (nuint)(&slot));
 Dos.PutStr($""r={(int)r} slot={(int)slot} {(int)r2}\n"");
 o.Dispose();
 Heap.Free(ref o);";
-        var c = CompileOk(Program("", body).Replace("public static class P", "public static unsafe class P"), HostC);
+        var c = WithoutArosWorkbenchStart(CompileOk(Program("", body).Replace("public static class P", "public static unsafe class P"), HostC));
         Assert.Contains("static __attribute__((unused)) int es_oclass_probe(void)", c);
         // Take the AROS branch of es_domethod with host gcc: a small intuition with classes whose objects keep the class pointer
         // OFFSET bytes before them.

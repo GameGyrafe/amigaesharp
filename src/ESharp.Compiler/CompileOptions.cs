@@ -28,4 +28,7 @@ public sealed class CompileOptions
 
     /// <summary>Fail the build when the constant chip RAM reservations exceed this many bytes (68k only).</summary>
     public long? ChipBudget { get; init; }
+
+    /// <summary>Test hook: name the program files as library files (no ES0103 for internal library members).</summary>
+    internal bool UserFilesAreLibrary { get; init; }
 }

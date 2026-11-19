@@ -8,14 +8,23 @@ namespace ESharp.Compiler;
 internal static class LibrarySources
 {
     /// <summary>The paths the library files are parsed under (resource names, ESharp.Compiler.csproj), for the analyzer: ';'-separated prefixes.</summary>
-    public const string PathPrefixes = "lib/Runtime/;lib/Platform/";
+    public const string PathPrefixes = Root + "Runtime/;" + Root + "Platform/";
+
+    /// <summary>
+    /// Starts every library path. No path the CLI builds from a project file (relative or absolute) starts with it, and
+    /// <see cref="UserPath"/> makes sure of that for any caller.
+    /// </summary>
+    public const string Root = "<esharp-lib>/";
+
+    /// <summary>A program file's path, kept out of the library's namespace of paths.</summary>
+    public static string UserPath(string path) => path.StartsWith(Root, System.StringComparison.Ordinal) ? "./" + path : path;
 
     public static IEnumerable<SourceFile> Load()
     {
         var asm = typeof(LibrarySources).Assembly;
         foreach (var name in asm.GetManifestResourceNames())
         {
-            if (!name.StartsWith("lib/")) continue;
+            if (!name.StartsWith(Root)) continue;
             using var stream = asm.GetManifestResourceStream(name)!;
             using var reader = new StreamReader(stream);
             yield return new SourceFile(name, reader.ReadToEnd());

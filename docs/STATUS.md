@@ -599,7 +599,7 @@ A class of the program may derive from a platform class that is marked `[Extensi
 Emitter fix needed for this: a class constructor's chained constructor (`: base(...)`, `: this(...)` or the implicit parameterless base one) is now marked reachable. Before, library code was emitted only when an expression named it, so the derived constructor called a `GtWindow_new_init` that was never emitted (a link error, never a miscompile).
 
 Verified:
-- `dotnet test`: 518 tests, 516 passed, 2 skipped (the SDK-backed BindGen ones), 0 failed. 13 of them are new (tests/ESharp.Compiler.Tests/PlatformSubclassTests.cs). A program with a two-level hierarchy over `GtWindow` (overrides called from platform code through `Dispatch`, `base.` calls, a refused and an accepted close, `is`/`as` across the library boundary, a class with no constructor, freeing through the base type) is compiled to C for the Amiga build of the platform and run with host gcc under ASan/UBSan/LSan. The same source, compiled by dotnet against the host platform assembly, gives the same `all ok`. The sample is built for m68k, AROS and os4 with the overrides in the class table, and runs on the host fake. Analyzer tests cover a library base without `[Extensible]` (ES0007, in the compiler and with ESharp.Platform loaded as metadata the way the IDE does), `GtWindow` as a metadata base (accepted), a .NET base (still ES0007), `class W : GtWindow` on sdl (ES0102), a program declared in the `ESharp` or `ESharp.Platform` namespace with its own hierarchy (accepted and run; library classes are recognised by their source path, `lib/Runtime/` and `lib/Platform/`, which the compiler passes to the analyzer as an option, or by their assembly in the IDE, never by namespace), and an implicit base constructor whose parameters are all optional (ES0099: the emitter would not run it).
+- `dotnet test`: 518 tests, 516 passed, 2 skipped (the SDK-backed BindGen ones), 0 failed. 13 of them are new (tests/ESharp.Compiler.Tests/PlatformSubclassTests.cs). A program with a two-level hierarchy over `GtWindow` (overrides called from platform code through `Dispatch`, `base.` calls, a refused and an accepted close, `is`/`as` across the library boundary, a class with no constructor, freeing through the base type) is compiled to C for the Amiga build of the platform and run with host gcc under ASan/UBSan/LSan. The same source, compiled by dotnet against the host platform assembly, gives the same `all ok`. The sample is built for m68k, AROS and os4 with the overrides in the class table, and runs on the host fake. Analyzer tests cover a library base without `[Extensible]` (ES0007, in the compiler and with ESharp.Platform loaded as metadata the way the IDE does), `GtWindow` as a metadata base (accepted), a .NET base (still ES0007), `class W : GtWindow` on sdl (ES0102), a program declared in the `ESharp` or `ESharp.Platform` namespace with its own hierarchy (accepted and run; library classes are recognised by their source path, `<esharp-lib>/Runtime/` and `<esharp-lib>/Platform/`, which the compiler passes to the analyzer as an option, or by their assembly in the IDE, never by namespace), and an implicit base constructor whose parameters are all optional (ES0099: the emitter would not run it).
 - A1200, Kickstart 3.1 (40.069) in FS-UAE: `esharp run samples/guiclass --headless --model A1200 --kickstart <rom> --input "click 400,300;rel -96,-100;press;rel -72,-63;rel -28,-10;press"` printed 8 `ok` lines and no `FAIL`, including "reply: Hello, Amiga!" from the overridden `OnClicked` and the close through `OnCloseRequest`. The close-gadget move documented for samples/gui (`rel -42,-20`) was found by screenshot before f76a167 (2026-11-13), which made `--input rel` move exactly instead of dropping the remainder of each step; since then the same chain lands 23 pixels left of and 9 above the close gadget, so `samples/gui` on main also stopped after the Hello click. Nothing in the GUI code changed. With `rel -28,-10`, found by screenshot, `samples/gui` gives its 7 `ok` lines again; AGENTS.md has the new moves. The cards and rummy moves in AGENTS.md (`rel -80,50`, `rel 16,-80`) were re-run after that fix and still hit: cards clicked (80,145), the Higher button, and made a guess; rummy clicked (128,80), the stock (28 `ok`, no `FAIL`).
 - AmigaOS 4.1 in the QEMU VM (`--target os4`, `--input "click 208,101;click 57,45"`, the samples/gui coordinates): the same 8 `ok` lines, no `FAIL`.
 - No regressions on the A1200 / 3.1 (`esharp test --target m68k`): inherit 24, objects 21, closures 20 `ok` on both host and Amiga, and they agree.
@@ -1331,7 +1331,7 @@ What each system shows (default E# icon, 48 x 32):
 | Workbench 3.1 (no NewIcons) | classic 4-colour image | `SEED=42`, `AUTO` (NewIcons lines skipped by E#) |
 | Workbench 3.x with NewIcons | NewIcons image (expected; not verified) | the same |
 | AmigaOS 4.1 | colour image (FORM ICON); NewIcons-only icon: colour image too | `SEED=42`, `AUTO` |
-| AROS (Wanderer) | colour image (FORM ICON); NewIcons-only icon: colour image from the NewIcons lines | not verified (see below) |
+| AROS (Wanderer) | colour image (FORM ICON); NewIcons-only icon: colour image from the NewIcons lines | `SEED=42`, `AUTO` (since issue #107, see below) |
 
 Verified:
 - `dotnet test`: 588 passed, 0 failed, 2 skipped (590). New `NewIconsTests` (13, with `stripni.py` run through python3 when it is there): the default icon written by `IconStep` read back by an independent decoder in the test
@@ -1359,15 +1359,71 @@ Verified:
   started from an E# icon (its program renamed next to our `.info`) opens normally.
 
 Not verified / found:
-- **A program built with the toolchain image's AROS compiler crashes when Wanderer starts it** (exec `RemHead`, address error, in the
-  program's task before any E# code matters): `samples/wbstart`, an E# program whose `Main` only calls `Dos.Delay`, the same with the
-  Workbench argument code taken out of the C, and a plain C `main` that calls `Delay` all crash; the same plain C program run from the
-  Shell works, and AROS's own Calculator started from Wanderer works, also with an E# icon. So the C startup of the `x86_64-aros-gcc`
-  toolchain (amigadev/crosstools) does not handle a Workbench start on this nightly; not caused by the icon and not fixed here.
-  The Workbench-start `Args` path is therefore not verified on AROS.
+- **A program built with the toolchain image's AROS compiler crashed when Wanderer started it** (exec `RemHead`, address error, in the
+  program's task before any E# code matters), while the same program from the Shell worked and AROS's own Calculator started from
+  Wanderer worked. Found and fixed in issue #107: see "Wanderer start on AROS" below.
 - Workbench 3.x with NewIcons installed (the colour image on 3.1): not verified. NewIcons was not fetched (no per-user fetch script was
   added; its archive terms were not checked).
 - A PNG icon's NewIcons image on a real system, MorphOS, OS 3.5/3.9, real hardware.
+
+### Wanderer start on AROS (issue #107)
+
+**Cause.** The x86-64 toolchain's startup code waited for the WBStartup message on the wrong address. AROS's C startup (`startup.o` and
+`libautoinit.a` of the toolchain) runs a `PROGRAM_ENTRIES` function, `__startup_fromwb`, before `main`: when the process has no CLI it calls
+`WaitPort` and `GetMsg` on the process's own port, `&pr_MsgPort`, at an offset compiled in from the SDK's `struct Process`. The `x86_64-aros`
+toolchain (amigadev/crosstools, libraries dated February 2020) has headers without the SMP field at the end of `struct Task`; the hosted
+x86-64 nightly is ABIv1 with `__AROSPLATFORM_SMP__` in its `aros/config.h`, and its `struct Task` ends with a `spinlock_t`. So `pr_MsgPort` is
+at 0x100 in the toolchain's `fromwb.o` and at 0x130 in the nightly's own (the nightly's `Developer/lib/libautoinit.a`, compared by
+disassembly), and the toolchain's startup waited 48 bytes too early inside the Process. A Shell start does not wait, so it was not affected.
+The i386 toolchain image (`esharp-aros-i386`, built from AROS source of 2026-11-15) has headers that match the i386 nightly, and its programs
+already started from Wanderer before this change (`samples/wbstart`: `arguments 2, SEED 42, AUTO yes`), so the crash was specific to the
+prebuilt x86-64 toolchain. Measured with a throwaway probe started from the Shell (not committed): on the x86-64 nightly the port with node
+type `NT_MSGPORT`, signal bit `SIGB_DOS` (8) and this process as its task is 48 bytes after the toolchain's compiled offset, and nothing else
+in the 128 bytes after that offset matches; on i386 it is at the compiled offset. The same kind of SMP layout change had already been found
+for BOOPSI objects (`es_domethod`, above).
+
+**Fix (generated C, every AROS program).** The C of every Amiga target now has, inside `#if defined(__AROS__)` (the m68k, os4 and MorphOS
+compilers never see it; sdl's C does not have it), a Workbench start entry of E#'s own. `int __nowbsupport` and `WBenchMsg` are defined in
+the program, so the linker no longer takes the toolchain's `fromwb.o` out of `libautoinit.a` (those two symbols are why it was linked;
+checked with `nm`: no `__startup_fromwb` in the x86-64 or i386 program any more), and `es_aros_wbstart` joins the `PROGRAM_ENTRIES` set of
+`aros/startup.h` at the same priority (-50, before the console-window and command-line entries, which look at `WBenchMsg`). It asks
+dos.library's `Cli()` whether this is a Shell start; if not, it finds the process port at run time (the first `MsgPort` from the compiled
+`pr_MsgPort` offset up to 128 bytes after it whose node type is `NT_MSGPORT`, whose signal bit is `SIGB_DOS` and whose task is this process),
+waits for the message, sets `__argc` to 0 and `__argv` to the message (what `main` and `Args` already expect), and makes a copy of the
+icon's directory lock the current directory. After the program and its exit code it restores the old directory, unlocks the copy and
+replies to the message under `Forbid()`, as every Amiga C startup does. No toolchain file was changed. For m68k and os4 the C differs only
+inside that `#if`: built with and without it, the m68k program is byte-identical and the os4 program differs only in the source file name
+in its symbol table (identical after strip).
+
+**Harness.** `tools/aros-hosted/xinput.py` has `drag x1,y1 x2,y2` (press, move in steps, release), used to move the console window that AROS
+opens for a Workbench-started program's output off the program's own window.
+
+Verified (hosted AROS images `esharp-aros-hosted`, nightly 20261114, and `esharp-aros-hosted-i386`, nightly 20261116):
+- Before the fix, x86-64: `aros-hosted.sh wbstart --docker esharp-aros-hosted --wanderer --log --input "dbl 45,135;sleep 4;dbl 368,150;sleep 4;dbl 90,128;sleep 6"`
+  (System, ESTest, the wbstart icon): 1 trap, `Exec_43_RemHead`, `Hardware bus fault/address error`, task `wbstart`. i386 with the same
+  input: 0 traps, `arguments 2, SEED 42, AUTO yes`.
+- After the fix, x86-64 and i386, the same input plus `;drag 200,42 560,420;sleep 2`: 0 traps; the program's window shows `Arguments 2`,
+  `SEED 42`, `AUTO yes` (the icon's 15 NewIcons lines skipped) and the console shows `arguments 2, SEED 42, AUTO yes, stack (not read)`
+  (screenshots looked at on both). With `;click 52,42;sleep 4` added (the window's close gadget) the program ends, its windows are gone,
+  Wanderer is back, 0 traps and no alert in the log, on both. `samples/gui` (no `Args`) started from Wanderer on x86-64: its window opens,
+  `ok the window opens` and `ok the string gadget holds the default name`, 0 traps.
+- Shell start unchanged: `aros-hosted.sh wbstart --args "SEED=7 auto"` prints `arguments 2, SEED 7, AUTO yes` on x86-64 and i386.
+- Shell regression with the final C (`aros-hosted.sh <sample>`, x86-64 and i386, the same on both): language 39, objects 21, linq 37,
+  lambdas 16, inherit 24, generics 24 ok, no FAIL, 0 traps; `mainargs --args 'ONE "two words" RC=5'`: 3 arguments, `two words` whole,
+  `rc 5`. An earlier run of the same set gave i386 `generics` 3 traps with all 24 ok, and 3 re-runs 0 traps: the intermittent i386
+  Wanderer-task traps described under "AROS i386".
+- A1200, Kickstart 3.1 (40.069), Workbench 3.1 disk 2 read-only in DF0, FS-UAE 3.2.35, `samples/wbstart` (m68k) and its icon on a directory
+  hard disk, opened by scripted double-clicks: the window shows `arguments 2, SEED 42, AUTO yes, stack 32768` (screenshot looked at).
+- `dotnet test`: 603 passed, 0 failed, 2 skipped (605). New `ArosWorkbenchStartTests` (4): the entry is in the AROS branch of the C of
+  every Amiga target and not in sdl's; built with the host gcc against stand-in AROS headers in which the process port is 48 bytes after the
+  compiled offset and a port of another task sits at the compiled offset: a Workbench start waits on the right port, `main` gets argc 0,
+  `Args` are the icon's tool types, the copied directory lock is current during `main` and is restored and unlocked before `Forbid` and
+  `ReplyMsg`; a Shell start waits for nothing and keeps the command line; a program without `Args` replies too. With the scan cut down to
+  the compiled offset only, the two Workbench tests fail.
+
+Not verified: native AROS (pc-x86_64 or pc-i386 in QEMU or on hardware), nightlies other than these two, a start with project icons as
+extra arguments (`sm_NumArgs` above 1: the message is passed on as before, `Args` reads only the program's own icon), clang building the
+entry (no clang on this host; CI builds the host test C with clang -Werror).
 
 ## AROS i386 (`--target aros-i386`, issue #4)
 
@@ -1446,3 +1502,15 @@ and runs it in the image.
 - **Default build (no `--build-context`, `docker build --no-cache -t ... docker/aros-hosted`):** built from the SourceForge download (about 4.5 minutes,
   the sha256 check printed OK); the smoke test against that image passes (hello prints `Hello from E#!`, 0 traps, image tree unpatched).
 - **Not verified:** gui, asl and keys in the image, a different nightly date.
+
+## Internal library members are not reachable from programs (issue #91)
+
+`esharp build` compiles the library and the program as one assembly, so C# let a program call `internal` library members (for example `Cast.ObjectToPtr`),
+also from a program class declared in `namespace ESharp.Platform`; the dotnet host build rejected the same code. New analyzer error **ES0103** ("'X' is
+internal to E#'s library"): a file that is not a library file (library files are found by the `<esharp-lib>/Runtime/`, `<esharp-lib>/Platform/` path prefixes (a program file whose path starts with that is renamed `./<esharp-lib>/...`) of the
+`ESharpLibrarySources` option, never by namespace) refers to a symbol declared in library source that, or whose containing type, is `internal` or
+`private protected`. It is active only where the library is source (the compiler); in the IDE and the host build the library is metadata and C# already errors,
+so those paths are unchanged. The platform's own internal use is not affected. The existing `Cast` intrinsic tests now compile their source as a library file.
+
+- Tests (`LibraryInternalTests`): a direct call of `Cast.ObjectToPtr`, a call from a class in `namespace ESharp.Platform`, an internal type (`DosLib`, m68k), the
+  library's own internal use and the public surface (accepted), a program member with the same name as a library internal (accepted).
