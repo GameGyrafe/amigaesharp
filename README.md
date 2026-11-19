@@ -85,9 +85,9 @@ Each links to a sample that shows it (every sample prints `ok` lines that `eshar
 - **Games:** a card game and rummy against a bot, written from scratch ([cards](samples/cards), [rummy](samples/rummy)).
 - **Input, sound and timing:** mouse, keyboard with keymaps, joystick, audio samples, frame timing
   ([keys](samples/keys), [controls](samples/controls), [sound](samples/sound), [timing](samples/timing)).
-- **System GUI:** GadTools windows, BOOPSI objects and hooks, MUI windows whose notifications go to C# lambdas, file requester,
-  fonts, IFF files ([gui](samples/gui), [guiclass](samples/guiclass), [boopsi](samples/boopsi), [mui](samples/mui),
-  [asl](samples/asl), [fonts](samples/fonts), [iff](samples/iff)).
+- **System GUI:** GadTools windows, BOOPSI objects and hooks, MUI windows whose notifications go to C# lambdas, MUI custom
+  classes written in C#, file requester, fonts, IFF files ([gui](samples/gui), [guiclass](samples/guiclass), [boopsi](samples/boopsi),
+  [mui](samples/mui), [muiclass](samples/muiclass), [asl](samples/asl), [fonts](samples/fonts), [iff](samples/iff)).
 - **Low level when you need it:** `[InlineAsm]` (68020 and PowerPC with a C# fallback), `[Interrupt]` VBlank servers
   ([interrupts](samples/interrupts)), raw library bindings and tag lists ([hwinfo](samples/hwinfo)).
 - **Debugging:** host builds step through under the .NET debugger; the Amiga build has a serial `Trace` and `esharp addr` to turn a

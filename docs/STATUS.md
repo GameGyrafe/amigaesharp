@@ -651,7 +651,7 @@ MUI on the BOOPSI core. MUI is third-party shareware, so all MUI facts here (cla
 - MorphOS: the emulation registers and `EmulCallDirectOS`.
 - AROS: AROS's own `AROS_LC` macros.
 
-`Mui.Request` wraps MUI_RequestA. Custom classes are not done (`MUI_CreateCustomClass` and the rest): they do not come cheaply from `[Extensible]`, so they are follow-up issue #93.
+`Mui.Request` wraps MUI_RequestA. Custom classes came later (issue #93): see "MUI custom classes".
 
 **Classes.** `MuiObject : BoopsiObject` takes any MUI class by name. `Init`, `Set` and `Get` work as on the core, with the typed catalogue `Muia` (MUIA_* with their value types) and `MuiFrame`. The wrappers are:
 - `MuiApplication` (title and base name; commodities and ARexx off) and `MuiWindow` (title, `Content`, `Id`, `Open`/`Close`/`IsOpen`, `OnCloseRequest`).
@@ -729,7 +729,7 @@ Not verified:
 - Several windows.
 - Disposing a window while the application runs.
 - `MuiRectangle()` without `Gap`.
-- MUI custom classes (#93).
+- MUI custom classes: see "MUI custom classes" (issue #93).
 
 ## Classic MUI in the emulator (`esharp run|test --mui 3.8|5`, samples/muicheck, issue #40)
 
@@ -742,6 +742,121 @@ Also verified: `samples/muicheck` on the AmigaOS 4.1 VM (`--target os4`, MUI 5 i
 The startup replaces LIBS: with the Workbench disk's Libs before it adds MUI:Libs (with ADD, the boot's LIBS: on DH0: stayed first, and a program named like a LIBS: drawer, `mui`, hid MUI 3.8's external classes) and ends with `Stack <EsStackSize>` (the boot shell's 4096 bytes made MUI 5 stop on a "raise the stack size" requester). samples/mui opens its window with MUI 3.8 and 5 on Kickstart 3.1 and 3.0, see "MUI wrappers".
 
 Not verified: MUI preferences and patterns (none are saved in ENV:), registered MUI, MUI 4, a Workbench disk other than 3.0/3.1 disk 2, Windows or macOS (the fetch script needs bash, curl, sha256sum and docker), `--mui` with `--input` or screenshots.
+
+## MUI custom classes (samples/muiclass, issue #93)
+
+A program can write a MUI class in C#: a class derived from `MuiArea` (a subclass of Area.mui) or `MuiCustomGroup` (a subclass of Group.mui, with
+`MuiGroup`'s `Add`, `Horizontal`, `Frame`, `Title`). Both are `[Extensible]`. The program overrides the members MUI calls, which are protected
+virtual members of `MuiObject` (a program cannot derive from any other MUI class, so only these two expose them):
+- `OnAskMinMax(ref MuiMinMax size)` (MUIM_AskMinMax): the contents' sizes, added to what the superclass asks for (frame and spacing; a group's
+  children). Minimum <= default <= maximum is kept, and `MuiMinMax.Unlimited` (MUI_MAXMAX, 10000) as a maximum lets the object grow.
+- `OnDraw(MuiRender r)` (MUIM_Draw with MADF_DRAWOBJECT or MADF_DRAWUPDATE, after the superclass drew frame and background, or a group its
+  children). `MuiRender` has the contents box (`Left`, `Top`, `Width`, `Height`), `Update`, `RastPort`, `Pen(MuiPen.X)` (MUI's pens:
+  Shine ... Mark, MPEN_*) and `Fill`, `Line` and `Text` with coordinates relative to the contents. `Fill` and `Line` are clipped to the
+  object's whole box. `Graphics.Draw` (graphics.library -246) is a new binding for `Line`.
+- `OnSetup`/`OnCleanup` (MUIM_Setup/Cleanup; false from `OnSetup` stops the window opening), `OnSet(attr, value)` (OM_SET, and the starting
+  attributes at OM_NEW; the superclass sees every attribute too, so MUI's notifications work on the class's own attributes), `OnGet(attr,
+  out value)` (OM_GET: true answers it, false lets the superclass answer), `OnMethod(id, msg, out result)` (any other method: the class's own,
+  sent with `DoMethod`).
+- `Redraw()` (protected) calls MUI_Redraw with MADF_DRAWOBJECT while the object is shown (between MUIM_Show and MUIM_Hide) and does nothing
+  otherwise; `IsShown` says which.
+
+**How it works.**
+- One MUI class per MUI superclass, not per C# class: `MUI_CreateCustomClass(NULL, "Area.mui" or "Group.mui", NULL, one pointer of
+  instance data, dispatcher)` when the first object of it is made. The C# virtual calls choose each class's behaviour, so a second MUI class
+  per C# class would add nothing. A class is deleted with `MUI_DeleteCustomClass` once MUI has disposed its last object (after the
+  outermost MUI_DisposeObject returns, so never inside its own dispatcher, and again at `Mui.Close`). A later object makes it again.
+- New muimaster.library calls, by vector from the AROS fd as before: `MUI_Redraw` (-102), `MUI_CreateCustomClass` (-108),
+  `MUI_DeleteCustomClass` (-114), written per target like the others (m68k registers, OS4 through EmulateTags on the 68k jump table,
+  MorphOS emulation registers, AROS `AROS_LC`). `bindgen check <AROS fd dir> src/ESharp.Platform muimaster`: 8 declarations, 0 problems.
+- The objects are made with `Intuition.NewObjectA(mcc_Class, NULL, tags)`. `mcc_Class` is the seventh pointer of struct MUI_CustomClass
+  (Zune header). The dispatcher is one `[HookEntry]` method for both classes, so its entry per target is the existing hook machinery: the
+  m68k register entry (a0 class, a2 object, a1 message), the MorphOS gate, plain C on AmigaOS 4 and AROS.
+- OM_NEW: the superclass first; then the instance data (one pointer) gets the C# object that is being made, and `OnSet` sees the starting
+  attributes. OM_DISPOSE clears it before the superclass runs. A method for an object whose pointer is null goes straight to the superclass.
+- Two new emitter natives, `es_dosupermethod` and `es_inst_data` (`BoopsiNative`): DoSuperMethodA is amiga.lib on m68k and MorphOS and
+  `IDoSuperMethodA` on AmigaOS 4. On AROS the superclass's dispatcher is called directly through `cl_Super`, so the object layout that
+  `es_domethod` probes for is not needed. The instance data is `obj + cl_InstOffset`.
+- Message layouts from the Zune headers, all pointer-sized slots (STACKED on AROS): MUIP_AskMinMax (a struct MUI_MinMax of six WORDs),
+  MUIP_Draw (flags), MUIP_Setup (the render info), opSet, opGet.
+- `MuiRender` reads struct MUI_RenderInfo (pens: the fourth pointer, a UWORD array; rast port: the sixth) and struct MUI_AreaData (font,
+  box, addleft/addtop/subwidth/subheight) from the Zune headers. Where MUI_AreaData starts in an object is not fixed: on m68k and OS4 it is
+  after the seven fields of MUI_NotifyData (28 bytes), but the AROS headers of 2026 align class instance data (`CLASS_INSTANCE_ALIGN`), so
+  the x86-64 header of the toolchain image says 56 while the hosted nightly has it at 64 (seen on a run, see below), and the i386 SDK says
+  32 instead of 28. So at the first MUIM_Setup the dispatcher looks for the render info pointer (MUIP_Setup's) in pointer-sized slots 7
+  to 16 of the object, the start of MUI_AreaData, and remembers the offset. If it is not found, it says so once and `OnDraw` is not
+  called.
+- Callbacks run on the program's own task. `Mui.HandlerDepth` counts them, so disposing a MUI object in them is refused, as in a
+  notification handler.
+- `Mui.CustomClasses` (made and not deleted), `Mui.CustomClassesMade`, `Mui.CustomObjects` (OM_NEW minus OM_DISPOSE as the dispatcher
+  saw them) are there for checks.
+- Host: the fake runs the same C#. A custom object sees its starting attributes in `OnSet`, `Set` goes to `OnSet` before the
+  notifications, `Get` asks `OnGet` first, `DoMethod` asks `OnMethod`. Opening a window runs setup, size, show and draw for each custom
+  object in it; closing runs hide and cleanup, and so does disposing one that is shown. `MuiRender` counts its calls (`HostFills`,
+  `HostLines`, `HostTexts`). `BoopsiObject` gained three internal host hooks for this (`HostCreated`, `HostGet`, `HostMethod`).
+- Left out: input events (MUIM_HandleEvent, event handler nodes, MUIM_HandleInput). A custom class does not get mouse or keys yet.
+
+**samples/muiclass.** `BarGraph : MuiArea` (C# `OnAskMinMax` and `OnDraw`: eight bars, a base line and the level as text; its own
+attribute `Level` with `OnSet`/`OnGet` and a redraw; its own method `Reset`) and `Panel : MuiCustomGroup` (a horizontal framed group with
+both graphs in it; its own attribute `Mark` drawn as a stripe under the children). A slider's notification sets the first graph's level
+and the group's mark. The checks (25, the same on every system):
+- The class is made once for both graphs (2 classes: Area and Group). The dispatcher saw 3 objects made (OM_NEW).
+- The starting levels went through OnSet and read back through OnGet.
+- Setup reached each object once, AskMinMax asked the graphs, Draw drew the graphs and the group.
+- The own attribute's round trip, its redraw, and a MUI notification on it.
+- The slider's notification set the level and the mark, and both redrew.
+- The own method ran. MUI's attributes still go to the superclass.
+- Cleanup reached each object at window close.
+- Disposing the application disposed the custom objects (OM_DISPOSE), and both classes were deleted after their last object.
+- A lone graph makes the Area class again; nothing is drawn while it is not shown; the class is deleted with it.
+- Every MUI object was disposed; no closure is left.
+WAIT runs until the window is closed or Quit is pressed and prints the level and the number of draws.
+
+Verified:
+- `dotnet test`: 627 passed, 2 skipped (the SDK-backed BindGen test and the OS4 VM test, which need an SDK or a VM), 0 failed. New in MuiTests:
+  - samples/muiclass as generated C, run with host gcc under ASan/UBSan against the fake muimaster.library. The fake grew custom classes:
+    MUI_CreateCustomClass/DeleteCustomClass/Redraw, NewObjectA of a private class with OM_NEW through the dispatcher, DoSuperMethodA as
+    Area/Group, objects laid out like MUI_NotifyData and MUI_AreaData, a window that opens with setup, size, show and draw for each custom
+    object, and graphics calls that refuse an unclipped rectangle. Result: all ok; the Area class made and deleted twice and the Group class
+    once, each deletion after the objects; 10 objects made and 10 disposed; nothing drawn while hidden.
+  - samples/muiclass on dotnet, default and WAIT.
+  - The sample compiles for m68k, aros, aros-i386, os4 and morphos with the per-target DoSuperMethodA and no MUI header.
+  - The vector test covers the three new calls.
+  - A program class may derive from `MuiArea` and `MuiCustomGroup` but not from `MuiText` (ES0007).
+  - The existing samples/mui fake run is unchanged (23 made, 23 disposed, 4 group changes).
+- Host: `esharp test samples/muiclass`: 25 ok; with `--args WAIT`: `events: level 90, 4 draw(s)`, 25 ok.
+- A1200, Kickstart 3.1 (40.069), Workbench 3.1 disk 2, FS-UAE (`esharp test samples/muiclass --target m68k --docker <m68k image>
+  --model A1200 --kickstart <rom> --mui V --workbench <wb>`):
+  - MUI 3.8 (muimaster 19.35): host 25 ok, Amiga 25 ok, they agree on every check.
+  - MUI 5 (muimaster 21.227): host 25 ok, Amiga 25 ok, they agree.
+  - `run --headless --screenshot` with MUI 3.8 and with MUI 5: the screenshots were looked at. Each shows the window "E# MUI custom class"
+    on the Workbench screen with the text "Level 70", the framed "Custom group" with the two graphs side by side (bars rising to 70% and
+    20%, alternating fill and shadow pens, the level as text in the top left corner, a base line), the slider at 70 and Quit. Under both,
+    the group's stripe under the graphs is blue for 70% of its width and black for the rest.
+  - No regression: `esharp test samples/mui --target m68k ... --mui 3.8 --workbench <wb>`: host 32 ok, Amiga 32 ok, they agree.
+  - All of the above, and the OS4 and hosted AROS x86-64 runs below, were re-run on the final code: same counts, screenshots looked at again.
+- AmigaOS 4.1 in the QEMU VM (MUI 5): `esharp test samples/muiclass --target os4`: host 25 ok, OS4 25 ok, they agree. `run --screenshot`: the
+  screendump was looked at and shows the same window in the OS4 look (graphs 70% and 20%, level texts, the stripe, slider at 70). So
+  MUI_CreateCustomClass through the 68k jump table takes the native PowerPC dispatcher on OS4.
+- Hosted AROS x86-64 (Zune, nightly 20261106, esharp-aros-hosted): `tools/aros-hosted/aros-hosted.sh muiclass --docker esharp-aros-hosted
+  --wait 0 --shot shot.png`: 25 ok, 0 traps, all ok. The screenshot was looked at and shows the same window in Zune's look. With
+  `--args WAIT --input "click 560,341;sleep 1;click 560,341;sleep 1;click 400,360"`: two slider pages by mouse (level 72, the graph redrawn
+  from the slider's notification, 8 draws), then Quit; all ok, 0 traps. A debug run printed the area data offset: 64 on this nightly
+  (the 2020 header of the toolchain image says 56), and the instance data 448 bytes into an Area object, 640 into a Group object.
+
+Not verified:
+- Hosted AROS i386 (`--target aros-i386`, esharp-aros-hosted-i386): **not passing.** It builds. 1 run of 7 passed all 25 checks with 0 traps.
+  In the others, either output stops a second into the two-second window loop after `SHOT` and the shell traps afterwards in `GetVar`, or
+  (two rebuilt binaries with debug lines) the program traps at its first `Create` with `IntuitionBase` overwritten (0x32) in
+  `es_oclass_probe`. So it depends on the binary's layout, like the samples/mui failure on hosted i386 described in "AROS i386". The cause
+  is not found; samples/mui ran 3 of 3 times on hosted i386 on this branch.
+- MorphOS (the C compiles; not built or run).
+- Real hardware.
+- Input events in custom classes (not written).
+- `OnSetup` returning false, and `MuiRender.Update` true: MUI_Redraw is always called with MADF_DRAWOBJECT, and no system sent DRAWUPDATE
+  in these runs.
+- A custom class inside a virtual group or a scrolled area, and several windows.
+- MUI preferences other than the defaults. The pens are whatever MUI's defaults gave on each system.
 
 ## Hardware test pack (tools/hwpack, samples/hwinfo; issue #7)
 
@@ -989,7 +1104,7 @@ Open work as of 2026-11-14 (the GitHub issues are the live list; the v1 tracker 
 - **Real hardware (#7):** nothing has run on a real Amiga yet. The hardware test pack (`tools/hwpack`) is ready; reports from an original A1200, an accelerated A1200 or an FPGA machine are the most valuable thing anyone can add. PowerPC real hardware and MorphOS runs are also not done (MorphOS only builds; QEMU `pegasos2` could boot it, not tried).
 - **Debugging (#14):** the host build can be stepped through under .NET and the Amiga build has serial `Trace` and `esharp addr`; a source-level debugger for the Amiga build is open.
 - **Windows (#11):** CI now runs a `windows` job (windows-latest, PR head): `dotnet test` (439 passed, 2 skipped, 0 failed; the runner has a MinGW gcc, so the generated-C tests run there and only the Docker/VM/SDK-dependent tests skip), emit-only builds of `samples/hello` and `samples/cards`, `esharp test samples/linq`, a clean `git status` afterwards, and a package round trip against the PR's own packages (`dotnet pack`, install the tool from the folder into a tool path, a nuget.config with the local feed, version and PackageReference checked, NU1603 fails the step, `esharp new`, `dotnet run`, `esharp test`, `esharp build --emit-only`). A `.gitattributes` keeps the working tree LF (the runner has `core.autocrlf=true`), and the native test output is read CRLF-tolerant. Still needs a person on a real Windows machine: Docker Desktop with `--docker` builds, FS-UAE for Windows, VS Code, and Windows with a different (or no) C compiler. `tools/aros-hosted` is Linux-only. macOS was checked, see "VS Code support".
-- **Bindings (#19, #40):** GadTools wrappers (v1), the BOOPSI core with hooks (#40 part 1, see "BOOPSI core and hooks") and the MUI wrappers on it (#40 part 2, see "MUI wrappers") are done. Open: MUI custom classes (#93), ReAction (last, if at all).
+- **Bindings (#19, #40):** GadTools wrappers (v1), the BOOPSI core with hooks (#40 part 1, see "BOOPSI core and hooks") and the MUI wrappers on it (#40 part 2, see "MUI wrappers") are done. MUI custom classes (#93, see "MUI custom classes") are done too. Open: ReAction (last, if at all).
 - **Small gaps (#72):** `string.IndexOf`, `Args` on the host, `esharp test --args`, os4 `--args`.
 - **Display design (not implemented):** [design/DISPLAY.md](design/DISPLAY.md) proposes logical coordinates with an integer scale, mode choice that follows the Workbench's monitor family (MODE option, asl screen-mode requester), 256 colours with a shared palette, a gradient pen (copper on AGA), window mode on the Workbench and multi-scale art. Nothing in it is built or verified yet; it waits for the maintainer's approval.
 - **v2:** AROS i386 (#4: toolchain, target and hosted runs done, see "AROS i386"; open: the mui sample crash on hosted i386, native pc-i386), E# library source packages on NuGet (#31), user classes deriving from platform classes (#42: done for `GtWindow`, see "Classes derived from platform classes"). Capturing lambdas stored in fields and events (#41): done (PR #83), see "Heap closures and events".

@@ -20,6 +20,8 @@ public class MuiTests
 
     private static string SamplePath => Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "..", "samples", "mui", "Mui.cs");
 
+    private static string ClassSamplePath => Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "..", "samples", "muiclass", "MuiClass.cs");
+
     /// <summary>
     /// A fake muimaster.library (and the bits of intuition, utility and exec the wrappers call): objects with an attribute store, children
     /// (OM_ADDMEMBER, a window's root, a listview's list), MUIM_Notify with MUIM_CallHook run from SetAttrsA as MUI does, a string list,
@@ -31,11 +33,25 @@ public class MuiTests
 #include <stdlib.h>
 #include <string.h>
 #include <stdint.h>
+/* A BOOPSI class as far as the generated C reads it (its dispatcher hook, cl_Super, cl_InstOffset) and a MUI custom class's own. */
+struct Hook { void *h_Succ, *h_Pred; uintptr_t (*h_Entry)(void *, void *, void *); void *h_SubEntry; void *h_Data; };
+typedef struct IClass { struct Hook cl_Dispatcher; struct IClass *cl_Super; uint16_t cl_InstOffset; int inst_size, objects; char super[16]; } Class;
 typedef struct MObj MObj;
-struct MObj { char cls[24]; int n; uintptr_t tag[40], val[40]; MObj *kids[32]; int nkids; uintptr_t note[16][3]; int nnotes; char *items[16]; int nitems; };
-static __attribute__((unused)) int shim_made, shim_disposed, shim_changes, shim_quit;
+/* Every fake object starts like a MUI area object (Zune headers): struct MUI_NotifyData (seven pointer-sized fields), then the start of
+   struct MUI_AreaData (render info, background, font, MUI_MinMax, the box, addleft/addtop/subwidth/subheight, flags). */
+struct MObj
+{
+    void *notify[7];
+    void *mad_RenderInfo, *mad_Background, *mad_Font;
+    int16_t mad_MinMax[6], mad_Box[4];
+    int8_t mad_add[4];
+    uint32_t mad_Flags;
+    char cls[24]; int n; uintptr_t tag[40], val[40]; MObj *kids[32]; int nkids; uintptr_t note[16][3]; int nnotes; char *items[16]; int nitems;
+    Class *custom; int shown;
+};
+static __attribute__((unused)) int shim_made, shim_disposed, shim_changes, shim_quit, shim_classes, shim_draws, shim_redraws;
 static __attribute__((unused)) int shim_is_text(uintptr_t t) { return t == 0x8042f8dcu || t == 0x80428ffdu; }
-static __attribute__((unused)) MObj *shim_new(const char *cls, const uintptr_t *tags);
+static __attribute__((unused)) MObj *shim_new(const char *cls, const uintptr_t *tags, int extra);
 static __attribute__((unused)) void shim_store(MObj *o, uintptr_t t, uintptr_t v)
 {
     int i;
@@ -61,11 +77,11 @@ static __attribute__((unused)) void *MUI_NewObjectA(const void *cls, void *tags)
         "Gauge.mui", "Rectangle.mui", "List.mui", "Listview.mui", NULL };
     int k = 0;
     while (known[k] != NULL && strcmp(known[k], (const char *)cls) != 0) k++;
-    return known[k] == NULL ? NULL : shim_new(known[k], tags);
+    return known[k] == NULL ? NULL : shim_new(known[k], tags, 0);
 }
-static __attribute__((unused)) MObj *shim_new(const char *cls, const uintptr_t *tags)
+static __attribute__((unused)) MObj *shim_new(const char *cls, const uintptr_t *tags, int extra)
 {
-    MObj *o = calloc(1, sizeof(MObj));
+    MObj *o = calloc(1, sizeof(MObj) + (size_t)extra);
     snprintf(o->cls, sizeof o->cls, "%s", cls);
     for (; tags != NULL && tags[0] != 0; tags += 2) shim_store(o, tags[0], tags[1]);
     shim_made++;
@@ -75,24 +91,69 @@ static __attribute__((unused)) void *MUI_MakeObjectA(int32_t type, uintptr_t *pa
 {
     char cls[24];
     snprintf(cls, sizeof cls, "Make%d", (int)type);
-    MObj *o = shim_new(cls, NULL);
+    MObj *o = shim_new(cls, NULL, 0);
     if (type == 2 && parms[0] != 0) shim_store(o, 0x8042f8dcu, parms[0]);   /* a button shows its label */
     return o;
+}
+static __attribute__((unused)) uintptr_t shim_dispatch(MObj *o, void *msg) { return o->custom->cl_Dispatcher.h_Entry(o->custom, o, msg); }
+static __attribute__((unused)) void MUI_DisposeObject(void *obj);
+/* The object goes (OM_DISPOSE of the superclass, or MUI_DisposeObject of a plain one): its children first, as MUI does. */
+static __attribute__((unused)) void shim_dispose_raw(MObj *o)
+{
+    for (int k = 0; k < o->nkids; k++) MUI_DisposeObject(o->kids[k]);
+    for (int i = 0; i < o->n; i++) if (shim_is_text(o->tag[i])) free((char *)o->val[i]);
+    for (int i = 0; i < o->nitems; i++) free(o->items[i]);
+    printf("[dispose %s%s]\n", o->custom ? "custom " : "", o->cls);
+    shim_disposed++;
+    free(o);
 }
 static __attribute__((unused)) void MUI_DisposeObject(void *obj)
 {
     MObj *o = obj;
-    for (int k = 0; k < o->nkids; k++) MUI_DisposeObject(o->kids[k]);
-    for (int i = 0; i < o->n; i++) if (shim_is_text(o->tag[i])) free((char *)o->val[i]);
-    for (int i = 0; i < o->nitems; i++) free(o->items[i]);
-    printf("[dispose %s]\n", o->cls);
-    shim_disposed++;
-    free(o);
+    if (o->custom != NULL) { uintptr_t m[1] = { 0x102 }; shim_dispatch(o, m); return; }   /* OM_DISPOSE through the class's dispatcher */
+    shim_dispose_raw(o);
+}
+/* MUI_CreateCustomClass: a struct MUI_CustomClass whose seventh pointer (mcc_Class) is a class with the dispatcher; instance data after the object. */
+static __attribute__((unused)) void *MUI_CreateCustomClass(void *base, const void *super, void *supermcc, int32_t size, void *dispatcher)
+{
+    if (base != NULL || supermcc != NULL || size <= 0) return NULL;
+    void **mcc = calloc(8, sizeof(void *));
+    Class *cl = calloc(1, sizeof(Class));
+    cl->cl_Dispatcher.h_Entry = (uintptr_t (*)(void *, void *, void *))dispatcher;
+    cl->cl_InstOffset = (uint16_t)sizeof(MObj);
+    cl->inst_size = (int)size;
+    snprintf(cl->super, sizeof cl->super, "%s", (const char *)super);
+    mcc[6] = cl;
+    shim_classes++;
+    printf("[create class on %s, %d bytes of instance data]\n", cl->super, (int)size);
+    return mcc;
+}
+static __attribute__((unused)) int32_t MUI_DeleteCustomClass(void *mcc)
+{
+    Class *cl = ((Class **)mcc)[6];
+    if (cl->objects != 0) { printf("[class on %s still has %d objects]\n", cl->super, cl->objects); return 0; }
+    printf("[delete class on %s]\n", cl->super);
+    shim_classes--;
+    free(cl);
+    free(mcc);
+    return 1;
+}
+static __attribute__((unused)) void MUI_Redraw(void *obj, uint32_t flags)
+{
+    MObj *o = obj;
+    if (o->custom == NULL || !o->shown) { printf("[redraw of an object that is not shown]\n"); return; }
+    uintptr_t m[2] = { 0x80426f3fu, flags };
+    shim_redraws++;
+    shim_dispatch(o, m);
 }
 static __attribute__((unused)) int32_t MUI_RequestA(void *app, void *win, uint32_t flags, const void *title, const void *gadgets, const void *format, void *parms)
 { (void)app; (void)win; (void)flags; (void)title; (void)gadgets; (void)format; (void)parms; return 1; }
 static __attribute__((unused)) int32_t MUI_Error(void) { return 0; }
-static __attribute__((destructor)) void shim_report(void) { printf("[shim: %d made, %d disposed, %d group changes]\n", shim_made, shim_disposed, shim_changes); }
+static __attribute__((destructor)) void shim_report(void)
+{
+    printf("[shim: %d made, %d disposed, %d group changes]\n", shim_made, shim_disposed, shim_changes);
+    if (shim_draws > 0 || shim_classes != 0) printf("[shim: %d draws, %d redraws, %d classes left]\n", shim_draws, shim_redraws, shim_classes);
+}
 """;
 
     private const string IntuitionShim = """
@@ -107,38 +168,86 @@ static inline __attribute__((unused)) void *OpenLibrary(const void *n, uint32_t 
 static inline __attribute__((unused)) void CloseLibrary(void *l) { (void)l; printf("[close library]\n"); }
 static inline __attribute__((unused)) uint32_t Wait(uint32_t s) { return s; }
 static inline __attribute__((unused)) void Delay(int32_t t) { (void)t; }
-static inline __attribute__((unused)) void *NewObjectA(void *cl, const void *id, void *tags) { (void)cl; (void)id; (void)tags; return NULL; }
-static inline __attribute__((unused)) void DisposeObject(void *o) { (void)o; printf("[intuition DisposeObject of a MUI object]\n"); }
-static inline __attribute__((unused)) uintptr_t SetAttrsA(void *obj, void *tags)
+/* NewObjectA of a private class (a MUI custom class): OM_NEW through its dispatcher, with the class as the object, as BOOPSI does. */
+static inline __attribute__((unused)) void *NewObjectA(void *cl, const void *id, void *tags)
 {
-    MObj *o = obj;
+    (void)id;
+    if (cl == NULL) return NULL;
+    uintptr_t m[3] = { 0x101, (uintptr_t)tags, 0 };
+    return (void *)((Class *)cl)->cl_Dispatcher.h_Entry(cl, cl, m);
+}
+static inline __attribute__((unused)) void DisposeObject(void *o) { (void)o; printf("[intuition DisposeObject of a MUI object]\n"); }
+/* What MUI does when a window opens (setup, size, layout, show, draw each custom object) or closes (hide, cleanup). */
+static struct { void *wo, *screen, *dri; uint16_t *pens; void *window, *rp; uint32_t flags; } shim_mri;
+static uint16_t shim_pens[8] = { 2, 2, 0, 1, 1, 1, 3, 2 };
+static int shim_rp;
+static __attribute__((unused)) void shim_show_tree(MObj *o, int on)
+{
+    for (int k = 0; k < o->nkids; k++) shim_show_tree(o->kids[k], on);
+    if (o->custom == NULL) return;
+    if (on && !o->shown)
+    {
+        shim_mri.pens = shim_pens;
+        shim_mri.rp = &shim_rp;
+        uintptr_t setup[2] = { 0x80428354u, (uintptr_t)&shim_mri };
+        if (!shim_dispatch(o, setup)) { printf("[setup refused]\n"); return; }
+        int16_t mm[6] = { 0 };
+        uintptr_t ask[2] = { 0x80423874u, (uintptr_t)mm };
+        shim_dispatch(o, ask);
+        if (mm[0] > mm[4] || mm[4] > mm[2] || mm[1] > mm[5] || mm[5] > mm[3]) printf("[bad min/max: %d %d %d %d %d %d]\n", mm[0], mm[1], mm[2], mm[3], mm[4], mm[5]);
+        o->mad_Box[0] = 10; o->mad_Box[1] = 20; o->mad_Box[2] = mm[4]; o->mad_Box[3] = mm[5];
+        o->mad_add[0] = 2; o->mad_add[1] = 2; o->mad_add[2] = 4; o->mad_add[3] = 4;
+        uintptr_t show[1] = { 0x8042cc84u };
+        shim_dispatch(o, show);
+        uintptr_t draw[2] = { 0x80426f3fu, 1 };
+        shim_dispatch(o, draw);
+    }
+    else if (!on && o->shown)
+    {
+        uintptr_t hide[1] = { 0x8042f20fu }, cleanup[1] = { 0x8042d985u };
+        shim_dispatch(o, hide);
+        shim_dispatch(o, cleanup);
+    }
+}
+static __attribute__((unused)) void shim_set_raw(MObj *o, const uintptr_t *tags)
+{
     const uintptr_t *t = tags;
     for (; t != NULL && t[0] != 0; t += 2) shim_store(o, t[0], t[1]);
     for (t = tags; t != NULL && t[0] != 0; t += 2) shim_fire(o, t[0], t[1]);
+    for (t = tags; t != NULL && t[0] != 0; t += 2) if (t[0] == 0x80428aa0u) for (int k = 0; k < o->nkids; k++) shim_show_tree(o->kids[k], t[1] != 0);
+}
+static inline __attribute__((unused)) uintptr_t SetAttrsA(void *obj, void *tags)
+{
+    MObj *o = obj;
+    if (o->custom != NULL) { uintptr_t m[3] = { 0x103, (uintptr_t)tags, 0 }; return shim_dispatch(o, m); }   /* OM_SET */
+    shim_set_raw(o, tags);
     return 0;
 }
 static inline __attribute__((unused)) uintptr_t SetGadgetAttrsA(void *g, void *w, void *r, void *t) { (void)w; (void)r; return SetAttrsA(g, t); }
 static inline __attribute__((unused)) void RefreshGList(void *g, void *w, void *r, int32_t n) { (void)g; (void)w; (void)r; (void)n; }
 static inline __attribute__((unused)) uint16_t RemoveGList(void *w, void *g, int32_t n) { (void)w; (void)g; (void)n; return 0; }
-static inline __attribute__((unused)) uintptr_t GetAttr(uint32_t id, void *obj, void *store)
+static inline __attribute__((unused)) uintptr_t shim_get_raw(uint32_t id, MObj *o, void *store)
 {
-    MObj *o = obj;
     if (id == 0x80421654u) { *(uintptr_t *)store = (uintptr_t)o->nitems; return 1; }
     for (int i = 0; i < o->n; i++) if (o->tag[i] == id) { *(uintptr_t *)store = o->val[i]; return 1; }
     return 0;
+}
+static inline __attribute__((unused)) uintptr_t GetAttr(uint32_t id, void *obj, void *store)
+{
+    MObj *o = obj;
+    if (o->custom != NULL) { uintptr_t m[3] = { 0x104, id, (uintptr_t)store }; return shim_dispatch(o, m); }   /* OM_GET */
+    return shim_get_raw(id, o, store);
 }
 """;
 
     private const string AlibShim = """
 #pragma once
-/* DoMethodA for the fake MUI objects. */
-static __attribute__((unused)) uintptr_t DoMethodA(void *obj, void *msg)
+/* DoMethodA for the fake MUI objects; a custom object's methods go to its class's dispatcher. */
+static __attribute__((unused)) uintptr_t shim_method(MObj *o, uintptr_t *m)
 {
-    MObj *o = obj;
-    uintptr_t *m = msg;
     switch (m[0])
     {
-        case 260: return GetAttr((uint32_t)m[1], obj, (void *)m[2]);
+        case 260: return shim_get_raw((uint32_t)m[1], o, (void *)m[2]);
         case 0x109: o->kids[o->nkids++] = (MObj *)m[1]; return 0;
         case 0x10a:
             for (int k = 0; k < o->nkids; k++)
@@ -157,6 +266,39 @@ static __attribute__((unused)) uintptr_t DoMethodA(void *obj, void *msg)
     }
     return 0;
 }
+static __attribute__((unused)) uintptr_t DoMethodA(void *obj, void *msg)
+{
+    MObj *o = obj;
+    if (o->custom != NULL) return shim_dispatch(o, msg);
+    return shim_method(o, msg);
+}
+/* The superclass of a custom class (Area.mui, Group.mui): what MUI's classes do with the methods a dispatcher passes on. */
+static __attribute__((unused)) uintptr_t DoSuperMethodA(Class *cl, void *obj, void *msg)
+{
+    MObj *o = obj;
+    uintptr_t *m = msg;
+    switch (m[0])
+    {
+        case 0x101:
+        {
+            if (obj != cl) { printf("[OM_NEW without the class as its object]\n"); return 0; }
+            MObj *n = shim_new(cl->super, (const uintptr_t *)m[1], cl->inst_size);
+            n->custom = cl;
+            cl->objects++;
+            return (uintptr_t)n;
+        }
+        case 0x102: cl->objects--; shim_dispose_raw(o); return 0;
+        case 0x103: shim_set_raw(o, (const uintptr_t *)m[1]); return 1;
+        case 0x104: return shim_get_raw((uint32_t)m[1], o, (void *)m[2]);
+        case 0x80428354u: o->mad_RenderInfo = (void *)m[1]; return 1;                         /* MUIM_Setup */
+        case 0x8042d985u: o->mad_RenderInfo = NULL; return 1;                                 /* MUIM_Cleanup */
+        case 0x8042cc84u: o->shown = 1; return 1;                                             /* MUIM_Show */
+        case 0x8042f20fu: o->shown = 0; return 1;                                             /* MUIM_Hide */
+        case 0x80423874u: { int16_t *mm = (int16_t *)m[1]; for (int i = 0; i < 6; i++) mm[i] = 4; return 0; }   /* the frame */
+        case 0x80426f3fu: if (!o->shown || o->mad_RenderInfo == NULL) printf("[draw while not shown]\n"); shim_draws++; return 0;
+    }
+    return shim_method(o, m);
+}
 """;
 
     private static Dictionary<string, string> Shims() => new()
@@ -165,7 +307,28 @@ static __attribute__((unused)) uintptr_t DoMethodA(void *obj, void *msg)
         ["proto/intuition.h"] = "#pragma once\n#include <es_muimaster_shim.h>\n" + IntuitionShim,
         ["proto/utility.h"] = "#pragma once\n",
         ["clib/alib_protos.h"] = "#pragma once\n#include <proto/intuition.h>\n" + AlibShim,
+        ["intuition/classes.h"] = "#pragma once\n#include <proto/intuition.h>\n",
+        ["proto/graphics.h"] = GraphicsShim,
     };
+
+    /// <summary>The graphics.library calls of <c>MuiRender</c>: rectangles must be the right way round (clipped), and are counted.</summary>
+    private const string GraphicsShim = """
+#pragma once
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <stdint.h>
+static __attribute__((unused)) int shim_fills, shim_lines, shim_texts, shim_pen;
+static inline __attribute__((unused)) void SetAPen(void *rp, int32_t pen) { (void)rp; shim_pen = pen; }
+static inline __attribute__((unused)) void SetDrMd(void *rp, int32_t mode) { (void)rp; (void)mode; }
+static inline __attribute__((unused)) void SetFont(void *rp, void *font) { (void)rp; (void)font; }
+static inline __attribute__((unused)) void RectFill(void *rp, int32_t x0, int32_t y0, int32_t x1, int32_t y1)
+{ if (rp == NULL || x1 < x0 || y1 < y0) { printf("[bad RectFill %d,%d %d,%d]\n", (int)x0, (int)y0, (int)x1, (int)y1); abort(); } shim_fills++; }
+static inline __attribute__((unused)) void Move(void *rp, int32_t x, int32_t y) { (void)rp; (void)x; (void)y; }
+static inline __attribute__((unused)) void Draw(void *rp, int32_t x, int32_t y) { (void)rp; (void)x; (void)y; shim_lines++; }
+static inline __attribute__((unused)) void Text(void *rp, const char *s, int32_t n) { (void)rp; if ((int32_t)strlen(s) != n) abort(); shim_texts++; }
+static __attribute__((destructor)) void shim_gfx_report(void) { if (shim_fills > 0) printf("[gfx: %d fills, %d lines, %d texts]\n", shim_fills, shim_lines, shim_texts); }
+""";
 
     private static (int, string) RunShimmed(string c) => HasSanitizers ? RunSanitized(c, Shims()) : RunWithHostGcc(c, Shims());
 
@@ -254,7 +417,11 @@ static __attribute__((unused)) uintptr_t DoMethodA(void *obj, void *msg)
     {
         // Facts from the AROS fd of muimaster.library (bias 30, one vector each 6 bytes): NewObjectA 1st, DisposeObject 2nd,
         // RequestA 3rd, Error 7th, MakeObjectA 16th. The C# declarations, the m68k jsr offsets and the AROS call numbers must agree.
-        var lvos = new Dictionary<string, int> { ["MUI_NewObjectA"] = 30, ["MUI_DisposeObject"] = 36, ["MUI_RequestA"] = 42, ["MUI_Error"] = 66, ["MUI_MakeObjectA"] = 120 };
+        var lvos = new Dictionary<string, int>
+        {
+            ["MUI_NewObjectA"] = 30, ["MUI_DisposeObject"] = 36, ["MUI_RequestA"] = 42, ["MUI_Error"] = 66, ["MUI_Redraw"] = 102,
+            ["MUI_CreateCustomClass"] = 108, ["MUI_DeleteCustomClass"] = 114, ["MUI_MakeObjectA"] = 120,
+        };
         var platform = File.ReadAllText(Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "..", "src", "ESharp.Platform", "Mui.cs"));
         string C(string target) => EsCompiler.Compile(new[] { new SourceFile("Mui.cs", File.ReadAllText(SamplePath)) }, Targets.Find(target)!.ToOptions()).C!;
         string m68k = C("m68k"), aros = C("aros"), morphos = C("morphos");
@@ -308,5 +475,101 @@ class Box
         var (code, output) = RunWithHostGcc(c);
         Assert.True(code == 0, output);
         Assert.Equal("123 7\n", output);
+    }
+
+    // ------------------------------------------------------------------ custom classes (issue #93)
+
+    [Fact]
+    public void Muiclass_sample_runs_against_a_fake_muimaster_with_a_C_sharp_dispatcher()
+    {
+        if (!HasGcc) return;
+        var c = CompileOk(File.ReadAllText(ClassSamplePath), HostC);
+        // The dispatcher's helpers: DoSuperMethodA (amiga.lib here and on m68k) and the instance data from cl_InstOffset.
+        Assert.Contains("DoSuperMethodA((Class *)cl, (Object *)obj, (Msg)msg)", c);
+        Assert.Contains("((Class *)cl)->cl_InstOffset", c);
+        Assert.Contains("Es_ESharp_Platform_MuiCustomClasses_Dispatch_HOOK", c);
+        Assert.DoesNotContain("libraries/mui.h", c);
+        var (code, output) = RunShimmed(c);
+        Assert.True(code == 0, output);
+        Assert.DoesNotContain("FAIL", output);
+        Assert.Contains("muiclass: all ok\n", output);
+        // One class on Area.mui for both graphs, one on Group.mui, each made once and deleted after the application; the lone graph
+        // makes the Area class again. Instance data: one pointer (the C# object).
+        Assert.Equal(2, Count(output, "[create class on Area.mui, 8 bytes of instance data]"));
+        Assert.Equal(1, Count(output, "[create class on Group.mui, 8 bytes of instance data]"));
+        Assert.Equal(2, Count(output, "[delete class on Area.mui]"));
+        Assert.Equal(1, Count(output, "[delete class on Group.mui]"));
+        Assert.DoesNotContain("still has", output);
+        var app = output[output.IndexOf("ok MUIM_Cleanup", StringComparison.Ordinal)..];
+        Assert.True(app.IndexOf("[dispose custom Group.mui]", StringComparison.Ordinal) < app.IndexOf("[delete class on Group.mui]", StringComparison.Ordinal), app);
+        Assert.True(app.IndexOf("[dispose Application.mui]", StringComparison.Ordinal) < app.IndexOf("[delete class on Area.mui]", StringComparison.Ordinal), app);
+        // The application's ten objects, three of them custom, and the lone graph: each made and disposed once; nothing drawn when hidden.
+        Assert.Contains("[shim: 10 made, 10 disposed, 0 group changes]", output);
+        Assert.Contains("classes left]", output);
+        Assert.Contains(" 0 classes left]", output);
+        Assert.DoesNotContain("[draw while not shown]", output);
+        Assert.DoesNotContain("[redraw of an object that is not shown]", output);
+        Assert.DoesNotContain("[bad", output);
+        Assert.Matches(@"\[gfx: \d+ fills, \d+ lines, \d+ texts\]", output);
+    }
+
+    private static int Count(string text, string part)
+    {
+        int n = 0;
+        for (int i = text.IndexOf(part, StringComparison.Ordinal); i >= 0; i = text.IndexOf(part, i + part.Length, StringComparison.Ordinal)) n++;
+        return n;
+    }
+
+    [Theory]
+    [InlineData(false, "muiclass: all ok\n")]
+    [InlineData(true, "events: level 90, 4 draw(s)\n")]
+    public void Muiclass_sample_runs_the_same_on_dotnet(bool wait, string expected)
+    {
+        var src = File.ReadAllText(ClassSamplePath);
+        var compilation = CSharpCompilation.Create("muiclass", new[] { CSharpSyntaxTree.ParseText(src) }, PlatformSubclassTests.HostReferences(),
+            new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary, allowUnsafe: true));
+        using var ms = new MemoryStream();
+        var emit = compilation.Emit(ms);
+        Assert.True(emit.Success, string.Join("\n", emit.Diagnostics.Where(d => d.Severity == DiagnosticSeverity.Error)));
+        var asm = System.Reflection.Assembly.Load(ms.ToArray());
+        if (wait) ESharp.Platform.Args.HostSet("WAIT");
+        try
+        {
+            using var console = HostConsole.Capture();
+            asm.GetType("MuiClassSample.Program")!.GetMethod("Main")!.Invoke(null, null);
+            Assert.DoesNotContain("FAIL", console.Output);
+            Assert.Contains(expected, console.Output);
+            Assert.EndsWith("muiclass: all ok\n", console.Output);
+        }
+        finally { ESharp.Platform.Args.HostReset(); }
+    }
+
+    [Theory]
+    [InlineData("m68k", "DoSuperMethodA((Class *)cl")]
+    [InlineData("aros", "CALLHOOKPKT((struct Hook *)((Class *)cl)->cl_Super, obj, msg)")]
+    [InlineData("aros-i386", "CALLHOOKPKT((struct Hook *)((Class *)cl)->cl_Super, obj, msg)")]
+    [InlineData("os4", "IDoSuperMethodA((Class *)cl")]
+    [InlineData("morphos", "DoSuperMethodA((Class *)cl")]
+    public void Muiclass_sample_compiles_for_every_amiga_target_without_a_MUI_header(string target, string superCall)
+    {
+        var r = EsCompiler.Compile(new[] { new SourceFile("MuiClass.cs", File.ReadAllText(ClassSamplePath)) }, Targets.Find(target)!.ToOptions());
+        Assert.True(r.Success, string.Join("\n", r.Diagnostics));
+        Assert.Contains(superCall, r.C!);
+        Assert.Contains("MUI_CreateCustomClass(NULL, ", r.C!);
+        Assert.Contains("Es_ESharp_Platform_MuiCustomClasses_Dispatch_HOOK", r.C!);
+        Assert.DoesNotContain("muimaster.h", r.C!);
+        Assert.DoesNotContain("libraries/mui.h", r.C!);
+    }
+
+    [Fact]
+    public void A_program_class_can_derive_from_MuiArea_and_MuiCustomGroup_but_not_from_other_MUI_classes()
+    {
+        var ok = Compile(Program("class Dial : MuiArea { protected override void OnDraw(MuiRender r) { r.Fill(MuiPen.Fill, 0, 0, r.Width, r.Height); } }\n" +
+            "class Box : MuiCustomGroup { protected override void OnAskMinMax(ref MuiMinMax size) { size.MinWidth = 10; } }",
+            "var d = new Dial(); var b = new Box(); b.Add(d); Heap.Free(ref b);"), HostC);
+        Assert.True(ok.Success, string.Join("\n", ok.Diagnostics));
+        var bad = Compile(Program("class MyText : MuiText { public MyText() : base(\"x\") { } }", "var t = new MyText(); Heap.Free(ref t);"), HostC);
+        Assert.False(bad.Success);
+        Assert.Contains(bad.Diagnostics, d => d.Id == "ES0007");
     }
 }

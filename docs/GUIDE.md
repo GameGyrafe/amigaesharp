@@ -249,7 +249,30 @@ MUI facts in E# (class names, attribute numbers, message layouts, vectors) come 
 License) and fd file only. `Mui.Open()` opens muimaster.library version 19 or newer and returns false when MUI is missing
 (the sample then prints `skip: MUI not installed`). The wrappers (`MuiApplication`, `MuiWindow`, `MuiGroup`, `MuiText`,
 `MuiButton`, `MuiCheckMark`, `MuiString`, `MuiCycle`, `MuiSlider`, `MuiGauge`, `MuiRectangle`, `MuiListview`, ...) sit on the
-BOOPSI core and send notifications to C# lambdas. Custom MUI classes are not done (issue #93).
+BOOPSI core and send notifications to C# lambdas.
+
+A MUI class of your own is a C# class derived from `MuiArea` (Area.mui) or `MuiCustomGroup` (Group.mui) that overrides what MUI calls
+(`samples/muiclass`):
+
+```csharp
+sealed unsafe class Meter : MuiArea
+{
+    public static IntAttr Level => new IntAttr(0x8E5A0001);   // your own attribute: TAG_USER and a number of yours
+    int _level;
+
+    protected override void OnAskMinMax(ref MuiMinMax size) { size.MinWidth = 60; size.MinHeight = 12; size.DefWidth = 120; size.MaxWidth = MuiMinMax.Unlimited; }
+    protected override void OnDraw(MuiRender r) { r.Fill(MuiPen.Fill, 0, 0, r.Width * _level / 100, r.Height); }
+    protected override void OnSet(uint attr, nuint value) { if (attr == Level.Tag) { _level = (int)value; Redraw(); } }
+    protected override bool OnGet(uint attr, out nuint value) { value = (nuint)_level; return attr == Level.Tag; }
+}
+...
+slider.OnValueChanged(v => meter.Set(Meter.Level, v));
+```
+
+`OnAskMinMax` sizes are added to the superclass's (frame, spacing); `OnDraw` coordinates are relative to the contents box and clipped to
+the object; `OnSetup`/`OnCleanup` and `OnMethod` (your own methods, sent with `DoMethod`) are there too. MUI calls them on the program's
+own task, so they may allocate and print. One MUI class per superclass serves every such C# class; it is made with the first object and
+deleted after the last. Mouse and key input in a custom class is not wrapped yet.
 
 In FS-UAE (m68k only) `--mui 3.8|5` mounts MUI from a per-user cache and `--workbench <Workbench 3.x disk 2 .adf>` (your own
 disk, mounted read-only for `C:` and the system libraries; or `ESHARP_MUI`, `ESHARP_WORKBENCH`):

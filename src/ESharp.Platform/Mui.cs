@@ -22,6 +22,9 @@ public static unsafe class MuiMaster
     [AmigaLib("muimaster", -36), Since(19)] public static extern void MUI_DisposeObject(void* obj);
     [AmigaLib("muimaster", -42), Since(19)] public static extern int MUI_RequestA(void* app, void* win, uint flags, byte* title, byte* gadgets, byte* format, void* parms);
     [AmigaLib("muimaster", -66), Since(19)] public static extern int MUI_Error();
+    [AmigaLib("muimaster", -102), Since(19)] public static extern void MUI_Redraw(void* obj, uint flags);
+    [AmigaLib("muimaster", -108), Since(19)] public static extern void* MUI_CreateCustomClass(void* libraryBase, byte* superName, void* superMcc, int dataSize, void* dispatcher);
+    [AmigaLib("muimaster", -114), Since(19)] public static extern int MUI_DeleteCustomClass(void* mcc);
     [AmigaLib("muimaster", -120), Since(19)] public static extern void* MUI_MakeObjectA(int type, nuint* parms);
 }
 #endif
@@ -33,6 +36,10 @@ internal static class MuiId
     public const uint ListInsertSingle = 0x804254d5, ListClear = 0x8042ad89, ListGetEntry = 0x804280ec, ListRemove = 0x8042647e;
     public const uint GroupInitChange = 0x80420887, GroupExitChange = 0x8042d1cc;
     public const uint OmAddMember = 0x109, OmRemMember = 0x10a;
+    public const uint OmNew = 0x101, OmDispose = 0x102, OmSet = 0x103, OmGet = 0x104;
+    // Methods a custom class's dispatcher sees (Area.mui), and MUIM_Draw's flags (MADF_DRAWOBJECT, MADF_DRAWUPDATE).
+    public const uint AskMinMax = 0x80423874, Draw = 0x80426f3f, Setup = 0x80428354, Cleanup = 0x8042d985, Show = 0x8042cc84, Hide = 0x8042f20f;
+    public const uint DrawObject = 1, DrawUpdate = 2;
     public const uint EveryTime = 0x49893131, TriggerValue = 0x49893131;
     public const uint ReturnIdQuit = 0xffffffff;
     public const int ListInsertBottom = -3, ListActiveOff = -1;
@@ -166,6 +173,7 @@ public static unsafe class Mui
     public static void Close()
     {
         if (_base == null || LiveObjects > 0) return;
+        MuiCustomClasses.DeleteUnused();
         MuiMaster.SetBase(null);
         Exec.CloseLibrary(_base);
         _base = null;
@@ -216,6 +224,15 @@ public static unsafe class Mui
 
     /// <summary>MUI objects made and not yet disposed (all of the program).</summary>
     public static int Live => LiveObjects;
+
+    /// <summary>Custom classes (for <see cref="MuiArea"/> and <see cref="MuiCustomGroup"/>) made and not yet deleted: at most one per MUI superclass.</summary>
+    public static int CustomClasses => MuiCustomClasses.Live;
+
+    /// <summary>Custom classes made so far (a class is made with the first object of it and deleted after its last one).</summary>
+    public static int CustomClassesMade => MuiCustomClasses.Made;
+
+    /// <summary>Objects of the custom classes that MUI made (OM_NEW) and has not yet disposed (OM_DISPOSE), as the dispatcher saw them.</summary>
+    public static int CustomObjects => MuiCustomClasses.Objects;
 
     internal static void Warn(string text)
     {
@@ -338,6 +355,14 @@ public unsafe class MuiObject : BoopsiObject
     private nuint _make0;
     private nuint _make1;
     private MuiNotification? _notes;
+    internal int CustomKind;          // MuiCustomClasses.Area or .Group for a custom class (MuiArea, MuiCustomGroup), 0 otherwise
+    private bool _setUp;              // between MUIM_Setup and MUIM_Cleanup
+    private bool _shown;              // between MUIM_Show and MUIM_Hide
+#if AMIGA
+    private void* _renderInfo;        // MUI's render info (from MUIM_Setup)
+#else
+    private MuiMinMax _hostSize;      // host: what OnAskMinMax asked for (the fake's layout)
+#endif
 
     /// <summary>An object of a MUI class by name (<c>"Text.mui"</c>, <c>"Group.mui"</c>, ...).</summary>
     public MuiObject(string muiClass) : base(muiClass) { }
@@ -368,6 +393,7 @@ public unsafe class MuiObject : BoopsiObject
     {
         if (!Mui.IsOpen) return null;
         void* o = null;
+        if (CustomKind != 0) return MuiCustomClasses.NewObject(this, CustomKind, tags);
         if (_makeType != 0)
         {
             MuiMsg p = new MuiMsg();
@@ -392,6 +418,9 @@ public unsafe class MuiObject : BoopsiObject
     internal override void AfterCreate()
     {
         Mui.LiveObjects++;
+#if !AMIGA
+        if (CustomKind != 0) MuiCustomClasses.HostNew(CustomKind);
+#endif
         for (MuiNotification? n = _notes; n != null; n = n.Next) Register(n);
     }
 
@@ -526,9 +555,18 @@ public unsafe class MuiObject : BoopsiObject
 #endif
             }
         }
+#if !AMIGA
+        // Host: MUI would hide, clean up and dispose a custom object here (inside the dispose of it or of its tree).
+        if (CustomKind != 0)
+        {
+            HostShow(false);
+            MuiCustomClasses.HostDisposed(CustomKind);
+        }
+#endif
         Attached = false;
         MarkGone();
         Mui.LiveObjects--;
+        MuiCustomClasses.DeleteUnused();    // a class goes once its last object is gone
     }
 
     internal override void DisposeOwned()
@@ -639,8 +677,238 @@ public unsafe class MuiObject : BoopsiObject
     // Host: MUI's notification, done by hand (every set counts, as there is no class to drop an unchanged value).
     internal override void HostChanged(uint tag, nuint value)
     {
+        if (CustomKind != 0) CallSet(tag, value);    // a custom class sees OM_SET before its superclass notifies
         for (MuiNotification? n = _notes; n != null; n = n.Next)
             if (n.Attr == tag && (n.Trigger == MuiId.EveryTime || n.Trigger == value)) n.Fire(value);
+    }
+
+    internal override void HostCreated(nuint* tags)
+    {
+        if (CustomKind == 0) return;
+        for (int i = 0; tags[i] != 0; i += 2) CallSet((uint)tags[i], tags[i + 1]);   // OM_NEW: the starting attributes
+    }
+
+    internal override bool HostGet(uint tag, out nuint value)
+    {
+        if (CustomKind != 0 && CallGet(tag, out value)) return true;
+        value = 0;     // an OnGet that answers false may have written to it
+        return false;
+    }
+
+    internal override bool HostMethod(nuint* msg, out nuint result)
+    {
+        result = 0;
+        return CustomKind != 0 && CallMethod((uint)msg[0], msg, out result);
+    }
+
+    // Host: what MUI does when the window opens (setup, size, show, draw) or closes (hide, cleanup), for this object and its children.
+    internal void HostShow(bool on)
+    {
+        for (MuiObject? c = FirstChild; c != null; c = c.NextSibling) c.HostShow(on);
+        if (CustomKind == 0) return;
+        if (on && !_shown)
+        {
+            if (!_setUp)
+            {
+                Mui.HandlerDepth++;
+                _setUp = OnSetup();
+                Mui.HandlerDepth--;
+                if (!_setUp) return;
+            }
+            MuiMinMax size = new MuiMinMax();
+            Mui.HandlerDepth++;
+            OnAskMinMax(ref size);
+            Mui.HandlerDepth--;
+            _hostSize = size;
+            _shown = true;
+            HostDraw(false);
+        }
+        else if (!on && _setUp)
+        {
+            _shown = false;
+            _setUp = false;
+            Mui.HandlerDepth++;
+            OnCleanup();
+            Mui.HandlerDepth--;
+        }
+    }
+
+    private void HostDraw(bool update)
+    {
+        int w = _hostSize.DefWidth > _hostSize.MinWidth ? _hostSize.DefWidth : _hostSize.MinWidth;
+        int h = _hostSize.DefHeight > _hostSize.MinHeight ? _hostSize.DefHeight : _hostSize.MinHeight;
+        MuiRender r = new MuiRender(0, 0, w, h, update);
+        Mui.HandlerDepth++;
+        OnDraw(r);
+        Mui.HandlerDepth--;
+    }
+#endif
+
+    // ---------------------------------------------------------- custom classes (MuiArea, MuiCustomGroup)
+    // The dispatcher of MuiCustomClasses calls these for an object of a custom class; the protected virtual members are what the
+    // program overrides (in a class derived from MuiArea or MuiCustomGroup, the only MUI classes a program can derive from).
+
+    /// <summary>MUIM_Setup: the object is about to be shown in a window (MUI's render info, pens and fonts are there). False stops the window opening.</summary>
+    protected virtual bool OnSetup() { return true; }
+
+    /// <summary>MUIM_Cleanup: the window closed (the opposite of <see cref="OnSetup"/>).</summary>
+    protected virtual void OnCleanup() { }
+
+    /// <summary>
+    /// MUIM_AskMinMax: the size of the object's contents, in pixels. Each number is added to what the superclass asks for (its frame and
+    /// spacing; a group's children), so the defaults (all 0) leave the superclass's sizes; <see cref="MuiMinMax.Unlimited"/> as a maximum
+    /// lets the object grow.
+    /// </summary>
+    protected virtual void OnAskMinMax(ref MuiMinMax size) { }
+
+    /// <summary>MUIM_Draw: draw the contents (after the superclass drew the frame and background, and a group its children).</summary>
+    protected virtual void OnDraw(MuiRender r) { }
+
+    /// <summary>OM_SET (and the starting attributes, at OM_NEW): every attribute that is set, the object's own ones and MUI's. The superclass sees them too.</summary>
+    protected virtual void OnSet(uint attr, nuint value) { }
+
+    /// <summary>OM_GET: true and the value for the object's own attributes; false lets the superclass answer.</summary>
+    protected virtual bool OnGet(uint attr, out nuint value) { value = 0; return false; }
+
+    /// <summary>Any other method (the object's own ones, sent with <see cref="BoopsiObject.DoMethod"/>): true if handled, with its result.</summary>
+    protected virtual bool OnMethod(uint methodId, nuint* msg, out nuint result) { result = 0; return false; }
+
+    /// <summary>True while the object is shown in an open window (between MUIM_Show and MUIM_Hide): it can draw then.</summary>
+    protected bool IsShown => _shown;
+
+    /// <summary>Draws the object again (MUI_Redraw with MADF_DRAWOBJECT) if it is shown; nothing otherwise.</summary>
+    protected void Redraw()
+    {
+        if (!_shown || CustomKind == 0) return;
+#if AMIGA
+        if (Address != null) MuiMaster.MUI_Redraw(Address, MuiId.DrawObject);
+#else
+        HostDraw(false);
+#endif
+    }
+
+    internal void CallSet(uint tag, nuint value)
+    {
+        Mui.HandlerDepth++;
+        OnSet(tag, value);
+        Mui.HandlerDepth--;
+    }
+
+    internal bool CallGet(uint tag, out nuint value)
+    {
+        Mui.HandlerDepth++;
+        bool ok = OnGet(tag, out value);
+        Mui.HandlerDepth--;
+        return ok;
+    }
+
+    internal bool CallMethod(uint id, nuint* msg, out nuint result)
+    {
+        Mui.HandlerDepth++;
+        bool ok = OnMethod(id, msg, out result);
+        Mui.HandlerDepth--;
+        return ok;
+    }
+
+#if AMIGA
+    // The dispatcher's work for a live object of a custom class (OM_NEW and OM_DISPOSE are handled in MuiCustomClasses.Dispatch).
+    internal nuint CustomDispatch(void* cls, void* obj, uint id, nuint* m)
+    {
+        nuint r = 0;
+        if (id == MuiId.Setup)
+        {
+            r = BoopsiNative.es_dosupermethod(cls, obj, (void*)m);
+            if (r == 0) return 0;
+            _renderInfo = (void*)m[1];
+            MuiCustomClasses.FindAreaData(obj, _renderInfo);
+            Mui.HandlerDepth++;
+            bool ok = OnSetup();
+            Mui.HandlerDepth--;
+            if (!ok)
+            {
+                MuiMsg c = new MuiMsg();
+                c.Put(0, MuiId.Cleanup);
+                BoopsiNative.es_dosupermethod(cls, obj, (void*)c.Ptr());
+                _renderInfo = null;
+                return 0;
+            }
+            _setUp = true;
+            return r;
+        }
+        if (id == MuiId.Cleanup)
+        {
+            if (_setUp)
+            {
+                Mui.HandlerDepth++;
+                OnCleanup();
+                Mui.HandlerDepth--;
+            }
+            _setUp = false;
+            _shown = false;
+            r = BoopsiNative.es_dosupermethod(cls, obj, (void*)m);
+            _renderInfo = null;
+            return r;
+        }
+        if (id == MuiId.Show)
+        {
+            r = BoopsiNative.es_dosupermethod(cls, obj, (void*)m);
+            if (r != 0) _shown = true;
+            return r;
+        }
+        if (id == MuiId.Hide)
+        {
+            _shown = false;
+            return BoopsiNative.es_dosupermethod(cls, obj, (void*)m);
+        }
+        if (id == MuiId.AskMinMax)
+        {
+            r = BoopsiNative.es_dosupermethod(cls, obj, (void*)m);
+            MuiMinMax size = new MuiMinMax();
+            Mui.HandlerDepth++;
+            OnAskMinMax(ref size);
+            Mui.HandlerDepth--;
+            size.AddTo((short*)m[1]);
+            return r;
+        }
+        if (id == MuiId.Draw)
+        {
+            r = BoopsiNative.es_dosupermethod(cls, obj, (void*)m);
+            uint flags = (uint)m[1];
+            if ((flags & (MuiId.DrawObject | MuiId.DrawUpdate)) != 0 && _renderInfo != null && MuiCustomClasses.AreaData > 0)
+            {
+                MuiRender rd = new MuiRender(obj, _renderInfo, (flags & MuiId.DrawObject) == 0);
+                Mui.HandlerDepth++;
+                OnDraw(rd);
+                Mui.HandlerDepth--;
+            }
+            return r;
+        }
+        if (id == MuiId.OmSet)
+        {
+            MuiCustomClasses.SetEach(this, (nuint*)m[1]);
+            return BoopsiNative.es_dosupermethod(cls, obj, (void*)m);
+        }
+        if (id == MuiId.OmGet)
+        {
+            nuint v = 0;
+            if (CallGet((uint)m[1], out v))
+            {
+                *(nuint*)m[2] = v;
+                return 1;
+            }
+            return BoopsiNative.es_dosupermethod(cls, obj, (void*)m);
+        }
+        nuint result = 0;
+        if (CallMethod(id, m, out result)) return result;
+        return BoopsiNative.es_dosupermethod(cls, obj, (void*)m);
+    }
+
+    // OM_DISPOSE reached the dispatcher: the system object is going.
+    internal void CustomGone()
+    {
+        _setUp = false;
+        _shown = false;
+        _renderInfo = null;
     }
 #endif
 }
@@ -779,10 +1047,20 @@ public unsafe class MuiWindow : MuiObject
     {
         if (!IsCreated || MuiParent == null) return false;
         Set(Muia.WindowOpen, true);
+#if !AMIGA
+        HostShow(true);
+#endif
         return Get(Muia.WindowOpen);
     }
 
-    public void Close() { if (IsCreated) Set(Muia.WindowOpen, false); }
+    public void Close()
+    {
+        if (!IsCreated) return;
+        Set(Muia.WindowOpen, false);
+#if !AMIGA
+        HostShow(false);
+#endif
+    }
 
     public bool IsOpen => IsCreated && Get(Muia.WindowOpen);
 
@@ -796,6 +1074,9 @@ public unsafe class MuiWindow : MuiObject
 public unsafe class MuiGroup : MuiObject
 {
     public MuiGroup() : base("Group.mui") { }
+
+    // A custom class on Group.mui (MuiCustomGroup).
+    internal MuiGroup(int customKind) : base("Group.mui") { CustomKind = customKind; }
 
     /// <summary>Children side by side (set before the group is made).</summary>
     public bool Horizontal { set { if (!IsCreated) Init(Muia.GroupHoriz, value); } }
@@ -823,11 +1104,17 @@ public unsafe class MuiGroup : MuiObject
         if (shown) DoMethod(MuiId.GroupInitChange, 0, 0);
         base.AttachSystem(child);
         if (shown) DoMethod(MuiId.GroupExitChange, 0, 0);
+#if !AMIGA
+        if (shown) child.HostShow(true);
+#endif
     }
 
     internal override void DetachSystem(MuiObject child)
     {
         bool shown = InOpenWindow();
+#if !AMIGA
+        if (shown) child.HostShow(false);
+#endif
         if (shown) DoMethod(MuiId.GroupInitChange, 0, 0);
         base.DetachSystem(child);
         if (shown) DoMethod(MuiId.GroupExitChange, 0, 0);
