@@ -52,7 +52,12 @@ struct Process { struct Task pr_Task; struct MsgPort pr_MsgPort; char pr_Rest[25
 struct WBArg { BPTR wa_Lock; char *wa_Name; };
 struct WBStartup { struct Message sm_Message; struct MsgPort *sm_Process; BPTR sm_Segment; long sm_NumArgs; char *sm_ToolWindow; struct WBArg *sm_ArgList; };
 struct DiskObject { char **do_ToolTypes; };
-int __argc; char **__argv;
+/* MinGW's stdlib.h has __argc and __argv as macros of its own: the stand-ins are variables of ours under those names. */
+#undef __argc
+#undef __argv
+#define __argc es_t_argc
+#define __argv es_t_argv
+int es_t_argc; char **es_t_argv;
 union { struct Process p; char raw[sizeof(struct Process) + 128]; } es_t_proc;
 struct WBArg es_t_arg = { 77, ""prog"" };
 struct WBStartup es_t_wb = { .sm_NumArgs = 1, .sm_ArgList = &es_t_arg };
