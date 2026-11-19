@@ -8,7 +8,8 @@ namespace ClosuresSample;
 // There is no garbage collector: a stored closure is freed by its owner with Heap.Free, an event owns its handlers
 // (-= drops one, Heap.Free(ref E) inside the class drops them all). Heap.LiveClosures() counts the closure references
 // not yet freed, so the last check finds a leak on the Amiga (it is always 0 under dotnet). A frame that holds a delegate it
-// owns (an [Owned] parameter, a setter's value) releases it when the frame goes (issue #85).
+// owns (an [Owned] parameter, a setter's value) releases it when the frame goes (issue #85). A value the caller keeps
+// (a field, or a local it uses again or frees) gives an [Owned] parameter or a setter a reference of its own (issue #110).
 
 public class Button
 {
@@ -186,6 +187,17 @@ public static class Program
         Check(t == 22, "a stored lambda over a setter's value");
         relay.Dispose();
         Heap.Free(ref relay);
+        // A value the caller keeps using (and frees itself) gives the setter a reference of its own (issue #110).
+        int u = 0;
+        Action bump = () => u++;
+        Relay relay2 = new Relay();
+        relay2.Target = bump;
+        bump();
+        Heap.Free(ref bump);
+        relay2.Fire();
+        Check(u == 3, "a shared value given to a setter keeps its own reference");
+        relay2.Dispose();
+        Heap.Free(ref relay2);
 
         Score s = new Score();
         s.Wire(b);

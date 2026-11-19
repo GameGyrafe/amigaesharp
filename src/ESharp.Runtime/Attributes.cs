@@ -157,6 +157,9 @@ public sealed class InlineAsmAttribute : Attribute
 /// returns it), so a capturing lambda passed here is made a heap closure, which the method (or whoever it hands it to) owns
 /// and frees with <c>Heap.Free</c>. Without it a delegate parameter is borrowed: the caller's closure may live on the caller's
 /// stack, so the method may call it and pass it on as an argument, but not keep it (ES0012).
+/// The method takes a reference of its own to what it is given: a value the caller keeps (a field, a property, an element, a
+/// local it uses again, frees or stores) gets a new reference at the call, so the caller still frees its own; a new lambda, or
+/// a local given away for good, is handed over as it is (docs/STATUS.md, "Heap closures and events").
 /// </summary>
 [AttributeUsage(AttributeTargets.Parameter)]
 public sealed class OwnedAttribute : Attribute

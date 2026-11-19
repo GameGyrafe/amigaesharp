@@ -19,7 +19,8 @@ namespace ESharp.Compiler;
 /// one reference, dropped when the scope ends (gcc's cleanup attribute, so return, break and continue are covered); each heap
 /// closure holds one more, dropped by Heap.Free(ref d). An event is a list of { fn, env } pairs that owns one reference per
 /// handler: += of a new lambda hands it over, += of any other delegate value takes a new reference, -= drops one, and
-/// Heap.Free(ref E) drops them all.
+/// Heap.Free(ref E) drops them all. An [Owned] parameter or a setter given a value the caller keeps takes a new reference at the
+/// call, as += does (issue #110); a new lambda or a local given away for good hands its reference over.
 /// </summary>
 internal sealed partial class CEmitter
 {
@@ -375,6 +376,254 @@ internal sealed partial class CEmitter
         }
     }
 
+    // ------------------------------------------------------------------ values handed to [Owned] parameters and setters (issue #110)
+
+    /// <summary>A property whose setter is a call that takes the value's reference (a set accessor with a body), not an auto-property's field store.</summary>
+    private static bool IsHandoverSetter(IPropertySymbol? p) =>
+        p is { SetMethod: not null, Type.TypeKind: TypeKind.Delegate } && !IsAutoProperty(p);
+
+    /// <summary>An [Owned] delegate parameter taken by value: the callee takes a reference.</summary>
+    private static bool IsHandoverParameter(IParameterSymbol? p) =>
+        p is { RefKind: RefKind.None, Type.TypeKind: TypeKind.Delegate } && IsOwned(p);
+
+    /// <summary>True when the value at <paramref name="node"/> (a value site, see <see cref="ValueSite"/>) is given to an [Owned] parameter or a setter.</summary>
+    private bool IsHandoverSite(SyntaxNode node, SyntaxNode? parent) => parent switch
+    {
+        ArgumentSyntax arg => arg.Expression == node && arg.RefKindKeyword.IsKind(SyntaxKind.None) && IsHandoverParameter(ParameterOf(arg)),
+        AssignmentExpressionSyntax { RawKind: (int)SyntaxKind.SimpleAssignmentExpression } a =>
+            a.Right == node && IsHandoverSetter(Model(a).GetSymbolInfo(a.Left).Symbol as IPropertySymbol),
+        _ => false,
+    };
+
+    /// <summary>
+    /// The C value given to an [Owned] parameter or a setter. The callee takes a reference, so a value whose reference the caller
+    /// does not give up (a field, a property, an element, a call that may return a kept delegate, or a variable that is used again,
+    /// freed, stored, captured or handed over more than once) gets a reference of its own first, as <c>E += x</c> does: then every
+    /// owner frees its own. A new lambda, a call that always returns new closures, null, a method group and a variable handed
+    /// over for good (see <see cref="MovesAt"/>) are handed over as they are.
+    /// </summary>
+    private string HandOver(ExpressionSyntax e, string value, ITypeSymbol type, string to)
+    {
+        if (type.TypeKind != TypeKind.Delegate || HandsOver(e, to, report: true) != false) return value;
+        _usesClosures = true;
+        var t = $"_ho{++_temp}";
+        return $"({{ {CType(type, e)} {t} = {value}; es_closure_retain({t}.env); {t}; }})";
+    }
+
+    /// <summary>True: the value's reference goes to the callee. False: the callee needs one of its own. Null: reported (mixed branches).</summary>
+    private bool? HandsOver(ExpressionSyntax e, string to, bool report)
+    {
+        e = Strip(e);
+        switch (e)
+        {
+            case LambdaExpressionSyntax:
+                return true;
+            case IdentifierNameSyntax id when Model(id).GetSymbolInfo(id).Symbol is ILocalSymbol { RefKind: RefKind.None } or IParameterSymbol { RefKind: RefKind.None }:
+            {
+                var v = Model(id).GetSymbolInfo(id).Symbol!;
+                if (MovesAt(v, id)) return true;
+                if (report) WarnUnfreedOriginal(v, id, to);
+                return false;
+            }
+            case InvocationExpressionSyntax inv:
+                if (IsFreshCall(inv, new HashSet<IMethodSymbol>(SymbolEqualityComparer.Default))) return true;
+                if (report && _reported.Add(inv))
+                    _diagnostics.Add(Diagnostic.Create(ESharp.Analyzers.Descriptors.ClosureNeverFreed, inv.GetLocation(),
+                        $"{to} takes its own reference to the delegate '{inv}' returns, because that method does not always return a new lambda; if it made a new closure, that reference is never freed (store the result in a variable, pass that, and Heap.Free the variable)"));
+                return false;
+            case CastExpressionSyntax cast:
+                return HandsOver(cast.Expression, to, report);
+            case ConditionalExpressionSyntax c:
+                return Merge(new[] { c.WhenTrue, c.WhenFalse });
+            case BinaryExpressionSyntax { RawKind: (int)SyntaxKind.CoalesceExpression } b:
+                return Merge(new[] { b.Left, b.Right });
+            case SwitchExpressionSyntax sw:
+                return Merge(sw.Arms.Select(arm => arm.Expression).ToArray());
+            default:
+                if (IsNullConstant(e) || Model(e).GetSymbolInfo(e).Symbol is IMethodSymbol) return true;   // nothing to hold: no closure
+                return false;   // a field, a property, an element: they keep theirs
+        }
+
+        bool? Merge(ExpressionSyntax[] parts)
+        {
+            bool? result = null;
+            foreach (var part in parts)
+            {
+                if (IsNullConstant(part)) continue;
+                var f = HandsOver(part, to, report);
+                if (f == null) return null;
+                if (result != null && result != f)
+                {
+                    if (report) ReportOnce(e, $"a value given to {to} that hands over its reference on one branch and is shared on another; split it into separate statements");
+                    return null;
+                }
+                result = f;
+            }
+            return result ?? true;
+        }
+    }
+
+    /// <summary>
+    /// True when the variable <paramref name="v"/> gives its reference up at <paramref name="at"/> (an [Owned] argument or a setter's
+    /// value): it owns a reference (a local only ever given new lambdas, null or fresh calls; an [Owned] parameter; a setter's value),
+    /// and <paramref name="at"/> is its last use: no use after it (also not in the same call), not in a loop that does not declare it,
+    /// not inside a nested lambda or local function, and no other use that keeps or frees it (a store, a return, a copy, a second
+    /// hand-over, Heap.Free, a capture by a stored closure) on a path that reaches it: uses on another branch of the same if, ?: or
+    /// switch do not count, and a lambda on the stack (an argument) may call it in a statement that ends before. Every other case
+    /// takes a new reference at the call, which can only leak (see <see cref="WarnUnfreedOriginal"/>), never free twice.
+    /// </summary>
+    private bool MovesAt(ISymbol v, IdentifierNameSyntax at)
+    {
+        if (v is IParameterSymbol p && !IsOwned(p) && p.ContainingSymbol is not IMethodSymbol { MethodKind: MethodKind.PropertySet }) return false;
+        if (v is not (ILocalSymbol or IParameterSymbol)) return false;
+        FrameScopeOf(v, out var fn);
+        if (fn == null) return false;
+        var decl = v is ILocalSymbol ? v.DeclaringSyntaxReferences.FirstOrDefault()?.GetSyntax() : null;
+        if (v is ILocalSymbol && decl is not VariableDeclaratorSyntax) return false;
+        if (fn.DescendantNodes().Any(n => n is GotoStatementSyntax or LabeledStatementSyntax)) return false;
+        for (var anc = at.Parent; anc != null && anc != fn; anc = anc.Parent)
+        {
+            if (IsFunctionNode(anc)) return false;   // a nested lambda or local function may run it more than once
+            var loopBody = anc switch
+            {
+                WhileStatementSyntax w => w.Statement,
+                DoStatementSyntax d => d.Statement,
+                ForStatementSyntax f => f.Statement,
+                CommonForEachStatementSyntax fe => fe.Statement,
+                _ => null,
+            };
+            if (loopBody != null && (decl == null || !loopBody.Span.Contains(decl.Span))) return false;
+        }
+        if (decl is VariableDeclaratorSyntax { Initializer: { } init } && !FreshValue(init.Value, new HashSet<IMethodSymbol>(SymbolEqualityComparer.Default))) return false;
+        foreach (var u in fn.DescendantNodes().OfType<IdentifierNameSyntax>())
+        {
+            if (u == at || u.Identifier.Text != v.Name || !SymbolEqualityComparer.Default.Equals(Model(u).GetSymbolInfo(u).Symbol, v)) continue;
+            var other = OnOtherBranch(u, at);
+            var capture = CaptureOf(u, fn);
+            if (capture == CaptureKind.Kept) return false;   // captured by a stored closure or a local function: it may use it later
+            if (capture == CaptureKind.Borrowed && !other && !BorrowedCaptureEndsBefore(u, fn, at)) return false;
+            var node = ValueSite(u, out var parent);
+            if (parent is AssignmentExpressionSyntax set && set.Left == node)
+            {
+                if (set.IsKind(SyntaxKind.SimpleAssignmentExpression) && FreshValue(set.Right, new HashSet<IMethodSymbol>(SymbolEqualityComparer.Default))) continue;
+                return false;   // an alias, a compound assignment or ??= (which also reads it)
+            }
+            if (other) continue;   // another branch of the same if, ?: or switch: it never runs together with the hand-over
+            if (u.SpanStart > at.SpanStart) return false;   // read after the hand-over: the callee may have freed it by then
+            if (parent is ArgumentSyntax arg && arg.Expression == node && IsHeapFreeArgument(arg)) return false;
+            var site = Classify(u);
+            if (site.Kind == SiteKind.Borrowed) continue;
+            if (site.Kind == SiteKind.Kept && parent is AssignmentExpressionSyntax { RawKind: (int)SyntaxKind.AddAssignmentExpression } add && add.Right == node
+                && Model(add).GetSymbolInfo(add.Left).Symbol is IEventSymbol) continue;   // the event took its own reference
+            return false;
+        }
+        return true;
+    }
+
+    private enum CaptureKind { None, Borrowed, Kept }
+
+    /// <summary>
+    /// How the use <paramref name="u"/> sits in <paramref name="fn"/>: directly (None), only inside lambdas on the stack (Borrowed:
+    /// no frame holds the variable, the lambdas only borrow it), or inside a stored closure or a local function (Kept).
+    /// </summary>
+    private CaptureKind CaptureOf(SyntaxNode u, SyntaxNode fn)
+    {
+        var kind = CaptureKind.None;
+        for (var anc = u.Parent; anc != null && anc != fn; anc = anc.Parent)
+        {
+            if (!IsFunctionNode(anc)) continue;
+            if (anc is not LambdaExpressionSyntax lam || IsHeapLambda(lam)) return CaptureKind.Kept;
+            kind = CaptureKind.Borrowed;
+        }
+        return kind;
+    }
+
+    /// <summary>
+    /// True when the stack lambdas around <paramref name="u"/> are done before <paramref name="at"/>: the outermost one is an argument
+    /// (so it lives only for that call) in a statement that ends before <paramref name="at"/>.
+    /// </summary>
+    private bool BorrowedCaptureEndsBefore(SyntaxNode u, SyntaxNode fn, SyntaxNode at)
+    {
+        LambdaExpressionSyntax? outer = null;
+        for (var anc = u.Parent; anc != null && anc != fn; anc = anc.Parent)
+            if (anc is LambdaExpressionSyntax lam) outer = lam;
+        if (outer == null || Classify(outer).Kind != SiteKind.Borrowed) return false;
+        var stmt = outer.Ancestors().OfType<StatementSyntax>().FirstOrDefault();
+        return stmt != null && stmt.Span.End <= at.SpanStart;
+    }
+
+    /// <summary>
+    /// True when <paramref name="a"/> and <paramref name="b"/> are on different branches of the same <c>if</c>/<c>else</c>, <c>?:</c>,
+    /// switch statement or switch expression, so at most one of them runs (a loop around both is handled by the caller).
+    /// </summary>
+    private static bool OnOtherBranch(SyntaxNode a, SyntaxNode b)
+    {
+        var common = a.Parent;
+        while (common != null && !common.Span.Contains(b.Span)) common = common.Parent;
+        static bool In(SyntaxNode? part, SyntaxNode n) => part != null && part.Span.Contains(n.Span);
+        return common switch
+        {
+            IfStatementSyntax i => In(i.Statement, a) && In(i.Else, b) || In(i.Else, a) && In(i.Statement, b),
+            ConditionalExpressionSyntax c => In(c.WhenTrue, a) && In(c.WhenFalse, b) || In(c.WhenFalse, a) && In(c.WhenTrue, b),
+            SwitchStatementSyntax sw => sw.Sections.FirstOrDefault(x => In(x, a)) is { } sa && sw.Sections.FirstOrDefault(x => In(x, b)) is { } sb && sa != sb
+                && !sa.DescendantNodes().OfType<GotoStatementSyntax>().Any() && !sb.DescendantNodes().OfType<GotoStatementSyntax>().Any(),
+            SwitchExpressionSyntax se => se.Arms.FirstOrDefault(x => In(x, a)) is { } ea && se.Arms.FirstOrDefault(x => In(x, b)) is { } eb && ea != eb
+                && !In(ea.WhenClause, a) && !In(eb.WhenClause, b) && !In(ea.Pattern, a) && !In(eb.Pattern, b),
+            _ => false,
+        };
+    }
+
+    private readonly HashSet<ISymbol> _unfreedWarned = new(SymbolEqualityComparer.Default);
+
+    /// <summary>
+    /// ES0013 when a variable that owns its reference is given to an [Owned] parameter or a setter that takes a new one (it is used
+    /// again, handed over more than once, or in a loop) and nothing else frees or keeps the variable's own: it would leak. A capture
+    /// by a lambda on the stack is only a use (no frame owns the variable), and a Heap.Free, store or return on another branch of
+    /// the same if, ?: or switch does not free it on the hand-over's path.
+    /// </summary>
+    private void WarnUnfreedOriginal(ISymbol v, IdentifierNameSyntax at, string to)
+    {
+        if (_unfreedWarned.Contains(v)) return;
+        if (v is IParameterSymbol p && !IsOwned(p) && p.ContainingSymbol is not IMethodSymbol { MethodKind: MethodKind.PropertySet }) return;
+        FrameScopeOf(v, out var fn);
+        if (fn == null) return;
+        if (v is ILocalSymbol)
+        {
+            if (v.DeclaringSyntaxReferences.FirstOrDefault()?.GetSyntax() is not VariableDeclaratorSyntax vd) return;
+            var anyValue = false;
+            if (vd.Initializer != null)
+            {
+                if (!FreshValue(vd.Initializer.Value, new HashSet<IMethodSymbol>(SymbolEqualityComparer.Default))) return;   // an alias: owns nothing
+                anyValue = !IsNullConstant(vd.Initializer.Value);
+            }
+            foreach (var set in fn.DescendantNodes().OfType<AssignmentExpressionSyntax>())
+                if (set.Left is IdentifierNameSyntax l && l.Identifier.Text == v.Name && SymbolEqualityComparer.Default.Equals(Model(l).GetSymbolInfo(l).Symbol, v))
+                {
+                    if (!set.IsKind(SyntaxKind.SimpleAssignmentExpression) || !FreshValue(set.Right, new HashSet<IMethodSymbol>(SymbolEqualityComparer.Default))) return;
+                    anyValue |= !IsNullConstant(set.Right);
+                }
+            if (!anyValue) return;
+        }
+        foreach (var u in fn.DescendantNodes().OfType<IdentifierNameSyntax>())
+        {
+            if (u.Identifier.Text != v.Name || !SymbolEqualityComparer.Default.Equals(Model(u).GetSymbolInfo(u).Symbol, v)) continue;
+            if (CaptureOf(u, fn) == CaptureKind.Kept) return;   // captured by a stored closure: its frame owns it
+            var node = ValueSite(u, out var parent);
+            if (parent is AssignmentExpressionSyntax set && set.Left == node) continue;
+            if (OnOtherBranch(u, at)) continue;   // freed, stored or given away only on a path that does not reach this hand-over
+            if (parent is ArgumentSyntax arg && arg.Expression == node && IsHeapFreeArgument(arg)) return;   // freed
+            if (IsHandoverSite(node, parent)) continue;
+            var site = Classify(u);
+            if (site.Kind == SiteKind.Borrowed) continue;
+            if (site.Kind == SiteKind.Kept && parent is AssignmentExpressionSyntax { RawKind: (int)SyntaxKind.AddAssignmentExpression } add && add.Right == node
+                && Model(add).GetSymbolInfo(add.Left).Symbol is IEventSymbol) continue;
+            return;   // stored, returned or copied: that owner frees it
+        }
+        _unfreedWarned.Add(v);
+        _diagnostics.Add(Diagnostic.Create(ESharp.Analyzers.Descriptors.ClosureNeverFreed, at.GetLocation(),
+            $"'{v.Name}' is given to {to} but is used again, given more than once or given inside a loop, so the callee takes a reference of its own and '{v.Name}' keeps one that is never freed: call Heap.Free(ref {v.Name}) after its last use"));
+    }
+
     // ------------------------------------------------------------------ frames
 
     /// <summary>The frames of one function: which of its scopes hold variables captured by heap closures.</summary>
@@ -591,6 +840,8 @@ internal sealed partial class CEmitter
             // E += v: the event takes a reference of its own (v is not a new delegate), so v still owns its one.
             if (site.Kind == SiteKind.Kept && parent is AssignmentExpressionSyntax { RawKind: (int)SyntaxKind.AddAssignmentExpression } add && add.Right == node
                 && Model(add).GetSymbolInfo(add.Left).Symbol is IEventSymbol) continue;
+            // Given to an [Owned] parameter or a setter that takes a reference of its own (issue #110): v still owns its one.
+            if (site.Kind == SiteKind.Kept && IsHandoverSite(node, parent) && !MovesAt(v, id)) continue;
             return Ownership.None;   // copied, stored, returned, handed on: someone else may free it
         }
         var weak = false;
