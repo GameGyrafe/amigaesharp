@@ -14,10 +14,14 @@
   <!-- The runtime attributes and platform contracts are compiled together with user code,
        so they ship inside the compiler as embedded sources. -->
   <ItemGroup>
-    <EmbeddedResource Include="..\ESharp.Runtime\*.cs" LogicalName="lib/Runtime/%(Filename)%(Extension)" />
-    <EmbeddedResource Include="..\ESharp.Platform\*.cs" LogicalName="lib/Platform/%(Filename)%(Extension)" />
+    <EmbeddedResource Include="..\ESharp.Runtime\*.cs" LogicalName="&lt;esharp-lib&gt;/Runtime/%(Filename)%(Extension)" />
+    <EmbeddedResource Include="..\ESharp.Platform\*.cs" LogicalName="&lt;esharp-lib&gt;/Platform/%(Filename)%(Extension)" />
     <!-- C runtime pasted into the generated C for non-Amiga targets (standard C, and SDL 3 for the sdl target). -->
     <EmbeddedResource Include="CRuntime\*.h" LogicalName="crt/%(Filename)%(Extension)" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="ESharp.Compiler.Tests" />
   </ItemGroup>
 
 </Project>

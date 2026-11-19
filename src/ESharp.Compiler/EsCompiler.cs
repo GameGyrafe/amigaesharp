@@ -22,7 +22,7 @@ public static class EsCompiler
         var parse = new CSharpParseOptions(LanguageVersion.Latest, preprocessorSymbols: options.Defines);
 
         var userTrees = sources
-            .Select(s => CSharpSyntaxTree.ParseText(s.Text, parse, path: s.Path))
+            .Select(s => CSharpSyntaxTree.ParseText(s.Text, parse, path: options.UserFilesAreLibrary ? LibrarySources.Root + "Platform/" + s.Path : LibrarySources.UserPath(s.Path)))
             .ToList();
         var libTrees = LibrarySources.Load()
             .Select(s => CSharpSyntaxTree.ParseText(s.Text, parse, path: s.Path))

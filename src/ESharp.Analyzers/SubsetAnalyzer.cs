@@ -299,7 +299,7 @@ public sealed partial class SubsetAnalyzer : DiagnosticAnalyzer
     /// <summary>
     /// A type of E#'s own library: from the ESharp.Platform / ESharp.Runtime assemblies (IDE, host projects), or, where the compiler
     /// parses the library as source together with the program, declared in one of the library's source files. The compiler names
-    /// those by path prefix in the <see cref="LibrarySourcesProperty"/> option (lib/Runtime/ and lib/Platform/); the IDE does not set it.
+    /// those by path prefix in the <see cref="LibrarySourcesProperty"/> option (<esharp-lib>/Runtime/ and <esharp-lib>/Platform/, which no program path can start with); the IDE does not set it.
     /// </summary>
     private static bool IsESharpLibraryType(SyntaxNodeAnalysisContext c, INamedTypeSymbol type)
     {

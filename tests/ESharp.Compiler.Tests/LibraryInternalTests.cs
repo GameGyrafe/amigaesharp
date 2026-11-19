@@ -5,6 +5,17 @@ namespace ESharp.Compiler.Tests;
 /// <summary>ES0103: the program and E#'s library are one compilation, but the library's internal members are not the program's.</summary>
 public class LibraryInternalTests
 {
+    [Theory]
+    [InlineData("lib/Platform/Evil.cs")]
+    [InlineData("lib/Runtime/Evil.cs")]
+    [InlineData("<esharp-lib>/Platform/Evil.cs")]
+    public void A_program_file_cannot_pass_as_a_library_file_by_its_path(string path)
+    {
+        var src = Program("static unsafe void F() { var o = new object(); void* p = Cast.ObjectToPtr(o); }");
+        var r = EsCompiler.Compile(new[] { new SourceFile(path, src) });
+        Assert.Contains("ES0103", ErrorIds(r));
+    }
+
     [Fact]
     public void Direct_call_of_an_internal_library_method_is_rejected()
     {
