@@ -55,6 +55,8 @@ public sealed partial class SubsetAnalyzer : DiagnosticAnalyzer
         context.RegisterSyntaxNodeAction(CheckArrayAssignment, SyntaxKind.SimpleAssignmentExpression);
         context.RegisterSyntaxNodeAction(CheckBorrowedDelegate, SyntaxKind.IdentifierName);
         context.RegisterSyntaxNodeAction(CheckDelegateTypeArguments, SyntaxKind.GenericName, SyntaxKind.InvocationExpression);
+        context.RegisterSyntaxNodeAction(CheckLibraryInternal,
+            SyntaxKind.IdentifierName, SyntaxKind.GenericName, SyntaxKind.ObjectCreationExpression, SyntaxKind.ImplicitObjectCreationExpression);
         context.RegisterCompilationStartAction(Closures.Start);
     }
 
@@ -297,7 +299,7 @@ public sealed partial class SubsetAnalyzer : DiagnosticAnalyzer
     /// <summary>
     /// A type of E#'s own library: from the ESharp.Platform / ESharp.Runtime assemblies (IDE, host projects), or, where the compiler
     /// parses the library as source together with the program, declared in one of the library's source files. The compiler names
-    /// those by path prefix in the <see cref="LibrarySourcesProperty"/> option (lib/Runtime/ and lib/Platform/); the IDE does not set it.
+    /// those by path prefix in the <see cref="LibrarySourcesProperty"/> option (<esharp-lib>/Runtime/ and <esharp-lib>/Platform/, which no program path can start with); the IDE does not set it.
     /// </summary>
     private static bool IsESharpLibraryType(SyntaxNodeAnalysisContext c, INamedTypeSymbol type)
     {
@@ -307,6 +309,34 @@ public sealed partial class SubsetAnalyzer : DiagnosticAnalyzer
             return false;
         var list = prefixes.Split(new[] { ';' }, System.StringSplitOptions.RemoveEmptyEntries);
         return type.OriginalDefinition.DeclaringSyntaxReferences.Any(r => list.Any(p => r.SyntaxTree.FilePath.StartsWith(p, System.StringComparison.Ordinal)));
+    }
+
+    /// <summary>
+    /// ES0103: the compiler parses E#'s library and the program as one assembly, so C# lets the program reach the library's internal
+    /// members; the dotnet host build (library as metadata) does not. Only where the library is source (the option is set) and only
+    /// for files that are not library files. A member is out of reach when it, or a type containing it, is internal or private protected.
+    /// </summary>
+    private static void CheckLibraryInternal(SyntaxNodeAnalysisContext c)
+    {
+        if (!c.Options.AnalyzerConfigOptionsProvider.GlobalOptions.TryGetValue(LibrarySourcesProperty, out var prefixes) || string.IsNullOrEmpty(prefixes))
+            return;
+        var list = prefixes.Split(new[] { ';' }, System.StringSplitOptions.RemoveEmptyEntries);
+        bool InLibrary(string path) => list.Any(p => path.StartsWith(p, System.StringComparison.Ordinal));
+        if (InLibrary(c.Node.SyntaxTree.FilePath)) return;
+        var info = c.SemanticModel.GetSymbolInfo(c.Node, c.CancellationToken);
+        var symbol = info.Symbol ?? (info.CandidateSymbols.Length == 1 ? info.CandidateSymbols[0] : null);
+        if (symbol == null) return;
+        symbol = symbol.OriginalDefinition;
+        if (symbol.DeclaringSyntaxReferences.IsEmpty || !symbol.DeclaringSyntaxReferences.All(r => InLibrary(r.SyntaxTree.FilePath))) return;
+        for (var s = symbol; s != null && !(s is INamespaceSymbol); s = s.ContainingSymbol)
+        {
+            if (s is IMethodSymbol { MethodKind: MethodKind.PropertyGet or MethodKind.PropertySet or MethodKind.EventAdd or MethodKind.EventRemove }) continue;
+            if (s.DeclaredAccessibility is Accessibility.Internal or Accessibility.ProtectedAndInternal)
+            {
+                c.ReportDiagnostic(Diagnostic.Create(Descriptors.LibraryInternal, c.Node.GetLocation(), symbol.ToDisplayString(SymbolDisplayFormat.CSharpErrorMessageFormat)));
+                return;
+            }
+        }
     }
 
     /// <summary>The library class is marked <c>[ESharp.Extensible]</c>: programs may derive from it.</summary>
