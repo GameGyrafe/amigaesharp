@@ -341,6 +341,200 @@ static void Wire(B b) { int n = 0; System.Action h = () => n++; b.Ev += h; Heap.
         Assert.DoesNotContain(r.Diagnostics, x => x.Id == "ES0013");
     }
 
+    // ---- frames release the delegates they own (issue #85): each runs under AddressSanitizer/LeakSanitizer when available.
+
+    [Fact]
+    public void A_frame_releases_an_owned_parameter_captured_by_a_stored_lambda()
+    {
+        if (!HasGcc) return;
+        const string members = @"
+static System.Func<int> Twice([Owned] System.Func<int> f) => () => f() + f();
+static System.Action Kept;
+static void Keep([Owned] System.Action a) { int n = 0; Kept = () => { n++; a(); }; }
+";
+        const string body = @"
+int base0 = Heap.LiveClosures();
+int t = 0;
+System.Func<int> twice = Twice(() => ++t);
+Check(twice() == 3, ""a stored lambda calls the owned parameter it captured"");
+Check(Heap.LiveClosures() == base0 + 2, ""the outer closure and the captured one are both counted"");
+Heap.Free(ref twice);
+Check(Heap.LiveClosures() == base0, ""freeing the outer closure releases the captured one"");
+Keep(() => t += 10);
+Kept(); Kept();
+Check(t == 22, ""a block-bodied stored lambda over an owned parameter"");
+Heap.Free(ref Kept);
+Check(Heap.LiveClosures() == base0, ""nothing left over"");
+";
+        var (code, output) = Run(members, body);
+        Assert.Equal(OkLines("a stored lambda calls the owned parameter it captured", "the outer closure and the captured one are both counted",
+            "freeing the outer closure releases the captured one", "a block-bodied stored lambda over an owned parameter", "nothing left over"), output);
+        Assert.Equal(0, code);
+    }
+
+    [Fact]
+    public void A_frame_releases_a_setter_value_captured_by_a_stored_lambda()
+    {
+        if (!HasGcc) return;
+        const string members = @"
+public class Relay
+{
+    System.Action _fire;
+    public System.Action Target { set { _fire = () => { value(); value(); }; } }
+    public void Fire() { _fire(); }
+    public void Dispose() { Heap.Free(ref _fire); }
+}
+";
+        const string body = @"
+int base0 = Heap.LiveClosures();
+int t = 0;
+Relay r = new Relay();
+r.Target = () => t++;
+r.Fire();
+Check(t == 2, ""the stored lambda calls the setter's value"");
+r.Dispose();
+Heap.Free(ref r);
+Check(Heap.LiveClosures() == base0, ""the setter's frame released its value"");
+";
+        var (code, output) = Run(members, body);
+        Assert.Equal(OkLines("the stored lambda calls the setter's value", "the setter's frame released its value"), output);
+        Assert.Equal(0, code);
+    }
+
+    [Fact]
+    public void Aliases_captured_by_a_stored_lambda_are_not_released_by_the_frame()
+    {
+        if (!HasGcc) return;
+        // Each alias has another owner that frees it: a double free here would stop the sanitized run.
+        const string members = @"
+static System.Action Field;
+static System.Action Kept;
+static System.Action Other;
+static void FromField() { System.Action a = Field; Kept = () => a(); }
+static void StoredToo([Owned] System.Action a) { Other = a; Kept = () => a(); }
+static void CopiedOut() { int n = 0; System.Action a = () => n++; Other = a; Kept = () => a(); }
+";
+        const string body = @"
+int base0 = Heap.LiveClosures();
+int t = 0;
+Field = () => t++;
+FromField();
+Kept();
+Heap.Free(ref Kept);
+Check(t == 1 && Heap.LiveClosures() == base0 + 1, ""a local copied from a field is left to the field"");
+Heap.Free(ref Field);
+StoredToo(() => t += 10);
+Kept();
+Heap.Free(ref Kept);
+Other();
+Check(t == 21 && Heap.LiveClosures() == base0 + 1, ""an owned parameter that was also stored is left to the field"");
+Heap.Free(ref Other);
+CopiedOut();
+Kept();
+Heap.Free(ref Kept);
+Other();
+Check(Heap.LiveClosures() == base0 + 1, ""a local copied into a field is left to the field"");
+Heap.Free(ref Other);
+Check(Heap.LiveClosures() == base0, ""nothing left over"");
+";
+        var (code, output) = Run(members, body);
+        Assert.Equal(OkLines("a local copied from a field is left to the field", "an owned parameter that was also stored is left to the field",
+            "a local copied into a field is left to the field", "nothing left over"), output);
+        Assert.Equal(0, code);
+    }
+
+    [Fact]
+    public void Nested_frames_release_their_own_delegates()
+    {
+        if (!HasGcc) return;
+        const string members = @"
+static System.Func<int>[] Fs = new System.Func<int>[3];
+static int Outer;
+// The local h of each loop body holds a closure over the method's frame and is owned by the body's frame.
+static void Fill([Owned] System.Func<int> seed)
+{
+    int k = 100;
+    for (int i = 0; i < 3; i++)
+    {
+        int j = i;
+        System.Func<int> h = () => k + seed();
+        Fs[i] = () => h() + j;
+    }
+}
+// A local given a lambda over its own scope: the frame holds it weakly, so the two do not keep each other alive.
+static System.Func<int> SelfScope()
+{
+    int n = 5;
+    System.Func<int> inc = () => ++n;
+    return () => inc() * 2;
+}
+// A local given a fresh closure from a call.
+static System.Func<int> Make(int v) => () => v;
+static System.Func<int> FromCall()
+{
+    System.Func<int> g = Make(1);
+    int w = 3;
+    return () => g() + w;
+}
+";
+        const string body = @"
+int base0 = Heap.LiveClosures();
+int one = 1;
+Fill(() => Outer + one);
+Check(Fs[0]() == 101 && Fs[2]() == 103, ""closures over nested frames"");
+for (int i = 0; i < 3; i++) Heap.Free(ref Fs[i]);
+Check(Heap.LiveClosures() == base0, ""each body frame released its local and the method frame its parameter"");
+System.Func<int> s = SelfScope();
+Check(s() == 12 && s() == 14, ""a local over its own frame"");
+Check(Heap.LiveClosures() == base0 + 1, ""only the returned closure is counted"");
+Heap.Free(ref s);
+System.Func<int> q = FromCall();
+Check(q() == 4, ""a local given a fresh call result"");
+Heap.Free(ref q);
+Check(Heap.LiveClosures() == base0, ""nothing left over"");
+";
+        var (code, output) = Run(members, body);
+        Assert.Equal(OkLines("closures over nested frames", "each body frame released its local and the method frame its parameter",
+            "a local over its own frame", "only the returned closure is counted", "a local given a fresh call result", "nothing left over"), output);
+        Assert.Equal(0, code);
+    }
+
+    [Fact]
+    public void Owned_frame_delegates_get_a_fini_and_aliases_do_not()
+    {
+        var c = CompileOk(Program(@"
+static System.Action Kept;
+static System.Action Field;
+static void Own([Owned] System.Action a) { Kept = () => a(); }
+static void Alias() { System.Action b = Field; Kept = () => b(); }", "Own(null); Heap.Free(ref Kept); Alias(); Heap.Free(ref Kept);"));
+        Assert.Contains("->v_a.env); }", c);
+        Assert.Contains("->hdr.fini = ", c);
+        Assert.DoesNotContain("->v_b.env); }", c);
+    }
+
+    [Fact]
+    public void Removing_a_lambda_literal_from_an_event_is_ES0015()
+    {
+        var r = Compile(Program(@"
+public class B { public event System.Action Ev; public void Drop() { Heap.Free(ref Ev); } }
+static int Count;
+static void Wire(B b) { b.Ev += () => Count++; b.Ev -= () => Count++; b.Ev -= (System.Action)(() => { }); }", ""));
+        Assert.Equal(2, r.Diagnostics.Count(x => x.Id == "ES0015"));
+        Assert.Contains("b.Ev -= <lambda>", r.Diagnostics.First(x => x.Id == "ES0015").GetMessage());
+        Assert.True(r.Success, string.Join("\n", r.Diagnostics));   // a warning, not an error
+
+        // A capturing lambda there is also ES0099 (the emitter cannot hold it), and still gets the warning that says why it is pointless.
+        r = Compile(Program(@"
+public class B { public event System.Action Ev; public void Drop() { Heap.Free(ref Ev); } }
+static void Wire(B b, int k) { b.Ev -= () => k++; }", ""));
+        Assert.Contains(r.Diagnostics, x => x.Id == "ES0015");
+
+        r = Compile(Program(@"
+public class B { public event System.Action Ev; public void Drop() { Heap.Free(ref Ev); } }
+static void Wire(B b, int k) { System.Action h = () => k++; b.Ev += h; b.Ev -= h; Heap.Free(ref h); }", ""));
+        Assert.DoesNotContain(r.Diagnostics, x => x.Id == "ES0015");
+    }
+
     // ---- review probes (PR #83): each runs under AddressSanitizer/LeakSanitizer when available, or must not compile.
 
     private static (int code, string output) RunProgram(string source)
@@ -905,6 +1099,8 @@ internal static class ClosuresExpected
         "an [Owned] parameter keeps the closure",
         "a borrowed lambda shares a variable with a stored one",
         "each loop iteration gets its own captured variable",
+        "a stored lambda over an [Owned] parameter",
+        "a stored lambda over a setter's value",
         "a stored lambda that uses this",
         "a raise uses a snapshot: removal and addition wait for the next raise",
         "the removed handler is gone and the added one runs",
