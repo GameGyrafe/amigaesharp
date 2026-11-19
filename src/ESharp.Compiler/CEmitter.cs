@@ -3206,7 +3206,7 @@ ADD2SET(es_aros_wbstart, PROGRAM_ENTRIES, -50)
             if (Model(oc).GetSymbolInfo(oc).Symbol is IMethodSymbol { IsImplicitlyDeclared: false } cctor)
             {
                 if (cctor.Parameters.Any(p => p.RefKind != RefKind.None)) return Unsupported(oc, "ref/out constructor argument");
-                create = $"{FuncName(cctor)}({string.Join(", ", (oc.ArgumentList?.Arguments ?? default).Select(a => Expr(a.Expression, top: true)))})";
+                create = $"{FuncName(cctor)}({string.Join(", ", (oc.ArgumentList?.Arguments ?? default).Select(a => Argument(a, cctor)))})";
             }
             else if ((oc.ArgumentList?.Arguments.Count ?? 0) > 0) return Unsupported(oc, "constructor call");
             else
@@ -3226,7 +3226,7 @@ ADD2SET(es_aros_wbstart, PROGRAM_ENTRIES, -50)
                 else if (item is AssignmentExpressionSyntax { Left: IdentifierNameSyntax prop } pa && pa.IsKind(SyntaxKind.SimpleAssignmentExpression)
                          && Model(pa).GetSymbolInfo(prop).Symbol is IPropertySymbol { IsStatic: false, IsIndexer: false, SetMethod: { } setter })
                     // A property with a setter body (new Text { Frame = 3 }): its setter runs on the new object, in initializer order.
-                    sets.Append($"{InstanceCall(setter, temp, new[] { Expr(pa.Right, top: true) })}; ");
+                    sets.Append($"{InstanceCall(setter, temp, new[] { SetterValue((IPropertySymbol)Model(pa).GetSymbolInfo(prop).Symbol!, pa.Right) })}; ");
                 else
                     Unsupported(item, "object initializer element");
             }
@@ -3236,7 +3236,7 @@ ADD2SET(es_aros_wbstart, PROGRAM_ENTRIES, -50)
         {
             if (oc.Initializer != null) return Unsupported(oc, "constructor call combined with an object initializer");
             if (ctor.Parameters.Any(p => p.RefKind != RefKind.None)) return Unsupported(oc, "ref/out constructor argument");
-            var ctorArgs = string.Join(", ", (oc.ArgumentList?.Arguments ?? default).Select(a => Expr(a.Expression, top: true)));
+            var ctorArgs = string.Join(", ", (oc.ArgumentList?.Arguments ?? default).Select(a => Argument(a, ctor)));
             return $"{FuncName(ctor)}({ctorArgs})";
         }
         if (type.TypeKind != TypeKind.Struct || (oc.ArgumentList?.Arguments.Count ?? 0) > 0)
@@ -3842,7 +3842,12 @@ ADD2SET(es_aros_wbstart, PROGRAM_ENTRIES, -50)
             var index = list.Arguments.IndexOf(a);
             param = index < m.Parameters.Length ? m.Parameters[index] : m.Parameters.LastOrDefault(p => p.IsParams);
         }
-        if (param == null || param.RefKind == RefKind.None) return Expr(a.Expression, top: true);
+        if (param == null || param.RefKind == RefKind.None)
+        {
+            var plain = Expr(a.Expression, top: true);
+            return IsHandoverParameter(param) && a.RefKindKeyword.IsKind(SyntaxKind.None)
+                ? HandOver(a.Expression, plain, param!.Type, $"the [Owned] parameter '{param.Name}'") : plain;
+        }
 
         var e = Strip(a.Expression);
         switch (e)
@@ -4099,10 +4104,17 @@ ADD2SET(es_aros_wbstart, PROGRAM_ENTRIES, -50)
         _ => false,
     };
 
+    /// <summary>The value given to a property's setter: a delegate takes a reference of its own unless it is handed over (issue #110).</summary>
+    private string SetterValue(IPropertySymbol p, ExpressionSyntax value)
+    {
+        var plain = Expr(value, top: true);
+        return IsHandoverSetter(p) ? HandOver(value, plain, p.Type, $"the setter of '{p.Name}'") : plain;
+    }
+
     private string PropertyAssignment(IPropertySymbol p, AssignmentExpressionSyntax a)
     {
         if (a.IsKind(SyntaxKind.SimpleAssignmentExpression))
-            return PropertyWrite(p, a.Left, a, _ => Expr(a.Right, top: true), reads: false);
+            return PropertyWrite(p, a.Left, a, _ => SetterValue(p, a.Right), reads: false);
         var token = a.OperatorToken.Text;
         var op = token.Substring(0, token.Length - 1);
         if (op == "?" ) return Unsupported(a, "??=");

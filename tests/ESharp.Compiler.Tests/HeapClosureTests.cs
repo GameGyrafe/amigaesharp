@@ -444,11 +444,12 @@ Check(Heap.LiveClosures() == base0, ""nothing left over"");
     }
 
     [Fact]
-    public void A_shared_value_passed_to_an_owned_parameter_or_a_setter_is_handed_over()
+    public void A_handed_over_local_and_a_cleared_field_are_released_once()
     {
         if (!HasGcc) return;
-        // The documented contract: [Owned] parameters and setters take the caller's reference. The caller hands it over (a local it
-        // does not free, a field it clears without freeing); the callee's frame then releases it once, with no double free.
+        // A local given to an [Owned] parameter and never used again hands its reference over (no new one, so no leak). A field
+        // given to a setter takes a reference of its own (issue #110): clearing the field without Heap.Free now leaks its original
+        // (counted below), freeing it is the right thing (see the next tests).
         const string members = @"
 public class Relay
 {
@@ -471,17 +472,250 @@ Check(Heap.LiveClosures() == base0, ""the callee's frame released the local's cl
 Field = () => t += 10;
 Relay r = new Relay();
 r.Target = Field;
-Field = null;
 r.Fire();
-Check(t == 12, ""a field handed to a setter"");
+Check(t == 12, ""a field given to a setter"");
 r.Dispose();
 Heap.Free(ref r);
-Check(Heap.LiveClosures() == base0, ""the setter's frame released the field's closure"");
+Check(Heap.LiveClosures() == base0 + 1, ""the setter's frame released its own reference, the field keeps one"");
+Heap.Free(ref Field);
+Check(Heap.LiveClosures() == base0, ""freeing the field releases the last one"");
 ";
         var (code, output) = Run(members, body);
         Assert.Equal(OkLines("a local handed to an owned parameter", "the callee's frame released the local's closure",
-            "a field handed to a setter", "the setter's frame released the field's closure"), output);
+            "a field given to a setter", "the setter's frame released its own reference, the field keeps one", "freeing the field releases the last one"), output);
         Assert.Equal(0, code);
+    }
+
+    // ---- shared values given to [Owned] parameters and setters keep their own reference (issue #110): each runs under
+    // AddressSanitizer/LeakSanitizer/UBSan when available (a use after free or a leak at exit fails the run).
+
+    [Fact]
+    public void Issue110_a_field_given_to_a_capturing_setter_and_then_freed()
+    {
+        if (!HasGcc) return;
+        const string members = @"
+public class Relay
+{
+    System.Action _fire;
+    public System.Action Target { set { _fire = () => value(); } }
+    public void Fire() { _fire(); }
+    public void Dispose() { Heap.Free(ref _fire); }
+}
+static System.Action Field;
+";
+        const string body = @"
+int base0 = Heap.LiveClosures();
+int t = 0;
+Field = () => t++;
+Relay r = new Relay();
+r.Target = Field;
+Heap.Free(ref Field);
+r.Fire(); r.Fire();
+Check(t == 2, ""the setter's closure still runs after the caller freed the field"");
+r.Dispose();
+Heap.Free(ref r);
+Check(Heap.LiveClosures() == base0, ""each reference released once"");
+";
+        var (code, output) = Run(members, body);
+        Assert.Equal(OkLines("the setter's closure still runs after the caller freed the field", "each reference released once"), output);
+        Assert.Equal(0, code);
+    }
+
+    [Fact]
+    public void Issue110_a_local_given_to_an_owned_parameter_and_also_freed()
+    {
+        if (!HasGcc) return;
+        const string members = @"
+static System.Func<int> Twice([Owned] System.Func<int> f) => () => f() + f();
+";
+        const string body = @"
+int base0 = Heap.LiveClosures();
+int t = 0;
+System.Func<int> one = () => ++t;
+System.Func<int> twice = Twice(one);
+Check(one() == 1, ""the local is still the caller's"");
+Heap.Free(ref one);
+Check(twice() == 5, ""the returned closure still calls it"");
+Heap.Free(ref twice);
+Check(Heap.LiveClosures() == base0, ""each reference released once"");
+";
+        var (code, output) = Run(members, body);
+        Assert.Equal(OkLines("the local is still the caller's", "the returned closure still calls it", "each reference released once"), output);
+        Assert.Equal(0, code);
+    }
+
+    [Fact]
+    public void Issue110_a_field_given_to_a_storing_setter_owned_constructor_and_initializer_then_freed()
+    {
+        if (!HasGcc) return;
+        const string members = @"
+public class Holder
+{
+    System.Action _run;
+    public Holder() { }
+    public Holder([Owned] System.Action run) { _run = run; }
+    public System.Action Run { set { _run = value; } }
+    public void Go() { _run(); }
+    public void Dispose() { Heap.Free(ref _run); }
+}
+static System.Action Field;
+static System.Action[] Arr = new System.Action[1];
+";
+        const string body = @"
+int base0 = Heap.LiveClosures();
+int t = 0;
+Field = () => t++;
+Holder a = new Holder();
+a.Run = Field;
+Holder b = new Holder(Field);
+Holder c = new Holder { Run = Field };
+Arr[0] = () => t += 100;
+Holder d = new Holder(Arr[0]);
+Heap.Free(ref Field);
+Heap.Free(ref Arr[0]);
+a.Go(); b.Go(); c.Go(); d.Go();
+Check(t == 103, ""a storing setter, an owned constructor parameter and an initializer keep their own"");
+a.Dispose(); b.Dispose(); c.Dispose(); d.Dispose();
+Heap.Free(ref a); Heap.Free(ref b); Heap.Free(ref c); Heap.Free(ref d);
+Check(Heap.LiveClosures() == base0, ""each reference released once"");
+";
+        var (code, output) = Run(members, body);
+        Assert.Equal(OkLines("a storing setter, an owned constructor parameter and an initializer keep their own", "each reference released once"), output);
+        Assert.Equal(0, code);
+    }
+
+    [Fact]
+    public void Issue110_fresh_values_and_plain_locals_are_handed_over_without_a_new_reference()
+    {
+        if (!HasGcc) return;
+        // A new lambda, a call that always returns one, and locals handed over for good (also an [Owned] parameter and a setter's
+        // value passed on) take no reference: with one, these would leak, which LeakSanitizer and LiveClosures would show.
+        const string members = @"
+public class Holder
+{
+    System.Action _run;
+    public System.Action Run { set { _run = value; } }
+    public System.Action Inner { set { Run = value; } }
+    public void Go() { _run(); }
+    public void Dispose() { Heap.Free(ref _run); }
+}
+static System.Action Kept;
+static void Keep([Owned] System.Action a) { Kept = a; }
+static void Pass([Owned] System.Action a) { Keep(a); }
+static System.Action Make(int k) => () => Kept2 += k;
+static int Kept2;
+";
+        const string body = @"
+int base0 = Heap.LiveClosures();
+int t = 0;
+Keep(() => t++);
+Kept();
+Heap.Free(ref Kept);
+Keep(Make(5));
+Kept();
+Heap.Free(ref Kept);
+System.Action local = () => t += 10;
+local();
+Pass(local);
+Kept();
+Heap.Free(ref Kept);
+Holder h = new Holder();
+System.Action other = () => t += 100;
+h.Inner = other;
+h.Go();
+h.Dispose();
+h.Run = () => t += 1000;
+h.Go();
+h.Dispose();
+Heap.Free(ref h);
+Check(t == 1121 && Kept2 == 5, ""fresh lambdas, a fresh call and locals handed over all ran"");
+Check(Heap.LiveClosures() == base0, ""no reference left over"");
+";
+        var (code, output) = Run(members, body);
+        Assert.Equal(OkLines("fresh lambdas, a fresh call and locals handed over all ran", "no reference left over"), output);
+        Assert.Equal(0, code);
+        var c = CompileOk(Program(members + Check, body));
+        Assert.DoesNotContain("es_closure_retain(_ho", c);
+    }
+
+    [Fact]
+    public void Issue110_locals_used_again_given_twice_or_in_a_loop_keep_their_own_and_are_freed()
+    {
+        if (!HasGcc) return;
+        const string members = @"
+static System.Action[] Kept = new System.Action[4];
+static int N;
+static void Keep([Owned] System.Action a) { Kept[N++] = a; }
+static System.Func<int> Twice([Owned] System.Func<int> f) => () => f() + f();
+";
+        const string body = @"
+int base0 = Heap.LiveClosures();
+int t = 0;
+System.Action a = () => t++;
+Keep(a);
+Keep(a);
+Heap.Free(ref a);
+System.Action b = () => t += 10;
+for (int i = 0; i < 2; i++) Keep(b);
+Heap.Free(ref b);
+for (int i = 0; i < 4; i++) Kept[i]();
+Check(t == 22, ""each kept copy runs after the local was freed"");
+for (int i = 0; i < 4; i++) Heap.Free(ref Kept[i]);
+int u = 0;
+System.Func<int> f = () => ++u;
+System.Func<int> g = Twice(f);
+Check(f() == 1 && g() == 5, ""a local still called after it was given away"");
+Heap.Free(ref f);
+Heap.Free(ref g);
+Check(Heap.LiveClosures() == base0, ""each reference released once"");
+";
+        var (code, output) = Run(members, body);
+        Assert.Equal(OkLines("each kept copy runs after the local was freed", "a local still called after it was given away", "each reference released once"), output);
+        Assert.Equal(0, code);
+    }
+
+    [Fact]
+    public void Issue110_a_captured_local_given_to_an_owned_parameter_is_released_by_its_frame()
+    {
+        if (!HasGcc) return;
+        // h is captured by a stored lambda and also given to Keep: Keep takes its own reference, and the method's frame releases h's.
+        const string members = @"
+static System.Action Kept;
+static System.Action Other;
+static void Keep([Owned] System.Action a) { Kept = a; }
+static void Wire(int k) { System.Action h = () => N += k; Other = () => h(); Keep(h); }
+static int N;
+";
+        const string body = @"
+int base0 = Heap.LiveClosures();
+Wire(3);
+Kept(); Other();
+Check(N == 6, ""both owners call it"");
+Heap.Free(ref Kept);
+Other();
+Heap.Free(ref Other);
+Check(N == 9 && Heap.LiveClosures() == base0, ""each reference released once"");
+";
+        var (code, output) = Run(members, body);
+        Assert.Equal(OkLines("both owners call it", "each reference released once"), output);
+        Assert.Equal(0, code);
+    }
+
+    [Fact]
+    public void Issue110_a_local_given_away_twice_and_never_freed_is_ES0013()
+    {
+        const string members = @"
+static System.Action[] Kept = new System.Action[2];
+static void Keep([Owned] System.Action a, int i) { Kept[i] = a; }
+static void Twice(int k) { System.Action a = () => k++; Keep(a, 0); Keep(a, 1); }
+static void Once(int k) { System.Action a = () => k++; Keep(a, 0); }
+static void Freed(int k) { System.Action a = () => k++; Keep(a, 0); Keep(a, 1); Heap.Free(ref a); }
+";
+        var r = Compile(Program(members, ""));
+        Assert.True(r.Success, string.Join("\n", r.Diagnostics));
+        var es13 = r.Diagnostics.Where(d => d.Id == "ES0013").ToList();
+        Assert.Single(es13);
+        Assert.Contains("'a' is given to the [Owned] parameter 'a'", es13[0].GetMessage());
     }
 
     [Fact]
@@ -1142,6 +1376,7 @@ internal static class ClosuresExpected
         "each loop iteration gets its own captured variable",
         "a stored lambda over an [Owned] parameter",
         "a stored lambda over a setter's value",
+        "a shared value given to a setter keeps its own reference",
         "a stored lambda that uses this",
         "a raise uses a snapshot: removal and addition wait for the next raise",
         "the removed handler is gone and the added one runs",

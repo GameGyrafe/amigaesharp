@@ -78,7 +78,9 @@ attributes (`[EntryPoint]`, `[AmigaLib]`, `[ChipRam]`, ...) and a small intrinsi
   values), nested classes, fixed-size array fields and field initializers in classes, interfaces (generic constraints and dynamic
   dispatch), delegates, lambdas, field-like events on classes, and LINQ over arrays as fused loops.
 - Lambdas that capture live on the stack while they are only passed down; stored or returned ones and event handlers are
-  reference-counted heap closures that you free with `Heap.Free` (`Heap.LiveClosures` is the leak check).
+  reference-counted heap closures that you free with `Heap.Free` (`Heap.LiveClosures` is the leak check). A delegate given to an
+  `[Owned]` parameter or a property setter is the callee's to free; if it is a field, or a local you use again or free, the callee
+  takes a reference of its own, so you still free yours.
 - User classes that derive from a platform class marked `[Extensible]` (so far `GtWindow`, see `samples/guiclass`).
 - Slow or opt-in: `long`/`ulong` (software 64-bit, rule ES0100 on the 68020), `float`/`double` (off by default, ES0003; `--allow-float`).
 
