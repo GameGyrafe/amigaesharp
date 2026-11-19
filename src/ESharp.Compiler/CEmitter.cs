@@ -2024,6 +2024,64 @@ static __attribute__((unused)) void *MUI_MakeObjectA(int32_t type, uintptr_t *pa
         result.AppendLine("}");
     }
 
+    /// <summary>
+    /// The Workbench (Wanderer) start on AROS, in every AROS program (issue #107; in the C of every Amiga target, inside #if __AROS__).
+    /// The AROS startup code waits for the WBStartup message on the process's own port, pr_MsgPort, at an offset compiled in from the SDK's struct Process. The x86-64 toolchain
+    /// (amigadev/crosstools, libraries from 2020) was built without the SMP field that newer x86-64 AROS (ABIv1, nightly 20261114)
+    /// has at the end of struct Task, so its startup waits 48 bytes too early in the Process and crashes (exec RemHead, address
+    /// error). So E# keeps the toolchain's Workbench entry out (defining __nowbsupport and WBenchMsg here means its object is not
+    /// linked) and adds its own to the PROGRAM_ENTRIES set of aros/startup.h at the same place (-50: before the console window
+    /// and command line entries, which look at WBenchMsg). It finds the port at run time: the first MsgPort at or after the
+    /// compiled offset whose node type is NT_MSGPORT, whose signal bit is SIGB_DOS and whose task is this one. Then it does what
+    /// every Amiga C startup does: argc 0 and argv the message, the program's directory as the current one, and after the
+    /// program the message replied under Forbid (so Workbench unloads the program only after it has ended).
+    /// </summary>
+    private const string ArosWorkbenchStart = @"#if defined(__AROS__)
+#include <proto/exec.h>
+#include <proto/dos.h>
+#include <aros/startup.h>
+#include <dos/dosextens.h>
+#include <workbench/startup.h>
+int __nowbsupport = 1;
+struct WBStartup *WBenchMsg = NULL;
+static struct MsgPort *es_aros_process_port(void *me)   /* this process */
+{
+    char *at = (char *)me + offsetof(struct Process, pr_MsgPort);
+    for (int d = 0; d <= 128; d += (int)sizeof(void *))
+    {
+        struct MsgPort *p = (struct MsgPort *)(at + d);
+        if (p->mp_Node.ln_Type == NT_MSGPORT && p->mp_SigBit == SIGB_DOS && p->mp_SigTask == me) return p;
+    }
+    return NULL;
+}
+static void es_aros_wbstart(struct ExecBase *SysBase)
+{
+    struct MsgPort *port = Cli() == NULL ? es_aros_process_port(FindTask(NULL)) : NULL;
+    BPTR dir = BNULL, old = BNULL;
+    if (port != NULL)
+    {
+        WaitPort(port);
+        WBenchMsg = (struct WBStartup *)GetMsg(port);
+    }
+    if (WBenchMsg != NULL)
+    {
+        __argc = 0;
+        __argv = (char **)WBenchMsg;
+        if (WBenchMsg->sm_NumArgs > 0 && WBenchMsg->sm_ArgList != NULL && WBenchMsg->sm_ArgList[0].wa_Lock != BNULL
+            && (dir = DupLock(WBenchMsg->sm_ArgList[0].wa_Lock)) != BNULL)
+            old = CurrentDir(dir);
+    }
+    __startup_entries_next();
+    if (WBenchMsg != NULL)
+    {
+        if (dir != BNULL) { CurrentDir(old); UnLock(dir); }
+        Forbid();
+        ReplyMsg(&WBenchMsg->sm_Message);
+    }
+}
+ADD2SET(es_aros_wbstart, PROGRAM_ENTRIES, -50)
+#endif";
+
     private void EmitMain()
     {
         var entry = FindEntryPoints(_compilation, _user).FirstOrDefault();
@@ -2039,6 +2097,7 @@ static __attribute__((unused)) void *MUI_MakeObjectA(int32_t type, uintptr_t *pa
             Line("}");
             Line("");
         }
+        if (IsDefined("AMIGA")) foreach (var l in ArosWorkbenchStart.Split('\n')) Line(l.TrimEnd('\r'));
         Line(UsesArgs ? "int main(int argc, char **argv)" : "int main(void)");
         Line("{");
         _indent++;
