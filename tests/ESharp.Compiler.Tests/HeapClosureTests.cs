@@ -444,6 +444,47 @@ Check(Heap.LiveClosures() == base0, ""nothing left over"");
     }
 
     [Fact]
+    public void A_shared_value_passed_to_an_owned_parameter_or_a_setter_is_handed_over()
+    {
+        if (!HasGcc) return;
+        // The documented contract: [Owned] parameters and setters take the caller's reference. The caller hands it over (a local it
+        // does not free, a field it clears without freeing); the callee's frame then releases it once, with no double free.
+        const string members = @"
+public class Relay
+{
+    System.Action _fire;
+    public System.Action Target { set { _fire = () => value(); } }
+    public void Fire() { _fire(); }
+    public void Dispose() { Heap.Free(ref _fire); }
+}
+static System.Action Field;
+static System.Func<int> Twice([Owned] System.Func<int> f) => () => f() + f();
+";
+        const string body = @"
+int base0 = Heap.LiveClosures();
+int t = 0;
+System.Func<int> one = () => ++t;
+System.Func<int> twice = Twice(one);
+Check(twice() == 3, ""a local handed to an owned parameter"");
+Heap.Free(ref twice);
+Check(Heap.LiveClosures() == base0, ""the callee's frame released the local's closure"");
+Field = () => t += 10;
+Relay r = new Relay();
+r.Target = Field;
+Field = null;
+r.Fire();
+Check(t == 12, ""a field handed to a setter"");
+r.Dispose();
+Heap.Free(ref r);
+Check(Heap.LiveClosures() == base0, ""the setter's frame released the field's closure"");
+";
+        var (code, output) = Run(members, body);
+        Assert.Equal(OkLines("a local handed to an owned parameter", "the callee's frame released the local's closure",
+            "a field handed to a setter", "the setter's frame released the field's closure"), output);
+        Assert.Equal(0, code);
+    }
+
+    [Fact]
     public void Nested_frames_release_their_own_delegates()
     {
         if (!HasGcc) return;
