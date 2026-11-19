@@ -467,9 +467,13 @@ internal sealed partial class CEmitter
             fields.Append(' ').Append(Decl(type, FrameField(v), scope)).Append(';');
         }
         if (f.SelfType != null) fields.Append($" {TypeName(f.SelfType)} *{ThisName};");
-        _spans[f.Struct] = $"struct {f.Struct} {{ es_frame hdr;{fields} }};\n";
+        var owned = f.Vars.Where(v => FrameOwns(f, v) == Ownership.Strong).ToList();
+        var fini = owned.Count == 0 ? "" :
+            $"static void {f.Struct}_fini(es_frame *f) {{ {string.Concat(owned.Select(v => $"es_closure_release(((struct {f.Struct} *)f)->{FrameField(v)}.env); "))}}}\n";
+        _spans[f.Struct] = $"struct {f.Struct} {{ es_frame hdr;{fields} }};\n{fini}";
         var up = f.Up != null ? f.Up.Var : _outerFrames.Count > 0 ? "_env" : "NULL";
         Line($"struct {f.Struct} *{f.Var} __attribute__((cleanup(es_frame_drop))) = (struct {f.Struct} *)es_frame_new(sizeof(struct {f.Struct}), {up});");
+        if (owned.Count > 0) Line($"{f.Var}->hdr.fini = {f.Struct}_fini;");
         foreach (var v in f.Vars)
         {
             if (v is IParameterSymbol p) Line($"{f.Var}->{FrameField(v)} = {(_captures.TryGetValue(p, out var cur) ? cur : p.Name)};");
@@ -526,7 +530,120 @@ internal sealed partial class CEmitter
         ValueSite(lam, out var site);
         var borrowedForRemoval = site is AssignmentExpressionSyntax { RawKind: (int)SyntaxKind.SubtractAssignmentExpression };
         var envRef = FrameRef(env[0]);
-        return $"(({dt}){{ {FuncName(m)}, {(borrowedForRemoval ? envRef : $"es_closure_retain({envRef})")} }})";
+        // Into a variable of the very frame the closure points at (see Ownership.Weak): no reference, or the two would hold each other.
+        var intoOwnFrame = IntoWeakSlot(lam);
+        return $"(({dt}){{ {FuncName(m)}, {(borrowedForRemoval || intoOwnFrame ? envRef : $"es_closure_retain({envRef})")} }})";
+    }
+
+    // ------------------------------------------------------------------ delegates owned by frames (issue #85)
+
+    /// <summary>
+    /// How a frame holds a delegate variable it captured. None: the frame does not own it (an alias of a field, a value that was
+    /// stored, returned or handed to an [Owned] parameter, a borrowed parameter, or anything not followed): the frame never releases
+    /// it, as before. Strong: the variable owns its reference (an [Owned] parameter, a setter's value, a local only ever given new
+    /// closures, null or fresh calls, and only called, compared, passed to borrowed parameters, added to an event, which takes its own
+    /// reference, or Heap.Free'd, which nulls it); the frame releases it when it is freed. Weak: Strong, but every closure the variable
+    /// is given points at this same frame (a lambda over the variables of the scope that declares it, or over 'this'); such a value
+    /// takes no reference at all, so the frame and the closure do not keep each other alive, and the frame releases nothing for it.
+    /// </summary>
+    private enum Ownership { None, Strong, Weak }
+
+    private readonly Dictionary<ISymbol, Ownership> _ownership = new(SymbolEqualityComparer.Default);
+
+    private Ownership FrameOwns(Frame f, ISymbol v)
+    {
+        if (_ownership.TryGetValue(v, out var known)) return known;
+        _ownership[v] = Ownership.None;   // asked again while deciding: not owned (the old behaviour, always memory-safe)
+        return _ownership[v] = DecideOwnership(f, v);
+    }
+
+    private Ownership DecideOwnership(Frame f, ISymbol v)
+    {
+        var values = new List<ExpressionSyntax>();
+        var strong = false;
+        switch (v)
+        {
+            case IParameterSymbol { RefKind: RefKind.None, Type.TypeKind: TypeKind.Delegate } p:
+                if (!IsOwned(p) && p.ContainingSymbol is not IMethodSymbol { MethodKind: MethodKind.PropertySet }) return Ownership.None;
+                strong = true;   // the caller handed over a reference
+                break;
+            case ILocalSymbol { RefKind: RefKind.None, Type.TypeKind: TypeKind.Delegate } l:
+                if (l.DeclaringSyntaxReferences.FirstOrDefault()?.GetSyntax() is not VariableDeclaratorSyntax vd) return Ownership.None;
+                if (vd.Initializer != null) values.Add(vd.Initializer.Value);
+                break;
+            default:
+                return Ownership.None;
+        }
+        var freed = false;
+        foreach (var id in f.Function.DescendantNodes().OfType<IdentifierNameSyntax>())
+        {
+            if (id.Identifier.Text != v.Name || !SymbolEqualityComparer.Default.Equals(Model(id).GetSymbolInfo(id).Symbol, v)) continue;
+            var node = ValueSite(id, out var parent);
+            if (parent is AssignmentExpressionSyntax set && set.Left == id)
+            {
+                if (!set.IsKind(SyntaxKind.SimpleAssignmentExpression) && !set.IsKind(SyntaxKind.CoalesceAssignmentExpression)) return Ownership.None;
+                values.Add(set.Right);
+                continue;
+            }
+            if (parent is ArgumentSyntax arg && arg.Expression == id && IsHeapFreeArgument(arg)) { freed = true; continue; }
+            var site = Classify(id);
+            if (site.Kind == SiteKind.Borrowed) continue;
+            // E += v: the event takes a reference of its own (v is not a new delegate), so v still owns its one.
+            if (site.Kind == SiteKind.Kept && parent is AssignmentExpressionSyntax { RawKind: (int)SyntaxKind.AddAssignmentExpression } add && add.Right == node
+                && Model(add).GetSymbolInfo(add.Left).Symbol is IEventSymbol) continue;
+            return Ownership.None;   // copied, stored, returned, handed on: someone else may free it
+        }
+        var weak = false;
+        foreach (var value in values)
+        {
+            if (!FreshValue(value, new HashSet<IMethodSymbol>(SymbolEqualityComparer.Default))) return Ownership.None;
+            foreach (var leaf in FreshLeaves(value))
+            {
+                if (leaf is not LambdaExpressionSyntax lam) { strong = true; continue; }   // a fresh call: a reference of its own
+                if (!IsHeapLambda(lam) || FunctionOf(lam) is not { } lamFn) continue;     // no closure: a null env, nothing to hold
+                var env = EnvChain(lam, lamFn);
+                if (env.Count == 0) continue;
+                if (env[0] == f) weak = true; else strong = true;
+            }
+        }
+        return weak && !strong && !freed ? Ownership.Weak : Ownership.Strong;
+    }
+
+    /// <summary>The lambdas and calls a fresh value (see <see cref="FreshValue"/>) can be, through ?:, ??, casts and switch arms; null is left out.</summary>
+    private static IEnumerable<ExpressionSyntax> FreshLeaves(ExpressionSyntax v)
+    {
+        v = Strip(v);
+        switch (v)
+        {
+            case CastExpressionSyntax c:
+                return FreshLeaves(c.Expression);
+            case ConditionalExpressionSyntax c:
+                return FreshLeaves(c.WhenTrue).Concat(FreshLeaves(c.WhenFalse));
+            case BinaryExpressionSyntax { RawKind: (int)SyntaxKind.CoalesceExpression } b:
+                return FreshLeaves(b.Left).Concat(FreshLeaves(b.Right));
+            case SwitchExpressionSyntax sw:
+                return sw.Arms.SelectMany(a => FreshLeaves(a.Expression));
+            case LambdaExpressionSyntax or InvocationExpressionSyntax:
+                return new[] { v };
+            default:
+                return Array.Empty<ExpressionSyntax>();
+        }
+    }
+
+    /// <summary>True when <paramref name="lam"/> is the value given to a delegate variable that its frame holds weakly.</summary>
+    private bool IntoWeakSlot(LambdaExpressionSyntax lam)
+    {
+        var node = ValueSite(lam, out var site);
+        var target = site switch
+        {
+            EqualsValueClauseSyntax { Parent: VariableDeclaratorSyntax vd } => Model(vd).GetDeclaredSymbol(vd),
+            AssignmentExpressionSyntax a when a.Right == node && (a.IsKind(SyntaxKind.SimpleAssignmentExpression) || a.IsKind(SyntaxKind.CoalesceAssignmentExpression))
+                => Model(a).GetSymbolInfo(a.Left).Symbol,
+            _ => null,
+        };
+        if (target is not (ILocalSymbol or IParameterSymbol) || FrameScopeOf(target, out var owner) is not { } scope || owner == null) return false;
+        return FramePlan(owner).TryGetValue(scope, out var f) && f.Vars.Contains(target, SymbolEqualityComparer.Default)
+            && FrameOwns(f, target) == Ownership.Weak;
     }
 
     // ------------------------------------------------------------------ events
@@ -617,8 +734,10 @@ internal sealed partial class CEmitter
     {
         foreach (var line in new[]
         {
-            "/* Heap closures: reference-counted frames of captured variables, each holding a reference to the frame around it. */",
-            "typedef struct es_frame { int32_t rc; struct es_frame *up; } es_frame;",
+            "/* Heap closures: reference-counted frames of captured variables, each holding a reference to the frame around it.",
+            "   A frame that owns delegate variables (an [Owned] parameter, a setter's value, a local only given new closures) has a fini",
+            "   that drops their references before the frame is freed. */",
+            "typedef struct es_frame { int32_t rc; struct es_frame *up; void (*fini)(struct es_frame *); } es_frame;",
             "static int32_t es_frames_live;",
             "static __attribute__((unused)) void *es_frame_new(size_t n, void *up)",
             "{",
@@ -635,6 +754,7 @@ internal sealed partial class CEmitter
             "    while (f != NULL && --f->rc == 0)",
             "    {",
             "        es_frame *up = f->up;",
+            "        if (f->fini != NULL) f->fini(f);",
             "        free(f);",
             "        es_frames_live--;",
             "        f = up;",

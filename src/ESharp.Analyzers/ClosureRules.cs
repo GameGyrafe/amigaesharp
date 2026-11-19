@@ -203,7 +203,7 @@ public sealed partial class SubsetAnalyzer
         {
             var state = new Closures();
             start.RegisterSyntaxNodeAction(state.Assignment,
-                SyntaxKind.SimpleAssignmentExpression, SyntaxKind.AddAssignmentExpression);
+                SyntaxKind.SimpleAssignmentExpression, SyntaxKind.AddAssignmentExpression, SyntaxKind.SubtractAssignmentExpression);
             start.RegisterSyntaxNodeAction(state.Argument, SyntaxKind.Argument);
             start.RegisterCompilationEndAction(state.End);
         }
@@ -213,6 +213,16 @@ public sealed partial class SubsetAnalyzer
             var a = (AssignmentExpressionSyntax)c.Node;
             var target = c.SemanticModel.GetSymbolInfo(a.Left, c.CancellationToken).Symbol;
             var isEvent = target is IEventSymbol;
+            if (a.IsKind(SyntaxKind.SubtractAssignmentExpression))
+            {
+                // A lambda literal is a delegate of its own (its own method, in C# and in E#): it can never equal a handler that was added.
+                var removed = a.Right;
+                while (removed is ParenthesizedExpressionSyntax or CastExpressionSyntax)
+                    removed = removed is ParenthesizedExpressionSyntax pe ? pe.Expression : ((CastExpressionSyntax)removed).Expression;
+                if (isEvent && removed is AnonymousFunctionExpressionSyntax)
+                    c.ReportDiagnostic(Diagnostic.Create(Descriptors.RemoveLambda, a.GetLocation(), a.Left.ToString()));
+                return;
+            }
             if (a.IsKind(SyntaxKind.AddAssignmentExpression) && !isEvent) return;
             if (target is not (IFieldSymbol or IEventSymbol) && !(target is IPropertySymbol prop && IsAutoProperty(prop))) return;
             if (IsCapturingLambda(c.SemanticModel, a.Right))

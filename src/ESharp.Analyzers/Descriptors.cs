@@ -88,6 +88,11 @@ public static class Descriptors
         "{0}",
         Category, DiagnosticSeverity.Warning, isEnabledByDefault: true);
 
+    public static readonly DiagnosticDescriptor RemoveLambda = new(
+        "ES0015", "Removing a lambda never matches",
+        "'{0} -= <lambda>' never removes a handler: each lambda is a function of its own, so it equals no handler that was added; keep the handler in a variable or field, add that and remove the same variable",
+        Category, DiagnosticSeverity.Warning, isEnabledByDefault: true);
+
     public static readonly DiagnosticDescriptor ChipBudgetExceeded = Error(
         "ES0030", "Chip RAM budget exceeded",
         "The program reserves {0} bytes of chip RAM at constant sizes; the budget is {1}");
@@ -112,5 +117,5 @@ public static class Descriptors
         System.Collections.Immutable.ImmutableArray.Create(
             Exceptions, Linq, FloatingPoint, AsyncAwait, Dynamic, Reflection,
             HeapClass, Generics, Interfaces, SlowArithmetic, LibraryTooOld, ReferenceField, FixedArrays,
-            BorrowedDelegate, ClosureNeverFreed, DelegateTypeArgument, LibraryInternal);
+            BorrowedDelegate, ClosureNeverFreed, DelegateTypeArgument, RemoveLambda, LibraryInternal);
 }

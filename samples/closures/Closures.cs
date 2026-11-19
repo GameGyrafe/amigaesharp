@@ -7,7 +7,8 @@ namespace ClosuresSample;
 // Heap closures and events (issue #41): capturing lambdas that are stored and outlive the method that made them.
 // There is no garbage collector: a stored closure is freed by its owner with Heap.Free, an event owns its handlers
 // (-= drops one, Heap.Free(ref E) inside the class drops them all). Heap.LiveClosures() counts the closure references
-// not yet freed, so the last check finds a leak on the Amiga (it is always 0 under dotnet).
+// not yet freed, so the last check finds a leak on the Amiga (it is always 0 under dotnet). A frame that holds a delegate it
+// owns (an [Owned] parameter, a setter's value) releases it when the frame goes (issue #85).
 
 public class Button
 {
@@ -44,6 +45,15 @@ public class Holder
     }
 }
 
+// A setter's value is owned by the setter: the stored lambda captures it, and the setter's frame releases it when that lambda goes.
+public class Relay
+{
+    Action? _fire;
+    public Action Target { set { _fire = () => { value(); value(); }; } }
+    public void Fire() { _fire!(); }
+    public void Dispose() { Heap.Free(ref _fire); }
+}
+
 public class Score
 {
     public int Points;
@@ -78,6 +88,9 @@ public static class Program
     }
 
     static Func<int> MakeAdder(int k) => () => k * 3;
+
+    // An [Owned] parameter captured by the returned closure: freeing that closure also releases the one it was given.
+    static Func<int> Twice([Owned] Func<int> f) => () => f() + f();
 
     static void Repeat(int times, Action body) { for (int i = 0; i < times; i++) body(); }
 
@@ -162,6 +175,17 @@ public static class Program
         }
         Check(fs[0]() == 1 && fs[1]() == 11 && fs[2]() == 21, "each loop iteration gets its own captured variable");
         for (int i = 0; i < 3; i++) Heap.Free(ref fs[i]);
+
+        int t = 0;
+        Func<int> twice = Twice(() => ++t);
+        Check(twice() == 3, "a stored lambda over an [Owned] parameter");
+        Heap.Free(ref twice);
+        Relay relay = new Relay();
+        relay.Target = () => t += 10;
+        relay.Fire();
+        Check(t == 22, "a stored lambda over a setter's value");
+        relay.Dispose();
+        Heap.Free(ref relay);
 
         Score s = new Score();
         s.Wire(b);
