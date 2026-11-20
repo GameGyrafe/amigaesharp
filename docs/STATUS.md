@@ -10,6 +10,51 @@ The minimum system is now an **Amiga 1200: 68020, AGA, 2 MB chip RAM, Kickstart 
 - **Kept on purpose:** `HasAga()` and `HasRtg()` with their fallbacks. A classic A1200 always has AGA, but PowerPC, RTG-only and AROS targets may not, so the checks stay as the portable way to ask. **Not yet done:** using 68020 instructions deliberately and AROS (a new target, untested).
 - Verified after the change: all 17 samples built with `-m68020` and run on Kickstart 3.1 (A1200) in FS-UAE: 300 `ok` lines, no `FAIL` (the script shows only the last 25 lines of each sample, so long ones are truncated), 136 unit tests pass. Not verified: PowerPC, real hardware, a 68000/Kickstart 2.04 run (no longer supported).
 
+## `esharp test` on hosted AROS, and the target program's return code (issue #118)
+
+- **`esharp test --target aros` and `--target aros-i386`** build for that target (`--docker` is the toolchain image as for build:
+  `esharp-amiga-toolchain`, or `esharp-aros-i386` by default for aros-i386) and run the program on hosted AROS in Docker: the
+  `esharp-aros-hosted` image for aros, `esharp-aros-hosted-i386` for aros-i386 (`docker/aros-hosted`; `--aros-image <image>` names
+  another; the image's `AROS_HOSTED_ARCH` must match the target or the run stops with a message). The runner is
+  `src/ESharp.Cli/ArosHosted.cs`, self-contained so that the installed tool needs no checkout: it writes the program, the
+  `S:Startup-Sequence` lines and a small bash script into `obj/<target>/run`, mounts that as `/esrun` and runs the script in the
+  image. The script copies the image's pristine AROS tree (never patched in place), puts the lines after AROS's own `FailAt 21`,
+  boots `AROSBootstrap` under Xvfb, waits up to `--timeout` seconds for the done marker and copies the output, the return code and
+  the debug log back. The ok/FAIL lines are compared with the host run as for the other targets; a `Trap` line in AROS's debug
+  output counts as a failure. `tools/aros-hosted/aros-hosted.sh` stays for screenshots, input and Wanderer runs.
+- **Return code:** `esharp test` prints the target program's return code and fails when it is non-zero while the host returned 0
+  (a different code when the host already failed is only noted). m68k (FS-UAE): the headless `S:Startup-sequence` raises `FailAt`
+  first, so a return of 10 or more no longer ends the script before the done marker, and writes `RC $RC` to a file after the
+  program. os4: the autorun script runs `Execute ESTEST:esrun | ESTEST:estype`; `esrun` runs the program and then writes
+  `ESHARP-RC <nonce> $RC` straight to the debug port with `estype -t` (the pipe hid the program's code before). AROS: an
+  `Echo "RC $RC"` line after the program. sdl: the exit code as before. A runner that cannot read it says "return code unknown".
+  `esharp run --headless` (m68k, os4) prints `the program returned N` when it is non-zero. New `samples/retcode`: one ok line, and
+  with `--args TARGETRC=n` the target build's Main returns n while the host returns 0, so the test fails on the return code alone.
+- **morphos:** `esharp test --target morphos` stops with "no runner for morphos" (build it with `esharp build --target morphos`).
+- **Verified:** `dotnet test`: 657 passed, 2 skipped (OS4 VM and an SDK path, opt-in), 0 failed. New unit tests (`ArosHostedTests`, `Os4VmTests`): the AROS startup lines, the run
+  script, RC and trap parsing, the image per target, the FS-UAE startup lines, the os4 `autorun`/`esrun` scripts and the RC marker
+  in the serial parser (another run's marker ignored), the morphos message, and the verdict (return code against the host, traps,
+  FAIL lines, missing checks).
+  - Hosted AROS x86-64 (`esharp-aros-hosted`, nightly 20261114): `esharp test --target aros --docker esharp-amiga-toolchain`:
+    language 39 ok, linq 37 ok, closures 23 ok, mui 32 ok (Zune), each with return code 0, 0 traps, host and AROS agree.
+  - Hosted AROS i386 (`esharp-aros-hosted-i386`, nightly 20261116): `--target aros-i386 --docker` (esharp-aros-i386): language 39 ok,
+    mui 32 ok, return code 0, 0 traps, they agree.
+  - A1200 / Kickstart 3.1 (40.069) in FS-UAE: `esharp test --target m68k --model A1200 --kickstart <rom>`: language 39 ok, closures
+    23 ok, return code 0, they agree. With FS-UAE's built-in AROS ROM: `samples/retcode --args TARGETRC=25` shows return code 25
+    (above the old FailAt limit), and `esharp run samples/hello --headless` still prints `Hello from E#!`.
+  - AmigaOS 4.1 in the QEMU VM: `esharp test samples/language --target os4`: 39 ok, return code 0, they agree (output order and the
+    first line unchanged by the `Execute` wrapper).
+  - Deliberate non-zero return (`samples/retcode --args TARGETRC=n`), each "1 ok, 0 FAIL", "host and target agree on every check" and
+    TEST FAILED with "... returned n, the host 0": m68k Kickstart 3.1 (n = 5), os4 (5), hosted AROS x86-64 (5), hosted AROS i386 (7).
+    Without the argument: return code 0 and TEST PASSED on m68k Kickstart 3.1 and hosted AROS x86-64.
+  - A crash on hosted AROS x86-64 (a throwaway program that writes to an unmapped address after one ok line, not committed):
+    AROS logs `[KRN] Trap signal 11`, the program never reaches the done marker, and `esharp test --timeout 40` prints the trap
+    line, says "did not finish within 40s (1 trap line(s))" and fails. `esharp test --target morphos` prints the no-runner message
+    and exits 1.
+- **Not verified:** a crash on os4 still ends at the timeout (the Grim Reaper waits), so its return code is never seen; m68k crashes
+  (a guru) likewise end at the timeout. The return code of a Workbench start. Windows and macOS hosts for the AROS runner (it
+  needs Docker with Linux containers and passes the caller's uid/gid). `esharp run --target aros` (not added: the script does it).
+
 ## NuGet packages: AmigaESharp.Tool and AmigaESharp.Sdk
 
 E# is packed as two nuget.org packages (the ID `esharp` is taken, so the prefix is `AmigaESharp`; `amigaesharp.tool` and `amigaesharp.sdk` were free when checked on 2026-11-13). **Published:** 0.1.1 is on nuget.org (2026-11-14, Release run 43534423320 started by hand: test, pack, smoke test, trusted-publishing push, tag `v0.1.1` and GitHub release all passed). Every later push to main that changes more than Markdown or workflows releases `0.1.<run number>`.
@@ -1190,7 +1235,7 @@ Open work as of 2026-11-14 (the GitHub issues are the live list; the v1 tracker 
 - **Bindings (#19, #40):** GadTools wrappers (v1), the BOOPSI core with hooks (#40 part 1, see "BOOPSI core and hooks") and the MUI wrappers on it (#40 part 2, see "MUI wrappers") are done. MUI custom classes (#93, see "MUI custom classes") are done too. Open: ReAction (last, if at all).
 - **Display design (not implemented):** [design/DISPLAY.md](design/DISPLAY.md) proposes logical coordinates with an integer scale, mode choice that follows the Workbench's monitor family (MODE option, asl screen-mode requester), 256 colours with a shared palette, a gradient pen (copper on AGA), window mode on the Workbench and multi-scale art. Nothing in it is built or verified yet; it waits for the maintainer's approval.
 - **v2:** AROS i386 (#4: toolchain, target and hosted runs done, see "AROS i386"; the MUI crashes on hosted i386 were an AROS bug, worked around (#105); open: native pc-i386), E# library source packages on NuGet (#31), user classes deriving from platform classes (#42: done for `GtWindow`, see "Classes derived from platform classes"). Capturing lambdas stored in fields and events (#41): done (PR #83), see "Heap closures and events".
-- Smaller follow-ups: `esharp test` for morphos and aros and the Amiga program's return code (today only the ok/FAIL lines are compared; the os4 pipe hides it); OS4 sound on real hardware; the chip budget report only covers constant sizes ([MEMORY.md](MEMORY.md)).
+- Smaller follow-ups: an `esharp test` runner for morphos (aros, aros-i386 and the return code are done, issue #118); OS4 sound on real hardware; the chip budget report only covers constant sizes ([MEMORY.md](MEMORY.md)).
 
 Done and no longer "next": the emulator side of the phase 1 gate (AROS replacement and Kickstart 3.1; 2.04 was also run, historically), the NuGet packages (on nuget.org since 0.1.1), the card demo and rummy, os4 runs in the VM, the `sdl` target, hosted AROS runs, double buffering.
 
@@ -1335,7 +1380,7 @@ Platform samples never run on OS4 before (`esharp run ... --target os4 --screens
 
 Not verified / not done:
 - PowerPC real hardware (Pegasos II, AmigaOne, X5000, ...). MorphOS: still not run.
-- The program's return code (the pipe hides it), a crash (it should end at the timeout with the Grim Reaper waiting; not
+- The program's return code (the pipe hid it; read since issue #118, see "`esharp test` on hosted AROS, and the target program's return code"), a crash (it should end at the timeout with the Grim Reaper waiting; not
   provoked).
 - All os4 findings from issue #57 are addressed: the ones above in this section, and sound, timing and the screen mode in the
   next section (sound in the VM is a QEMU limitation and is skipped cleanly).

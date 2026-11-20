@@ -45,15 +45,30 @@ public static class Os4Vm
         return dir;
     }
 
-    /// <summary>The AmigaDOS script the hook executes: markers around the program, its output piped to the debug port.</summary>
+    /// <summary>
+    /// The AmigaDOS script the hook executes: markers around the run, whose output is piped to the debug port. The run is the
+    /// script <see cref="EsRun"/> (ESTEST:esrun), so that the program's return code can be written after it: a pipe hides it.
+    /// </summary>
     public static string Autorun(string program, string nonce, string? programArgs = null) =>
         "; E# os4 run harness (esharp run/test --target os4)\n" +
         "FailAt 1000000\n" +
         "Stack 1000000\n" +
         $"{Volume}:estype -t \"ESHARP-BEGIN {nonce}\"\n" +
         "CD RAM:\n" +
-        $"{Volume}:{program}{(string.IsNullOrWhiteSpace(programArgs) ? "" : " " + programArgs.Trim())} | {Volume}:estype\n" +
+        $"Execute {Volume}:esrun | {Volume}:estype\n" +
         $"{Volume}:estype -t \"ESHARP-END {nonce}\"\n";
+
+    /// <summary>
+    /// ESTEST:esrun, executed with its output in the pipe: the program, then its return code (the shell's RC) as a marker line
+    /// straight to the debug port ("ESHARP-RC nonce n"). FailAt is raised here too, so a FAIL return does not end the script first.
+    /// </summary>
+    public static string EsRun(string program, string nonce, string? programArgs = null) =>
+        "; E# os4 run harness: the program and its return code\n" +
+        "FailAt 1000000\n" +
+        "Stack 1000000\n" +
+        "CD RAM:\n" +
+        $"{Volume}:{program}{(string.IsNullOrWhiteSpace(programArgs) ? "" : " " + programArgs.Trim())}\n" +
+        $"{Volume}:estype -t \"ESHARP-RC {nonce} $RC\"\n";
 
     /// <summary>
     /// Why an <c>--args</c> line cannot go into an AmigaDOS script or startup sequence (newlines, redirections, ';' comments, pipes and
@@ -64,7 +79,7 @@ public static class Os4Vm
             ? "--args: no newlines, redirections, '|', '$' or ';' in the line" : null;
 
     /// <summary>What the serial file says so far about one run.</summary>
-    public sealed record SerialState(bool Begun, bool Ended, string Output, bool Shot, string Other = "");
+    public sealed record SerialState(bool Begun, bool Ended, string Output, bool Shot, string Other = "", int? ReturnCode = null);
 
     /// <summary>
     /// Reads the serial text: the program's lines are those with the "ES: " prefix after the start marker; kernel and driver
@@ -73,6 +88,7 @@ public static class Os4Vm
     public static SerialState Parse(string serial, string nonce)
     {
         bool begun = false, ended = false, shot = false;
+        int? rc = null;
         var output = new StringBuilder();
         var other = new StringBuilder();   // kernel debug lines during the run: Trace output, drivers, crash reports
         var lines = serial.Split('\n');
@@ -86,6 +102,13 @@ public static class Os4Vm
                 continue;
             }
             if (line.Trim() == "ESHARP-END " + nonce) { ended = true; break; }
+            var rcMarker = "ESHARP-RC " + nonce + " ";
+            if (line.Trim().StartsWith(rcMarker, StringComparison.Ordinal))
+            {
+                if (int.TryParse(line.Trim()[rcMarker.Length..], System.Globalization.NumberStyles.AllowLeadingSign,
+                        System.Globalization.CultureInfo.InvariantCulture, out var n)) rc = n;
+                continue;
+            }
             // The prefix must start the line. The only thing allowed before it is stray control characters (a NUL, a lone CR or
             // an escape left by the kernel's serial output); a "ES: " in the middle of a kernel or driver line is not ours.
             var start = 0;
@@ -96,7 +119,7 @@ public static class Os4Vm
             if (text == "SHOT") shot = true;
             output.Append(text).Append('\n');
         }
-        return new SerialState(begun, ended, output.ToString(), shot, other.ToString());
+        return new SerialState(begun, ended, output.ToString(), shot, other.ToString(), rc);
     }
 
     public static List<string> QemuArgs(string vm, string overlay, string iso, string serial, string monitor)
@@ -139,7 +162,7 @@ public static class Os4Vm
         return pids;
     }
 
-    public static (int Exit, string Output) Run(string exe, TimeSpan timeout, string? docker, string? screenshot, string? serialOut = null, bool echo = true, string? input = null, string? programArgs = null)
+    public static (int Exit, string Output) Run(string exe, TimeSpan timeout, string? docker, string? screenshot, string? serialOut = null, bool echo = true, string? input = null, string? programArgs = null, RunInfo? info = null)
     {
         if (ProgramArgsError(programArgs) is { } argsError) return Fail(argsError);
         List<Os4Input.Step>? inputSteps = null;
@@ -163,6 +186,7 @@ public static class Os4Vm
         if (File.Exists(exe + ".info")) File.Copy(exe + ".info", Path.Combine(cd, name + ".info"));
         var nonce = Guid.NewGuid().ToString("N")[..12];
         File.WriteAllText(Path.Combine(cd, "autorun"), Autorun(name, nonce, programArgs));
+        File.WriteAllText(Path.Combine(cd, "esrun"), EsRun(name, nonce, programArgs));
         var image = docker ?? Program.DefaultImage(ESharp.Compiler.Targets.Os4);
         if (!BuildEstype(runDir, cd, docker)) return Fail("could not build the estype helper (needs ppc-amigaos-gcc or --docker)");
         var iso = Path.Combine(runDir, "estest.iso");
@@ -250,6 +274,8 @@ public static class Os4Vm
                     : $"the program never started within {timeout.TotalSeconds:0}s: is the test hook installed (esharp os4vm install-hook)? See {serial}",
                     state.Output);
             }
+            if (info != null) info.ReturnCode = state.ReturnCode;
+            else if (state.ReturnCode is { } nonZero and not 0) Console.Error.WriteLine($"esharp: the program returned {nonZero}");
             return (0, state.Output);
         }
         finally
@@ -388,7 +414,7 @@ public static class Os4Vm
     [System.Runtime.InteropServices.DllImport("libc")] private static extern uint getgid();
 
     /// <summary>docker --user for files the container writes into our directories (owned by us, not root).</summary>
-    private static string UserSpec() => $"{getuid()}:{getgid()}";
+    internal static string UserSpec() => $"{getuid()}:{getgid()}";
 
     private static int RunTool(string file, params string[] args)
     {

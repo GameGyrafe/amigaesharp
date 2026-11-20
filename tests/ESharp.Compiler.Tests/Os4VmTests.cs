@@ -95,12 +95,12 @@ public class Os4VmTests
     }
 
     [Fact]
-    public void Autorun_pipes_the_program_through_estype_between_markers()
+    public void Autorun_pipes_the_run_script_through_estype_between_markers()
     {
         var s = Os4Vm.Autorun("cards", "n0nce");
         var lines = s.Split('\n');
         var begin = Array.IndexOf(lines, "ESTEST:estype -t \"ESHARP-BEGIN n0nce\"");
-        var run = Array.IndexOf(lines, "ESTEST:cards | ESTEST:estype");
+        var run = Array.IndexOf(lines, "Execute ESTEST:esrun | ESTEST:estype");
         var end = Array.IndexOf(lines, "ESTEST:estype -t \"ESHARP-END n0nce\"");
         Assert.True(begin >= 0 && run > begin && end > run, s);
         Assert.Contains("FailAt 1000000", lines);   // a FAIL return code must not stop the script before the end marker
@@ -108,11 +108,34 @@ public class Os4VmTests
     }
 
     [Fact]
-    public void Autorun_puts_the_argument_line_after_the_program_name()
+    public void EsRun_runs_the_program_and_writes_its_return_code_to_the_debug_port()
     {
-        var lines = Os4Vm.Autorun("cards", "n0nce", "SEED=42 \"two words\"").Split('\n');
-        Assert.Contains("ESTEST:cards SEED=42 \"two words\" | ESTEST:estype", lines);
-        Assert.Contains("ESTEST:cards | ESTEST:estype", Os4Vm.Autorun("cards", "n0nce", "  ").Split('\n'));
+        var lines = Os4Vm.EsRun("cards", "n0nce").Split('\n');
+        var run = Array.IndexOf(lines, "ESTEST:cards");
+        var rc = Array.IndexOf(lines, "ESTEST:estype -t \"ESHARP-RC n0nce $RC\"");
+        Assert.True(run >= 0 && rc == run + 1, string.Join("\n", lines));   // RC is the program's only right after it
+        Assert.True(Array.IndexOf(lines, "FailAt 1000000") is >= 0 and var f && f < run);
+        Assert.Contains("CD RAM:", lines);
+    }
+
+    [Fact]
+    public void EsRun_puts_the_argument_line_after_the_program_name()
+    {
+        var lines = Os4Vm.EsRun("cards", "n0nce", "SEED=42 \"two words\"").Split('\n');
+        Assert.Contains("ESTEST:cards SEED=42 \"two words\"", lines);
+        Assert.Contains("ESTEST:cards", Os4Vm.EsRun("cards", "n0nce", "  ").Split('\n'));
+    }
+
+    [Fact]
+    public void Serial_parse_takes_the_return_code_of_this_run_only()
+    {
+        var serial = "ESHARP-RC abc 9\nESHARP-BEGIN abc\nES: ok a\nESHARP-RC other 7\nESHARP-RC abc 20\nES: ok b\nESHARP-END abc\n";
+        var st = Os4Vm.Parse(serial, "abc");
+        Assert.Equal(20, st.ReturnCode);
+        Assert.Equal("ok a\nok b\n", st.Output);
+        Assert.Equal("ESHARP-RC other 7\n", st.Other);
+        Assert.Null(Os4Vm.Parse(Serial, "abc").ReturnCode);   // no marker: unknown, not 0
+        Assert.Equal(-1, Os4Vm.Parse("ESHARP-BEGIN abc\nESHARP-RC abc -1\nESHARP-END abc\n", "abc").ReturnCode);
     }
 
     private const string Serial =
