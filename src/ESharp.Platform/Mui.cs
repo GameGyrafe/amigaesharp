@@ -40,6 +40,9 @@ internal static class MuiId
     // Methods a custom class's dispatcher sees (Area.mui), and MUIM_Draw's flags (MADF_DRAWOBJECT, MADF_DRAWUPDATE).
     public const uint AskMinMax = 0x80423874, Draw = 0x80426f3f, Setup = 0x80428354, Cleanup = 0x8042d985, Show = 0x8042cc84, Hide = 0x8042f20f;
     public const uint DrawObject = 1, DrawUpdate = 2;
+    // Input for custom classes: MUIM_HandleEvent, the window's event handler list, and MUI_EventHandlerRC_Eat.
+    public const uint HandleEvent = 0x80426d66, WindowAddEventHandler = 0x804203b7, WindowRemEventHandler = 0x8042679e;
+    public const uint EventEat = 1;
     public const uint EveryTime = 0x49893131, TriggerValue = 0x49893131;
     public const uint ReturnIdQuit = 0xffffffff;
     public const int ListInsertBottom = -3, ListActiveOff = -1;
@@ -358,8 +361,13 @@ public unsafe class MuiObject : BoopsiObject
     internal int CustomKind;          // MuiCustomClasses.Area or .Group for a custom class (MuiArea, MuiCustomGroup), 0 otherwise
     private bool _setUp;              // between MUIM_Setup and MUIM_Cleanup
     private bool _shown;              // between MUIM_Show and MUIM_Hide
+    private uint _wantEvents;         // IDCMP classes OnEvent wants (WantEvents), 0 for none
 #if AMIGA
     private void* _renderInfo;        // MUI's render info (from MUIM_Setup)
+    private byte* _ehn;               // struct MUI_EventHandlerNode, one from MUIM_Setup to MUIM_Cleanup (freed only at MUIM_Cleanup)
+    private void* _ehnWindow;         // the window object it is in, while it is in the window's list (null when not added)
+    private void* _ehnClass;          // the custom class and object it calls (ehn_Class, ehn_Object)
+    private void* _ehnObject;
 #else
     private MuiMinMax _hostSize;      // host: what OnAskMinMax asked for (the fake's layout)
 #endif
@@ -733,6 +741,25 @@ public unsafe class MuiObject : BoopsiObject
         }
     }
 
+    /// <summary>
+    /// Host: an input event as MUI would send it (MUIM_HandleEvent) to a shown custom object that wants this IDCMP class: x and y are
+    /// relative to the contents box. True if <c>OnEvent</c> ate it; false if it was not delivered or not eaten.
+    /// </summary>
+    public bool HostEvent(uint idcmpClass, int code, int qualifier, int x, int y)
+    {
+        if (CustomKind == 0 || !_shown || (_wantEvents & idcmpClass) == 0) return false;
+        MuiEvent e = new MuiEvent();
+        e.Class = idcmpClass;
+        e.Code = code;
+        e.Qualifier = qualifier;
+        e.MouseX = x;
+        e.MouseY = y;
+        e.Width = _hostSize.DefWidth > _hostSize.MinWidth ? _hostSize.DefWidth : _hostSize.MinWidth;
+        e.Height = _hostSize.DefHeight > _hostSize.MinHeight ? _hostSize.DefHeight : _hostSize.MinHeight;
+        e.MuiKey = -1;
+        return CallEvent(e);
+    }
+
     private void HostDraw(bool update)
     {
         int w = _hostSize.DefWidth > _hostSize.MinWidth ? _hostSize.DefWidth : _hostSize.MinWidth;
@@ -772,6 +799,39 @@ public unsafe class MuiObject : BoopsiObject
 
     /// <summary>Any other method (the object's own ones, sent with <see cref="BoopsiObject.DoMethod"/>): true if handled, with its result.</summary>
     protected virtual bool OnMethod(uint methodId, nuint* msg, out nuint result) { result = 0; return false; }
+
+    /// <summary>
+    /// MUIM_HandleEvent: an input event of a class given to <see cref="WantEvents"/>, in the object's window while the object is shown
+    /// (every such event, wherever the mouse is: see <see cref="MuiEvent.Inside"/>). True eats it (no other handler sees it).
+    /// </summary>
+    protected virtual bool OnEvent(MuiEvent e) { return false; }
+
+    /// <summary>
+    /// The IDCMP classes <see cref="OnEvent"/> wants (<see cref="MuiEvent.MouseButtons"/>, <see cref="MuiEvent.MouseMove"/>,
+    /// <see cref="MuiEvent.RawKey"/>, or'ed; 0 for none). One MUI event handler node per object lives from MUIM_Setup to MUIM_Cleanup; it
+    /// is in the window's list while the set is not 0. Changed while the object is set up (also from inside <c>OnEvent</c>, this object's
+    /// or another one's), the node is taken out of the list, given the new set and put back: ask for <see cref="MuiEvent.MouseMove"/>
+    /// only while a drag goes on, as every mouse move in the window costs a call.
+    /// </summary>
+    protected void WantEvents(uint idcmpClasses)
+    {
+        if (idcmpClasses == _wantEvents) return;
+        _wantEvents = idcmpClasses;
+#if AMIGA
+        if (_setUp) UpdateHandler();
+#endif
+    }
+
+    /// <summary>The IDCMP classes given to <see cref="WantEvents"/>.</summary>
+    protected uint WantedEvents => _wantEvents;
+
+    internal bool CallEvent(MuiEvent e)
+    {
+        Mui.HandlerDepth++;
+        bool eat = OnEvent(e);
+        Mui.HandlerDepth--;
+        return eat;
+    }
 
     /// <summary>True while the object is shown in an open window (between MUIM_Show and MUIM_Hide): it can draw then.</summary>
     protected bool IsShown => _shown;
@@ -833,10 +893,15 @@ public unsafe class MuiObject : BoopsiObject
                 return 0;
             }
             _setUp = true;
+            _ehnClass = cls;
+            _ehnObject = obj;
+            AllocHandler();
+            UpdateHandler();
             return r;
         }
         if (id == MuiId.Cleanup)
         {
+            FreeHandler();
             if (_setUp)
             {
                 Mui.HandlerDepth++;
@@ -883,6 +948,29 @@ public unsafe class MuiObject : BoopsiObject
             }
             return r;
         }
+        if (id == MuiId.HandleEvent && _ehn != null)
+        {
+            // MUIM_HandleEvent { imsg, muikey } for our node (the classes we asked for); anything else goes to the superclass.
+            byte* im = (byte*)m[1];
+            uint cls0 = im == null ? 0 : *(uint*)(im + Layout.MsgClass);
+            if (im != null && (cls0 & _wantEvents) == 0) return BoopsiNative.es_dosupermethod(cls, obj, (void*)m);
+            if (!_shown) return 0;          // set up but hidden (a page not shown): its box is not valid, nothing to hit
+            MuiEvent e = new MuiEvent();
+            e.Class = cls0;
+            e.MuiKey = (int)(nint)m[2];
+            if (im != null)
+            {
+                e.Code = *(ushort*)(im + Layout.MsgCode);
+                e.Qualifier = *(ushort*)(im + Layout.MsgQualifier);
+                int left = 0, top = 0, width = 0, height = 0;
+                MuiCustomClasses.ContentBox(obj, out left, out top, out width, out height);
+                e.MouseX = *(short*)(im + Layout.MsgMouseX) - left;
+                e.MouseY = *(short*)(im + Layout.MsgMouseY) - top;
+                e.Width = width;
+                e.Height = height;
+            }
+            return CallEvent(e) ? MuiId.EventEat : 0;
+        }
         if (id == MuiId.OmSet)
         {
             MuiCustomClasses.SetEach(this, (nuint*)m[1]);
@@ -903,9 +991,66 @@ public unsafe class MuiObject : BoopsiObject
         return BoopsiNative.es_dosupermethod(cls, obj, (void*)m);
     }
 
+    // The object's one event handler node, allocated at MUIM_Setup (the render info names the window) and freed only at MUIM_Cleanup,
+    // so a node is never freed while MUI may be going through the window's handler list (an OnEvent of any object can call WantEvents).
+    private void AllocHandler()
+    {
+        if (_ehn != null || _renderInfo == null || _ehnObject == null) return;
+        byte* n = Mem.AllocFast((uint)Layout.EhnSize);   // cleared: priority and flags 0
+        if (n == null) return;
+        *(void**)(n + Layout.EhnObject) = _ehnObject;
+        *(void**)(n + Layout.EhnClass) = _ehnClass;   // MUI sends MUIM_HandleEvent to this class (CoerceMethod)
+        _ehn = n;
+    }
+
+    // The node takes the current set: out of the window's list if it is in it (MUIM_Window_RemEventHandler), ehn_Events changed in
+    // place, back in (MUIM_Window_AddEventHandler) unless the set is 0. The same node every time.
+    private void UpdateHandler()
+    {
+        if (_ehn == null) return;
+        if (_ehnWindow != null)
+        {
+            MuiMsg rem = new MuiMsg();
+            rem.Put(0, MuiId.WindowRemEventHandler);
+            rem.Put(1, (nuint)_ehn);
+            BoopsiNative.es_domethod(_ehnWindow, (void*)rem.Ptr());
+            _ehnWindow = null;
+        }
+        *(uint*)(_ehn + Layout.EhnEvents) = _wantEvents;
+        if (_wantEvents == 0 || _renderInfo == null) return;
+        void* win = *(void**)_renderInfo;   // struct MUI_RenderInfo starts with the window object
+        if (win == null) return;
+        MuiMsg add = new MuiMsg();
+        add.Put(0, MuiId.WindowAddEventHandler);
+        add.Put(1, (nuint)_ehn);
+        BoopsiNative.es_domethod(win, (void*)add.Ptr());
+        _ehnWindow = win;
+    }
+
+    // MUIM_Cleanup (before it reaches the superclass): the node out of the window's list and freed.
+    private void FreeHandler()
+    {
+        if (_ehn == null) return;
+        if (_ehnWindow != null)
+        {
+            MuiMsg msg = new MuiMsg();
+            msg.Put(0, MuiId.WindowRemEventHandler);
+            msg.Put(1, (nuint)_ehn);
+            BoopsiNative.es_domethod(_ehnWindow, (void*)msg.Ptr());
+        }
+        Mem.Free(_ehn);
+        _ehn = null;
+        _ehnWindow = null;
+    }
+
     // OM_DISPOSE reached the dispatcher: the system object is going.
     internal void CustomGone()
     {
+        // MUIM_Cleanup removed the node. Should an object go without one, its window is no longer safe to call: only the memory goes.
+        if (_ehn != null) Mem.Free(_ehn);
+        _ehn = null;
+        _ehnWindow = null;
+        _ehnObject = null;
         _setUp = false;
         _shown = false;
         _renderInfo = null;
