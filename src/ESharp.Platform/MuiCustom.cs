@@ -158,8 +158,8 @@ public unsafe struct MuiRender
         // struct MUI_AreaData (found in the object by MuiCustomClasses.FindAreaData): three pointers (render info, background, font),
         // MUI_MinMax (12 bytes), the box (an IBox: four WORDs), then addleft, addtop, subwidth, subheight (BYTEs).
         byte* ad = (byte*)obj + MuiCustomClasses.AreaData;
-        short* box = (short*)(ad + 3 * p + 12);
-        sbyte* add = (sbyte*)(ad + 3 * p + 20);
+        short* box = MuiCustomClasses.AreaBox(obj);
+        sbyte* add = MuiCustomClasses.AreaAdd(obj);
         _x0 = box[0];
         _y0 = box[1];
         _x1 = box[0] + box[2] - 1;
@@ -348,6 +348,11 @@ internal static unsafe class MuiCustomClasses
         }
     }
 
+    // struct MUI_AreaData (found by FindAreaData): three pointers (render info, background, font), MUI_MinMax (12 bytes), the box (an IBox:
+    // four WORDs), then addleft, addtop, subwidth, subheight (BYTEs). The one place these offsets live (MuiRender and ContentBox use it).
+    internal static short* AreaBox(void* obj) { return (short*)((byte*)obj + AreaData + 3 * sizeof(nuint) + 12); }
+    internal static sbyte* AreaAdd(void* obj) { return (sbyte*)((byte*)obj + AreaData + 3 * sizeof(nuint) + 20); }
+
     // The object's contents box (_mleft, _mtop, _mwidth, _mheight of the Zune headers: the box inside the frame and spacing), in window
     // coordinates; false while the area data is not known.
     internal static bool ContentBox(void* obj, out int left, out int top, out int width, out int height)
@@ -357,10 +362,8 @@ internal static unsafe class MuiCustomClasses
         width = 0;
         height = 0;
         if (AreaData <= 0) return false;
-        int p = sizeof(nuint);
-        byte* ad = (byte*)obj + AreaData;
-        short* box = (short*)(ad + 3 * p + 12);
-        sbyte* add = (sbyte*)(ad + 3 * p + 20);
+        short* box = AreaBox(obj);
+        sbyte* add = AreaAdd(obj);
         left = box[0] + add[0];
         top = box[1] + add[1];
         width = box[2] - add[2];

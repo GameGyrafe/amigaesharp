@@ -826,7 +826,9 @@ internal sealed partial class CEmitter
     /// below it; which block that is depends on the memory layout, so programs failed now and then. When muiscreen.library is not
     /// loaded yet, the guard opens it first with exec's AllocMem patched for this task only: the stack request that follows the task
     /// structure gets ES_MUIS_GUARD bytes of its own below it, so the overrun lands there. The guard is never freed (the library never
-    /// frees the stack either: its task lives as long as the library). Other targets: nothing to do.
+    /// frees the stack either: its task lives as long as the library). The vector holds a small stub in public memory (also never freed), not a
+    /// function of the program: another task may patch AllocMem during the open and chain to our entry, which must stay valid after the
+    /// program exits. Other targets: nothing to do.
     /// </summary>
     internal const string MuiScreenGuard = """
 /* The request to pad (plain C, so the tests run it with the host compiler): this task asked for the task structure
@@ -839,6 +841,27 @@ static __attribute__((unused)) int es_muis_pad(int *step, uintptr_t size, uint32
     if (*step == 1 && size == 4096 && flags == 1u) { *step = 2; return 1; }
     *step = size >= taskSize && size <= taskSize + 1024 && flags == 0x10001u ? 1 : 0;
     return 0;
+}
+/* The entry that goes into exec's vector is not the function in our segment but a 16-byte stub in public memory that jumps through
+   a slot (the slot is at offset 8, aligned): x86-64 "jmp *rel32(%rip)" (FF 25, rel32 = 2), i386 "jmp *abs32" (FF 25, the slot's
+   address). While the guard works the slot points to es_muis_allocmem; afterwards it points to the system's own AllocMem, so the stub
+   only passes calls on and references nothing of the program's segment. That matters when another task patched AllocMem meanwhile:
+   its patch then calls the stub (it saved our entry as its "old" function), so the stub must stay valid after the program exits
+   and its segment is freed. It is never freed for the same reason. Plain C, so the test builds it with the host compiler.
+   Returns 0 when there is no stub for this CPU (then the guard is not used). */
+static __attribute__((unused)) int es_muis_stub(uint8_t *mem, uintptr_t target)
+{
+#if defined(__x86_64__)
+    mem[0] = 0xFF; mem[1] = 0x25; mem[2] = 2; mem[3] = mem[4] = mem[5] = 0; mem[6] = mem[7] = 0xCC;
+#elif defined(__i386__)
+    uint32_t slot = (uint32_t)(uintptr_t)(mem + 8);
+    mem[0] = 0xFF; mem[1] = 0x25; mem[2] = (uint8_t)slot; mem[3] = (uint8_t)(slot >> 8); mem[4] = (uint8_t)(slot >> 16); mem[5] = (uint8_t)(slot >> 24); mem[6] = mem[7] = 0xCC;
+#else
+    (void)mem; (void)target;
+    return 0;
+#endif
+    *(volatile uintptr_t *)(mem + 8) = target;
+    return 1;
 }
 #if defined(__AROS__)
 #include <proto/exec.h>
@@ -864,22 +887,30 @@ static AROS_LH2(APTR, es_muis_allocmem, AROS_LHA(IPTR, byteSize, D0), AROS_LHA(U
 }
 static __attribute__((unused)) void es_mui_guard_begin(void)
 {
-    APTR mine = (APTR)AROS_SLIB_ENTRY(es_muis_allocmem, Es, 33), now;
+    uint8_t *stub;
+    APTR now;
     int loaded;
     Forbid();
     loaded = FindName(&SysBase->LibList, (CONST_STRPTR)"muiscreen.library") != NULL;
     Permit();
     if (loaded || es_muis_base != NULL) return;
+    stub = (uint8_t *)AllocMem(16, MEMF_PUBLIC);
+    if (stub == NULL || !es_muis_stub(stub, (uintptr_t)AROS_SLIB_ENTRY(es_muis_allocmem, Es, 33)))
+    {
+        if (stub != NULL) FreeMem(stub, 16);
+        return;   /* no guard: the open runs as it did before */
+    }
     es_muis_task = FindTask(NULL);
     es_muis_step = 0;
     Forbid();
-    es_muis_old = SetFunction((struct Library *)SysBase, -33 * (LONG)LIB_VECTSIZE, mine);
+    es_muis_old = SetFunction((struct Library *)SysBase, -33 * (LONG)LIB_VECTSIZE, (APTR)stub);
     Permit();
     es_muis_base = OpenLibrary((CONST_STRPTR)"muiscreen.library", 0);
     es_muis_step = 2;   /* from here on the patch only passes calls on */
+    *(volatile uintptr_t *)(stub + 8) = (uintptr_t)es_muis_old;   /* the stub no longer reaches into our segment */
     Forbid();
     now = SetFunction((struct Library *)SysBase, -33 * (LONG)LIB_VECTSIZE, es_muis_old);
-    if (now != mine) SetFunction((struct Library *)SysBase, -33 * (LONG)LIB_VECTSIZE, now);   /* patched again meanwhile: leave theirs (it calls this one, which only passes on) */
+    if (now != (APTR)stub) SetFunction((struct Library *)SysBase, -33 * (LONG)LIB_VECTSIZE, now);   /* patched again meanwhile: put theirs back; it calls the stub, which only passes on and stays allocated */
     Permit();
 }
 /* After muimaster.library is open (it holds muiscreen.library itself). */

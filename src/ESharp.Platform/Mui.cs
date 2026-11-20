@@ -824,7 +824,8 @@ public unsafe class MuiObject : BoopsiObject
     /// <see cref="MuiEvent.RawKey"/>, or'ed; 0 for none). One MUI event handler node per object lives from MUIM_Setup to MUIM_Cleanup; it
     /// is in the window's list while the set is not 0. Changed while the object is set up (also from inside <c>OnEvent</c>, this object's
     /// or another one's), the node is taken out of the list, given the new set and put back: ask for <see cref="MuiEvent.MouseMove"/>
-    /// only while a drag goes on, as every mouse move in the window costs a call.
+    /// only while a drag goes on, as every mouse move in the window costs a call. If the handler node cannot be allocated at setup (out of
+    /// memory) the object silently gets no events (a <see cref="Trace"/> line says so).
     /// </summary>
     protected void WantEvents(uint idcmpClasses)
     {
@@ -1006,11 +1007,17 @@ public unsafe class MuiObject : BoopsiObject
 
     // The object's one event handler node, allocated at MUIM_Setup (the render info names the window) and freed only at MUIM_Cleanup,
     // so a node is never freed while MUI may be going through the window's handler list (an OnEvent of any object can call WantEvents).
+    // When the node cannot be allocated (out of fast memory) the object gets no events: OnEvent is never called, WantEvents does nothing,
+    // and a Trace line (serial, with --trace) says so.
     private void AllocHandler()
     {
         if (_ehn != null || _renderInfo == null || _ehnObject == null) return;
         byte* n = Mem.AllocFast((uint)Layout.EhnSize);   // cleared: priority and flags 0
-        if (n == null) return;
+        if (n == null)
+        {
+            Trace.Line("Mui: no memory for an event handler node, this object gets no events");
+            return;
+        }
         *(void**)(n + Layout.EhnObject) = _ehnObject;
         *(void**)(n + Layout.EhnClass) = _ehnClass;   // MUI sends MUIM_HandleEvent to this class (CoerceMethod)
         _ehn = n;
