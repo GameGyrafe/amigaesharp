@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
 using System.Linq;
@@ -21,6 +22,19 @@ public static class ArosHosted
     public const string ImageI386 = "esharp-aros-hosted-i386";
 
     /// <summary>The hosted AROS build an aros target runs on: x86_64 or i386 (the image's AROS_HOSTED_ARCH).</summary>
+    /// <summary>
+    /// The docker run arguments. <paramref name="user"/> is the uid:gid for --user, so the files the container writes
+    /// into the run folder are ours; null leaves it out (Windows: no getuid, and Docker Desktop maps the bind mount itself).
+    /// </summary>
+    internal static List<string> DockerArgs(string runDir, string image, string arch, string name, int secs, string? user)
+    {
+        var args = new List<string> { "run", "--rm" };
+        if (user != null) { args.Add("--user"); args.Add(user); }
+        args.AddRange(new[] { "-e", "HOME=/tmp", "-v", $"{runDir}:/esrun", image,
+            "bash", "/esrun/run.sh", arch, name, secs.ToString(System.Globalization.CultureInfo.InvariantCulture) });
+        return args;
+    }
+
     public static string Arch(TargetInfo target) => target == Targets.ArosI386 ? "i386" : "x86_64";
 
     /// <summary>The runtime image for a target unless --aros-image names one.</summary>
@@ -110,8 +124,7 @@ public static class ArosHosted
 
         var secs = Math.Max(10, (int)timeout.TotalSeconds);
         var psi = new ProcessStartInfo("docker") { UseShellExecute = false, RedirectStandardOutput = true, RedirectStandardError = true };
-        foreach (var a in new[] { "run", "--rm", "--user", Os4Vm.UserSpec(), "-e", "HOME=/tmp", "-v", $"{runDir}:/esrun", image,
-                     "bash", "/esrun/run.sh", Arch(target), name, secs.ToString(System.Globalization.CultureInfo.InvariantCulture) })
+        foreach (var a in DockerArgs(runDir, image, Arch(target), name, secs, OperatingSystem.IsWindows() ? null : Os4Vm.UserSpec()))
             psi.ArgumentList.Add(a);
         string said;
         int exit;

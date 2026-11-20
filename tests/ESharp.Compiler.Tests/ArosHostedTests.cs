@@ -62,6 +62,17 @@ public class ArosHostedTests
     }
 
     [Fact]
+    public void Docker_user_is_passed_only_when_there_is_one()
+    {
+        var unix = ArosHosted.DockerArgs("/r", "img", "x86_64", "language", 60, "1000:1000");
+        Assert.Equal(new[] { "run", "--rm", "--user", "1000:1000", "-e", "HOME=/tmp", "-v", "/r:/esrun", "img",
+            "bash", "/esrun/run.sh", "x86_64", "language", "60" }, unix);
+        var windows = ArosHosted.DockerArgs("/r", "img", "i386", "language", 60, null);
+        Assert.DoesNotContain("--user", windows);
+        Assert.Equal(unix.Count - 2, windows.Count);
+    }
+
+    [Fact]
     public void Fs_uae_headless_startup_raises_FailAt_and_records_RC_before_the_done_marker()
     {
         var lines = FsUae.HeadlessLines("cards", " SEED=42").Split('\n');
