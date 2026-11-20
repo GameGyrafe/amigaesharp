@@ -1188,7 +1188,6 @@ Open work as of 2026-11-14 (the GitHub issues are the live list; the v1 tracker 
 - **Debugging (#14):** the host build can be stepped through under .NET and the Amiga build has serial `Trace` and `esharp addr`; a source-level debugger for the Amiga build is open.
 - **Windows (#11):** CI now runs a `windows` job (windows-latest, PR head): `dotnet test` (439 passed, 2 skipped, 0 failed; the runner has a MinGW gcc, so the generated-C tests run there and only the Docker/VM/SDK-dependent tests skip), emit-only builds of `samples/hello` and `samples/cards`, `esharp test samples/linq`, a clean `git status` afterwards, and a package round trip against the PR's own packages (`dotnet pack`, install the tool from the folder into a tool path, a nuget.config with the local feed, version and PackageReference checked, NU1603 fails the step, `esharp new`, `dotnet run`, `esharp test`, `esharp build --emit-only`). A `.gitattributes` keeps the working tree LF (the runner has `core.autocrlf=true`), and the native test output is read CRLF-tolerant. Still needs a person on a real Windows machine: Docker Desktop with `--docker` builds, FS-UAE for Windows, VS Code, and Windows with a different (or no) C compiler. `tools/aros-hosted` is Linux-only. macOS was checked, see "VS Code support".
 - **Bindings (#19, #40):** GadTools wrappers (v1), the BOOPSI core with hooks (#40 part 1, see "BOOPSI core and hooks") and the MUI wrappers on it (#40 part 2, see "MUI wrappers") are done. MUI custom classes (#93, see "MUI custom classes") are done too. Open: ReAction (last, if at all).
-- **Small gaps (#72):** `string.IndexOf`, `Args` on the host, `esharp test --args`, os4 `--args`.
 - **Display design (not implemented):** [design/DISPLAY.md](design/DISPLAY.md) proposes logical coordinates with an integer scale, mode choice that follows the Workbench's monitor family (MODE option, asl screen-mode requester), 256 colours with a shared palette, a gradient pen (copper on AGA), window mode on the Workbench and multi-scale art. Nothing in it is built or verified yet; it waits for the maintainer's approval.
 - **v2:** AROS i386 (#4: toolchain, target and hosted runs done, see "AROS i386"; the MUI crashes on hosted i386 were an AROS bug, worked around (#105); open: native pc-i386), E# library source packages on NuGet (#31), user classes deriving from platform classes (#42: done for `GtWindow`, see "Classes derived from platform classes"). Capturing lambdas stored in fields and events (#41): done (PR #83), see "Heap closures and events".
 - Smaller follow-ups: `esharp test` for morphos and aros and the Amiga program's return code (today only the ok/FAIL lines are compared; the os4 pipe hides it); OS4 sound on real hardware; the chip budget report only covers constant sizes ([MEMORY.md](MEMORY.md)).
@@ -1707,19 +1706,27 @@ mungwall made them pass. Hosted x86-64, m68k and OS4 passed.
   Below the stack is the allocator's header of the stack block and then whatever block lies under it, so what breaks depends on the
   memory layout: an AROS bug, not E#. Probably the hosted kernel's task switches put the host's signal frames on the task's stack (the
   writes below the stack come in blocks of about 2 KB, and kernel code addresses are on the stack); not checked in the AROS source, and a
-  native AROS was not measured.
+  native AROS was not measured. Both sizes were measured on one host (one CPU) only. If the host's signal frames are the cause, the size
+  depends on the host CPU's xsave area (AVX-512 and similar state make the frame larger), so other machines may overrun by more or less
+  than these numbers; the guard's 32 KB is far above both, but that is a margin, not a measurement on other hardware.
 
 **Workaround in E# (all AROS targets).** `Mui.Open` calls `es_mui_guard_begin()` before opening muimaster.library and
 `es_mui_guard_end()` after. When muiscreen.library is not loaded yet, the guard opens it itself with exec's `AllocMem` patched (`SetFunction`,
-removed again right after): only for the program's own task, only the request of 4096 bytes `MEMF_PUBLIC` that directly follows a
+removed again right after; the vector holds a 16-byte stub in public memory that jumps through a slot, see below): only for the program's own task, only the request of 4096 bytes `MEMF_PUBLIC` that directly follows a
 `MEMF_PUBLIC | MEMF_CLEAR` request of at least `sizeof(struct Task)` (the system's struct may be larger: 304 bytes on the x86-64 nightly,
 176 in the x86-64 toolchain's headers). That request gets 32 KB of its own below it, so the overrun lands there. The memory is never
-freed (the library never frees the stack either). Traced on hosted i386, that pair is the only match during the open. When muiscreen.library
+freed (the library never frees the stack either). When the guard is done the stub's slot is set to the system's own AllocMem and the
+old vector is put back; if another task patched AllocMem meanwhile (the vector is no longer the stub) that task's patch is put back and
+left alone: it calls the stub, which only passes calls on and references nothing of the program's segment, so it stays valid after the
+program exits (the stub is never freed, 16 bytes). The stub is x86 machine code (`jmp` through the slot) for hosted AROS x86-64 and
+i386; on another CPU `es_muis_stub` says no and the guard is skipped. A test builds the stub with the host compiler in executable memory
+and calls it; the another-task-patched race itself was not exercised. Traced on hosted i386, that pair is the only match during the open. When muiscreen.library
 is already loaded (Wanderer or another MUI program opened MUI first), nothing is done: its stack was set up then and the overrun hit
 whatever was under it, which E# cannot change. Other targets: the guard is an empty function. The choice of the request is plain C
 (`es_muis_pad`) and is run by a test with the host compiler.
 
 **Verified:**
+- After the stub change (issue #117): samples/muiclass on hosted AROS x86-64 26 ok, 0 traps, and on hosted i386 26 ok, 0 traps; samples/mui 32 ok, 0 traps on both (one run each, `--wait 0`); m68k Kickstart 3.1 with MUI 3.8 `esharp test samples/muiclass` 26 ok on host and Amiga; OS4 VM `esharp test samples/muiclass --target os4` 26 ok. Not verified: the case of another task patching AllocMem during the open.
 - Debug build of samples/muiclass printing the handler task after `Mui.Open`: its `tc_SPLower` is the padded block, on hosted i386 and on
   hosted x86-64.
 - Hosted i386 (esharp-aros-hosted-i386, `--target aros-i386`): samples/muiclass 25 ok, 0 traps in **10 of 10** runs; samples/mui 32 ok,

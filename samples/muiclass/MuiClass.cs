@@ -73,7 +73,7 @@ public sealed unsafe class BarGraph : MuiArea
         return true;
     }
 
-    protected override void OnCleanup() { Cleanups++; }
+    protected override void OnCleanup() { Cleanups++; _dragging = false; }
 
     protected override void OnAskMinMax(ref MuiMinMax size)
     {

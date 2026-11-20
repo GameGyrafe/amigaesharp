@@ -1,3 +1,4 @@
+using System.Runtime.InteropServices;
 using System.Collections.Generic;
 using ESharp.Target.Host;
 using Microsoft.CodeAnalysis;
@@ -671,7 +672,7 @@ class Box
         int aros = c.IndexOf("#if defined(__AROS__)\n#include <proto/exec.h>\n#include <exec/memory.h>", StringComparison.Ordinal);
         Assert.True(aros >= 0, "the AROS guard");
         string guard = c.Substring(aros, c.IndexOf("#else\n", aros, StringComparison.Ordinal) - aros);
-        Assert.Contains("SetFunction((struct Library *)SysBase, -33 * (LONG)LIB_VECTSIZE, mine)", guard);
+        Assert.Contains("SetFunction((struct Library *)SysBase, -33 * (LONG)LIB_VECTSIZE, (APTR)stub)", guard);
         Assert.Contains("OpenLibrary((CONST_STRPTR)\"muiscreen.library\", 0)", guard);
         Assert.Contains("FindTask(NULL) == es_muis_task", guard);
         if (!HasGcc) return;
@@ -696,6 +697,30 @@ int main(void)
 """);
         Assert.Equal(0, run.exitCode);
         Assert.Equal("000001000 2\n00000000 0\n010 2\n", run.output);
+
+        // The entry in exec's vector is a stub in public memory that jumps through a slot: built here, in executable memory, it must
+        // call the function the slot names, then the one it is retargeted to (the system's own AllocMem once the guard is done), and
+        // keep working with nothing of the guard's function left (another task's patch may chain to it after the program exits).
+        if (!OperatingSystem.IsLinux() || RuntimeInformation.ProcessArchitecture != Architecture.X64) return;
+        int stubAt = c.IndexOf("static __attribute__((unused)) int es_muis_stub(", StringComparison.Ordinal);
+        string stubFn = c.Substring(stubAt, c.IndexOf("\n}\n", stubAt, StringComparison.Ordinal) + 3 - stubAt);
+        var stubRun = RunWithHostGcc("#include <stdint.h>\n#include <stdio.h>\n#include <sys/mman.h>\n" + stubFn + """
+static long guarded(long a, long b) { return a * 100 + b; }
+static long passthrough(long a, long b) { return a + b; }
+int main(void)
+{
+    uint8_t *mem = mmap(0, 4096, PROT_READ | PROT_WRITE | PROT_EXEC, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    if (mem == MAP_FAILED) { printf("nomap\n"); return 0; }
+    if (!es_muis_stub(mem, (uintptr_t)guarded)) { printf("nostub\n"); return 1; }
+    long (*entry)(long, long) = (long (*)(long, long))(void *)mem;
+    printf("%ld ", entry(3, 4));
+    *(volatile uintptr_t *)(mem + 8) = (uintptr_t)passthrough;
+    printf("%ld\n", entry(3, 4));
+    return 0;
+}
+""");
+        Assert.Equal(0, stubRun.exitCode);
+        Assert.True(stubRun.output == "304 7\n" || stubRun.output == "nomap\n", stubRun.output);
     }
 
     [Fact]
