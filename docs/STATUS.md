@@ -1788,7 +1788,7 @@ whatever was under it, which E# cannot change. Other targets: the guard is an em
 
 **Not verified:** native AROS (pc-i386, pc-x86_64): whether the handler overruns its stack there; MUI programs started when muiscreen.library
 is already loaded (the usual case with Wanderer running) are not protected by the guard, and nothing in this repository can be; reported
-upstream: not yet. A future muiscreen.library with a larger stack would not match the guard's request, so the guard would then do nothing.
+upstream on 2026-11-20 as https://github.com/aros-development-team/AROS/issues/2347 (with a suggested fix: an `AROS_STACKSIZE` stack, or `NewCreateTaskA` with `TASKTAG_STACKSIZE`). A future muiscreen.library with a larger stack would not match the guard's request, so the guard would then do nothing.
 
 ## Hosted AROS in a Docker image (issue #75)
 
