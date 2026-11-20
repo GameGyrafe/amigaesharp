@@ -775,6 +775,8 @@ internal sealed partial class CEmitter
             result.AppendLine("#endif");
             result.AppendLine();
         }
+        if (_natives.Contains("es_mui_guard_begin") || _natives.Contains("es_mui_guard_end"))
+            result.Append(MuiScreenGuard);
         if (_natives.Contains("es_dosupermethod") || _natives.Contains("es_inst_data"))
         {
             // A class dispatcher's two helpers (MUI custom classes): the superclass's dispatcher and the instance data. DoSuperMethodA
@@ -815,6 +817,82 @@ internal sealed partial class CEmitter
     private readonly HashSet<string> _natives = new();
 
     private bool _usesMuiMaster;
+
+    /// <summary>
+    /// Mui.Open's guard against an AROS bug (issue #105). muimaster.library's init opens muiscreen.library, whose init starts a task
+    /// ("PUBSCREEN handler") on a stack of 4096 bytes, AllocMem(sizeof(struct Task), MEMF_PUBLIC | MEMF_CLEAR) then
+    /// AllocMem(4096, MEMF_PUBLIC), on the task that opens it first. On hosted AROS that task writes about 4 KB below its stack
+    /// (measured: 4.2 KB on linux-i386, 3.4 KB on linux-x86_64), over the allocator's header of the stack and over whatever block lies
+    /// below it; which block that is depends on the memory layout, so programs failed now and then. When muiscreen.library is not
+    /// loaded yet, the guard opens it first with exec's AllocMem patched for this task only: the stack request that follows the task
+    /// structure gets ES_MUIS_GUARD bytes of its own below it, so the overrun lands there. The guard is never freed (the library never
+    /// frees the stack either: its task lives as long as the library). Other targets: nothing to do.
+    /// </summary>
+    internal const string MuiScreenGuard = """
+/* The request to pad (plain C, so the tests run it with the host compiler): this task asked for the task structure
+   (MEMF_PUBLIC | MEMF_CLEAR: 0x10001; at least taskSize bytes, the size in our headers: the system's may be larger, the hosted
+   x86-64 nightly's is 304 bytes where the x86-64 toolchain's headers say 176) and then for 4096 bytes MEMF_PUBLIC (1).
+   *step: 0 waiting for the task structure, 1 the next request is the stack, 2 done. */
+static __attribute__((unused)) int es_muis_pad(int *step, uintptr_t size, uint32_t flags, uintptr_t taskSize)
+{
+    if (*step >= 2) return 0;
+    if (*step == 1 && size == 4096 && flags == 1u) { *step = 2; return 1; }
+    *step = size >= taskSize && size <= taskSize + 1024 && flags == 0x10001u ? 1 : 0;
+    return 0;
+}
+#if defined(__AROS__)
+#include <proto/exec.h>
+#include <exec/memory.h>
+#include <exec/tasks.h>
+#include <exec/execbase.h>
+#include <aros/libcall.h>
+#define ES_MUIS_GUARD 32768
+static struct Task *es_muis_task;
+static int es_muis_step = 2;
+static APTR es_muis_old;
+static struct Library *es_muis_base;
+static AROS_LH2(APTR, es_muis_allocmem, AROS_LHA(IPTR, byteSize, D0), AROS_LHA(ULONG, requirements, D1), struct ExecBase *, SysBase, 33, Es)
+{
+    AROS_LIBFUNC_INIT
+    if (es_muis_step < 2 && FindTask(NULL) == es_muis_task && es_muis_pad(&es_muis_step, byteSize, requirements, sizeof(struct Task)))
+    {
+        UBYTE *b = (UBYTE *)AROS_CALL2(APTR, es_muis_old, AROS_LCA(IPTR, byteSize + ES_MUIS_GUARD, D0), AROS_LCA(ULONG, requirements, D1), struct ExecBase *, SysBase);
+        if (b != NULL) return b + ES_MUIS_GUARD;
+    }
+    return AROS_CALL2(APTR, es_muis_old, AROS_LCA(IPTR, byteSize, D0), AROS_LCA(ULONG, requirements, D1), struct ExecBase *, SysBase);
+    AROS_LIBFUNC_EXIT
+}
+static __attribute__((unused)) void es_mui_guard_begin(void)
+{
+    APTR mine = (APTR)AROS_SLIB_ENTRY(es_muis_allocmem, Es, 33), now;
+    int loaded;
+    Forbid();
+    loaded = FindName(&SysBase->LibList, (CONST_STRPTR)"muiscreen.library") != NULL;
+    Permit();
+    if (loaded || es_muis_base != NULL) return;
+    es_muis_task = FindTask(NULL);
+    es_muis_step = 0;
+    Forbid();
+    es_muis_old = SetFunction((struct Library *)SysBase, -33 * (LONG)LIB_VECTSIZE, mine);
+    Permit();
+    es_muis_base = OpenLibrary((CONST_STRPTR)"muiscreen.library", 0);
+    es_muis_step = 2;   /* from here on the patch only passes calls on */
+    Forbid();
+    now = SetFunction((struct Library *)SysBase, -33 * (LONG)LIB_VECTSIZE, es_muis_old);
+    if (now != mine) SetFunction((struct Library *)SysBase, -33 * (LONG)LIB_VECTSIZE, now);   /* patched again meanwhile: leave theirs (it calls this one, which only passes on) */
+    Permit();
+}
+/* After muimaster.library is open (it holds muiscreen.library itself). */
+static __attribute__((unused)) void es_mui_guard_end(void)
+{
+    if (es_muis_base != NULL) { CloseLibrary(es_muis_base); es_muis_base = NULL; }
+}
+#else
+static inline __attribute__((unused)) void es_mui_guard_begin(void) { }
+static inline __attribute__((unused)) void es_mui_guard_end(void) { }
+#endif
+
+""";
 
     /// <summary>
     /// The muimaster.library calls of ESharp.Platform's MuiMaster class, by vector (bias 30, the AROS fd), with no MUI header: the

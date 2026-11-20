@@ -846,11 +846,9 @@ Verified (#93):
   (the 2020 header of the toolchain image says 56), and the instance data 448 bytes into an Area object, 640 into a Group object.
 
 Not verified (#93):
-- Hosted AROS i386 (`--target aros-i386`, esharp-aros-hosted-i386): **not passing.** It builds. 1 run of 7 passed all 25 checks with 0 traps.
-  In the others, either output stops a second into the two-second window loop after `SHOT` and the shell traps afterwards in `GetVar`, or
-  (two rebuilt binaries with debug lines) the program traps at its first `Create` with `IntuitionBase` overwritten (0x32) in
-  `es_oclass_probe`. So it depends on the binary's layout, like the samples/mui failure on hosted i386 described in "AROS i386". The cause
-  is not found; samples/mui ran 3 of 3 times on hosted i386 on this branch.
+- Hosted AROS i386 on this branch: 1 run of 7 passed (the output stopped after `SHOT` and the shell trapped in `GetVar`, or a debug build
+  trapped at its first `Create` with `IntuitionBase` overwritten). Fixed since: an AROS bug, see "MUI on hosted AROS: the muiscreen.library
+  handler stack (issue #105)"; samples/muiclass now gives 25 ok in 10 of 10 runs on hosted i386.
 - MorphOS (the C compiles; not built or run).
 - Real hardware.
 - `OnSetup` returning false, and `MuiRender.Update` true: MUI_Redraw is always called with MADF_DRAWOBJECT, and no system sent DRAWUPDATE
@@ -1192,7 +1190,7 @@ Open work as of 2026-11-14 (the GitHub issues are the live list; the v1 tracker 
 - **Bindings (#19, #40):** GadTools wrappers (v1), the BOOPSI core with hooks (#40 part 1, see "BOOPSI core and hooks") and the MUI wrappers on it (#40 part 2, see "MUI wrappers") are done. MUI custom classes (#93, see "MUI custom classes") are done too. Open: ReAction (last, if at all).
 - **Small gaps (#72):** `string.IndexOf`, `Args` on the host, `esharp test --args`, os4 `--args`.
 - **Display design (not implemented):** [design/DISPLAY.md](design/DISPLAY.md) proposes logical coordinates with an integer scale, mode choice that follows the Workbench's monitor family (MODE option, asl screen-mode requester), 256 colours with a shared palette, a gradient pen (copper on AGA), window mode on the Workbench and multi-scale art. Nothing in it is built or verified yet; it waits for the maintainer's approval.
-- **v2:** AROS i386 (#4: toolchain, target and hosted runs done, see "AROS i386"; open: the mui sample crash on hosted i386, native pc-i386), E# library source packages on NuGet (#31), user classes deriving from platform classes (#42: done for `GtWindow`, see "Classes derived from platform classes"). Capturing lambdas stored in fields and events (#41): done (PR #83), see "Heap closures and events".
+- **v2:** AROS i386 (#4: toolchain, target and hosted runs done, see "AROS i386"; the MUI crashes on hosted i386 were an AROS bug, worked around (#105); open: native pc-i386), E# library source packages on NuGet (#31), user classes deriving from platform classes (#42: done for `GtWindow`, see "Classes derived from platform classes"). Capturing lambdas stored in fields and events (#41): done (PR #83), see "Heap closures and events".
 - Smaller follow-ups: `esharp test` for morphos and aros and the Amiga program's return code (today only the ok/FAIL lines are compared; the os4 pipe hides it); OS4 sound on real hardware; the chip budget report only covers constant sizes ([MEMORY.md](MEMORY.md)).
 
 Done and no longer "next": the emulator side of the phase 1 gate (AROS replacement and Kickstart 3.1; 2.04 was also run, historically), the NuGet packages (on nuget.org since 0.1.1), the card demo and rummy, os4 runs in the VM, the `sdl` target, hosted AROS runs, double buffering.
@@ -1654,7 +1652,8 @@ i386` (or an image name with `i386`) runs `obj/aros-i386/<sample>`.
 
 **A fix found on the way (all AROS targets).** Generated C wrote its out-of-memory and index messages to stdio's `stderr`, so every
 program with heap objects opened posixc.library. On hosted i386 AROS a program that has posixc.library open and creates a Zune Application
-crashes in the C library's exit code (`__stdc_program_end` / `__callexitfuncs`); reproduced in a 20-line C program, so it is an AROS problem,
+crashes in the C library's exit code (`__stdc_program_end` / `__callexitfuncs`); reproduced in a 20-line C program, so it is an AROS problem
+(later found: memory corruption from muiscreen.library's handler stack, issue #105, gives this kind of crash; whether it was this one is not verified),
 not E#. On AROS the messages now go through dos.library (`ErrorOutput()`, else `Output()`), so no E# program opens posixc.library; other
 targets keep `stderr`. New test `Aros_error_messages_use_dos_library_not_stderr` (runs the helpers with the host gcc).
 
@@ -1671,17 +1670,73 @@ targets keep `stderr`. New test `Aros_error_messages_use_dos_library_not_stderr`
 - With input on hosted i386: `gui --input "click 208,74;click 47,37"` 7 ok (Hello, reply, close); `boopsi --args WAIT --input "click
   75,57;click 220,84;click 47,37"` 38 ok (button, slider page to 55, close). `cards --shot --input "click 400,300"`: the screenshot was
   looked at and shows the 640x400 table with the HD cards, the card back and the sprite.
-- **mui on hosted i386: not passing.** It prints its 28 checks up to `SHOT` and then crashes in the program's own task (bus error, a PC
-  outside every loaded module), 3 of 3 runs. A copy with `Trace.Line` in every check, or the same binary with exec's mungwall on, passes all
-  32 checks and ends cleanly, so it depends on timing or memory layout; not found yet. (Before the posixc fix it also crashed at exit.)
+- mui on hosted i386, when this was written: 28 checks up to `SHOT`, then a crash in the program's own task, 3 of 3 runs; with
+  `Trace.Line` in every check, or with mungwall, it passed. Found and worked around later: see "MUI on hosted AROS: the muiscreen.library
+  handler stack (issue #105)". Now 32 ok in 10 of 10 runs.
 - Intermittent traps in the Workbench task (Wanderer) after a program has ended, on hosted i386 only: also with a program that only waits
-  5 s (1 of 14 runs), so it is the nightly, not E#; the program's own output and checks are complete in those runs.
+  5 s (1 of 14 runs), so it is the nightly, not E# (when no program opened MUI before it, Wanderer is the first to open muimaster.library, so
+  the muiscreen.library stack overrun of issue #105 may be the cause; not verified); the program's own output and checks are complete in those runs.
 - x86-64 unchanged: every sample still builds with `--target aros`; on hosted x86-64 mui 32 ok and boopsi 37 ok; `esharp-aros-hosted`
   rebuilt from the changed Dockerfile (default `AROS_ARCH`) passes its smoke test.
 - m68k on Kickstart 3.1 (A1200, real ROM): `esharp test samples/language` 39 ok and `samples/boopsi` 37 ok, host and Amiga agree.
 - `dotnet test`: 586 passed, 2 skipped (the SDK-backed BindGen ones), 0 failed; after merging main (#102, NewIcons) 599 passed, 2 skipped, 0 failed, and on hosted i386 hello, language 39, boopsi 37, cards 16 re-run unchanged.
 
 **Not verified:** native pc-i386 (the boot ISO in QEMU), real i386 hardware, CI building the image (it is not in CI).
+
+## MUI on hosted AROS: the muiscreen.library handler stack (issue #105)
+
+**Symptom.** On hosted i386 AROS (nightly 20261116) MUI programs failed now and then, depending on the binary's layout: samples/mui
+crashed after 28 checks (bus error, PC outside every module), samples/muiclass passed 1 of 7 runs (output stopped, then the shell
+trapped in `GetVar`; debug builds trapped at the first `Create` with `IntuitionBase` read as 0x32). `Trace.Line` in every check or
+mungwall made them pass. Hosted x86-64, m68k and OS4 passed.
+
+**Narrowed down** (each step a build of the generated C with changes, run on hosted i386):
+- A copy of samples/muiclass whose `Main` only opens and closes muimaster.library: the shell traps in `FindVar`/`GetVar` after the
+  program has ended, every run (the link of a local variable's node reads as the text "Pack"). The local variable list is intact when
+  the program ends. A trace of exec's `FreeMem`/`FreeVec`/`FreePooled`/`CloseLibrary` from the program showed nothing that explained it.
+- With muimaster.library opened once by another, plain C program earlier in `S:Startup-Sequence`, the same binary passes, and the
+  unchanged samples/muiclass passes 10 of 10 runs. With only the libraries muimaster.library's init loads opened earlier (coolimages,
+  cybergraphics, rexxsyslib, keymap, commodities, diskfont, asl) it still traps; the rest of the list (workbench, gadtools, layers,
+  iffparse, datatypes, icon, locale, muiscreen) opened by another program made that program's boot crash in a task named
+  "PUBSCREEN handler".
+- That task is muiscreen.library's (AROS `workbench/libs/muiscreen/muiscreen_init.c`, opened by muimaster.library's init): it is
+  started with `AddTask` on a stack of `AllocMem(4096, MEMF_PUBLIC)` (`MUIS_STACKSIZE`), on the task that opens the library first.
+- `tools/aros-hosted/muiscreen-stack.c` (plain C, ours) measures it: it opens muiscreen.library with exec's `AllocMem` patched for its
+  own task so that the stack gets 16 KB of a known pattern below it. Result, 3 of 3 runs each, the same every run: on hosted i386 the
+  handler writes all 4096 bytes of its stack and **4244 bytes below it**; on hosted x86-64 (nightly 20261114) **3448 bytes below it**.
+  Below the stack is the allocator's header of the stack block and then whatever block lies under it, so what breaks depends on the
+  memory layout: an AROS bug, not E#. Probably the hosted kernel's task switches put the host's signal frames on the task's stack (the
+  writes below the stack come in blocks of about 2 KB, and kernel code addresses are on the stack); not checked in the AROS source, and a
+  native AROS was not measured.
+
+**Workaround in E# (all AROS targets).** `Mui.Open` calls `es_mui_guard_begin()` before opening muimaster.library and
+`es_mui_guard_end()` after. When muiscreen.library is not loaded yet, the guard opens it itself with exec's `AllocMem` patched (`SetFunction`,
+removed again right after): only for the program's own task, only the request of 4096 bytes `MEMF_PUBLIC` that directly follows a
+`MEMF_PUBLIC | MEMF_CLEAR` request of at least `sizeof(struct Task)` (the system's struct may be larger: 304 bytes on the x86-64 nightly,
+176 in the x86-64 toolchain's headers). That request gets 32 KB of its own below it, so the overrun lands there. The memory is never
+freed (the library never frees the stack either). Traced on hosted i386, that pair is the only match during the open. When muiscreen.library
+is already loaded (Wanderer or another MUI program opened MUI first), nothing is done: its stack was set up then and the overrun hit
+whatever was under it, which E# cannot change. Other targets: the guard is an empty function. The choice of the request is plain C
+(`es_muis_pad`) and is run by a test with the host compiler.
+
+**Verified:**
+- Debug build of samples/muiclass printing the handler task after `Mui.Open`: its `tc_SPLower` is the padded block, on hosted i386 and on
+  hosted x86-64.
+- Hosted i386 (esharp-aros-hosted-i386, `--target aros-i386`): samples/muiclass 25 ok, 0 traps in **10 of 10** runs; samples/mui 32 ok,
+  0 traps in **10 of 10** runs (`tools/aros-hosted/aros-hosted.sh <sample> --docker esharp-aros-hosted-i386 --wait 0`). Before the
+  workaround, the same command gave samples/muiclass 25 ok in 3 of 5 runs, and 0 of 8 with `Stack 1000000` before the program in the
+  startup sequence; with the workaround and that stack setting 5 of 5. Screenshots (`--shot`) looked at: the custom class window (graphs
+  at 70% and 20%, "Level 70", the slider at 70) and the samples/mui window (Volume 42, the list with three lines), in Zune's look.
+- Hosted x86-64 (esharp-aros-hosted, `--target aros`): samples/muiclass 25 ok and samples/mui 32 ok, 0 traps, 3 of 3 runs each.
+- A1200, Kickstart 3.1 (40.069), MUI 3.8, Workbench 3.1 disk 2 (`esharp test samples/<s> --target m68k --docker <m68k image> --model
+  A1200 --kickstart <rom> --mui 3.8 --workbench <wb>`): samples/mui host 32 ok, Amiga 32 ok; samples/muiclass host 25 ok, Amiga 25 ok;
+  they agree.
+- AmigaOS 4.1 VM (MUI 5): `esharp test samples/muiclass --target os4`: host 25 ok, OS4 25 ok, they agree.
+- `dotnet test`: 642 passed, 2 skipped (the SDK-backed BindGen test and the OS4 VM test), 0 failed. New: `Mui_open_guards_the_muiscreen_handler_stack_on_aros` (every Amiga target: the guard around the open; the request choice run with the host gcc).
+
+**Not verified:** native AROS (pc-i386, pc-x86_64): whether the handler overruns its stack there; MUI programs started when muiscreen.library
+is already loaded (the usual case with Wanderer running) are not protected by the guard, and nothing in this repository can be; reported
+upstream: not yet. A future muiscreen.library with a larger stack would not match the guard's request, so the guard would then do nothing.
 
 ## Hosted AROS in a Docker image (issue #75)
 

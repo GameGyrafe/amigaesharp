@@ -27,6 +27,17 @@ public static unsafe class MuiMaster
     [AmigaLib("muimaster", -114), Since(19)] public static extern int MUI_DeleteCustomClass(void* mcc);
     [AmigaLib("muimaster", -120), Since(19)] public static extern void* MUI_MakeObjectA(int type, nuint* parms);
 }
+
+/// <summary>
+/// Mui.Open's guard on AROS (issue #105): when muiscreen.library is not loaded yet, it is opened first so that the stack of its
+/// handler task, which hosted AROS overruns by about 4 KB, gets memory of its own below it (see CEmitter.MuiScreenGuard). Nothing
+/// on the other targets.
+/// </summary>
+internal static class MuiNative
+{
+    [Native] public static extern void es_mui_guard_begin();
+    [Native] public static extern void es_mui_guard_end();
+}
 #endif
 
 /// <summary>MUI numbers (the same on every target).</summary>
@@ -166,7 +177,9 @@ public static unsafe class Mui
     public static bool Open()
     {
         if (_base != null) return true;
+        MuiNative.es_mui_guard_begin();
         _base = Exec.OpenLibrary("muimaster.library", 19);
+        MuiNative.es_mui_guard_end();
         if (_base == null) return false;
         MuiMaster.SetBase(_base);
         return true;

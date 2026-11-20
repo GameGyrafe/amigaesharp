@@ -650,6 +650,54 @@ class Box
         Assert.DoesNotContain("libraries/mui.h", r.C!);
     }
 
+    // Issue #105: Mui.Open opens muiscreen.library first on AROS, with exec's AllocMem patched for its own task so that the stack of
+    // muiscreen's handler task (overrun by about 4 KB on hosted AROS) gets memory of its own below it. The guard is in every Amiga
+    // target's C (AROS only, under __AROS__); the choice of the request to pad is plain C and runs here with the host compiler.
+    [Theory]
+    [InlineData("m68k")]
+    [InlineData("aros")]
+    [InlineData("aros-i386")]
+    [InlineData("os4")]
+    [InlineData("morphos")]
+    public void Mui_open_guards_the_muiscreen_handler_stack_on_aros(string target)
+    {
+        var r = EsCompiler.Compile(new[] { new SourceFile("Mui.cs", File.ReadAllText(SamplePath)) }, Targets.Find(target)!.ToOptions());
+        Assert.True(r.Success, string.Join("\n", r.Diagnostics));
+        string c = r.C!.Replace("\r\n", "\n");
+        int begin = c.IndexOf("    es_mui_guard_begin();\n", StringComparison.Ordinal);
+        int open = c.IndexOf("OpenLibrary(\"muimaster.library\", 19)", StringComparison.Ordinal);
+        int end = c.IndexOf("    es_mui_guard_end();\n", StringComparison.Ordinal);
+        Assert.True(begin >= 0 && begin < open && open < end, "guard begin, OpenLibrary(muimaster), guard end in Mui.Open");
+        int aros = c.IndexOf("#if defined(__AROS__)\n#include <proto/exec.h>\n#include <exec/memory.h>", StringComparison.Ordinal);
+        Assert.True(aros >= 0, "the AROS guard");
+        string guard = c.Substring(aros, c.IndexOf("#else\n", aros, StringComparison.Ordinal) - aros);
+        Assert.Contains("SetFunction((struct Library *)SysBase, -33 * (LONG)LIB_VECTSIZE, mine)", guard);
+        Assert.Contains("OpenLibrary((CONST_STRPTR)\"muiscreen.library\", 0)", guard);
+        Assert.Contains("FindTask(NULL) == es_muis_task", guard);
+        if (!HasGcc) return;
+        int pad = c.IndexOf("static __attribute__((unused)) int es_muis_pad(", StringComparison.Ordinal);
+        string padFn = c.Substring(pad, c.IndexOf("\n}\n", pad, StringComparison.Ordinal) + 3 - pad);
+        var run = RunWithHostGcc("#include <stdint.h>\n#include <stdio.h>\n" + padFn + """
+static int step;
+static void ask(uintptr_t size, uint32_t flags) { printf("%d", es_muis_pad(&step, size, flags, 224)); }
+int main(void)
+{
+    /* loading the library (as traced on hosted i386), then its init: the task structure and its stack; later requests are left alone */
+    ask(4096, 1); ask(220, 0); ask(456, 0x10001); ask(220, 0); ask(224, 0x10001); ask(4096, 1); ask(4096, 1); ask(224, 0x10001); ask(4096, 1);
+    printf(" %d\n", step);
+    /* the task structure followed by something else, or too small: no padding */
+    step = 0; ask(224, 0x10001); ask(4096, 0x10001); ask(4096, 1); ask(224, 0x10001); ask(36, 0); ask(4096, 1); ask(100, 0x10001); ask(4096, 1);
+    printf(" %d\n", step);
+    /* a larger task structure than our headers say (a newer system) */
+    step = 0; ask(304, 0x10001); ask(4096, 1); ask(4096, 1);
+    printf(" %d\n", step);
+    return 0;
+}
+""");
+        Assert.Equal(0, run.exitCode);
+        Assert.Equal("000001000 2\n00000000 0\n010 2\n", run.output);
+    }
+
     [Fact]
     public void A_program_class_can_derive_from_MuiArea_and_MuiCustomGroup_but_not_from_other_MUI_classes()
     {
