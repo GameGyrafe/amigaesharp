@@ -92,6 +92,8 @@ public static class Os4Input
                     Move(steps, (int)Math.Round(dx * Scale), (int)Math.Round(dy * Scale));
                 }
                 else if (parts[0] == "press") Press(steps);
+                else if (parts[0] == "down") steps.Add(new Step("mouse_button 1", 300));   // held for a drag: rel moves, then up
+                else if (parts[0] == "up") steps.Add(new Step("mouse_button 0", 500));
                 else if (parts[0] == "key" && parts.Length == 2)
                 {
                     var names = parts[1].Split('+').Select(c =>
@@ -102,7 +104,7 @@ public static class Os4Input
             }
             catch (Exception e) when (e is FormatException or IndexOutOfRangeException or OverflowException)
             {
-                throw new FormatException($"bad input step '{raw}' (use 'click X,Y', 'rel DX,DY', 'press' or 'key N'; N is an Amiga raw key code for os4): {e.Message}");
+                throw new FormatException($"bad input step '{raw}' (use 'click X,Y', 'rel DX,DY', 'press', 'down', 'up' or 'key N'; N is an Amiga raw key code for os4): {e.Message}");
             }
         }
         return steps;

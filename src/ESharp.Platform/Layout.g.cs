@@ -237,6 +237,17 @@ public static class Layout
     public const uint IdcmpIdcmpUpdate = 8388608u;
     public const uint SghKey = 1u;
     public const uint SghClick = 2u;
+    public const int EhnSize = 48;
+    public const int EhnPriority = 17;
+    public const int EhnFlags = 18;
+    public const int EhnObject = 24;
+    public const int EhnClass = 32;
+    public const int EhnEvents = 40;
+    public const uint IdcmpMouseButtons = 8u;
+    public const uint IdcmpMouseMove = 16u;
+    public const uint IdcmpRawKey = 1024u;
+    public const uint SelectDown = 104u;
+    public const uint SelectUp = 232u;
 #elif I386
     public const int WindowRPort = 52;
     public const int WindowUserPort = 88;
@@ -467,6 +478,17 @@ public static class Layout
     public const uint IdcmpIdcmpUpdate = 8388608u;
     public const uint SghKey = 1u;
     public const uint SghClick = 2u;
+    public const int EhnSize = 24;
+    public const int EhnPriority = 9;
+    public const int EhnFlags = 10;
+    public const int EhnObject = 12;
+    public const int EhnClass = 16;
+    public const int EhnEvents = 20;
+    public const uint IdcmpMouseButtons = 8u;
+    public const uint IdcmpMouseMove = 16u;
+    public const uint IdcmpRawKey = 1024u;
+    public const uint SelectDown = 104u;
+    public const uint SelectUp = 232u;
 #else
     public const int WindowRPort = 50;
     public const int WindowUserPort = 86;
@@ -697,6 +719,17 @@ public static class Layout
     public const uint IdcmpIdcmpUpdate = 8388608u;
     public const uint SghKey = 1u;
     public const uint SghClick = 2u;
+    public const int EhnSize = 24;
+    public const int EhnPriority = 9;
+    public const int EhnFlags = 10;
+    public const int EhnObject = 12;
+    public const int EhnClass = 16;
+    public const int EhnEvents = 20;
+    public const uint IdcmpMouseButtons = 8u;
+    public const uint IdcmpMouseMove = 16u;
+    public const uint IdcmpRawKey = 1024u;
+    public const uint SelectDown = 104u;
+    public const uint SelectUp = 232u;
 #endif
 }
 #endif

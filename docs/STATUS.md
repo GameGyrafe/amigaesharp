@@ -794,12 +794,12 @@ virtual members of `MuiObject` (a program cannot derive from any other MUI class
   notifications, `Get` asks `OnGet` first, `DoMethod` asks `OnMethod`. Opening a window runs setup, size, show and draw for each custom
   object in it; closing runs hide and cleanup, and so does disposing one that is shown. `MuiRender` counts its calls (`HostFills`,
   `HostLines`, `HostTexts`). `BoopsiObject` gained three internal host hooks for this (`HostCreated`, `HostGet`, `HostMethod`).
-- Left out: input events (MUIM_HandleEvent, event handler nodes, MUIM_HandleInput). A custom class does not get mouse or keys yet.
+- Input events: see "Input events in custom classes (issue #114)" below. MUIM_HandleInput (the older input method) is not wrapped.
 
 **samples/muiclass.** `BarGraph : MuiArea` (C# `OnAskMinMax` and `OnDraw`: eight bars, a base line and the level as text; its own
 attribute `Level` with `OnSet`/`OnGet` and a redraw; its own method `Reset`) and `Panel : MuiCustomGroup` (a horizontal framed group with
 both graphs in it; its own attribute `Mark` drawn as a stripe under the children). A slider's notification sets the first graph's level
-and the group's mark. The checks (25, the same on every system):
+and the group's mark. The checks (25 with #93, 26 since #114; the same on every system):
 - The class is made once for both graphs (2 classes: Area and Group). The dispatcher saw 3 objects made (OM_NEW).
 - The starting levels went through OnSet and read back through OnGet.
 - Setup reached each object once, AskMinMax asked the graphs, Draw drew the graphs and the group.
@@ -810,9 +810,10 @@ and the group's mark. The checks (25, the same on every system):
 - Disposing the application disposed the custom objects (OM_DISPOSE), and both classes were deleted after their last object.
 - A lone graph makes the Area class again; nothing is drawn while it is not shown; the class is deleted with it.
 - Every MUI object was disposed; no closure is left.
-WAIT runs until the window is closed or Quit is pressed and prints the level and the number of draws.
+WAIT runs until the window is closed or Quit is pressed and prints the level and the number of draws (since #114: the levels, clicks
+and moves; see below).
 
-Verified:
+Verified (#93):
 - `dotnet test`: 627 passed, 2 skipped (the SDK-backed BindGen test and the OS4 VM test, which need an SDK or a VM), 0 failed. New in MuiTests:
   - samples/muiclass as generated C, run with host gcc under ASan/UBSan against the fake muimaster.library. The fake grew custom classes:
     MUI_CreateCustomClass/DeleteCustomClass/Redraw, NewObjectA of a private class with OM_NEW through the dispatcher, DoSuperMethodA as
@@ -844,17 +845,101 @@ Verified:
   from the slider's notification, 8 draws), then Quit; all ok, 0 traps. A debug run printed the area data offset: 64 on this nightly
   (the 2020 header of the toolchain image says 56), and the instance data 448 bytes into an Area object, 640 into a Group object.
 
-Not verified:
+Not verified (#93):
 - Hosted AROS i386 on this branch: 1 run of 7 passed (the output stopped after `SHOT` and the shell trapped in `GetVar`, or a debug build
   trapped at its first `Create` with `IntuitionBase` overwritten). Fixed since: an AROS bug, see "MUI on hosted AROS: the muiscreen.library
   handler stack (issue #105)"; samples/muiclass now gives 25 ok in 10 of 10 runs on hosted i386.
 - MorphOS (the C compiles; not built or run).
 - Real hardware.
-- Input events in custom classes (not written).
 - `OnSetup` returning false, and `MuiRender.Update` true: MUI_Redraw is always called with MADF_DRAWOBJECT, and no system sent DRAWUPDATE
   in these runs.
 - A custom class inside a virtual group or a scrolled area, and several windows.
 - MUI preferences other than the defaults. The pens are whatever MUI's defaults gave on each system.
+
+### Input events in custom classes (issue #114)
+
+A class derived from `MuiArea` or `MuiCustomGroup` gets mouse and key input:
+- `WantEvents(uint idcmpClasses)` (protected) names the IDCMP classes it wants: `MuiEvent.MouseButtons`, `MuiEvent.MouseMove`,
+  `MuiEvent.RawKey` (IDCMP_MOUSEBUTTONS, IDCMP_MOUSEMOVE, IDCMP_RAWKEY), or'ed. Called in the constructor or `OnSetup`, and again at any
+  time (also from `OnEvent`, the usual way to ask for mouse moves only while dragging); `WantedEvents` reads it back.
+- At MUIM_Setup (after `OnSetup` said yes) the dispatcher allocates one struct MUI_EventHandlerNode per object (`ehn_Object` the object,
+  `ehn_Class` the custom class, `ehn_Events` the wanted classes, priority and flags 0) and, if the set is not 0, sends
+  MUIM_Window_AddEventHandler to the window object (the first field of the render info). `WantEvents` with another set while the object
+  is set up sends MUIM_Window_RemEventHandler (if the node is in the list), changes `ehn_Events` in place and sends
+  MUIM_Window_AddEventHandler with the same node (unless the set is 0); this works from inside any object's `OnEvent`. The node is freed
+  only at MUIM_Cleanup (before the superclass's, after MUIM_Window_RemEventHandler), so no node is freed while MUI may be going through
+  the window's handler list (review of #115: the first version freed and replaced it on every change).
+- MUIM_HandleEvent (`{ imsg, muikey }`) with an event of a wanted class calls `OnEvent(MuiEvent e)` while the object is shown (between
+  MUIM_Show and MUIM_Hide; hidden, it answers 0). `MuiEvent` has the IntuiMessage's `Class`, `Code`, `Qualifier`, the mouse position
+  relative to the contents box (`MouseX = imsg->MouseX - _mleft`, `MouseY = imsg->MouseY - _mtop`, from struct MUI_AreaData as `MuiRender`
+  reads it), the contents' `Width`/`Height`, `Inside`, and MUI's key code `MuiKey` (MUIKEY_*, -1 for none). `MuiEvent.SelectDown` /
+  `SelectUp` are the left button's codes. `OnEvent` returning true answers MUI_EventHandlerRC_Eat. Events of other classes go to the
+  superclass.
+- MUI facts from the AROS Zune headers only: MUIM_HandleEvent 0x80426d66, MUIM_Window_AddEventHandler 0x804203b7,
+  MUIM_Window_RemEventHandler 0x8042679e, MUI_EventHandlerRC_Eat 1, MUIP_HandleEvent, the node's fields. The node's layout is measured per
+  target by `tools/BindGen/layouts.sh`: a new `zune NAME` line in `tools/BindGen/structs.txt` makes `bindgen offsets` copy struct NAME from
+  the AROS Zune `libraries/mui.h` (read from the AROS image at measuring time, `--zune`, never stored) into the measuring C file, compiled
+  with each target's compiler and its own exec/intuition headers; no target's MUI header is used. Results (`Layout.g.cs`): size 48,
+  `ehn_Priority` 17, `ehn_Flags` 18, `ehn_Object` 24, `ehn_Class` 32, `ehn_Events` 40 on AROS x86-64; 24, 9, 10, 12, 16, 20 on AROS i386 and
+  m68k. The same spec measured with the os4 and morphos compilers gave the m68k numbers (that run is not stored; the PowerPC targets use the
+  m68k layout as before). The IDCMP classes and SELECTDOWN/SELECTUP are measured header constants too (the host fake uses the same numbers).
+- Host: `HostEvent(class, code, qualifier, x, y)` (public, host only) sends an event to a shown custom object that wants its class, with x
+  and y relative to the contents box; true if `OnEvent` ate it.
+- Review nits of #113 fixed: OM_NEW counts an object only when its instance pointer is set, and OM_DISPOSE counts it off only then, so a
+  stray OM_DISPOSE cannot take `Mui.CustomObjects` below the objects that live. GUIDE says which `MuiRender` calls clip (`Fill`), clamp
+  (`Line`) or neither (`Text`, which also leaves the font and JAM1 set), and that `OnSet` at OM_NEW runs before the wrapper has its object.
+- `esharp run --target os4 --input` takes `down` and `up` (hold and release the left button) like FS-UAE, for drags.
+
+samples/muiclass: `BarGraph` wants MouseButtons, and MouseMove only while dragging (`WantEvents` from inside `OnEvent`). The left button
+down inside a graph sets its level from the mouse's x (left 0, right 100) and starts a drag; moves while dragging set it again; the
+button up ends it; each of these is eaten. The level goes
+through `Set` (OM_SET), so the notification on it moves the slider (and the slider's moves the group's mark and the status text); each
+side sets the other only when the value differs, so the notifications stop. New check (26 in all): the slider followed a `Set` of the
+graph's level. With `WAIT` the window runs until Quit and prints `events: level L, slider S, N click(s), M move(s); other graph L2, N2
+click(s)` and checks that the slider follows the graph; `WAIT CLICKS` (scripted runs) also checks that a click reached a graph. On the
+host, `WAIT` sends a click at the middle of the first graph, a move to its right edge and the button up (the second graph is sent the
+click and the move outside its box and leaves them), then Quit.
+
+Verified (#114):
+- `dotnet test`: 638 passed, 2 skipped (the SDK-backed BindGen test and the OS4 VM test), 0 failed (also after the review change of
+  `WantEvents`, with the sample asking for moves only while dragging; the muiclass `test` and scripted `WAIT CLICKS` runs below on m68k
+  with MUI 3.8 and 5, OS4 and hosted AROS were repeated with it and gave the same lines; the screenshots and the samples/mui run were not
+  repeated). New or changed:
+  - `Muiclass_sample_takes_clicks_and_drags_through_MUIM_HandleEvent_against_the_fake_muimaster`: samples/muiclass with `WAIT CLICKS` as
+    generated C under ASan/UBSan. The fake window object keeps the handler list (MUIM_Window_AddEventHandler/RemEventHandler, refused on any
+    other object), defines struct MUI_EventHandlerNode as the Zune header does (compiled by host gcc, so the generated C's Layout offsets
+    must agree), and at the first MUIM_Application_NewInput sends MUIM_HandleEvent to each node that wants the class, in order, until one
+    eats it: a click in the graphs' contents, a move, the button up, a click and button up outside, a raw key (wanted by none), then quit.
+    The fake also notes when an object adds a node other than its first one (a node freed and replaced). Result: 4 adds and 4 removes
+    (each graph's at setup and cleanup, and the first graph's node out and back in at the button down and up, from inside `OnEvent`),
+    always the same node per object, 8 events sent (the move only to the dragging graph), 3 eaten (all by the first graph),
+    `events: level 100, slider 100, 1 click(s), 1 move(s); other graph 20, 0 click(s)`, all ok.
+  - samples/muiclass on dotnet with WAIT: the same events line. The os4 input translation test covers `down`/`up`.
+- Host: `esharp test samples/muiclass`: 26 ok; with `--args WAIT`: 28 ok and the events line above.
+- A1200, Kickstart 3.1 (40.069), Workbench 3.1 disk 2, FS-UAE (m68k image):
+  - `esharp test samples/muiclass --target m68k ... --mui 3.8` and `--mui 5`: host 26 ok, Amiga 26 ok, they agree (each).
+  - `esharp run samples/muiclass --headless ... --args "WAIT CLICKS" --input "click 400,300;down;rel -40,0;rel -40,0;up;rel 200,0;press;rel
+    -52,128;press"` (MUI 3.8; MUI 5 lays the window out taller: last move `rel -40,155`): a click on the first graph, a drag to the left,
+    a click on the second graph, Quit. MUI 3.8: `events: level 20, slider 20, 2 click(s), 9 move(s); other graph 17, 1 click(s)`, 28 ok,
+    all ok. MUI 5: `events: level 19, slider 19, 2 click(s), 8 move(s); other graph 17, 1 click(s)`, 28 ok, all ok.
+  - The same input without the Quit and with `--screenshot`, MUI 3.8 and MUI 5, looked at: the first graph's bars low with "20%" (MUI 5:
+    "19%"), the status text "Level 20" (19), the slider's knob at 20 (19) near its left end, the group's stripe short; the second graph at
+    "17%", the pointer over it. A single click (`click 400,300` only) showed "Level 62" (MUI 5: 61) with the graph, slider and status agreeing.
+  - No regression: `esharp test samples/mui --target m68k ... --mui 3.8`: host 32 ok, Amiga 32 ok, they agree.
+- AmigaOS 4.1 in the QEMU VM (MUI 5): `esharp test samples/muiclass --target os4`: host 26 ok, OS4 26 ok, they agree. `run --args "WAIT
+  CLICKS" --input "click 590,505;down;rel -50,0;rel -50,0;up;click 740,505;click 640,590"`: `events: level 24, slider 24, 2 click(s), 6
+  move(s); other graph 49, 1 click(s)`, 28 ok, all ok. The screendump of the same input without Quit was looked at: "Level 24", the first
+  graph at 24%, the slider at 24, the second graph at 49% with the pointer over it.
+- Hosted AROS x86-64 (Zune, esharp-aros-hosted): `aros-hosted.sh muiclass --wait 0`: all ok. `--args "WAIT CLICKS" --input "drag 350,295
+  230,295;click 500,295;click 400,359"`: `events: level 14, slider 14, 1 click(s), 10 move(s); other graph 49, 1 click(s)`, 28 ok, all ok,
+  0 traps. The screenshot without Quit was looked at: "Level 14", the first graph at 14%, the slider at 14, the second graph at 49%.
+
+Not verified (#114):
+- `MuiEvent.RawKey` and `Qualifier` on any system (only the fake sent a raw key, to a class that did not want it), `MuiKey` values.
+- `WantEvents` called from one object's `OnEvent` for another object (only an object's own change from its `OnEvent` ran on the systems
+  above); a custom group (`MuiCustomGroup`) with events.
+- Events while the object is set up but hidden (a page group), several windows, MUI_EHF_* flags and node priorities (always 0 here).
+- Hosted AROS i386 (see above), MorphOS (the C compiles), Kickstart 3.0, real hardware.
 
 ## Hardware test pack (tools/hwpack, samples/hwinfo; issue #7)
 

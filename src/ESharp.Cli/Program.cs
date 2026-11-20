@@ -68,7 +68,7 @@ Run options (build options also apply; run is m68k, os4 or sdl):
                     ""click X,Y;key 9;key 50+38"" with display pixels and X11 key codes, + holds keys (needs libXtst);
                     ""rel DX,DY"" moves, ""press"" clicks where the pointer is, ""down""/""up"" hold and release (a drag)
                     os4: the QEMU monitor sends it: click X,Y moves the pointer to X,Y of the screen (from the top-left
-                    corner), rel DX,DY moves it, and key N takes an AMIGA RAW key code (Esc is 69, 96+32 is Shift+A)
+                    corner), rel DX,DY moves it, down/up hold and release, and key N takes an AMIGA RAW key code (Esc is 69, 96+32 is Shift+A)
                     sdl: the same script is replayed by the program itself after SHOT, with X,Y in the program's
                     screen pixels; the screenshot is the program's own frame (both also work without --headless)
 

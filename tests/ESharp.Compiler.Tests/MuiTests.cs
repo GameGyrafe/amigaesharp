@@ -96,6 +96,31 @@ static __attribute__((unused)) void *MUI_MakeObjectA(int32_t type, uintptr_t *pa
     return o;
 }
 static __attribute__((unused)) uintptr_t shim_dispatch(MObj *o, void *msg) { return o->custom->cl_Dispatcher.h_Entry(o->custom, o, msg); }
+/* struct MUI_EventHandlerNode as the AROS Zune header defines it (a MinNode, two BYTEs, a UWORD, object, class, IDCMP flags), compiled
+   by the host gcc: the generated C writes it at the offsets of Layout.g.cs (AROS x86-64), so the two must agree. A window's handler
+   list, in the order they were added; MUIM_HandleEvent goes to each handler that wants the event's class until one eats it. */
+struct ShimEhn { void *succ, *pred; int8_t reserved, priority; uint16_t flags; void *object; Class *cls; uint32_t events; };
+static __attribute__((unused)) struct ShimEhn *shim_ehn[16];
+static __attribute__((unused)) int shim_nehn, shim_ehn_added, shim_ehn_removed, shim_events_eaten, shim_events_sent;
+/* The first node each object added: E# keeps one node per object from MUIM_Setup to MUIM_Cleanup and changes its events in place, so a
+   later add of another node by the same object (in one setup: these tests open the window once) means a node was freed and replaced. */
+static __attribute__((unused)) void *shim_ehn_obj[16], *shim_ehn_first[16];
+static __attribute__((unused)) int shim_nehn_obj;
+static __attribute__((unused)) void shim_event(uint32_t cls, uint16_t code, int16_t x, int16_t y)
+{
+    /* An IntuiMessage of AROS x86-64 (Layout.g.cs): Class at 48, Code 52, Qualifier 54, MouseX 64, MouseY 66. */
+    uint8_t im[96] = { 0 };
+    memcpy(im + 48, &cls, 4); memcpy(im + 52, &code, 2); memcpy(im + 64, &x, 2); memcpy(im + 66, &y, 2);
+    uintptr_t m[3] = { 0x80426d66u, (uintptr_t)im, (uintptr_t)(intptr_t)-1 };
+    for (int k = 0; k < shim_nehn; k++)
+    {
+        struct ShimEhn *n = shim_ehn[k];
+        if ((n->events & cls) == 0) continue;
+        shim_events_sent++;
+        if (n->cls->cl_Dispatcher.h_Entry(n->cls, n->object, m) & 1) { shim_events_eaten++; printf("[event %u,%u at %d,%d eaten by handler %d]\n", (unsigned)cls, (unsigned)code, x, y, k); return; }
+    }
+    printf("[event %u,%u at %d,%d not eaten]\n", (unsigned)cls, (unsigned)code, x, y);
+}
 static __attribute__((unused)) void MUI_DisposeObject(void *obj);
 /* The object goes (OM_DISPOSE of the superclass, or MUI_DisposeObject of a plain one): its children first, as MUI does. */
 static __attribute__((unused)) void shim_dispose_raw(MObj *o)
@@ -153,6 +178,7 @@ static __attribute__((destructor)) void shim_report(void)
 {
     printf("[shim: %d made, %d disposed, %d group changes]\n", shim_made, shim_disposed, shim_changes);
     if (shim_draws > 0 || shim_classes != 0) printf("[shim: %d draws, %d redraws, %d classes left]\n", shim_draws, shim_redraws, shim_classes);
+    if (shim_ehn_added > 0) printf("[shim: %d event handlers added, %d removed, %d left; %d events sent, %d eaten]\n", shim_ehn_added, shim_ehn_removed, shim_nehn, shim_events_sent, shim_events_eaten);
 }
 """;
 
@@ -214,7 +240,7 @@ static __attribute__((unused)) void shim_set_raw(MObj *o, const uintptr_t *tags)
     const uintptr_t *t = tags;
     for (; t != NULL && t[0] != 0; t += 2) shim_store(o, t[0], t[1]);
     for (t = tags; t != NULL && t[0] != 0; t += 2) shim_fire(o, t[0], t[1]);
-    for (t = tags; t != NULL && t[0] != 0; t += 2) if (t[0] == 0x80428aa0u) for (int k = 0; k < o->nkids; k++) shim_show_tree(o->kids[k], t[1] != 0);
+    for (t = tags; t != NULL && t[0] != 0; t += 2) if (t[0] == 0x80428aa0u) { shim_mri.wo = o; for (int k = 0; k < o->nkids; k++) shim_show_tree(o->kids[k], t[1] != 0); }
 }
 static inline __attribute__((unused)) uintptr_t SetAttrsA(void *obj, void *tags)
 {
@@ -257,7 +283,36 @@ static __attribute__((unused)) uintptr_t shim_method(MObj *o, uintptr_t *m)
             if (m[5] != 0x8042b96bu || o->nnotes == 16) return 0;
             o->note[o->nnotes][0] = m[1]; o->note[o->nnotes][1] = m[2]; o->note[o->nnotes][2] = m[6]; o->nnotes++;
             return 0;
-        case 0x80423ba6u: *(uint32_t *)m[1] = 0; return shim_quit ? 0xffffffffu : 0;
+        case 0x80423ba6u:                                                                 /* MUIM_Application_NewInput */
+            *(uint32_t *)m[1] = 0;
+            if (getenv("SHIM_EVENTS") && !shim_quit && shim_nehn > 0)
+            {
+                /* A user: a click in the middle of the graphs' contents (the fake lays out every custom object at 10,20 with 2 pixels
+                   of frame: contents from 12,22, 192 x 64), a drag to the right edge, the button up, a click outside, then quit. */
+                shim_event(8, 0x68, 12 + 96, 22 + 32);
+                shim_event(16, 0, 12 + 191, 22 + 32);
+                shim_event(8, 0xe8, 12 + 191, 22 + 32);
+                shim_event(8, 0x68, 2, 2);
+                shim_event(8, 0xe8, 2, 2);
+                shim_event(1024, 0x20, 12, 22);
+                shim_quit = 1;
+            }
+            return shim_quit ? 0xffffffffu : 0;
+        case 0x804203b7u:                                                                 /* MUIM_Window_AddEventHandler */
+            if (o != shim_mri.wo || shim_nehn == 16) { printf("[event handler added to the wrong object]\n"); return 0; }
+            shim_ehn[shim_nehn++] = (struct ShimEhn *)m[1]; shim_ehn_added++;
+            {
+                int j = 0;
+                while (j < shim_nehn_obj && shim_ehn_obj[j] != shim_ehn[shim_nehn - 1]->object) j++;
+                if (j == shim_nehn_obj && j < 16) { shim_ehn_obj[j] = shim_ehn[shim_nehn - 1]->object; shim_ehn_first[j] = (void *)m[1]; shim_nehn_obj++; }
+                else if (j < shim_nehn_obj && shim_ehn_first[j] != (void *)m[1]) printf("[event handler node replaced]\n");
+            }
+            return 0;
+        case 0x8042679eu:                                                                 /* MUIM_Window_RemEventHandler */
+            for (int k = 0; k < shim_nehn; k++)
+                if (shim_ehn[k] == (struct ShimEhn *)m[1]) { for (; k < shim_nehn - 1; k++) shim_ehn[k] = shim_ehn[k + 1]; shim_nehn--; shim_ehn_removed++; return 0; }
+            printf("[unknown event handler removed]\n");
+            return 0;
         case 0x804276efu: shim_quit = 1; return 0;
         case 0x804254d5u: if (o->nitems < 16) o->items[o->nitems++] = strdup((const char *)m[1]); return 0;
         case 0x8042ad89u: for (int i = 0; i < o->nitems; i++) free(o->items[i]); o->nitems = 0; return 0;
@@ -513,6 +568,40 @@ class Box
         Assert.Matches(@"\[gfx: \d+ fills, \d+ lines, \d+ texts\]", output);
     }
 
+    [Fact]
+    public void Muiclass_sample_takes_clicks_and_drags_through_MUIM_HandleEvent_against_the_fake_muimaster()
+    {
+        if (!HasGcc) return;
+        var c = CompileOk(File.ReadAllText(ClassSamplePath), HostC);
+        Environment.SetEnvironmentVariable("SHIM_EVENTS", "1");
+        try
+        {
+            var (code, output) = HasSanitizers ? RunSanitized(c, Shims(), "WAIT", "CLICKS") : RunWithHostGcc(c, Shims(), "WAIT", "CLICKS");
+            Assert.True(code == 0, output);
+            Assert.DoesNotContain("FAIL", output);
+            Assert.Contains("muiclass: all ok\n", output);
+            // Each graph's node added at MUIM_Setup and removed at MUIM_Cleanup (the group asks for no events); the node's fields as the
+            // Zune header has them. The click lands on both graphs' boxes (the fake puts every object at one place): the first handler
+            // eats it, the second never sees it, and the first one asks for mouse moves from inside OnEvent: its node is taken out,
+            // changed and put back (at the end of the list, after the second graph's). Only it gets the move; the button up goes to the
+            // second graph (not dragging, not eaten) and then the first, which eats it and drops the moves (out and back once more).
+            // The click outside and its button up go to both and are not eaten; the raw key is not asked for. Every add is the same node
+            // per object (never freed and replaced while the window is open).
+            Assert.Contains("[shim: 4 event handlers added, 4 removed, 0 left; 8 events sent, 3 eaten]", output);
+            Assert.Contains("[event 8,104 at 108,54 eaten by handler 0]", output);
+            Assert.Contains("[event 16,0 at 203,54 eaten by handler 1]", output);
+            Assert.Contains("[event 8,232 at 203,54 eaten by handler 1]", output);
+            Assert.DoesNotContain("[event handler node replaced]", output);
+            Assert.Contains("[event 8,104 at 2,2 not eaten]", output);
+            Assert.Contains("[event 1024,32 at 12,22 not eaten]", output);
+            Assert.Contains("events: level 100, slider 100, 1 click(s), 1 move(s); other graph 20, 0 click(s)\n", output);
+            Assert.Contains("ok a click reached a graph (MUIM_HandleEvent)\n", output);
+            Assert.DoesNotContain("[event handler added to the wrong object]", output);
+            Assert.DoesNotContain("[unknown event handler removed]", output);
+        }
+        finally { Environment.SetEnvironmentVariable("SHIM_EVENTS", null); }
+    }
+
     private static int Count(string text, string part)
     {
         int n = 0;
@@ -522,7 +611,7 @@ class Box
 
     [Theory]
     [InlineData(false, "muiclass: all ok\n")]
-    [InlineData(true, "events: level 90, 4 draw(s)\n")]
+    [InlineData(true, "events: level 100, slider 100, 1 click(s), 1 move(s); other graph 20, 0 click(s)\n")]
     public void Muiclass_sample_runs_the_same_on_dotnet(bool wait, string expected)
     {
         var src = File.ReadAllText(ClassSamplePath);
