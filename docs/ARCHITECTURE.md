@@ -128,11 +128,14 @@ Tests that need Docker, the OS4 VM or an SDK skip when it is missing (two skip b
 **`esharp test`** (the behaviour of one program on several machines). A program prints `ok NAME` and `FAIL NAME` lines (and
 `skip NAME` for a check that cannot run on this machine). `esharp test <path>` always runs the program on the host with
 `HOST` defined. With `--target m68k --docker` it also builds for m68k and runs it headless in FS-UAE, with `--target os4` it
-boots the AmigaOS 4.1 VM, and with `--target sdl` it runs the SDL build headless. `TestReport` parses the `ok`/`FAIL` lines of both
-runs and compares them by name: a check that is ok on one side and FAIL or missing on the other is a difference, a skipped one
-is not, and the exit code is non-zero on any `FAIL`, crash, build error or difference. The same `--args` line goes to both
-runs. Hosted AROS runs go through `tools/aros-hosted/aros-hosted.sh`, which prints the program's lines (`esharp test` does
-not support `aros` or `morphos` yet).
+boots the AmigaOS 4.1 VM, with `--target aros` or `aros-i386` it boots hosted AROS in the `esharp-aros-hosted` image
+(`ArosHosted.cs`, which carries its own run script so the installed tool needs no checkout), and with `--target sdl` it runs the
+SDL build headless. `TestReport` parses the `ok`/`FAIL` lines of both runs and compares them by name: a check that is ok on one
+side and FAIL or missing on the other is a difference, a skipped one is not. `TestReport.Judge` adds the target program's return
+code (each runner records the shell's `RC` after the program: an `RC` file on m68k and AROS, a marker line on the os4 debug
+port) and, on AROS, the `Trap` lines of the debug log. The exit code is non-zero on any `FAIL`, crash, trap, build error,
+difference, or a non-zero target return code when the host returned 0. The same `--args` line goes to both runs. morphos has
+no runner; `tools/aros-hosted/aros-hosted.sh` remains for AROS screenshots, input and Wanderer runs.
 
 This is why samples are written as lists of checks: the host run is the reference, and the target run has to agree with it.
 CI runs the unit tests on Linux and Windows, a package round trip, the toolchain image smoke test and the `sdl` target

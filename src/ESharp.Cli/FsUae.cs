@@ -12,7 +12,7 @@ namespace ESharp.Cli;
 /// </summary>
 internal static class FsUae
 {
-    public static int Run(string exe, bool headless, TimeSpan timeout, string? kickstart, string model = "A1200", string? fsuaePath = null, string? screenshot = null, string? input = null, string? serial = null, string? programArgs = null, string? muiDrawer = null, string? workbench = null)
+    public static int Run(string exe, bool headless, TimeSpan timeout, string? kickstart, string model = "A1200", string? fsuaePath = null, string? screenshot = null, string? input = null, string? serial = null, string? programArgs = null, string? muiDrawer = null, string? workbench = null, RunInfo? info = null)
     {
         var name = Path.GetFileName(exe);
         var runDir = Path.Combine(Path.GetDirectoryName(Path.GetFullPath(exe))!, "run");
@@ -28,9 +28,7 @@ internal static class FsUae
         if (Os4Vm.ProgramArgsError(programArgs) is { } argsError) { Console.Error.WriteLine($"esharp: {argsError}"); return 1; }
         var line = string.IsNullOrWhiteSpace(programArgs) ? "" : " " + programArgs.Trim();
         var pre = muiDrawer == null ? "" : string.Concat(Mui.StartupLines(IconStackSize(exe)).Select(l => l + "\n"));
-        File.WriteAllText(Path.Combine(dh0, "S", "Startup-sequence"), pre + (headless
-            ? $"dh0:{name} >dh0:out.txt{line}\necho done >dh0:done\n"
-            : $"dh0:{name}{line}\n"));
+        File.WriteAllText(Path.Combine(dh0, "S", "Startup-sequence"), pre + (headless ? HeadlessLines(name, line) : $"dh0:{name}{line}\n"));
 
         var config = Path.Combine(runDir, "run.fs-uae");
         File.WriteAllText(config,
@@ -112,6 +110,10 @@ internal static class FsUae
                 var outFile = Path.Combine(dh0, "out.txt");
                 if (File.Exists(outFile)) Console.Out.Write(File.ReadAllText(outFile));
                 PrintSerial(serial);
+                var rcFile = Path.Combine(dh0, "rc.txt");
+                var programRc = ArosHosted.ParseReturnCode(File.Exists(rcFile) ? File.ReadAllText(rcFile) : null);
+                if (info != null) info.ReturnCode = programRc;
+                else if (programRc is { } nonZero and not 0) Console.Error.WriteLine($"esharp: the program returned {nonZero}");
                 return 0;
             }
         }
@@ -121,6 +123,17 @@ internal static class FsUae
             xvfb?.Dispose();
         }
     }
+
+    /// <summary>
+    /// The headless S:Startup-sequence after any MUI lines: the program with its output in a file, the shell's RC in rc.txt, then the
+    /// done marker the host waits for. FailAt goes up first, so that a return code of 10 or more (the default limit) does not end
+    /// the script before the marker. The redirection goes right after the command name, before the program's own arguments.
+    /// </summary>
+    public static string HeadlessLines(string name, string argsLine = "") =>
+        "FailAt 1000000\n" +
+        $"dh0:{name} >dh0:out.txt{argsLine}\n" +
+        "echo >dh0:rc.txt \"RC $RC\"\n" +
+        "echo done >dh0:done\n";
 
     /// <summary>The stack size in the icon the build wrote next to the program (EsStackSize), or the default without one.</summary>
     internal static int IconStackSize(string exe)

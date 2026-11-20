@@ -26,8 +26,8 @@ Usage:
   esharp addr <exe | dir> <hunk> <hex offset> [--docker [image]]
                                     Map a crash address of a built m68k program to the C# file:line (see docs/DEBUGGING.md)
   esharp test [path] [options]      Run the project on the host; with --target m68k --docker also on the Amiga (or
-                                    --target os4 --docker also in the AmigaOS 4.1 VM, or --target sdl --docker also
-                                    through SDL, headless), and compare
+                                    --target os4 --docker also in the AmigaOS 4.1 VM, --target aros or aros-i386 also on
+                                    hosted AROS in Docker, or --target sdl --docker also through SDL, headless), and compare
   esharp os4vm check|start|install-hook|remove-hook [options]
                                     Helpers for the AmigaOS 4.1 QEMU VM in ESHARP_OS4_VM (python3; see the README.md
                                     in the os4vm folder next to esharp.dll)
@@ -78,8 +78,13 @@ Test options (esharp test; a program prints ""ok NAME"" / ""FAIL NAME"" lines):
   With --target os4 it builds for os4 and boots the AmigaOS 4.1 VM in ESHARP_OS4_VM (QEMU pegasos2, on a throwaway
   overlay, unattended; tools/os4vm/README.md) and compares the same way; --timeout covers the boot (about 10 s).
   With --target sdl it builds for sdl and runs it headless (in the --docker image if given) and compares the same way.
+  With --target aros or aros-i386 it builds for that target (--docker: the toolchain image) and boots hosted AROS headless
+  in the esharp-aros-hosted (or esharp-aros-hosted-i386) image, built from docker/aros-hosted in the E# repository;
+  --aros-image <image> names another. A ""Trap"" line in AROS's debug output counts as a failure.
+  The target program's return code is shown (m68k, os4, aros: the shell's RC after it; sdl: the exit code) and fails
+  the test when it is non-zero while the host returned 0. morphos has no runner.
   --args ""<line>"" gives the same argument line to the host run and the target run (split at spaces, ""quoted text"" kept).
-  Exit code is non-zero on any FAIL, crash, build error or host/Amiga difference.
+  Exit code is non-zero on any FAIL, crash, build error, host/target difference or non-zero target return code.
 
 Targets:
 " + string.Join("\n", Targets.All.Select(t => $"  {t.Name,-10} {t.Description}")) + "\n";
@@ -123,6 +128,8 @@ Targets:
         string model = "A1200";
         string? fsuae = null;
         bool amiga = false, sdl = false, os4 = false;
+        TargetInfo? aros = null;           // aros or aros-i386: hosted AROS in Docker
+        string? arosImage = null;
         var amigaOnly = new List<string>();   // options that only matter with --target m68k
         string path = ".";
         string? programArgs = null;
@@ -139,12 +146,13 @@ Targets:
                 case "--kickstart" when i + 1 < args.Length: amigaOnly.Add("--kickstart"); kickstart = args[++i]; break;
                 case "--model" when i + 1 < args.Length: amigaOnly.Add("--model"); model = args[++i]; break;
                 case "--fsuae" when i + 1 < args.Length: amigaOnly.Add("--fsuae"); fsuae = args[++i]; break;
+                case "--aros-image" when i + 1 < args.Length: arosImage = args[++i]; break;
                 case "--target" when i + 1 < args.Length:
                     var t = args[++i];
-                    if (t != "m68k" && t != "sdl" && t != "os4")
-                        return Fail("test runs on the host, and with --target m68k also in FS-UAE, with --target os4 also in the AmigaOS 4.1 VM (ESHARP_OS4_VM) or with --target sdl also through SDL (headless); other targets are not supported");
-                    if (t == "m68k") amiga = true; else if (t == "os4") os4 = true; else sdl = true;
-                    if ((amiga ? 1 : 0) + (sdl ? 1 : 0) + (os4 ? 1 : 0) > 1) return Fail("test takes one --target");
+                    if (TestTargetError(t) is { } targetError) return Fail(targetError);
+                    if ((amiga || sdl || os4 || aros != null)) return Fail("test takes one --target");
+                    if (t == "m68k") amiga = true; else if (t == "os4") os4 = true; else if (t == "sdl") sdl = true;
+                    else aros = Targets.Find(t);
                     buildArgs.Add("--target"); buildArgs.Add(t);
                     break;
                 case "--docker":
@@ -161,17 +169,18 @@ Targets:
         }
 
         if (Os4Vm.ProgramArgsError(programArgs) is { } testArgsError) return Fail(testArgsError);
-        if ((muiOption ?? workbenchOption) != null && (sdl || os4)) return Fail(MuiTargetError(sdl ? "sdl" : "os4"));
+        if ((muiOption ?? workbenchOption) != null && (sdl || os4 || aros != null)) return Fail(MuiTargetError(sdl ? "sdl" : os4 ? "os4" : aros!.Name));
+        if (arosImage != null && aros == null) return Fail("--aros-image is for --target aros or aros-i386 (the hosted AROS image to run in)");
         string? muiDrawer = null, workbench = null;
         if (amiga && MuiDrawer(muiOption, workbenchOption, out muiDrawer, out workbench) is { } testMuiError) return Fail(testMuiError);
         if (SyncAssets(path) is { } assetError) return Fail(assetError);
 
         var files = CollectSources(path);
         if (files.Count == 0) return Fail($"no .cs files found in '{path}'");
-        if (sdl || os4) amigaOnly.RemoveAll(o => o == "--docker");
+        if (sdl || os4 || aros != null) amigaOnly.RemoveAll(o => o == "--docker");
         if (!amiga && amigaOnly.Count > 0)
             Console.Error.WriteLine($"esharp: warning: {string.Join(", ", amigaOnly.Distinct())} ignored, because " +
-                (sdl || os4 ? "they only matter for --target m68k" : "the test only runs on the host; add --target m68k to also run in FS-UAE"));
+                (sdl || os4 || aros != null ? "they only matter for --target m68k" : "the test only runs on the host; add --target m68k to also run in FS-UAE"));
         var repo = SourceTree.HostSide();
         if (repo == null) return Fail("cannot find the E# host libraries (the host folder next to esharp.dll) or an E# source tree; reinstall AmigaESharp.Tool or set ESHARP_ROOT to a checkout");
         var baseDir = Directory.Exists(path) ? path : Path.GetDirectoryName(Path.GetFullPath(path)) ?? ".";
@@ -201,22 +210,13 @@ Targets:
             var captured = new StringWriter();
             var saved = Console.Out;
             int runRc;
+            var info = new RunInfo();
             Console.SetOut(captured);
-            try { runRc = FsUae.Run(exe, true, TimeSpan.FromSeconds(timeout), kickstart, model, fsuae, null, null, null, programArgs, muiDrawer, workbench); }
+            try { runRc = FsUae.Run(exe, true, TimeSpan.FromSeconds(timeout), kickstart, model, fsuae, null, null, null, programArgs, muiDrawer, workbench, info); }
             finally { Console.SetOut(saved); }
             Console.Write(captured.ToString());
             if (runRc != 0) return Fail("the Amiga run failed (see above)");
-            var amigaReport = TestReport.Parse(captured.ToString());
-            Console.WriteLine($"Amiga: {amigaReport.Summary}");
-            if (amigaReport.Failed > 0) failed = true;
-            var diffs = TestReport.Compare(hostReport, amigaReport);
-            if (diffs.Count == 0) Console.WriteLine("Host and Amiga agree on every check.");
-            else
-            {
-                Console.WriteLine($"{diffs.Count} difference(s) between host and Amiga:");
-                foreach (var d in diffs) Console.WriteLine("  " + d);
-                failed = true;
-            }
+            if (!CompareWithHost(hostReport, host.Exit, TestReport.Parse(captured.ToString()), "Amiga", info.ReturnCode)) failed = true;
         }
 
         if (os4)
@@ -225,19 +225,23 @@ Targets:
             buildArgs.Insert(0, path);
             var rc = Build(buildArgs.ToArray(), out var exe);
             if (rc != 0 || exe == null) return Fail("os4 build failed");
-            var (exit, output) = Os4Vm.Run(exe, TimeSpan.FromSeconds(timeout), DockerImage(buildArgs, Targets.Os4), null, programArgs: programArgs);
+            var info = new RunInfo();
+            var (exit, output) = Os4Vm.Run(exe, TimeSpan.FromSeconds(timeout), DockerImage(buildArgs, Targets.Os4), null, programArgs: programArgs, info: info);
             if (exit != 0) return Fail("the os4 run failed (see above)");
-            var os4Report = TestReport.Parse(output);
-            Console.WriteLine($"OS4: {os4Report.Summary}");
-            if (os4Report.Failed > 0) failed = true;
-            var diffs = TestReport.Compare(hostReport, os4Report, "OS4");
-            if (diffs.Count == 0) Console.WriteLine("Host and OS4 agree on every check.");
-            else
-            {
-                Console.WriteLine($"{diffs.Count} difference(s) between host and OS4:");
-                foreach (var d in diffs) Console.WriteLine("  " + d);
-                failed = true;
-            }
+            if (!CompareWithHost(hostReport, host.Exit, TestReport.Parse(output), "OS4", info.ReturnCode)) failed = true;
+        }
+
+        if (aros != null)
+        {
+            var image = arosImage ?? ArosHosted.DefaultImage(aros);
+            Console.WriteLine($"\nAROS ({aros.Name}, hosted {ArosHosted.Arch(aros)} in {image}):");
+            buildArgs.Insert(0, path);
+            var rc = Build(buildArgs.ToArray(), out var exe);
+            if (rc != 0 || exe == null) return Fail($"{aros.Name} build failed");
+            var run = ArosHosted.Run(exe, aros, TimeSpan.FromSeconds(timeout), image, programArgs);
+            Console.Write(run.Output);
+            if (run.Exit != 0) return Fail("the hosted AROS run failed (see above)");
+            if (!CompareWithHost(hostReport, host.Exit, TestReport.Parse(run.Output), "AROS", run.ReturnCode, run.Traps)) failed = true;
         }
 
         if (sdl)
@@ -248,21 +252,29 @@ Targets:
             if (rc != 0 || exe == null) return Fail("sdl build failed");
             var (exit, output) = SdlRun.Run(exe, true, TimeSpan.FromSeconds(timeout), DockerImage(buildArgs, Targets.Sdl), null, null,
                 programArgs: programArgs == null ? null : SdlRun.SplitCommandLine(programArgs));
-            var sdlReport = TestReport.Parse(output);
-            Console.WriteLine($"SDL: {sdlReport.Summary}" + (exit != 0 ? $", exit code {exit} (crash or error)" : ""));
-            if (exit != 0 || sdlReport.Failed > 0) failed = true;
-            var diffs = TestReport.Compare(hostReport, sdlReport, "SDL");
-            if (diffs.Count == 0) Console.WriteLine("Host and SDL agree on every check.");
-            else
-            {
-                Console.WriteLine($"{diffs.Count} difference(s) between host and SDL:");
-                foreach (var d in diffs) Console.WriteLine("  " + d);
-                failed = true;
-            }
+            if (!CompareWithHost(hostReport, host.Exit, TestReport.Parse(output), "SDL", exit)) failed = true;
         }
 
         Console.WriteLine(failed ? "TEST FAILED" : "TEST PASSED");
         return failed ? 1 : 0;
+    }
+
+    /// <summary>Why <c>esharp test --target t</c> cannot run, or null for a target it runs on.</summary>
+    internal static string? TestTargetError(string target) => target switch
+    {
+        "m68k" or "os4" or "sdl" or "aros" or "aros-i386" => null,
+        "morphos" => "no runner for morphos: esharp test cannot run MorphOS programs yet (no emulator or VM harness); " +
+                     "build them with esharp build --target morphos --docker <image> and run them on a MorphOS machine",
+        _ => $"test runs on the host, and with --target m68k also in FS-UAE, os4 in the AmigaOS 4.1 VM (ESHARP_OS4_VM), aros or aros-i386 " +
+             $"on hosted AROS in Docker (esharp-aros-hosted images) or sdl through SDL (headless); not '{target}'",
+    };
+
+    /// <summary>Prints the target's summary and the differences from the host; false when the target side fails the test.</summary>
+    private static bool CompareWithHost(TestReport hostReport, int hostExit, TestReport target, string label, int? returnCode, int? traps = null)
+    {
+        var verdict = TestReport.Judge(hostReport, hostExit, target, label, returnCode, traps);
+        foreach (var line in verdict.Lines) Console.WriteLine(line);
+        return verdict.Ok;
     }
 
     private static int New(string[] args)
@@ -623,7 +635,8 @@ Targets:
             return exit;
         }
         if (targetName != "m68k")
-            return Fail("run uses FS-UAE, which emulates 68k Amigas only, an AmigaOS 4.1 QEMU VM (--target os4, ESHARP_OS4_VM), or SDL on this machine; use --target m68k, os4 or sdl");
+            return Fail("run uses FS-UAE, which emulates 68k Amigas only, an AmigaOS 4.1 QEMU VM (--target os4, ESHARP_OS4_VM), or SDL on this machine; use --target m68k, os4 or sdl" +
+                (targetName is "aros" or "aros-i386" ? " (AROS: esharp test --target " + targetName + " runs it on hosted AROS; tools/aros-hosted/aros-hosted.sh in the E# repository adds screenshots and input)" : ""));
 
         if (kickstart != null)
         {

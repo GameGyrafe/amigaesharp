@@ -203,12 +203,20 @@ esharp test samples/language                                  # on the host: ok/
 esharp test samples/objects --target m68k --docker <image> --kickstart <rom>   # host and FS-UAE, compared
 esharp test samples/linq --target os4 --docker esharp-amiga-toolchain          # host and the AmigaOS 4.1 VM (ESHARP_OS4_VM)
 esharp test samples/language --target sdl --docker esharp-sdl                  # host and SDL (headless in the image)
+esharp test samples/language --target aros --docker esharp-amiga-toolchain     # host and hosted AROS x86-64 (esharp-aros-hosted image)
+esharp test samples/language --target aros-i386 --docker esharp-aros-i386      # host and hosted AROS i386 (esharp-aros-hosted-i386 image)
+esharp test samples/retcode --target m68k --docker <image> --args TARGETRC=5   # fails on purpose: the target returns 5, the host 0
 esharp run samples/cards --target sdl --docker esharp-sdl                      # a window on this desktop (no --headless)
 tools/aros-hosted/aros-hosted.sh cards --docker esharp-aros-hosted --shot shot.png --input "click 400,300"   # hosted AROS (needs a --target aros build)
 ```
 
 - `--args "SEED=42 auto"` gives the same argument line to the program (`Args.Count`, `Args.Get`, `Args.Value`); `esharp test`
   passes it to both the host and the target run.
+- `esharp test` also shows the target program's return code (m68k, os4 and AROS: the shell's `RC` after the program; sdl: the
+  exit code) and fails when it is non-zero while the host returned 0. On hosted AROS a `Trap` line in AROS's debug output is a
+  failure too. `--target aros` and `aros-i386` boot hosted AROS headless in the `esharp-aros-hosted` / `esharp-aros-hosted-i386`
+  image (built from `docker/aros-hosted` in the repository; `--aros-image <image>` names another); `--docker` is the build's
+  toolchain image as usual. `--target morphos` says there is no runner yet.
 - `--input` scripts: `click X,Y;key 9;key 50+38` with display pixels and X11 key codes (`+` holds keys; needs libXtst),
   `rel DX,DY` moves, `press` clicks where the pointer is, `down`/`up` hold and release (a drag). On `os4` the QEMU monitor sends
   the input and `key N` is an Amiga raw code; on `sdl` the program replays the script itself, with X,Y in its own screen pixels.
@@ -330,7 +338,7 @@ arrays. A source-level debugger for the Amiga build is open (issue #14). See [DE
 esharp new <name> [--source [dir] | --package [version]]   new hello-world project (csproj, .vscode)
 esharp build [path] [options]      check the subset, emit C, run the target C compiler
 esharp run [path] [options]        build and run (m68k in FS-UAE, os4 in the VM, sdl on the desktop)
-esharp test [path] [options]       run on the host; with --target m68k|os4|sdl also on the target, and compare
+esharp test [path] [options]       run on the host; with --target m68k|os4|aros|aros-i386|sdl also on the target, and compare
 esharp assets [dir|assets.json] [--force]   PNG, ILBM and WAV to Assets.g.cs
 esharp addr <exe | dir> <hunk> <hex offset> [--docker [image]]   crash address to C# file:line
 esharp os4vm check|start|install-hook|remove-hook   AmigaOS 4.1 QEMU VM helpers
