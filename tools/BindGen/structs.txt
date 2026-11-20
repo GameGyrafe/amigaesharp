@@ -1,5 +1,7 @@
 # Struct offsets E# reads directly (our own list: names of fields, no header text).
 # Lines: "include <header>", "Name = struct.field.path" (offsetof), "Name = sizeof struct" or "Name = value MACRO" (a constant).
+# "zune NAME": struct NAME is taken from the AROS Zune libraries/mui.h (--zune; tools/BindGen/layouts.sh reads it from the AROS
+# image) and measured with every target's compiler; no target's own MUI header is used.
 # Measured with the target's own C compiler: tools/BindGen offsets (see docs/BINDINGS_SPIKE.md).
 include exec/io.h
 include exec/execbase.h
@@ -289,3 +291,17 @@ FrameRidge = value FRAME_RIDGE
 IdcmpIdcmpUpdate = value IDCMP_IDCMPUPDATE
 SghKey = value SGH_KEY
 SghClick = value SGH_CLICK
+
+# MUI custom classes: input events (src/ESharp.Platform/MuiCustom.cs). The node's definition comes from the AROS Zune header.
+zune MUI_EventHandlerNode
+EhnSize = sizeof MUI_EventHandlerNode
+EhnPriority = MUI_EventHandlerNode.ehn_Priority
+EhnFlags = MUI_EventHandlerNode.ehn_Flags
+EhnObject = MUI_EventHandlerNode.ehn_Object
+EhnClass = MUI_EventHandlerNode.ehn_Class
+EhnEvents = MUI_EventHandlerNode.ehn_Events
+IdcmpMouseButtons = value IDCMP_MOUSEBUTTONS
+IdcmpMouseMove = value IDCMP_MOUSEMOVE
+IdcmpRawKey = value IDCMP_RAWKEY
+SelectDown = value SELECTDOWN
+SelectUp = value SELECTUP

@@ -271,10 +271,32 @@ sealed unsafe class Meter : MuiArea
 slider.OnValueChanged(v => meter.Set(Meter.Level, v));
 ```
 
-`OnAskMinMax` sizes are added to the superclass's (frame, spacing); `OnDraw` coordinates are relative to the contents box and clipped to
-the object; `OnSetup`/`OnCleanup` and `OnMethod` (your own methods, sent with `DoMethod`) are there too. MUI calls them on the program's
-own task, so they may allocate and print. One MUI class per superclass serves every such C# class; it is made with the first object and
-deleted after the last. Mouse and key input in a custom class is not wrapped yet.
+`OnAskMinMax` sizes are added to the superclass's (frame, spacing). `OnDraw` coordinates are relative to the contents box; `Fill` is
+clipped to the object's box, `Line` moves both of its ends into the box (a diagonal line that leaves it comes out at another angle), and
+`Text` is not clipped at all (keep it short) and leaves the object's font and JAM1 set in MUI's rast port. `OnSetup`/`OnCleanup` and
+`OnMethod` (your own methods, sent with `DoMethod`) are there too. `OnSet` also sees the starting attributes, before the wrapper has its
+MUI object: `Set`, `Get` and `Redraw` on the object itself do nothing at that point. MUI calls these on the program's own task, so they
+may allocate and print. One MUI class per superclass serves every such C# class; it is made with the first object and deleted after the
+last.
+
+For mouse and key input the class names the IDCMP classes it wants and overrides `OnEvent` (MUIM_HandleEvent; MUI's event handler node
+is added to the window at setup and removed at cleanup). The mouse position is relative to the contents box; returning true eats the
+event, so no other handler sees it:
+
+```csharp
+public Meter() { WantEvents(MuiEvent.MouseButtons | MuiEvent.MouseMove); }
+
+protected override bool OnEvent(MuiEvent e)
+{
+    if (e.Class == MuiEvent.MouseButtons && e.Code == MuiEvent.SelectDown && e.Inside) { _drag = true; Set(Level, e.MouseX * 100 / e.Width); return true; }
+    if (e.Class == MuiEvent.MouseButtons && e.Code == MuiEvent.SelectUp && _drag) { _drag = false; return true; }
+    if (e.Class == MuiEvent.MouseMove && _drag) { Set(Level, e.MouseX * 100 / e.Width); return true; }
+    return false;
+}
+```
+
+Every wanted event in the window arrives while the object is shown, wherever the mouse is: check `e.Inside`. On the host,
+`HostEvent(class, code, qualifier, x, y)` sends one to a shown object, for tests.
 
 In FS-UAE (m68k only) `--mui 3.8|5` mounts MUI from a per-user cache and `--workbench <Workbench 3.x disk 2 .adf>` (your own
 disk, mounted read-only for `C:` and the system libraries; or `ESHARP_MUI`, `ESHARP_WORKBENCH`):

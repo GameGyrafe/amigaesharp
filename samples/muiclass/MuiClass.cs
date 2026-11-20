@@ -4,9 +4,10 @@ using ESharp.Platform;
 namespace MuiClassSample;
 
 /// <summary>
-/// A MUI custom class written in C# (issue #93): a bar graph derived from <see cref="MuiArea"/> (Area.mui) whose size (MUIM_AskMinMax)
-/// and drawing (MUIM_Draw) are C#, with an attribute of its own (<see cref="Level"/>, OM_SET/OM_GET) and a method of its own
-/// (<see cref="Reset"/>). Setting the attribute redraws the graph.
+/// A MUI custom class written in C# (issues #93, #114): a bar graph derived from <see cref="MuiArea"/> (Area.mui) whose size
+/// (MUIM_AskMinMax) and drawing (MUIM_Draw) are C#, with an attribute of its own (<see cref="Level"/>, OM_SET/OM_GET), a method of its
+/// own (<see cref="Reset"/>) and mouse input (MUIM_HandleEvent): a click or a drag on the graph sets the level from the mouse's
+/// position, left 0 to right 100. Setting the attribute redraws the graph.
 /// </summary>
 public sealed unsafe class BarGraph : MuiArea
 {
@@ -17,12 +18,50 @@ public sealed unsafe class BarGraph : MuiArea
     public const uint Reset = 0x8E5A0101;
 
     private int _level;
-    public int Setups, Cleanups, SizeAsks, Draws, Sets;
+    private bool _dragging;
+    public int Setups, Cleanups, SizeAsks, Draws, Sets, Clicks, Moves;
 
     public BarGraph(int level)
     {
         Frame = MuiFrame.Text;
         Init(Level, level);
+        WantEvents(MuiEvent.MouseButtons | MuiEvent.MouseMove);
+    }
+
+    // The left button down on the graph sets the level and starts a drag; moves while it is held set it again; up ends the drag.
+    // Events elsewhere in the window are left to the other handlers (false).
+    protected override bool OnEvent(MuiEvent e)
+    {
+        if (e.Class == MuiEvent.MouseButtons)
+        {
+            if (e.Code == MuiEvent.SelectDown && e.Inside)
+            {
+                _dragging = true;
+                Clicks++;
+                LevelAt(e);
+                return true;
+            }
+            if (e.Code == MuiEvent.SelectUp && _dragging)
+            {
+                _dragging = false;
+                return true;
+            }
+            return false;
+        }
+        if (e.Class == MuiEvent.MouseMove && _dragging)
+        {
+            Moves++;
+            LevelAt(e);
+            return true;
+        }
+        return false;
+    }
+
+    private void LevelAt(MuiEvent e)
+    {
+        int x = e.MouseX < 0 ? 0 : e.MouseX >= e.Width ? e.Width - 1 : e.MouseX;
+        int v = e.Width > 1 ? x * 100 / (e.Width - 1) : 0;
+        if (v != _level) Set(Level, v);   // through OM_SET, so the notifications (the slider) follow
     }
 
     protected override bool OnSetup()
@@ -135,7 +174,9 @@ public sealed unsafe class Panel : MuiCustomGroup
 /// Two bar graphs (one Area class for both) in a custom group, a slider whose notification sets the first graph's level and the group's
 /// mark, and checks of the class's life: made once with the first object, objects made and disposed through the dispatcher (OM_NEW,
 /// OM_DISPOSE), setup, size and draw called, the own attribute's round trip and notification, the own method, and the classes deleted
-/// after the application. Without arguments the window stays up for two seconds; with WAIT it runs until closed (or Quit).
+/// after the application. Without arguments the window stays up for two seconds; with WAIT it runs until closed (or Quit): click or drag on
+/// a graph to set its level (the first graph's slider follows). WAIT CLICKS (scripted runs with --input) also checks that a click reached a
+/// graph.
 /// </summary>
 public static unsafe class Program
 {
@@ -197,10 +238,16 @@ public static unsafe class Program
 
         int seen = -1;
         int notes = 0;
-        bar.WhenChanged(BarGraph.Level, v => { seen = v; notes++; });
+        // The graph and the slider follow each other: each sets the other only when it differs, so the notifications stop.
+        bar.WhenChanged(BarGraph.Level, v =>
+        {
+            seen = v;
+            notes++;
+            if (slider.Value != v) slider.Value = v;
+        });
         slider.OnValueChanged(v =>
         {
-            bar.Set(BarGraph.Level, v);
+            if (bar.Get(BarGraph.Level) != v) bar.Set(BarGraph.Level, v);
             panel.Set(Panel.Mark, v);
             status.Text = $"Level {v}";
         });
@@ -212,6 +259,7 @@ public static unsafe class Program
         Check(bar.Get(BarGraph.Level) == 55 && bar.Sets == sets + 1, "the own attribute's round trip (OM_SET, OM_GET)");
         Check(bar.Draws > before, "setting it redrew the graph");
         Check(seen == 55 && notes == 1, "a notification on the own attribute fired");
+        Check(slider.Value == 55 && panel.Get(Panel.Mark) == 55, "and the slider followed the graph (and the group's mark the slider)");
         before = bar.Draws;
         int panelDraws = panel.Draws;
         slider.Value = 70;
@@ -224,13 +272,23 @@ public static unsafe class Program
         if (wait)
         {
 #if !AMIGA
-            slider.Value = 90;
+            // Host: what a user would do: a click at the middle of the first graph, a drag to its right edge, the button up (MUI would
+            // send these to each graph's handler: the second one is not under the mouse and leaves them), then Quit.
+            int h = 32;
+            bool ate = bar.HostEvent(MuiEvent.MouseButtons, MuiEvent.SelectDown, 0, 96, h);
+            ate = ate && !other.HostEvent(MuiEvent.MouseButtons, MuiEvent.SelectDown, 0, 96 + 200, h);
+            ate = ate && bar.HostEvent(MuiEvent.MouseMove, 0, 0, 191, h) && !other.HostEvent(MuiEvent.MouseMove, 0, 0, 191 + 200, h);
+            ate = ate && bar.HostEvent(MuiEvent.MouseButtons, MuiEvent.SelectUp, 0, 191, h);
+            Check(ate, "host: the graph under the mouse ate the click and the drag, the other one did not");
             quit.HostPress();
 #endif
             Dos.PutStr("SHOT\n");
             Dos.FlushOutput();
             app.Run();
-            Dos.PutStr($"events: level {bar.Get(BarGraph.Level)}, {bar.Draws} draw(s)\n");
+            int level = bar.Get(BarGraph.Level);
+            Dos.PutStr($"events: level {level}, slider {slider.Value}, {bar.Clicks} click(s), {bar.Moves} move(s); other graph {other.Get(BarGraph.Level)}, {other.Clicks} click(s)\n");
+            Check(slider.Value == level, "the slider follows the graph's level");
+            if (Args.Has("CLICKS")) Check(bar.Clicks + other.Clicks > 0, "a click reached a graph (MUIM_HandleEvent)");   // scripted runs
         }
         else
         {

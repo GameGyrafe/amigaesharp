@@ -171,6 +171,8 @@ public class Os4VmTests
         Assert.All(moves, m => Assert.InRange(int.Parse(m[1]), -Os4Input.Chunk, Os4Input.Chunk));
         var rest = steps.Skip(moves.Count).ToList();
         Assert.Equal(new[] { "mouse_button 1", "mouse_button 0", "mouse_move -5 3", "mouse_button 1", "mouse_button 0", "sendkey esc", "sendkey shift-a" }, rest);
+        // down, moves, up: a drag
+        Assert.Equal(new[] { "mouse_button 1", "mouse_move 10 0", "mouse_button 0" }, Os4Input.Translate("down;rel 10,0;up").Select(x => x.Command).ToArray());
         Assert.Throws<FormatException>(() => Os4Input.Translate("wiggle 1,2"));
         Assert.Throws<FormatException>(() => Os4Input.Translate("key 255"));   // no such Amiga raw code
         Assert.Throws<FormatException>(() => Os4Input.Translate("click 5"));

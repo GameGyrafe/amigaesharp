@@ -14,8 +14,9 @@ using System.Text;
 //   bindgen check <sdk-include-or-fd-dir> <ESharp.Platform dir> [lib...] [--include <dir>]
 //                                   the same comparison for every library we bind (types only with prototypes)
 //   bindgen facts <sdk-include-or-fd-dir> <lib>                         list name, vector, first version
-//   bindgen offsets <spec> <target> --docker <image> | --cc <compiler> [--cflags "..."]
-//                                   measure struct offsets with the target's C compiler
+//   bindgen offsets <spec> <target> --docker <image> | --cc <compiler> [--cflags "..."] [--zune <AROS libraries/mui.h>]
+//                                   measure struct offsets with the target's C compiler (MUI structs: "zune NAME" lines,
+//                                   the struct's definition read from the AROS Zune header)
 //   bindgen layout <aros-offsets.txt> <aros-i386-offsets.txt> <m68k-offsets.txt> [out.cs]   write Layout.g.cs from three measured lists
 //   bindgen compare <sdk-include-dir> <fd-dir> <lib...>                 where the AROS headers and the classic fd files disagree
 //

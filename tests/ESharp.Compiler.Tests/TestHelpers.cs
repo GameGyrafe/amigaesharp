@@ -84,8 +84,8 @@ public static class P
     public static (int exitCode, string output) RunSanitized(string c) => RunWithHostGccFlags(c, "-fsanitize=address,undefined -fno-sanitize-recover=all -g", null);
 
     /// <summary><see cref="RunSanitized(string)"/> with extra headers (relative path to text), as for <see cref="RunWithHostGcc"/>.</summary>
-    public static (int exitCode, string output) RunSanitized(string c, System.Collections.Generic.IReadOnlyDictionary<string, string> extraHeaders) =>
-        RunWithHostGccFlags(c, "-fsanitize=address,undefined -fno-sanitize-recover=all -g", extraHeaders);
+    public static (int exitCode, string output) RunSanitized(string c, System.Collections.Generic.IReadOnlyDictionary<string, string> extraHeaders, params string[] programArgs) =>
+        RunWithHostGccFlags(c, "-fsanitize=address,undefined -fno-sanitize-recover=all -g", extraHeaders, programArgs);
 
     private static (int exitCode, string output) RunWithHostGccFlags(string c, string flags, System.Collections.Generic.IReadOnlyDictionary<string, string>? extraHeaders, params string[] programArgs)
     {

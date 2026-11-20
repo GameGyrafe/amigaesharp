@@ -4,8 +4,8 @@ using System;
 
 namespace ESharp.Platform;
 
-// MUI custom classes (issue #93). MUI facts (method numbers, message layouts, struct MUI_CustomClass, MUI_MinMax, the render info and
-// the area data) are taken from the AROS Zune headers; the muimaster.library vectors from the AROS fd file.
+// MUI custom classes (issues #93, #114). MUI facts (method numbers, message layouts, struct MUI_CustomClass, MUI_MinMax, the render info, the area data and
+// the event handler node) are taken from the AROS Zune headers; the muimaster.library vectors from the AROS fd file.
 
 /// <summary>
 /// A MUI object whose class is written in C#: a subclass of Area.mui. Derive from it and override the members MUI calls
@@ -25,8 +25,9 @@ namespace ESharp.Platform;
 /// One MUI class (MUI_CreateCustomClass on Area.mui) serves every C# class derived from MuiArea: it is made with the first object and
 /// deleted after the last one is disposed. Its dispatcher finds the C# object through the instance data and calls the virtual members
 /// above, on the program's own task (inside the application's input handling, or inside the call that sent the method), so they may
-/// allocate, print and set attributes; disposing MUI objects in them is refused, as in a notification handler. Input events
-/// (MUIM_HandleEvent) are not wrapped yet.
+/// allocate, print and set attributes; disposing MUI objects in them is refused, as in a notification handler. For mouse and key input
+/// the class calls <c>WantEvents</c> with the IDCMP classes it wants (<see cref="MuiEvent.MouseButtons"/>, ...) and overrides
+/// <c>OnEvent</c> (MUIM_HandleEvent); see <see cref="MuiEvent"/>.
 /// </summary>
 [Extensible]
 public unsafe class MuiArea : MuiObject
@@ -77,6 +78,55 @@ public struct MuiMinMax
     private static int Clamp(int v) { return v < 0 ? 0 : v > Unlimited ? Unlimited : v; }
 }
 
+/// <summary>
+/// An input event for a custom class (MUIM_HandleEvent): the IntuiMessage's class, code and qualifier, and the mouse position relative
+/// to the object's contents box (the top left corner inside its frame, as <see cref="MuiRender"/> draws). A class asks for events with
+/// <c>WantEvents(MuiEvent.MouseButtons | MuiEvent.MouseMove)</c> (in its constructor or <c>OnSetup</c>); MUI then calls <c>OnEvent</c>
+/// for each such event in the object's window while it is shown, wherever the mouse is (check <see cref="Inside"/>). <c>OnEvent</c>
+/// returning true eats the event (MUI_EventHandlerRC_Eat): no other handler sees it.
+/// <code>
+/// protected override bool OnEvent(MuiEvent e)
+/// {
+///     if (e.Class == MuiEvent.MouseButtons &amp;&amp; e.Code == MuiEvent.SelectDown &amp;&amp; e.Inside) { Set(Value, e.MouseX * 100 / e.Width); return true; }
+///     return false;
+/// }
+/// </code>
+/// </summary>
+public struct MuiEvent
+{
+#if AMIGA
+    /// <summary>IDCMP_MOUSEBUTTONS: a mouse button went down or up (<see cref="Code"/>: <see cref="SelectDown"/>, <see cref="SelectUp"/>, ...).</summary>
+    public const uint MouseButtons = Layout.IdcmpMouseButtons;
+    /// <summary>IDCMP_MOUSEMOVE: the mouse moved.</summary>
+    public const uint MouseMove = Layout.IdcmpMouseMove;
+    /// <summary>IDCMP_RAWKEY: a key went down or up (<see cref="Code"/> is the raw key code; see <see cref="Keys"/>).</summary>
+    public const uint RawKey = Layout.IdcmpRawKey;
+    /// <summary>The left mouse button went down (a <see cref="MouseButtons"/> code).</summary>
+    public const int SelectDown = (int)Layout.SelectDown;
+    /// <summary>The left mouse button went up.</summary>
+    public const int SelectUp = (int)Layout.SelectUp;
+#else
+    public const uint MouseButtons = 0x8, MouseMove = 0x10, RawKey = 0x400;
+    public const int SelectDown = 0x68, SelectUp = 0xE8;
+#endif
+
+    /// <summary>The IDCMP class (<see cref="MouseButtons"/>, <see cref="MouseMove"/>, <see cref="RawKey"/>, ...); 0 without a message.</summary>
+    public uint Class;
+    /// <summary>The IntuiMessage's code: the button for <see cref="MouseButtons"/>, the raw key for <see cref="RawKey"/>.</summary>
+    public int Code;
+    /// <summary>The qualifier (shift, alt, buttons held: <see cref="Keys"/>' constants).</summary>
+    public int Qualifier;
+    /// <summary>The mouse position relative to the contents box's top left corner (negative or past the size when outside).</summary>
+    public int MouseX, MouseY;
+    /// <summary>The contents box's size.</summary>
+    public int Width, Height;
+    /// <summary>MUI's own key code for the event (MUIKEY_*: -1 for none, 0 for "press", ...), as MUI's settings map keys to actions.</summary>
+    public int MuiKey;
+
+    /// <summary>True when the mouse is inside the contents box.</summary>
+    public bool Inside => MouseX >= 0 && MouseY >= 0 && MouseX < Width && MouseY < Height;
+}
+
 /// <summary>MUI's pens (MPEN_*), for <see cref="MuiRender"/>: the user's colours from the MUI settings.</summary>
 public static class MuiPen
 {
@@ -86,8 +136,8 @@ public static class MuiPen
 /// <summary>
 /// What <c>OnDraw</c> draws with: the object's contents box (<see cref="Left"/>, <see cref="Top"/>, <see cref="Width"/>,
 /// <see cref="Height"/>: inside its frame and spacing) and MUI's rast port and pens. The drawing calls take coordinates relative to the
-/// contents' top left corner and a <see cref="MuiPen"/>; <see cref="Fill"/> and <see cref="Line"/> are clipped to the object's whole box
-/// (frame included), so nothing lands on a neighbour.
+/// contents' top left corner and a <see cref="MuiPen"/>. <see cref="Fill"/> is clipped to the object's whole box (frame included) and
+/// <see cref="Line"/> moves its ends into it, so neither lands on a neighbour; <see cref="Text"/> is not clipped.
 /// </summary>
 public unsafe struct MuiRender
 {
@@ -253,8 +303,11 @@ internal static unsafe class MuiCustomClasses
             if (o == null) return 0;
             void** slot = (void**)BoopsiNative.es_inst_data(cls, o);
             *slot = self == null ? null : Cast.ObjectToPtr(self);
-            Count(cls, 1);
-            if (self != null) SetEach(self, (nuint*)m[1]);   // the starting attributes
+            if (self != null)
+            {
+                Count(cls, 1);                          // counted with its pointer: OM_DISPOSE counts it off only when the pointer is set
+                SetEach(self, (nuint*)m[1]);            // the starting attributes
+            }
             return (nuint)o;
         }
         void** data = (void**)BoopsiNative.es_inst_data(cls, obj);
@@ -264,9 +317,9 @@ internal static unsafe class MuiCustomClasses
             {
                 MuiObject gone = Cast.PtrToObject<MuiObject>(*data);
                 gone.CustomGone();
+                Count(cls, -1);
             }
             *data = null;
-            Count(cls, -1);
             return BoopsiNative.es_dosupermethod(cls, obj, msg);
         }
         if (*data == null) return BoopsiNative.es_dosupermethod(cls, obj, msg);
@@ -292,6 +345,26 @@ internal static unsafe class MuiCustomClasses
             if (tag != 1) o.CallSet(tag, t[1]);
             t += 2;
         }
+    }
+
+    // The object's contents box (_mleft, _mtop, _mwidth, _mheight of the Zune headers: the box inside the frame and spacing), in window
+    // coordinates; false while the area data is not known.
+    internal static bool ContentBox(void* obj, out int left, out int top, out int width, out int height)
+    {
+        left = 0;
+        top = 0;
+        width = 0;
+        height = 0;
+        if (AreaData <= 0) return false;
+        int p = sizeof(nuint);
+        byte* ad = (byte*)obj + AreaData;
+        short* box = (short*)(ad + 3 * p + 12);
+        sbyte* add = (sbyte*)(ad + 3 * p + 20);
+        left = box[0] + add[0];
+        top = box[1] + add[1];
+        width = box[2] - add[2];
+        height = box[3] - add[3];
+        return true;
     }
 
     // At the first MUIM_Setup: find struct MUI_AreaData in the object by the render info pointer it starts with. It follows
