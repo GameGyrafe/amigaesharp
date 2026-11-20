@@ -25,11 +25,12 @@ public sealed unsafe class BarGraph : MuiArea
     {
         Frame = MuiFrame.Text;
         Init(Level, level);
-        WantEvents(MuiEvent.MouseButtons | MuiEvent.MouseMove);
+        WantEvents(MuiEvent.MouseButtons);
     }
 
     // The left button down on the graph sets the level and starts a drag; moves while it is held set it again; up ends the drag.
-    // Events elsewhere in the window are left to the other handlers (false).
+    // Mouse moves are asked for only during the drag (every move in the window would be a call otherwise). Events elsewhere in the
+    // window are left to the other handlers (false).
     protected override bool OnEvent(MuiEvent e)
     {
         if (e.Class == MuiEvent.MouseButtons)
@@ -37,6 +38,7 @@ public sealed unsafe class BarGraph : MuiArea
             if (e.Code == MuiEvent.SelectDown && e.Inside)
             {
                 _dragging = true;
+                WantEvents(MuiEvent.MouseButtons | MuiEvent.MouseMove);
                 Clicks++;
                 LevelAt(e);
                 return true;
@@ -44,6 +46,7 @@ public sealed unsafe class BarGraph : MuiArea
             if (e.Code == MuiEvent.SelectUp && _dragging)
             {
                 _dragging = false;
+                WantEvents(MuiEvent.MouseButtons);
                 return true;
             }
             return false;

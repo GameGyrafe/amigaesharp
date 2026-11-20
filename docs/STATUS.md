@@ -862,13 +862,15 @@ Not verified (#93):
 
 A class derived from `MuiArea` or `MuiCustomGroup` gets mouse and key input:
 - `WantEvents(uint idcmpClasses)` (protected) names the IDCMP classes it wants: `MuiEvent.MouseButtons`, `MuiEvent.MouseMove`,
-  `MuiEvent.RawKey` (IDCMP_MOUSEBUTTONS, IDCMP_MOUSEMOVE, IDCMP_RAWKEY), or'ed. Called in the constructor or `OnSetup`; `WantedEvents` reads
-  it back.
-- At MUIM_Setup (after `OnSetup` said yes) the dispatcher allocates a struct MUI_EventHandlerNode (`ehn_Object` the object, `ehn_Class` the
-  custom class, `ehn_Events` the wanted classes, priority and flags 0) and sends MUIM_Window_AddEventHandler to the window object (the
-  first field of the render info). At MUIM_Cleanup, before the superclass's, MUIM_Window_RemEventHandler and the node is freed.
-  `WantEvents` with another set while the object is set up replaces the node at once, except from inside `OnEvent` (then it waits for the
-  next setup).
+  `MuiEvent.RawKey` (IDCMP_MOUSEBUTTONS, IDCMP_MOUSEMOVE, IDCMP_RAWKEY), or'ed. Called in the constructor or `OnSetup`, and again at any
+  time (also from `OnEvent`, the usual way to ask for mouse moves only while dragging); `WantedEvents` reads it back.
+- At MUIM_Setup (after `OnSetup` said yes) the dispatcher allocates one struct MUI_EventHandlerNode per object (`ehn_Object` the object,
+  `ehn_Class` the custom class, `ehn_Events` the wanted classes, priority and flags 0) and, if the set is not 0, sends
+  MUIM_Window_AddEventHandler to the window object (the first field of the render info). `WantEvents` with another set while the object
+  is set up sends MUIM_Window_RemEventHandler (if the node is in the list), changes `ehn_Events` in place and sends
+  MUIM_Window_AddEventHandler with the same node (unless the set is 0); this works from inside any object's `OnEvent`. The node is freed
+  only at MUIM_Cleanup (before the superclass's, after MUIM_Window_RemEventHandler), so no node is freed while MUI may be going through
+  the window's handler list (review of #115: the first version freed and replaced it on every change).
 - MUIM_HandleEvent (`{ imsg, muikey }`) with an event of a wanted class calls `OnEvent(MuiEvent e)` while the object is shown (between
   MUIM_Show and MUIM_Hide; hidden, it answers 0). `MuiEvent` has the IntuiMessage's `Class`, `Code`, `Qualifier`, the mouse position
   relative to the contents box (`MouseX = imsg->MouseX - _mleft`, `MouseY = imsg->MouseY - _mtop`, from struct MUI_AreaData as `MuiRender`
@@ -890,8 +892,9 @@ A class derived from `MuiArea` or `MuiCustomGroup` gets mouse and key input:
   (`Line`) or neither (`Text`, which also leaves the font and JAM1 set), and that `OnSet` at OM_NEW runs before the wrapper has its object.
 - `esharp run --target os4 --input` takes `down` and `up` (hold and release the left button) like FS-UAE, for drags.
 
-samples/muiclass: `BarGraph` wants MouseButtons and MouseMove. The left button down inside a graph sets its level from the mouse's x
-(left 0, right 100) and starts a drag; moves while dragging set it again; the button up ends it; each of these is eaten. The level goes
+samples/muiclass: `BarGraph` wants MouseButtons, and MouseMove only while dragging (`WantEvents` from inside `OnEvent`). The left button
+down inside a graph sets its level from the mouse's x (left 0, right 100) and starts a drag; moves while dragging set it again; the
+button up ends it; each of these is eaten. The level goes
 through `Set` (OM_SET), so the notification on it moves the slider (and the slider's moves the group's mark and the status text); each
 side sets the other only when the value differs, so the notifications stop. New check (26 in all): the slider followed a `Set` of the
 graph's level. With `WAIT` the window runs until Quit and prints `events: level L, slider S, N click(s), M move(s); other graph L2, N2
@@ -900,14 +903,19 @@ host, `WAIT` sends a click at the middle of the first graph, a move to its right
 click and the move outside its box and leaves them), then Quit.
 
 Verified (#114):
-- `dotnet test`: 638 passed, 2 skipped (the SDK-backed BindGen test and the OS4 VM test), 0 failed. New or changed:
+- `dotnet test`: 638 passed, 2 skipped (the SDK-backed BindGen test and the OS4 VM test), 0 failed (also after the review change of
+  `WantEvents`, with the sample asking for moves only while dragging; the muiclass `test` and scripted `WAIT CLICKS` runs below on m68k
+  with MUI 3.8 and 5, OS4 and hosted AROS were repeated with it and gave the same lines; the screenshots and the samples/mui run were not
+  repeated). New or changed:
   - `Muiclass_sample_takes_clicks_and_drags_through_MUIM_HandleEvent_against_the_fake_muimaster`: samples/muiclass with `WAIT CLICKS` as
     generated C under ASan/UBSan. The fake window object keeps the handler list (MUIM_Window_AddEventHandler/RemEventHandler, refused on any
     other object), defines struct MUI_EventHandlerNode as the Zune header does (compiled by host gcc, so the generated C's Layout offsets
     must agree), and at the first MUIM_Application_NewInput sends MUIM_HandleEvent to each node that wants the class, in order, until one
     eats it: a click in the graphs' contents, a move, the button up, a click and button up outside, a raw key (wanted by none), then quit.
-    Result: 2 nodes added and 2 removed, 7 events sent, 3 eaten (all by the first graph), `events: level 100, slider 100, 1 click(s), 1
-    move(s); other graph 20, 0 click(s)`, all ok.
+    The fake also notes when an object adds a node other than its first one (a node freed and replaced). Result: 4 adds and 4 removes
+    (each graph's at setup and cleanup, and the first graph's node out and back in at the button down and up, from inside `OnEvent`),
+    always the same node per object, 8 events sent (the move only to the dragging graph), 3 eaten (all by the first graph),
+    `events: level 100, slider 100, 1 click(s), 1 move(s); other graph 20, 0 click(s)`, all ok.
   - samples/muiclass on dotnet with WAIT: the same events line. The os4 input translation test covers `down`/`up`.
 - Host: `esharp test samples/muiclass`: 26 ok; with `--args WAIT`: 28 ok and the events line above.
 - A1200, Kickstart 3.1 (40.069), Workbench 3.1 disk 2, FS-UAE (m68k image):
@@ -930,7 +938,8 @@ Verified (#114):
 
 Not verified (#114):
 - `MuiEvent.RawKey` and `Qualifier` on any system (only the fake sent a raw key, to a class that did not want it), `MuiKey` values.
-- `WantEvents` changing the set while the object is set up (the node replaced at once); a custom group (`MuiCustomGroup`) with events.
+- `WantEvents` called from one object's `OnEvent` for another object (only an object's own change from its `OnEvent` ran on the systems
+  above); a custom group (`MuiCustomGroup`) with events.
 - Events while the object is set up but hidden (a page group), several windows, MUI_EHF_* flags and node priorities (always 0 here).
 - Hosted AROS i386 (see above), MorphOS (the C compiles), Kickstart 3.0, real hardware.
 

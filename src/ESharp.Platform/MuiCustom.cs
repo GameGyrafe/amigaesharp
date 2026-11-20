@@ -81,7 +81,8 @@ public struct MuiMinMax
 /// <summary>
 /// An input event for a custom class (MUIM_HandleEvent): the IntuiMessage's class, code and qualifier, and the mouse position relative
 /// to the object's contents box (the top left corner inside its frame, as <see cref="MuiRender"/> draws). A class asks for events with
-/// <c>WantEvents(MuiEvent.MouseButtons | MuiEvent.MouseMove)</c> (in its constructor or <c>OnSetup</c>); MUI then calls <c>OnEvent</c>
+/// <c>WantEvents(MuiEvent.MouseButtons)</c> (in its constructor or <c>OnSetup</c>, and again at any time, also from <c>OnEvent</c>:
+/// add <see cref="MouseMove"/> only while dragging); MUI then calls <c>OnEvent</c>
 /// for each such event in the object's window while it is shown, wherever the mouse is (check <see cref="Inside"/>). <c>OnEvent</c>
 /// returning true eats the event (MUI_EventHandlerRC_Eat): no other handler sees it.
 /// <code>

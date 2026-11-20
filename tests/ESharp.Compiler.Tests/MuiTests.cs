@@ -102,6 +102,10 @@ static __attribute__((unused)) uintptr_t shim_dispatch(MObj *o, void *msg) { ret
 struct ShimEhn { void *succ, *pred; int8_t reserved, priority; uint16_t flags; void *object; Class *cls; uint32_t events; };
 static __attribute__((unused)) struct ShimEhn *shim_ehn[16];
 static __attribute__((unused)) int shim_nehn, shim_ehn_added, shim_ehn_removed, shim_events_eaten, shim_events_sent;
+/* The first node each object added: E# keeps one node per object from MUIM_Setup to MUIM_Cleanup and changes its events in place, so a
+   later add of another node by the same object (in one setup: these tests open the window once) means a node was freed and replaced. */
+static __attribute__((unused)) void *shim_ehn_obj[16], *shim_ehn_first[16];
+static __attribute__((unused)) int shim_nehn_obj;
 static __attribute__((unused)) void shim_event(uint32_t cls, uint16_t code, int16_t x, int16_t y)
 {
     /* An IntuiMessage of AROS x86-64 (Layout.g.cs): Class at 48, Code 52, Qualifier 54, MouseX 64, MouseY 66. */
@@ -297,6 +301,12 @@ static __attribute__((unused)) uintptr_t shim_method(MObj *o, uintptr_t *m)
         case 0x804203b7u:                                                                 /* MUIM_Window_AddEventHandler */
             if (o != shim_mri.wo || shim_nehn == 16) { printf("[event handler added to the wrong object]\n"); return 0; }
             shim_ehn[shim_nehn++] = (struct ShimEhn *)m[1]; shim_ehn_added++;
+            {
+                int j = 0;
+                while (j < shim_nehn_obj && shim_ehn_obj[j] != shim_ehn[shim_nehn - 1]->object) j++;
+                if (j == shim_nehn_obj && j < 16) { shim_ehn_obj[j] = shim_ehn[shim_nehn - 1]->object; shim_ehn_first[j] = (void *)m[1]; shim_nehn_obj++; }
+                else if (j < shim_nehn_obj && shim_ehn_first[j] != (void *)m[1]) printf("[event handler node replaced]\n");
+            }
             return 0;
         case 0x8042679eu:                                                                 /* MUIM_Window_RemEventHandler */
             for (int k = 0; k < shim_nehn; k++)
@@ -572,11 +582,16 @@ class Box
             Assert.Contains("muiclass: all ok\n", output);
             // Each graph's node added at MUIM_Setup and removed at MUIM_Cleanup (the group asks for no events); the node's fields as the
             // Zune header has them. The click lands on both graphs' boxes (the fake puts every object at one place): the first handler
-            // eats it, the second never sees it. The click outside and its button up go to both and are not eaten; the raw key is not asked for.
-            Assert.Contains("[shim: 2 event handlers added, 2 removed, 0 left; 7 events sent, 3 eaten]", output);
+            // eats it, the second never sees it, and the first one asks for mouse moves from inside OnEvent: its node is taken out,
+            // changed and put back (at the end of the list, after the second graph's). Only it gets the move; the button up goes to the
+            // second graph (not dragging, not eaten) and then the first, which eats it and drops the moves (out and back once more).
+            // The click outside and its button up go to both and are not eaten; the raw key is not asked for. Every add is the same node
+            // per object (never freed and replaced while the window is open).
+            Assert.Contains("[shim: 4 event handlers added, 4 removed, 0 left; 8 events sent, 3 eaten]", output);
             Assert.Contains("[event 8,104 at 108,54 eaten by handler 0]", output);
-            Assert.Contains("[event 16,0 at 203,54 eaten by handler 0]", output);
-            Assert.Contains("[event 8,232 at 203,54 eaten by handler 0]", output);
+            Assert.Contains("[event 16,0 at 203,54 eaten by handler 1]", output);
+            Assert.Contains("[event 8,232 at 203,54 eaten by handler 1]", output);
+            Assert.DoesNotContain("[event handler node replaced]", output);
             Assert.Contains("[event 8,104 at 2,2 not eaten]", output);
             Assert.Contains("[event 1024,32 at 12,22 not eaten]", output);
             Assert.Contains("events: level 100, slider 100, 1 click(s), 1 move(s); other graph 20, 0 click(s)\n", output);

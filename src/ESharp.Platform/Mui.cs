@@ -364,8 +364,8 @@ public unsafe class MuiObject : BoopsiObject
     private uint _wantEvents;         // IDCMP classes OnEvent wants (WantEvents), 0 for none
 #if AMIGA
     private void* _renderInfo;        // MUI's render info (from MUIM_Setup)
-    private byte* _ehn;               // struct MUI_EventHandlerNode in the window's list (between MUIM_Setup and MUIM_Cleanup)
-    private void* _ehnWindow;         // the window object it was added to
+    private byte* _ehn;               // struct MUI_EventHandlerNode, one from MUIM_Setup to MUIM_Cleanup (freed only at MUIM_Cleanup)
+    private void* _ehnWindow;         // the window object it is in, while it is in the window's list (null when not added)
     private void* _ehnClass;          // the custom class and object it calls (ehn_Class, ehn_Object)
     private void* _ehnObject;
 #else
@@ -808,32 +808,27 @@ public unsafe class MuiObject : BoopsiObject
 
     /// <summary>
     /// The IDCMP classes <see cref="OnEvent"/> wants (<see cref="MuiEvent.MouseButtons"/>, <see cref="MuiEvent.MouseMove"/>,
-    /// <see cref="MuiEvent.RawKey"/>, or'ed; 0 for none). MUI's event handler node is added to the window at MUIM_Setup and removed at
-    /// MUIM_Cleanup; set it in the constructor or in <c>OnSetup</c>. Changed while the object is set up, the node is replaced at once
-    /// (not from inside <c>OnEvent</c>: MUI is going through its handler list then; the change waits for the next MUIM_Setup).
+    /// <see cref="MuiEvent.RawKey"/>, or'ed; 0 for none). One MUI event handler node per object lives from MUIM_Setup to MUIM_Cleanup; it
+    /// is in the window's list while the set is not 0. Changed while the object is set up (also from inside <c>OnEvent</c>, this object's
+    /// or another one's), the node is taken out of the list, given the new set and put back: ask for <see cref="MuiEvent.MouseMove"/>
+    /// only while a drag goes on, as every mouse move in the window costs a call.
     /// </summary>
     protected void WantEvents(uint idcmpClasses)
     {
         if (idcmpClasses == _wantEvents) return;
         _wantEvents = idcmpClasses;
 #if AMIGA
-        if (!_setUp || _inEvent) return;
-        RemoveHandler();
-        AddHandler();
+        if (_setUp) UpdateHandler();
 #endif
     }
 
     /// <summary>The IDCMP classes given to <see cref="WantEvents"/>.</summary>
     protected uint WantedEvents => _wantEvents;
 
-    private bool _inEvent;
-
     internal bool CallEvent(MuiEvent e)
     {
         Mui.HandlerDepth++;
-        _inEvent = true;
         bool eat = OnEvent(e);
-        _inEvent = false;
         Mui.HandlerDepth--;
         return eat;
     }
@@ -900,12 +895,13 @@ public unsafe class MuiObject : BoopsiObject
             _setUp = true;
             _ehnClass = cls;
             _ehnObject = obj;
-            AddHandler();
+            AllocHandler();
+            UpdateHandler();
             return r;
         }
         if (id == MuiId.Cleanup)
         {
-            RemoveHandler();
+            FreeHandler();
             if (_setUp)
             {
                 Mui.HandlerDepth++;
@@ -995,33 +991,53 @@ public unsafe class MuiObject : BoopsiObject
         return BoopsiNative.es_dosupermethod(cls, obj, (void*)m);
     }
 
-    // MUIM_Window_AddEventHandler with a node for the classes OnEvent wants (after MUIM_Setup: the render info names the window).
-    private void AddHandler()
+    // The object's one event handler node, allocated at MUIM_Setup (the render info names the window) and freed only at MUIM_Cleanup,
+    // so a node is never freed while MUI may be going through the window's handler list (an OnEvent of any object can call WantEvents).
+    private void AllocHandler()
     {
-        if (_wantEvents == 0 || _ehn != null || _renderInfo == null || _ehnObject == null) return;
-        void* win = *(void**)_renderInfo;   // struct MUI_RenderInfo starts with the window object
-        if (win == null) return;
-        byte* n = Mem.AllocFast((uint)Layout.EhnSize);
+        if (_ehn != null || _renderInfo == null || _ehnObject == null) return;
+        byte* n = Mem.AllocFast((uint)Layout.EhnSize);   // cleared: priority and flags 0
         if (n == null) return;
         *(void**)(n + Layout.EhnObject) = _ehnObject;
         *(void**)(n + Layout.EhnClass) = _ehnClass;   // MUI sends MUIM_HandleEvent to this class (CoerceMethod)
-        *(uint*)(n + Layout.EhnEvents) = _wantEvents;
-        MuiMsg msg = new MuiMsg();
-        msg.Put(0, MuiId.WindowAddEventHandler);
-        msg.Put(1, (nuint)n);
-        BoopsiNative.es_domethod(win, (void*)msg.Ptr());
         _ehn = n;
+    }
+
+    // The node takes the current set: out of the window's list if it is in it (MUIM_Window_RemEventHandler), ehn_Events changed in
+    // place, back in (MUIM_Window_AddEventHandler) unless the set is 0. The same node every time.
+    private void UpdateHandler()
+    {
+        if (_ehn == null) return;
+        if (_ehnWindow != null)
+        {
+            MuiMsg rem = new MuiMsg();
+            rem.Put(0, MuiId.WindowRemEventHandler);
+            rem.Put(1, (nuint)_ehn);
+            BoopsiNative.es_domethod(_ehnWindow, (void*)rem.Ptr());
+            _ehnWindow = null;
+        }
+        *(uint*)(_ehn + Layout.EhnEvents) = _wantEvents;
+        if (_wantEvents == 0 || _renderInfo == null) return;
+        void* win = *(void**)_renderInfo;   // struct MUI_RenderInfo starts with the window object
+        if (win == null) return;
+        MuiMsg add = new MuiMsg();
+        add.Put(0, MuiId.WindowAddEventHandler);
+        add.Put(1, (nuint)_ehn);
+        BoopsiNative.es_domethod(win, (void*)add.Ptr());
         _ehnWindow = win;
     }
 
-    // MUIM_Window_RemEventHandler (before MUIM_Cleanup reaches the superclass) and the node freed.
-    private void RemoveHandler()
+    // MUIM_Cleanup (before it reaches the superclass): the node out of the window's list and freed.
+    private void FreeHandler()
     {
         if (_ehn == null) return;
-        MuiMsg msg = new MuiMsg();
-        msg.Put(0, MuiId.WindowRemEventHandler);
-        msg.Put(1, (nuint)_ehn);
-        BoopsiNative.es_domethod(_ehnWindow, (void*)msg.Ptr());
+        if (_ehnWindow != null)
+        {
+            MuiMsg msg = new MuiMsg();
+            msg.Put(0, MuiId.WindowRemEventHandler);
+            msg.Put(1, (nuint)_ehn);
+            BoopsiNative.es_domethod(_ehnWindow, (void*)msg.Ptr());
+        }
         Mem.Free(_ehn);
         _ehn = null;
         _ehnWindow = null;

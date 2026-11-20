@@ -281,15 +281,22 @@ last.
 
 For mouse and key input the class names the IDCMP classes it wants and overrides `OnEvent` (MUIM_HandleEvent; MUI's event handler node
 is added to the window at setup and removed at cleanup). The mouse position is relative to the contents box; returning true eats the
-event, so no other handler sees it:
+event, so no other handler sees it. `WantEvents` may be called again at any time, also from `OnEvent`: ask for mouse moves only while a
+drag goes on, as each move in the window is otherwise a call:
 
 ```csharp
-public Meter() { WantEvents(MuiEvent.MouseButtons | MuiEvent.MouseMove); }
+public Meter() { WantEvents(MuiEvent.MouseButtons); }
 
 protected override bool OnEvent(MuiEvent e)
 {
-    if (e.Class == MuiEvent.MouseButtons && e.Code == MuiEvent.SelectDown && e.Inside) { _drag = true; Set(Level, e.MouseX * 100 / e.Width); return true; }
-    if (e.Class == MuiEvent.MouseButtons && e.Code == MuiEvent.SelectUp && _drag) { _drag = false; return true; }
+    if (e.Class == MuiEvent.MouseButtons && e.Code == MuiEvent.SelectDown && e.Inside)
+    {
+        _drag = true;
+        WantEvents(MuiEvent.MouseButtons | MuiEvent.MouseMove);
+        Set(Level, e.MouseX * 100 / e.Width);
+        return true;
+    }
+    if (e.Class == MuiEvent.MouseButtons && e.Code == MuiEvent.SelectUp && _drag) { _drag = false; WantEvents(MuiEvent.MouseButtons); return true; }
     if (e.Class == MuiEvent.MouseMove && _drag) { Set(Level, e.MouseX * 100 / e.Width); return true; }
     return false;
 }
