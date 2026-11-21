@@ -55,7 +55,8 @@ public sealed class TargetInfo
     public bool IsAmiga => Defines.Contains("AMIGA");
 
     /// <summary>With <paramref name="debug"/>, defines DEBUG (poisoned arenas) and turns bounds checks on.</summary>
-    public CompileOptions ToOptions(bool allowFloat = false, bool debug = false, long? chipBudget = null, bool trace = false, string? cFileName = null) =>
+    public CompileOptions ToOptions(bool allowFloat = false, bool debug = false, long? chipBudget = null, bool trace = false, string? cFileName = null,
+        IReadOnlyList<EsPackage>? packages = null, bool allowCopyleft = false, string? sdkVersion = null) =>
         new()
         {
             // --debug implies TRACE: a debug build wants its serial trace.
@@ -64,6 +65,10 @@ public sealed class TargetInfo
             BoundsChecks = debug,
             ChipBudget = chipBudget,
             CFileName = cFileName,
+            TargetName = Name,
+            Packages = packages ?? Array.Empty<EsPackage>(),
+            AllowCopyleft = allowCopyleft,
+            SdkVersion = sdkVersion,
         };
 }
 

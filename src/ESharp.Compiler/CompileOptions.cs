@@ -32,6 +32,18 @@ public sealed class CompileOptions
     /// <summary>The generated C file's name, for the #line directives that point back at it after each user function (default program.c).</summary>
     public string? CFileName { get; init; }
 
+    /// <summary>E# library packages compiled with the program (from the project's restore, see <see cref="PackageLoader"/>).</summary>
+    public IReadOnlyList<EsPackage> Packages { get; init; } = System.Array.Empty<EsPackage>();
+
+    /// <summary>The target's name (m68k, os4, ...), checked against the targets each package lists; null skips that check.</summary>
+    public string? TargetName { get; init; }
+
+    /// <summary>Allow packages under a GPL-family licence (the program's EsAllowCopyleft property).</summary>
+    public bool AllowCopyleft { get; init; }
+
+    /// <summary>The E# version building the program, checked against each package's minimum; null skips that check.</summary>
+    public string? SdkVersion { get; init; }
+
     /// <summary>Test hook: name the program files as library files (no ES0103 for internal library members).</summary>
     internal bool UserFilesAreLibrary { get; init; }
 }

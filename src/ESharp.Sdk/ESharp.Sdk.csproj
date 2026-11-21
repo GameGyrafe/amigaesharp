@@ -4,6 +4,7 @@
     Packaging only: AmigaESharp.Sdk, the package a game's host project references (esharp new writes the PackageReference).
       lib/net10.0:          ESharp.Runtime, ESharp.Platform, ESharp.Target.Host (built with HOST)
       analyzers/dotnet/cs:  ESharp.Analyzers (the subset rules, ES0001-ES0010), loaded by the compiler, not referenced
+      buildTransitive:      AmigaESharp.Sdk.targets, the E# library step (EsLibrary=true: sources and manifest embedded in the DLL)
     The project has no code of its own and its own assembly is not packed. The package has no dependencies: the analyzer
     runs on the compiler's Roslyn, and the host assemblies only need the framework.
   -->
@@ -25,6 +26,8 @@
   <ItemGroup>
     <ProjectReference Include="..\ESharp.Target.Host\ESharp.Target.Host.csproj" PrivateAssets="all" />
     <ProjectReference Include="..\ESharp.Analyzers\ESharp.Analyzers.csproj" ReferenceOutputAssembly="false" PrivateAssets="all" />
+    <!-- The E# library step (EsLibrary=true embeds a library's sources and manifest), for every project that references the package. -->
+    <None Update="buildTransitive\AmigaESharp.Sdk.targets" Pack="true" PackagePath="buildTransitive/AmigaESharp.Sdk.targets" />
     <None Include="..\PackageReadme.md" Pack="true" PackagePath="README.md" />
     <None Include="..\icon.png" Pack="true" PackagePath="icon.png" />
   </ItemGroup>

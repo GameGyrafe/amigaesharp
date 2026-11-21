@@ -113,6 +113,44 @@ public static class Descriptors
         "ES0099", "Construct not supported by the emitter",
         "'{0}' is not supported by the E# C emitter yet");
 
+    // E# library packages (issue #31). Reported by the compiler (esharp build), which sees the package sources; not by the IDE analyzer.
+
+    public static readonly DiagnosticDescriptor PackageTarget = Error(
+        "ES0110", "Package does not support the target",
+        "Package '{0}' {1} does not support target '{2}' (it lists: {3})");
+
+    public static readonly DiagnosticDescriptor PackageCopyleft = Error(
+        "ES0111", "GPL/LGPL package",
+        "Package '{0}' {1} has the licence '{2}' (GPL family): its code would be compiled into the program. Set <EsAllowCopyleft>true</EsAllowCopyleft> in the program's csproj to allow it");
+
+    public static readonly DiagnosticDescriptor PackageSdk = Error(
+        "ES0112", "Package needs a newer E#",
+        "Package '{0}' {1} needs E# {2} or newer; this esharp is {3}");
+
+    public static readonly DiagnosticDescriptor PackageFeature = Error(
+        "ES0113", "Package uses a platform-level feature it does not declare",
+        "Package '{0}' uses {1} ('{2}') but does not declare it; the library's csproj must list {1} in EsFeatures");
+
+    public static readonly DiagnosticDescriptor PackageEntryPoint = Error(
+        "ES0114", "Entry point in a package",
+        "Package '{0}' declares an [EntryPoint] ('{1}'); a library cannot have one");
+
+    public static readonly DiagnosticDescriptor PackageNameClash = Error(
+        "ES0115", "Type declared by a package and by the program or another package",
+        "'{0}' is declared in {1} and in {2}; a package and the program, or two packages, cannot declare the same type (use a namespace of your own)");
+
+    public static readonly DiagnosticDescriptor PackageInternal = Error(
+        "ES0116", "Internal package member",
+        "'{0}' is internal to package '{1}' and cannot be used from {2} (the dotnet host build rejects it too)");
+
+    public static readonly DiagnosticDescriptor PackageDerive = Error(
+        "ES0117", "Class derived from a package class",
+        "'{0}' derives from '{1}' of package '{2}'; deriving from a package class is not supported yet");
+
+    public static readonly DiagnosticDescriptor PackageInvalid = Error(
+        "ES0118", "Package cannot be used",
+        "Package '{0}' {1}: {2}");
+
     public static System.Collections.Immutable.ImmutableArray<DiagnosticDescriptor> SubsetRules =>
         System.Collections.Immutable.ImmutableArray.Create(
             Exceptions, Linq, FloatingPoint, AsyncAwait, Dynamic, Reflection,

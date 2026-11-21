@@ -86,7 +86,7 @@ public static class Toolchain
     /// folder or on PATH, or a path). Returns an error message, or null with <paramref name="choice"/> set.
     /// </summary>
     public static string? Resolve(TargetInfo target, string? option, string? sysrootOption, Func<string, string?> env,
-        out ToolchainChoice? choice, string? cc = null, HostOs? hostOs = null)
+        out ToolchainChoice? choice, string? cc = null, HostOs? hostOs = null, bool forBinutils = false)
     {
         var os = hostOs ?? CurrentOs;
         choice = null;
@@ -109,7 +109,7 @@ public static class Toolchain
                 var found = new[] { Path.Combine(dir, "bin", Exe(name, os)), Path.Combine(dir, Exe(name, os)) }.FirstOrDefault(File.Exists);
                 if (found == null)
                     return $"no {Exe(name, os)} in {Path.Combine(dir, "bin")} (toolchain folder from {source}): give the toolchain's install " +
-                           $"prefix, the folder that holds bin/{target.Compiler} (in the pinned image: {ImageDir(target)}), or build with --docker [image]" + SetupAdvice(target, os);
+                           $"prefix, the folder that holds bin/{target.Compiler} (in the pinned image: {ImageDir(target)}), or {(forBinutils ? "pass" : "build with")} --docker [image]" + SetupAdvice(target, os);
                 compiler = found;
             }
         }
@@ -129,9 +129,9 @@ public static class Toolchain
             {
                 var found = FindOnPath(name, env, os);
                 if (found == null)
-                    return $"{name} not found on PATH. Build with --docker [image] (the default way: the pinned toolchain image), " +
+                    return $"{name} not found on PATH. {(forBinutils ? "Pass" : "Build with")} --docker [image] (the default way: the pinned toolchain image), " +
                            $"point --toolchain <dir> or {EnvFor(target)}" + (target.IsAmiga ? $" / {EnvAll}" : "") +
-                           " at a local toolchain (the folder that holds bin/" + name + "), or use --emit-only." + SetupAdvice(target, os);
+                           " at a local toolchain (the folder that holds bin/" + name + ")" + (forBinutils ? "." : ", or use --emit-only.") + SetupAdvice(target, os);
                 compiler = found;
                 source = "PATH";
             }
