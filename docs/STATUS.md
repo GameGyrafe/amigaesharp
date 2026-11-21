@@ -41,6 +41,11 @@ chip bss, five hunks; `CRASH` crashes on purpose). Details in [DEBUGGING.md](DEB
   (Poke, inlined into Main at line 61), the trace lines `_start+0x…` to 51, 27, 38, 44. The log's "section 1 @" values were 4
   below the section offset of the same instruction (for ip, lr and `_start`, in both crashes produced); the symbol form is exact
   and is the one used when a whole line is pasted.
+- m68k regression after `-fno-reorder-functions` (it changes every m68k exe), Kickstart 3.1 (40.069), FS-UAE, A1200, the pinned
+  m68k image: `tools/hwpack/build.sh` (44 programs plus Summary) and `run-emulated.sh obj/hwtest --rom <rom> --wb <wb>` (hard
+  disk, no MUI): 35 programs with the emulator's ok count, the same counts as on main, `hello`, `mainargs`, `trace` and
+  `muicheck` text only, `mui` and `muiclass` "skipped, MUI is not installed", no FAIL. `esharp test --target m68k --kickstart
+  <rom>`: crash 1, interrupts 14, closures 23, objects 21 ok, host and Amiga agree. Run in review and again on the PR head.
 - Built only: morphos (the `.debug` link works and `esharp addr` lists its sections and maps a symbol offset to a line).
 - Not verified: a real Amiga (SegTracker, Enforcer, MuForce), a Workbench start for `Trace.Where` on m68k (`pr_SegList` entry 3),
   MorphOS at run time, the Grim Reaper's own window (the same report was read from the serial log), whether the os4 "@" offset is
