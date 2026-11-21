@@ -8,6 +8,8 @@ namespace ESharp.Compiler.Tests;
 /// program on every runner: the startup lines, the RC and trap parsing, the image choice, the morphos message and the
 /// verdict that compares a target run with the host run.
 /// </summary>
+// Console.SetOut/SetError are process-wide: classes that swap them share one collection so they do not overlap.
+[Collection("ProcessConsole")]
 public class ArosHostedTests
 {
     [Fact]

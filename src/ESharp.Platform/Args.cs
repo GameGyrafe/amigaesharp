@@ -11,27 +11,31 @@ namespace ESharp.Platform;
 public static class Args
 {
 #if HOST
-    private static string[]? _host;
+    // Per execution flow (AsyncLocal), so test classes running in parallel do not see each other's HostSet.
+    private static readonly System.Threading.AsyncLocal<string[]?> _host = new();
+    private static string[]? _real;
 
     // Without HostSet the host program's own command line (the words after the program), so Args and Main(string[] args) agree.
     private static string[] HostArgs
     {
         get
         {
-            if (_host == null)
+            var set = _host.Value;
+            if (set != null) return set;
+            if (_real == null)
             {
                 var all = System.Environment.GetCommandLineArgs();
-                _host = all.Length > 1 ? all[1..] : System.Array.Empty<string>();
+                _real = all.Length > 1 ? all[1..] : System.Array.Empty<string>();
             }
-            return _host;
+            return _real;
         }
     }
 
     /// <summary>Back to the real command line (what a program sees when nothing called <see cref="HostSet"/>).</summary>
-    public static void HostReset() { _host = null; }
+    public static void HostReset() { _host.Value = null; }
 
     /// <summary>Host fake: sets the arguments the program sees (tests call this to be repeatable; without it they are the real command line).</summary>
-    public static void HostSet(params string[] args) { _host = args; }
+    public static void HostSet(params string[] args) { _host.Value = args; }
 
     /// <summary>The number of arguments.</summary>
     public static int Count { get { return HostArgs.Length; } }

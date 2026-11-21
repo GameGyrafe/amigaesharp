@@ -5,6 +5,7 @@ using static ESharp.Compiler.Tests.TestHelpers;
 namespace ESharp.Compiler.Tests;
 
 /// <summary>The entry points Main(), int Main(), Main(string[] args) and int Main(string[] args) (issue #66): the generated C is built with host gcc and run with arguments.</summary>
+[Collection("ProcessConsole")]
 public class MainArgsTests
 {
     private const string Show = @"

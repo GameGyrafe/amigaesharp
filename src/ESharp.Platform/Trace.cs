@@ -97,8 +97,15 @@ public static class Trace
         Crt.es_std_trace_char('\n');
     }
 #else
-    /// <summary>Where the host writes trace text. Tests replace it to capture the output.</summary>
-    public static System.IO.TextWriter Out = System.Console.Error;
+    private static readonly System.Threading.AsyncLocal<System.IO.TextWriter?> _out = new();
+    private static readonly System.IO.TextWriter _error = System.Console.Error;
+
+    /// <summary>Where the host writes trace text. Tests replace it to capture the output. The value is per execution flow, so tests that run in parallel do not see each other's output.</summary>
+    public static System.IO.TextWriter Out
+    {
+        get => _out.Value ?? _error;
+        set => _out.Value = value;
+    }
 
     /// <summary>Writes the text to standard error.</summary>
     [Conditional("TRACE")]

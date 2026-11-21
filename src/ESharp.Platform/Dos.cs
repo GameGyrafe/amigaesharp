@@ -38,8 +38,15 @@ public static class Dos
     /// <summary>Waits for <paramref name="ticks"/> 50ths of a second (the screen, if open, is shown first).</summary>
     public static void Delay(int ticks) { Crt.es_sdl_delay(ticks); }
 #else
-    /// <summary>Where PutStr writes on the host. Tests replace it to capture output.</summary>
-    public static TextWriter Out = System.Console.Out;
+    private static readonly System.Threading.AsyncLocal<TextWriter?> _out = new();
+    private static readonly TextWriter _console = System.Console.Out;
+
+    /// <summary>Where PutStr writes on the host. Tests replace it to capture output. The value is per execution flow (a test and the tasks it starts), so tests that run in parallel do not see each other's output.</summary>
+    public static TextWriter Out
+    {
+        get => _out.Value ?? _console;
+        set => _out.Value = value;
+    }
 
     public static int PutStr(string str)
     {
