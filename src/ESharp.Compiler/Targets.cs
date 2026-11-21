@@ -15,9 +15,11 @@ namespace ESharp.Compiler;
 public sealed class TargetInfo
 {
     public TargetInfo(string name, string description, string[] defines, string compiler,
-        string cflags, string libs = "", string pkgConfig = "")
+        string cflags, string libs = "", string pkgConfig = "", string sysroot = "", string version = "")
     {
         PkgConfig = pkgConfig;
+        Sysroot = sysroot;
+        CompilerVersion = version;
         Name = name;
         Description = description;
         Defines = defines;
@@ -34,6 +36,15 @@ public sealed class TargetInfo
 
     /// <summary>Linker libraries, placed after the source file.</summary>
     public string Libs { get; }
+
+    /// <summary>
+    /// The compiler's <c>--sysroot</c> in the pinned Docker image (AROS only), or empty. A local toolchain gives its own
+    /// (<c>--sysroot</c>, <c>ESHARP_SYSROOT_*</c>, or a folder under <c>--toolchain</c>); see the CLI's Toolchain class.
+    /// </summary>
+    public string Sysroot { get; }
+
+    /// <summary>What the pinned image's compiler prints for <c>-dumpversion</c>, or empty when any version will do (sdl).</summary>
+    public string CompilerVersion { get; }
 
     /// <summary>pkg-config packages linked statically (<c>pkg-config --static --cflags --libs</c>), or empty.</summary>
     public string PkgConfig { get; }
@@ -60,22 +71,22 @@ public static class Targets
     public static readonly TargetInfo M68k = new(
         "m68k", "AmigaOS 3.1+ on 68020+ (amiga-gcc)",
         new[] { "AMIGA", "M68K", "AMIGAOS3" },
-        "m68k-amigaos-gcc", "-noixemul -m68020 -O2 -fwrapv");
+        "m68k-amigaos-gcc", "-noixemul -m68020 -O2 -fwrapv", version: "6.5.0b");
 
     public static readonly TargetInfo Os4 = new(
         "os4", "AmigaOS 4 on PowerPC",
         new[] { "AMIGA", "PPC", "AMIGAOS4" },
-        "ppc-amigaos-gcc", "-O2 -fwrapv -D__USE_INLINE__", "-lauto");
+        "ppc-amigaos-gcc", "-O2 -fwrapv -D__USE_INLINE__", "-lauto", version: "11.5.0");
 
     public static readonly TargetInfo MorphOs = new(
         "morphos", "MorphOS on PowerPC",
         new[] { "AMIGA", "PPC", "MORPHOS" },
-        "ppc-morphos-gcc", "-noixemul -O2 -fwrapv");
+        "ppc-morphos-gcc", "-noixemul -O2 -fwrapv", version: "15.2.0");
 
     public static readonly TargetInfo Aros = new(
         "aros", "AROS on x86-64 (64-bit pointers)",
         new[] { "AMIGA", "X86_64", "AROS" },
-        "x86_64-aros-gcc", "--sysroot=/opt/x86_64-aros -O2 -fwrapv");
+        "x86_64-aros-gcc", "-O2 -fwrapv", sysroot: "/opt/x86_64-aros", version: "9.1.0");
 
     /// <summary>
     /// AROS on 32-bit x86 (i386 ABI, as the linux-i386 hosted and pc-i386 native builds): 32-bit pointers, so the
@@ -84,7 +95,7 @@ public static class Targets
     public static readonly TargetInfo ArosI386 = new(
         "aros-i386", "AROS on i386 (32-bit pointers)",
         new[] { "AMIGA", "I386", "AROS" },
-        "i386-aros-gcc", "--sysroot=/opt/i386-aros/sdk -O2 -fwrapv");
+        "i386-aros-gcc", "-O2 -fwrapv", sysroot: "/opt/i386-aros/sdk", version: "6.5.0");
 
     /// <summary>
     /// A desktop build through SDL 3 (Linux x86-64 in the esharp-sdl image; SDL is linked statically). Defines SDL and

@@ -119,17 +119,18 @@ internal static class Addr
     public static int Run(string[] args, TextWriter? output = null)
     {
         var o = output ?? Console.Out;
-        string? docker = null, path = null;
+        string? docker = null, path = null, toolchain = null;
         var words = new List<string>();
         for (var i = 0; i < args.Length; i++)
         {
-            if (args[i] == "--docker") docker = i + 1 < args.Length && !args[i + 1].StartsWith("-") ? args[++i] : "esharp-amiga-toolchain";
+            if (args[i] == "--toolchain" && i + 1 < args.Length) toolchain = args[++i];
+            else if (args[i] == "--docker") docker = i + 1 < args.Length && !args[i + 1].StartsWith("-") ? args[++i] : "esharp-amiga-toolchain";
             else if (args[i].StartsWith("-") && args[i].Length > 1 && !char.IsDigit(args[i][1])) return Fail($"unknown option '{args[i]}'");
             else if (path == null) path = args[i];
             else words.Add(args[i]);
         }
         if (path == null || !TryParseAddress(words.ToArray(), out var hunk, out var offset))
-            return Fail("usage: esharp addr <exe | project dir> <hunk> <offset in hex> [--docker [image]]   (for example: esharp addr obj/m68k/hello 0 e8)");
+            return Fail("usage: esharp addr <exe | project dir> <hunk> <offset in hex> [--docker [image] | --toolchain <dir>]   (for example: esharp addr obj/m68k/hello 0 e8)");
 
         var exe = path;
         if (Directory.Exists(path))
@@ -146,7 +147,15 @@ internal static class Addr
 
         var exeName = Path.GetFileName(exe);
         var objName = Path.GetFileName(obj);
-        const string tool = "m68k-amigaos-objdump";
+        var tool = "m68k-amigaos-objdump";
+        if (docker != null && !string.IsNullOrWhiteSpace(toolchain)) return Fail("--docker and --toolchain both say where m68k-amigaos-objdump is: use one");
+        if (docker == null)
+        {
+            // The binutils of a local toolchain (--toolchain, ESHARP_TOOLCHAIN_M68K, ESHARP_TOOLCHAIN), else PATH.
+            if (Toolchain.Resolve(ESharp.Compiler.Targets.M68k, toolchain, null, Environment.GetEnvironmentVariable, out var choice, tool) is { } error)
+                return Fail(error);
+            tool = choice!.Compiler;
+        }
         try
         {
             var exeSyms = RunTool(docker, dir, tool, "-t", exeName);

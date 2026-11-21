@@ -10,6 +10,45 @@ The minimum system is now an **Amiga 1200: 68020, AGA, 2 MB chip RAM, Kickstart 
 - **Kept on purpose:** `HasAga()` and `HasRtg()` with their fallbacks. A classic A1200 always has AGA, but PowerPC, RTG-only and AROS targets may not, so the checks stay as the portable way to ask. **Not yet done:** using 68020 instructions deliberately and AROS (a new target, untested).
 - Verified after the change: all 17 samples built with `-m68020` and run on Kickstart 3.1 (A1200) in FS-UAE: 300 `ok` lines, no `FAIL` (the script shows only the last 25 lines of each sample, so long ones are truncated), 136 unit tests pass. Not verified: PowerPC, real hardware, a 68000/Kickstart 2.04 run (no longer supported).
 
+## Local toolchains, part 1 (issue #122)
+
+Docker stays the default way to build. A second way, a toolchain on the developer's machine, is now configurable:
+`--toolchain <dir>` (the install prefix holding `bin/<compiler>`), `ESHARP_TOOLCHAIN_<TARGET>` or `ESHARP_TOOLCHAIN`, else PATH;
+AROS sysroot from the folder or `--sysroot` / `ESHARP_SYSROOT_AROS[_I386]`; the compiler's `-dumpversion` must match the pinned
+image's (`--any-cc-version` overrides); clear errors for a missing folder, a missing compiler and another version
+(`src/ESharp.Cli/Toolchain.cs`). A local compiler now runs in the output folder with the same relative command line as in
+Docker. `esharp addr` takes `--toolchain` too, and an os4 run builds its estype helper with the same local compiler.
+`esharp doctor` reports, per target, Docker (image present) and local (compiler, version, source), then FS-UAE, Xvfb, xwd,
+the Kickstart setting, the OS4 VM, the hosted AROS images and the MUI cache; offline, exit code 0 (`src/ESharp.Cli/Doctor.cs`).
+`esharp new` adds the VS Code tasks "E#: build (m68k, local toolchain)" and "E#: run in FS-UAE (local toolchain)", which pass
+`--toolchain ${config:esharp.toolchain}`, and `.vscode/settings.json` with `"esharp.toolchain": ""`, so the variable always
+resolves (VS Code does not resolve a `${config:...}` for a setting defined nowhere); empty counts as not given, and then the
+variables or PATH apply. A local build runs the compiler in the output folder, as Docker does, so relative `--cflags` paths
+are taken from there (GUIDE). Research
+note with the options per platform, versions and licences: [design/TOOLCHAINS.md](design/TOOLCHAINS.md).
+
+- Verified (Linux x86-64, 2026-11-21): the m68k toolchain copied out of the pinned image (`docker create` + `docker cp`
+  of `/opt/m68k-amigaos` into a scratch folder) builds `samples/hello` (4,840 bytes) and `samples/cards` (68,508 bytes) with
+  `--toolchain`, byte-identical to `--docker` builds of the same source, and the same `.info` and `.c`
+  (`tools/local-toolchain/compare.sh`). The `.o` written for `esharp addr` differs (its debug info holds the build folder:
+  `/work` in the container). The locally built cards ran in FS-UAE on Kickstart 3.1 (A1200, headless): 14 ok lines, the
+  scripted click on Higher ("guess higher: right"), the screenshot shows the table with four cards, the deck, the 9 of clubs and
+  the two buttons. `esharp doctor` on the dev host listed all six targets as building by Docker, m68k also by the local
+  toolchain (6.5.0b, from `ESHARP_TOOLCHAIN_M68K`), sdl's local gcc without pkg-config `sdl3`, FS-UAE 3.2.35, the OS4 VM and
+  both hosted AROS images.
+- CI: the Linux `test` job runs `tools/local-toolchain/compare.sh` for hello and cards and prints `esharp doctor` (a step in
+  the existing job, not a new check).
+- Unit tests (`ToolchainTests`, `ProjectTemplateTests`): lookup order, the empty option, ESHARP_TOOLCHAIN for Amiga targets
+  only, PATH, every error message, the AROS sysroot rules, the version check, the command line a local build passes (a fake
+  gcc script; Unix only), `--docker` with `--toolchain`, the doctor report with fakes (only `docker version` and
+  `docker image inspect` are run) and its exit code, and the new VS Code tasks.
+- Found (verified): copies of the os4, morphos, aros and aros-i386 toolchains out of their images do not work in another
+  folder (os4 and morphos: `stdint.h` not found; AROS: `collect-aros` runs `/opt/.../bin/x86_64-aros-ld`). They only work at the
+  image's own path, which needs a root install; not tried, so local builds of those targets are **not verified**.
+- Not verified: local toolchains on macOS and Windows (part 2 of #122, by hand), a self-built AmigaPorts m68k-amigaos-gcc,
+  the VS Code tasks in VS Code itself (the unit test checks the files `esharp new` writes, including the empty
+  `esharp.toolchain` in `.vscode/settings.json`; nobody has run the tasks in VS Code), `esharp addr --toolchain` against a real crash, an os4 run with a local compiler.
+
 ## `esharp test` on hosted AROS, and the target program's return code (issue #118)
 
 - **`esharp test --target aros` and `--target aros-i386`** build for that target (`--docker` is the toolchain image as for build:
@@ -1243,6 +1282,9 @@ Open work as of 2026-11-14 (the GitHub issues are the live list; the v1 tracker 
 - **Bindings (#19, #40):** GadTools wrappers (v1), the BOOPSI core with hooks (#40 part 1, see "BOOPSI core and hooks") and the MUI wrappers on it (#40 part 2, see "MUI wrappers") are done. MUI custom classes (#93, see "MUI custom classes") are done too. Open: ReAction (last, if at all).
 - **Display design (not implemented):** [design/DISPLAY.md](design/DISPLAY.md) proposes logical coordinates with an integer scale, mode choice that follows the Workbench's monitor family (MODE option, asl screen-mode requester), 256 colours with a shared palette, a gradient pen (copper on AGA), window mode on the Workbench and multi-scale art. Nothing in it is built or verified yet; it waits for the maintainer's approval.
 - **v2:** AROS i386 (#4: toolchain, target and hosted runs done, see "AROS i386"; the MUI crashes on hosted i386 were an AROS bug, worked around (#105); open: native pc-i386), E# library source packages on NuGet (#31), user classes deriving from platform classes (#42: done for `GtWindow`, see "Classes derived from platform classes"). Capturing lambdas stored in fields and events (#41): done (PR #83), see "Heap closures and events".
+- **Local toolchains (#122):** part 1 done (configuration, `esharp doctor`, VS Code tasks, a local m68k build in CI; see
+  "Local toolchains, part 1"). Open: macOS and Windows by hand, and whether os4, morphos and AROS get a local route
+  ([design/TOOLCHAINS.md](design/TOOLCHAINS.md) has the options; the maintainer picks).
 - Smaller follow-ups: an `esharp test` runner for morphos (aros, aros-i386 and the return code are done, issue #118); OS4 sound on real hardware; the chip budget report only covers constant sizes ([MEMORY.md](MEMORY.md)).
 
 Done and no longer "next": the emulator side of the phase 1 gate (AROS replacement and Kickstart 3.1; 2.04 was also run, historically), the NuGet packages (on nuget.org since 0.1.1), the card demo and rummy, os4 runs in the VM, the `sdl` target, hosted AROS runs, double buffering.

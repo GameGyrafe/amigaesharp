@@ -31,7 +31,7 @@ run, unit tested and debugged on the PC.
 | `src/ESharp.Platform` | The platform layer: `Video`, `Input`, `Sound`, `Dos`, `Mem`, `Heap`, collections, `Gui`, BOOPSI, MUI, IFF, fonts, and the `[AmigaLib]` bindings. Parsed together with user code, with the symbols below choosing the implementation. `Layout.g.cs` holds struct offsets measured per target. |
 | `src/ESharp.Target.Host` | Managed fakes for tests (`HostConsole`, `HostMem`, a fake chip RAM budget). Built with `HOST`. |
 | `src/ESharp.Assets` | The PNG and IFF ILBM readers, PNG writer, colour reduction and dithering, planar packing, WAV and 8SVX reading, the `assets.json` to `Assets.g.cs` generator with an incremental `Sync` and the Workbench icon writers. |
-| `src/ESharp.Cli` | The `esharp` command: `new`, `build`, `run`, `test`, `assets`, `addr`, `os4vm`. The FS-UAE, SDL, host and AmigaOS 4.1 VM harnesses live here, plus the project template (`ProjectTemplate.cs`). Packs the dotnet tool **AmigaESharp.Tool**. |
+| `src/ESharp.Cli` | The `esharp` command: `new`, `build`, `run`, `test`, `assets`, `addr`, `os4vm`, `doctor` (`Doctor.cs`). Where a local compiler comes from (`--toolchain`, `ESHARP_TOOLCHAIN_*`, PATH; version check) is `Toolchain.cs`; Docker builds pass the same command line. The FS-UAE, SDL, host and AmigaOS 4.1 VM harnesses live here, plus the project template (`ProjectTemplate.cs`). Packs the dotnet tool **AmigaESharp.Tool**. |
 | `src/ESharp.Sdk` | Packaging only: **AmigaESharp.Sdk** (Runtime, Platform and Target.Host in `lib/net10.0`, the analyzer in `analyzers/dotnet/cs`). |
 | `tests/ESharp.Compiler.Tests` | The unit tests (xUnit). |
 | `samples/` | Programs that double as feature demos and tests (`ok NAME` / `FAIL NAME` lines). |
