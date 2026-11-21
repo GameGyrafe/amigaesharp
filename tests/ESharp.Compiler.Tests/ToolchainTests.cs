@@ -288,4 +288,76 @@ printf x > ""$out""
         Assert.Contains("unknown target", w.ToString());
         Assert.Equal(0, Doctor.Run(new[] { "--toolchain", _dir }, w));
     }
+
+    // macOS and Windows (issue #122, part 2): the rules run on any host through the HostOs parameter.
+
+    [Fact]
+    public void Windows_finds_the_exe_in_a_folder_with_spaces_and_does_not_double_the_suffix()
+    {
+        var dir = Path.Combine(_dir, "my tools", "m68k amigaos");
+        Directory.CreateDirectory(Path.Combine(dir, "bin"));
+        File.WriteAllText(Path.Combine(dir, "bin", "m68k-amigaos-gcc.exe"), "");
+        Assert.Null(Toolchain.Resolve(Targets.M68k, dir, null, Env(), out var c, null, Toolchain.HostOs.Windows));
+        Assert.Equal(Path.Combine(dir, "bin", "m68k-amigaos-gcc.exe"), c!.Compiler);
+        Assert.Null(Toolchain.Resolve(Targets.M68k, dir, null, Env(), out var c2, "m68k-amigaos-gcc.exe", Toolchain.HostOs.Windows));
+        Assert.Equal(c.Compiler, c2!.Compiler);
+        // The same folder on Linux has no compiler without the suffix.
+        var e = Toolchain.Resolve(Targets.M68k, dir, null, Env(), out _, null, Toolchain.HostOs.Linux)!;
+        Assert.Contains("no m68k-amigaos-gcc in ", e);
+        Assert.DoesNotContain("On Windows", e);
+        Assert.Equal("m68k-amigaos-gcc.exe", Toolchain.Exe("m68k-amigaos-gcc", Toolchain.HostOs.Windows));
+        Assert.Equal("m68k-amigaos-gcc.EXE", Toolchain.Exe("m68k-amigaos-gcc.EXE", Toolchain.HostOs.Windows));
+        Assert.Equal("m68k-amigaos-gcc", Toolchain.Exe("m68k-amigaos-gcc", Toolchain.HostOs.MacOS));
+    }
+
+    [Fact]
+    public void Windows_path_uses_semicolons_and_quoted_entries_with_spaces()
+    {
+        var dir = Path.Combine(_dir, "Program Files", "amiga", "bin");
+        Directory.CreateDirectory(dir);
+        File.WriteAllText(Path.Combine(dir, "m68k-amigaos-gcc.exe"), "");
+        // On Windows the separator is ';' (a ':' would split C:\... in two); entries may be quoted.
+        var path = "\"" + dir + "\";" + Path.Combine(_dir, "elsewhere");
+        Assert.Equal(Path.Combine(dir, "m68k-amigaos-gcc.exe"), Toolchain.FindOnPath("m68k-amigaos-gcc", n => n == "PATH" ? path : null, Toolchain.HostOs.Windows));
+        Assert.Null(Toolchain.FindOnPath("m68k-amigaos-gcc", n => n == "PATH" ? dir : null, Toolchain.HostOs.Linux));
+        Assert.Null(Toolchain.Resolve(Targets.M68k, null, null, n => n == "PATH" ? path : null, out var c, null, Toolchain.HostOs.Windows));
+        Assert.Equal("PATH", c!.Source);
+    }
+
+    [Fact]
+    public void A_cc_without_exe_is_found_on_windows()
+    {
+        var f = Path.Combine(_dir, "cc dir", "gcc-m68k");
+        Directory.CreateDirectory(Path.GetDirectoryName(f)!);
+        File.WriteAllText(f + ".exe", "");
+        Assert.Null(Toolchain.Resolve(Targets.M68k, null, null, Env(), out var c, f, Toolchain.HostOs.Windows));
+        Assert.Equal(f + ".exe", c!.Compiler);
+        Assert.Contains("not found", Toolchain.Resolve(Targets.M68k, null, null, Env(), out _, f, Toolchain.HostOs.MacOS));
+    }
+
+    [Fact]
+    public void Errors_and_doctor_give_platform_advice_for_macos_and_windows()
+    {
+        var missing = Path.Combine(_dir, "nope");
+        var mac = Toolchain.Resolve(Targets.M68k, missing, null, Env(), out _, null, Toolchain.HostOs.MacOS)!;
+        Assert.Contains("Homebrew", mac);
+        Assert.Contains("docs/GUIDE.md", mac);
+        var win = Toolchain.Resolve(Targets.M68k, null, null, Env(), out _, null, Toolchain.HostOs.Windows)!;
+        Assert.Contains("MSYS2", win);
+        Assert.Contains("WSL2", win);
+        Assert.Contains("m68k-amigaos-gcc.exe", win);
+        Assert.Contains("--docker", win);
+        Assert.Contains("MSYS2", Toolchain.VersionProblem(Targets.M68k, "m68k-amigaos-gcc.exe", "13.2.0", Toolchain.HostOs.Windows)!);
+        Assert.Contains("Homebrew", Toolchain.VersionProblem(Targets.M68k, "m68k-amigaos-gcc", null, Toolchain.HostOs.MacOS)!);
+        Assert.DoesNotContain("Homebrew", Toolchain.VersionProblem(Targets.M68k, "m68k-amigaos-gcc", "13.2.0", Toolchain.HostOs.Linux)!);
+        // Other targets stay Docker-only: no macOS or Windows advice for them.
+        Assert.DoesNotContain("Homebrew", Toolchain.Resolve(Targets.Os4, null, null, Env(), out _, null, Toolchain.HostOs.MacOS)!);
+
+        string Doc(Toolchain.HostOs os) => string.Join("\n", Doctor.Report(new Doctor.Probe { Env = Env(), FileExists = _ => false, VersionOf = _ => null, Run = (_, _) => null, Os = os }, new[] { Targets.M68k }));
+        Assert.Contains("not set up", Doc(Toolchain.HostOs.MacOS));
+        Assert.Contains("Homebrew", Doc(Toolchain.HostOs.MacOS));
+        Assert.Contains("MSYS2", Doc(Toolchain.HostOs.Windows));
+        Assert.DoesNotContain("Xvfb", Doc(Toolchain.HostOs.MacOS));
+        Assert.Contains("Xvfb", Doc(Toolchain.HostOs.Linux));
+    }
 }

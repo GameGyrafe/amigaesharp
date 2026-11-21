@@ -112,7 +112,7 @@ local toolchains.
    `--toolchain <folder>`). It needs Docker once, gives the same bytes, and is what CI checks. Without Docker at all,
    building AmigaPorts m68k-amigaos-gcc is the documented route (not verified; `-dumpversion` must say 6.5.0b).
 3. Local m68k on macOS and Windows: AmigaPorts m68k-amigaos-gcc built with Homebrew / MSYS2 (or WSL2 with the Linux route).
-   Verify by hand on real machines first (part 2 of #122), comparing the output with the Docker build of the same source.
+   Verify by hand on real machines first (part 2 of #122: the steps and a paste-back checklist are in docs/GUIDE.md, "Local m68k toolchain on macOS and Windows", all marked not verified), comparing the output with the Docker build of the same source.
 4. os4, morphos, aros, aros-i386: stay Docker-only for now. Their image copies are not relocatable; supporting them locally
    means a root install at `/opt/<name>` on Linux or the vendors' own SDK setups, each to be tried before it is documented.
 5. Keep `-noixemul` on m68k and morphos, so no GPL C library is ever linked into a game; settle the NDK 3.2 and OS4 SDK link
