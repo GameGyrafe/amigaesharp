@@ -97,6 +97,7 @@ internal sealed partial class CEmitter
         r.AppendLine("        found = DecodeLocationA((APTR)pc, tags) && start != NULL;");
         r.AppendLine("        CloseLibrary(DebugBase);");
         r.AppendLine("    }");
+        r.AppendLine("    es_rawioinit();");
         r.AppendLine("    es_trace_where_text(label);");
         r.AppendLine("    if (!found) { es_trace_where_text(\": not found by debug.library, address \"); es_trace_where_hex((unsigned long)(IPTR)pc); }");
         r.AppendLine("    else");
@@ -114,6 +115,7 @@ internal sealed partial class CEmitter
         r.AppendLine("static __attribute__((noinline)) void es_trace_where_at(const char *label)");
         r.AppendLine("{");
         r.AppendLine("    const char *pc = ES_TRACE_CALL_PC;");
+        r.AppendLine("    es_rawioinit();");
         r.AppendLine("    es_trace_where_text(label);");
         r.AppendLine("    if ((const char *)pc >= (const char *)_start) { es_trace_where_text(\": _start+\"); es_trace_where_hex((unsigned long)((const char *)pc - (const char *)_start)); }");
         r.AppendLine("    else { es_trace_where_text(\": address \"); es_trace_where_hex((unsigned long)pc); }");
@@ -124,6 +126,7 @@ internal sealed partial class CEmitter
         r.AppendLine("{");
         r.AppendLine("    const char *pc = ES_TRACE_CALL_PC;");
         r.AppendLine("    (void)pc;");
+        r.AppendLine("    es_rawioinit();");
         r.AppendLine("    es_trace_where_text(label);");
         r.AppendLine("    es_trace_where_text(\": (no code offset on this target yet)\\n\");");
         r.AppendLine("}");
