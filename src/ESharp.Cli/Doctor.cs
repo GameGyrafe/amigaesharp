@@ -23,6 +23,8 @@ public static class Doctor
         public Func<string, string?> Env { get; init; } = Environment.GetEnvironmentVariable;
         public Func<string, bool> FileExists { get; init; } = File.Exists;
         public Func<string, string?> VersionOf { get; init; } = Toolchain.ReadVersion;
+        /// <summary>The kind of machine, for the PATH rules and the setup advice (tests give each).</summary>
+        public Toolchain.HostOs Os { get; init; } = Toolchain.CurrentOs;
     }
 
     public static int Run(string[] args, TextWriter? output = null)
@@ -81,15 +83,15 @@ public static class Doctor
             var anyImage = images.Any(Image);
             lines.Add($"  {t.Name,-10} docker: {string.Join(", ", images.Select(ImageText))}" + (dockerOk && !anyImage ? $"; {BuildHint(t)}" : ""));
 
-            var error = Toolchain.Resolve(t, toolchainOption, null, p.Env, out var choice);
+            var error = Toolchain.Resolve(t, toolchainOption, null, p.Env, out var choice, null, p.Os);
             string local;
             bool localOk = false;
             if (error != null)
-                local = error.Contains("not found on PATH") ? $"not set up ({t.Compiler} not on PATH; set {Toolchain.EnvFor(t)} or pass --toolchain <dir>)" : error;
+                local = error.Contains("not found on PATH") ? $"not set up ({t.Compiler} not on PATH; set {Toolchain.EnvFor(t)} or pass --toolchain <dir>)" + Toolchain.SetupAdvice(t, p.Os) : error;
             else
             {
                 var v = p.VersionOf(choice!.Compiler);
-                var problem = Toolchain.VersionProblem(t, choice.Compiler, v);
+                var problem = Toolchain.VersionProblem(t, choice.Compiler, v, p.Os);
                 localOk = problem == null && v != null;
                 local = $"{choice.Compiler} {v ?? "(no version)"} (from {choice.Source})" +
                         (t.CompilerVersion.Length == 0 ? "" : problem == null ? ", as in the pinned image" : $", the pinned image has {t.CompilerVersion}: builds need --any-cc-version (not tested)");
@@ -108,20 +110,20 @@ public static class Doctor
 
         lines.Add("");
         lines.Add("Emulators and VMs:");
-        var fsuae = p.Env("ESHARP_FSUAE") is { Length: > 0 } fe ? fe : Toolchain.FindOnPath("fs-uae", p.Env);
+        var fsuae = p.Env("ESHARP_FSUAE") is { Length: > 0 } fe ? fe : Toolchain.FindOnPath("fs-uae", p.Env, p.Os);
         var fsv = fsuae == null ? null : p.Run(fsuae, new[] { "--version" });
         lines.Add("  FS-UAE (m68k run/test): " + (fsuae == null ? "not found (install FS-UAE, or set ESHARP_FSUAE / pass --fsuae)"
             : $"{fsuae}" + (fsv is { Code: 0 } ? $" {fsv.Value.Output.Trim().Split('\n')[0]}" : fsv == null ? " (cannot be started)" : "")));
-        if (!OperatingSystem.IsWindows() && !OperatingSystem.IsMacOS())
+        if (p.Os == Toolchain.HostOs.Linux)
         {
-            lines.Add("  Xvfb (headless runs): " + (Toolchain.FindOnPath("Xvfb", p.Env) != null ? "found" : "not found (headless runs need Xvfb, or a DISPLAY)"));
-            lines.Add("  xwd (--screenshot): " + (Toolchain.FindOnPath("xwd", p.Env) != null ? "found" : "not found"));
+            lines.Add("  Xvfb (headless runs): " + (Toolchain.FindOnPath("Xvfb", p.Env, p.Os) != null ? "found" : "not found (headless runs need Xvfb, or a DISPLAY)"));
+            lines.Add("  xwd (--screenshot): " + (Toolchain.FindOnPath("xwd", p.Env, p.Os) != null ? "found" : "not found"));
         }
         var ks = p.Env("ESHARP_KICKSTART");
         lines.Add("  Kickstart: " + (string.IsNullOrWhiteSpace(ks) ? "ESHARP_KICKSTART not set (FS-UAE's built-in AROS ROM replacement is used, or pass --kickstart)"
             : p.FileExists(ks) ? "ESHARP_KICKSTART set, the file is there" : "ESHARP_KICKSTART set, but the file is not there"));
         var vm = Os4Vm.FindVm(p.Env("ESHARP_OS4_VM"), out var vmError);
-        var qemu = Toolchain.FindOnPath("qemu-system-ppc", p.Env);
+        var qemu = Toolchain.FindOnPath("qemu-system-ppc", p.Env, p.Os);
         lines.Add("  OS4 VM (os4 run/test): " + (vm == null ? vmError : "ESHARP_OS4_VM set up") + "; qemu-system-ppc " + (qemu != null ? "found" : "not found"));
         foreach (var img in new[] { ArosHosted.ImageX86_64, ArosHosted.ImageI386 })
             lines.Add($"  Hosted AROS ({(img == ArosHosted.ImageI386 ? "aros-i386" : "aros")} test): " + (!dockerOk ? $"{img} (no Docker)"

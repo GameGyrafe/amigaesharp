@@ -296,8 +296,9 @@ verified):
 
   The copied binaries need glibc 2.38 or later (Ubuntu 24.04 and newer). Building the toolchain yourself
   (AmigaPorts m68k-amigaos-gcc) works the same way if its `-dumpversion` is 6.5.0b (not verified).
-- **macOS and Windows, m68k (not verified):** build AmigaPorts m68k-amigaos-gcc (Homebrew on macOS, MSYS2 on Windows; or the
-  Linux route inside WSL2) and pass its install prefix. The Linux copies above do not run there.
+- **macOS and Windows, m68k (not verified):** build AmigaPorts m68k-amigaos-gcc yourself and pass its install prefix; the
+  Linux copies above are Linux programs and do not run there. Step by step in
+  [Local m68k toolchain on macOS and Windows](#local-m68k-toolchain-on-macos-and-windows) below.
 - **os4, morphos, aros, aros-i386 (not verified):** use Docker. Copies of these toolchains out of the images only work at
   the image's own path (`/opt/ppc-amigaos` and so on): their include and linker paths are built in.
 
@@ -311,6 +312,135 @@ In VS Code, the tasks "E#: build (m68k, local toolchain)" and "E#: run in FS-UAE
 empty and use `ESHARP_TOOLCHAIN_M68K` / `ESHARP_TOOLCHAIN` (VS Code must be started with them in its environment) or PATH.
 The workspace value wins over your user `settings.json`: to use a user-wide setting instead, delete the line from the
 workspace file. The default build task stays the Docker one.
+
+#### Local m68k toolchain on macOS and Windows
+
+**Not verified.** Nobody has run any step of this section on a Mac or a Windows machine yet. It is written from the project
+pages named in each step, in our own words; where a step is a guess it says so. The checklist at the end is for whoever tries
+it first: please paste the results back on issue #122. Docker (`--docker`) stays the default and the safe way on both systems.
+
+What you are building is the same compiler the pinned Docker image has: AmigaPorts m68k-amigaos-gcc
+(https://github.com/AmigaPorts/m68k-amigaos-gcc, the continuation of Bebbo's amiga-gcc) with its **legacy gcc 6.5.0b**, which
+reports `6.5.0b` for `-dumpversion`. `esharp build` refuses any other version (without `--any-cc-version`). The project's
+default is a much newer gcc (16.2 at the time of writing), so the step that switches the gcc branch below is not optional.
+The pinned image's own build string is `m68k-amigaos-gcc (AmigaDev amiga6-g0a5f82c43) 6.5.0b 20260819091705`; a build you make
+yourself will be the same gcc branch, but libnix, the NDK headers and binutils come from the checkout you build, so the
+generated executable may differ from the Docker one even when the version matches (the comparison step below tells you).
+Building takes a while (the project says roughly 5 to 15 minutes on current Linux hardware; not measured on a Mac or on
+Windows) and a few GB of disk.
+
+**macOS (Intel and Apple Silicon), not verified.** Source: the project's build page,
+https://github.com/AmigaPorts/m68k-amigaos-gcc/blob/master/doc/build.md ("macOS"). It does not name Apple Silicon either way,
+so that is part of what the checklist finds out.
+
+1. Install the Xcode command line tools (`xcode-select --install`) and Homebrew (https://brew.sh).
+2. Install the build tools Apple does not ship in GNU form:
+   `brew install bash bison coreutils curl flex gettext gnu-sed gnu-tar grep make wget xz`
+3. Put Homebrew's GNU versions first on `PATH` under their plain names (the project says its build needs this and that Apple's
+   old GNU make 3.81 is known to give link failures). In `~/.zshrc`:
+
+   ```bash
+   export PATH="$(brew --prefix bison)/bin:$(brew --prefix flex)/bin:$PATH"
+   for pkg in coreutils gnu-sed gnu-tar grep make; do
+     export PATH="$(brew --prefix $pkg)/libexec/gnubin:$PATH"
+   done
+   ```
+
+   Open a new terminal; `make --version` should say GNU Make 4.x. (On Apple Silicon `brew --prefix` is `/opt/homebrew`; Intel
+   `/usr/local`; the lines above work for both.)
+4. Get the sources, pick the legacy gcc branch, and build into a folder you own (no `sudo`; the path may contain no spaces,
+   to be safe: the project does not say it works with them):
+
+   ```bash
+   git clone https://github.com/AmigaPorts/m68k-amigaos-gcc
+   cd m68k-amigaos-gcc
+   make update
+   make branch mod=gcc branch=amiga6      # branches.md: amiga6 is the legacy gcc 6.5.0b; the default is 16.2
+   make all PREFIX="$HOME/amiga/m68k-amigaos" -j"$(sysctl -n hw.ncpu)"
+   ```
+
+   The branch step is from https://github.com/AmigaPorts/m68k-amigaos-gcc/blob/master/doc/branches.md. Whether the `amiga6`
+   branch still builds on a current Mac, and whether it needs the extra Homebrew gcc the build page mentions for gdb
+   (`brew install gcc@12`, then `CC=gcc-12 CXX=g++-12 make all`), is not known; gdb is not needed by E#. There is no separate
+   install step: the build installs into `PREFIX` as it goes.
+5. Check the compiler, then tell E# where it is:
+
+   ```bash
+   "$HOME/amiga/m68k-amigaos/bin/m68k-amigaos-gcc" -dumpversion        # must print 6.5.0b
+   export ESHARP_TOOLCHAIN_M68K="$HOME/amiga/m68k-amigaos"             # or pass --toolchain on each command
+   esharp doctor --target m68k
+   esharp build samples/hello
+   ```
+
+**Windows with MSYS2, not verified.** Source: the same build page ("Windows with msys2"). The project documents MSYS2 only; its
+build host list is not specific about native Windows beyond that.
+
+1. Install MSYS2 (https://www.msys2.org) and open an *MSYS2 shell* (the `MSYS` one, not UCRT64: the project's package list is
+   for the MSYS environment).
+2. `pacman -S curl git base-devel gcc flex rsync`
+3. Get the sources and build, **entering the directory by its absolute path** (the build page says `make` can fail to find
+   files otherwise, because of an MSYS2 bug), and switch to the legacy gcc as on macOS:
+
+   ```bash
+   cd /c/msys64/home/<you>
+   git clone https://github.com/AmigaPorts/m68k-amigaos-gcc
+   cd /c/msys64/home/<you>/m68k-amigaos-gcc
+   make update
+   make branch mod=gcc branch=amiga6
+   make all PREFIX=/c/amiga/m68k-amigaos -j$(nproc)
+   ```
+
+   `PREFIX` is the folder E# will be pointed at: `C:\amiga\m68k-amigaos` here. Avoid spaces in it. Whether `amiga6` builds
+   under MSYS2 today is not known.
+4. The result is `C:\amiga\m68k-amigaos\bin\m68k-amigaos-gcc.exe`. If it was built in the `MSYS` environment it may need the
+   MSYS runtime DLLs (`msys-2.0.dll`, in `C:\msys64\usr\bin`) to start: if running it from PowerShell or cmd fails with a
+   missing DLL, either add `C:\msys64\usr\bin` to the Windows `PATH`, or run `esharp` from the MSYS2 shell. Not verified, and
+   it is a guess from how MSYS2 programs work.
+5. Check and use it from PowerShell (`esharp` finds `bin\m68k-amigaos-gcc.exe`; paths with spaces are fine for `--toolchain`
+   and `ESHARP_TOOLCHAIN_M68K`, quote them):
+
+   ```powershell
+   & C:\amiga\m68k-amigaos\bin\m68k-amigaos-gcc.exe -dumpversion     # must print 6.5.0b
+   $env:ESHARP_TOOLCHAIN_M68K = "C:\amiga\m68k-amigaos"                # or --toolchain "C:\amiga\m68k-amigaos"
+   esharp doctor --target m68k
+   esharp build samples\hello
+   ```
+
+**Windows with WSL2, not verified.** Install WSL2 with Ubuntu 24.04 or newer (`wsl --install -d Ubuntu-24.04`), then follow the
+**Linux** route above inside WSL (Docker Desktop with WSL integration for the image copy, or a Linux build of the toolchain),
+and run `esharp` itself inside WSL too. Keep the project and the toolchain in the Linux file system (`~/...`), not under
+`/mnt/c`: file access there is slow. This is the route with the fewest unknowns, because it is the verified Linux one.
+
+**Compare with the Docker build, not verified on these systems.** `tools/local-toolchain/compare.sh` (Linux, in the E#
+repository) does this with a copy of the image's own toolchain; it cannot be pointed at your own build, so on a Mac or Windows
+do it by hand with Docker Desktop running (three commands per sample; on Windows use `samples\hello` and
+`Get-FileHash -Algorithm SHA256 <file>`):
+
+```bash
+esharp build samples/hello --docker amigadev/crosstools:m68k-amigaos@sha256:32ec76dac03a642203f0f09f0416480d6c25de1092ed7ed472db870304a64859 -o hello-docker
+esharp build samples/hello --toolchain "$HOME/amiga/m68k-amigaos" -o hello-local
+shasum -a 256 hello-docker/hello hello-local/hello hello-docker/hello.c hello-local/hello.c
+```
+
+(The output folder holds the executable `<name>`, its icon `<name>.info` and the generated C `<name>.c`; compare all three.) Identical
+hashes are the best result. Different hashes are not a failure of the setup if `-dumpversion` matches: record both hashes, the
+`--version` first line of your compiler against the image's, and which sample it was. Then run the program in FS-UAE
+(`esharp run samples/hello --headless --kickstart <rom>`; headless needs Xvfb, so on macOS and Windows leave `--headless` off).
+Generated C does not depend on the toolchain: it is the same on every machine.
+
+**Checklist for the first person to try this** (paste the answers into issue #122, one line each; say which of macOS Intel,
+macOS Apple Silicon, Windows MSYS2 or Windows WSL2 you used):
+
+- [ ] OS, version and CPU (`sw_vers` and `uname -m`, or `winver` and `systeminfo`).
+- [ ] Which steps above worked as written, and the first line of any step that failed (with the error text).
+- [ ] Did `make branch mod=gcc branch=amiga6` and `make all` finish? How long did it take, and how big is the install folder?
+- [ ] Output of `m68k-amigaos-gcc -dumpversion` (expected `6.5.0b`) and of `m68k-amigaos-gcc --version | head -1`.
+- [ ] Output of `esharp doctor --target m68k` (it should show the compiler, `6.5.0b`, "as in the pinned image").
+- [ ] On Windows: does the compiler start from PowerShell without MSYS2 on `PATH`? Does a `--toolchain` folder with a space in it work?
+- [ ] On Windows: `esharp build samples\hello` with the toolchain only on `PATH` (no `--toolchain`): does it find the `.exe`?
+- [ ] The two SHA-256 hashes from the comparison above (Docker build and local build) for `samples/hello`, and whether they match.
+- [ ] Did `esharp run samples/hello --kickstart <rom>` show the program's output in FS-UAE?
+- [ ] Any message from `esharp` that was unclear or gave wrong advice.
 
 AROS needs a hosted AROS to run: `docker build -t esharp-aros-hosted docker/aros-hosted` (downloads a pinned AROS nightly and
 checks its sha256, [docker/aros-hosted](../docker/aros-hosted/README.md)), and

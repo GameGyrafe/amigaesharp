@@ -19,6 +19,11 @@ public sealed record ToolchainChoice(string Compiler, string? Sysroot, string So
 /// </summary>
 public static class Toolchain
 {
+    /// <summary>The kind of machine esharp runs on; a parameter so the Windows and macOS rules (.exe, PATH separator, advice) are tested on any host.</summary>
+    public enum HostOs { Linux, MacOS, Windows }
+
+    public static HostOs CurrentOs => OperatingSystem.IsWindows() ? HostOs.Windows : OperatingSystem.IsMacOS() ? HostOs.MacOS : HostOs.Linux;
+
     public const string EnvAll = "ESHARP_TOOLCHAIN";
 
     /// <summary>The per-target variable, ESHARP_TOOLCHAIN_M68K for m68k, ESHARP_TOOLCHAIN_AROS_I386 for aros-i386.</summary>
@@ -40,15 +45,36 @@ public static class Toolchain
 
     private static string? NonEmpty(string? s) => string.IsNullOrWhiteSpace(s) ? null : s;
 
-    private static string Exe(string name) => OperatingSystem.IsWindows() && !name.EndsWith(".exe", StringComparison.OrdinalIgnoreCase) ? name + ".exe" : name;
+    /// <summary>The file name of a program: <c>.exe</c> added on Windows unless it is already there.</summary>
+    public static string Exe(string name, HostOs? os = null) =>
+        (os ?? CurrentOs) == HostOs.Windows && !name.EndsWith(".exe", StringComparison.OrdinalIgnoreCase) ? name + ".exe" : name;
+
+    /// <summary>
+    /// What to do when no local compiler is found or it has the wrong version, for this kind of machine: where the setup steps are
+    /// (docs/GUIDE.md "A local toolchain instead of Docker"). The Linux route needs Docker once; macOS and Windows build the
+    /// toolchain (Homebrew, MSYS2 or WSL2) and say where its install prefix is.
+    /// </summary>
+    public static string SetupAdvice(TargetInfo target, HostOs os)
+    {
+        if (target != Targets.M68k) return "";
+        return os switch
+        {
+            HostOs.MacOS => " On macOS, build AmigaPorts m68k-amigaos-gcc with Homebrew's tools and pass its install prefix (docs/GUIDE.md, \"A local toolchain instead of Docker\").",
+            HostOs.Windows => " On Windows, build AmigaPorts m68k-amigaos-gcc in MSYS2 (or use WSL2 and the Linux route) and pass its install prefix, the folder that holds bin\\m68k-amigaos-gcc.exe (docs/GUIDE.md, \"A local toolchain instead of Docker\").",
+            _ => "",
+        };
+    }
 
     /// <summary>The first of <paramref name="name"/> on PATH (with .exe on Windows), or null.</summary>
-    public static string? FindOnPath(string name, Func<string, string?>? env = null)
+    public static string? FindOnPath(string name, Func<string, string?>? env = null, HostOs? os = null)
     {
         var path = (env ?? Environment.GetEnvironmentVariable)("PATH") ?? "";
-        foreach (var d in path.Split(Path.PathSeparator, StringSplitOptions.RemoveEmptyEntries))
+        var sep = (os ?? CurrentOs) == HostOs.Windows ? ';' : ':';
+        foreach (var d in path.Split(sep, StringSplitOptions.RemoveEmptyEntries))
         {
-            var f = Path.Combine(d.Trim('"'), Exe(name));
+            var dir = d.Trim().Trim('"');
+            if (dir.Length == 0) continue;
+            var f = Path.Combine(dir, Exe(name, os));
             if (File.Exists(f)) return f;
         }
         return null;
@@ -60,8 +86,9 @@ public static class Toolchain
     /// folder or on PATH, or a path). Returns an error message, or null with <paramref name="choice"/> set.
     /// </summary>
     public static string? Resolve(TargetInfo target, string? option, string? sysrootOption, Func<string, string?> env,
-        out ToolchainChoice? choice, string? cc = null, bool forBinutils = false)
+        out ToolchainChoice? choice, string? cc = null, HostOs? hostOs = null, bool forBinutils = false)
     {
+        var os = hostOs ?? CurrentOs;
         choice = null;
         string? dir = null, source = null;
         if (NonEmpty(option) is { } o) { dir = o; source = "--toolchain"; }
@@ -75,14 +102,14 @@ public static class Toolchain
             dir = Expand(dir);
             if (!Directory.Exists(dir))
                 return $"toolchain folder {dir} (from {source}) does not exist; it should be the toolchain's install prefix, the folder " +
-                       $"that holds bin/{target.Compiler} (in the pinned image: {ImageDir(target)})";
+                       $"that holds bin/{target.Compiler} (in the pinned image: {ImageDir(target)})" + SetupAdvice(target, os);
             if (Path.IsPathRooted(name)) compiler = name;
             else
             {
-                var found = new[] { Path.Combine(dir, "bin", Exe(name)), Path.Combine(dir, Exe(name)) }.FirstOrDefault(File.Exists);
+                var found = new[] { Path.Combine(dir, "bin", Exe(name, os)), Path.Combine(dir, Exe(name, os)) }.FirstOrDefault(File.Exists);
                 if (found == null)
-                    return $"no {Exe(name)} in {Path.Combine(dir, "bin")} (toolchain folder from {source}): give the toolchain's install " +
-                           $"prefix, the folder that holds bin/{target.Compiler} (in the pinned image: {ImageDir(target)}), or {(forBinutils ? "pass" : "build with")} --docker [image]";
+                    return $"no {Exe(name, os)} in {Path.Combine(dir, "bin")} (toolchain folder from {source}): give the toolchain's install " +
+                           $"prefix, the folder that holds bin/{target.Compiler} (in the pinned image: {ImageDir(target)}), or {(forBinutils ? "pass" : "build with")} --docker [image]" + SetupAdvice(target, os);
                 compiler = found;
             }
         }
@@ -91,15 +118,20 @@ public static class Toolchain
             if (Path.IsPathRooted(name) || name.Contains('/') || name.Contains('\\'))
             {
                 compiler = Expand(name);
-                if (!File.Exists(compiler) && !File.Exists(compiler + ".exe")) return $"--cc {name}: {compiler} not found";
+                if (!File.Exists(compiler))
+                {
+                    // On Windows a --cc without its .exe is still the program.
+                    if (os == HostOs.Windows && File.Exists(Exe(compiler, os))) compiler = Exe(compiler, os);
+                    else return $"--cc {name}: {compiler} not found";
+                }
             }
             else
             {
-                var found = FindOnPath(name, env);
+                var found = FindOnPath(name, env, os);
                 if (found == null)
                     return $"{name} not found on PATH. {(forBinutils ? "Pass" : "Build with")} --docker [image] (the default way: the pinned toolchain image), " +
                            $"point --toolchain <dir> or {EnvFor(target)}" + (target.IsAmiga ? $" / {EnvAll}" : "") +
-                           " at a local toolchain (the folder that holds bin/" + name + ")" + (forBinutils ? "" : ", or use --emit-only");
+                           " at a local toolchain (the folder that holds bin/" + name + ")" + (forBinutils ? "." : ", or use --emit-only.") + SetupAdvice(target, os);
                 compiler = found;
                 source = "PATH";
             }
@@ -142,15 +174,15 @@ public static class Toolchain
     /// Why the version a compiler reported does not do for <paramref name="target"/>, or null. E# is tested with the pinned images'
     /// compilers, so another version is an error unless --any-cc-version is given.
     /// </summary>
-    public static string? VersionProblem(TargetInfo target, string compiler, string? reported)
+    public static string? VersionProblem(TargetInfo target, string compiler, string? reported, HostOs? os = null)
     {
         if (target.CompilerVersion.Length == 0) return null;
         if (reported == null)
-            return $"{compiler} did not report a version (-dumpversion); is it a gcc for {target.Name}? Pass --any-cc-version to build anyway";
+            return $"{compiler} did not report a version (-dumpversion); is it a gcc for {target.Name}? Pass --any-cc-version to build anyway" + SetupAdvice(target, os ?? CurrentOs);
         var v = reported.Trim();
         if (v == target.CompilerVersion) return null;
         return $"{compiler} is version {v}, but E# is built and tested with {target.CompilerVersion} for {target.Name} (the pinned Docker image's " +
-               "compiler, docs/design/TOOLCHAINS.md). Install that version, or pass --any-cc-version to build anyway (not tested)";
+               "compiler, docs/design/TOOLCHAINS.md). Install that version, or pass --any-cc-version to build anyway (not tested)" + SetupAdvice(target, os ?? CurrentOs);
     }
 
     /// <summary>What <paramref name="compiler"/> prints for -dumpversion, or null when it cannot be run or fails.</summary>

@@ -169,6 +169,20 @@ note with the options per platform, versions and licences: [design/TOOLCHAINS.md
   the VS Code tasks in VS Code itself (the unit test checks the files `esharp new` writes, including the empty
   `esharp.toolchain` in `.vscode/settings.json`; nobody has run the tasks in VS Code), `esharp addr --toolchain` against a real crash, an os4 run with a local compiler.
 
+### Local toolchains, part 2: macOS and Windows (issue #122)
+
+- Done: setup instructions for a local m68k toolchain on macOS (Intel and Apple Silicon, AmigaPorts m68k-amigaos-gcc with
+  Homebrew's tools), Windows (MSYS2) and Windows with WSL2 (the Linux route), with the legacy gcc 6.5.0b branch switch the pinned
+  version needs, how to check with `esharp doctor` and by comparing a build with the Docker build, and a paste-back checklist
+  (GUIDE, "Local m68k toolchain on macOS and Windows"). **Every step in it is not verified**: nobody has run it on a Mac or a
+  Windows machine; it is written from the AmigaPorts build pages. Whether the self-built toolchain gives bytes identical to the
+  Docker image's is also not known (same gcc branch, but libnix, NDK and binutils come from the checkout).
+- Code: `Toolchain` and `Doctor` take the kind of machine as a parameter (`Toolchain.HostOs`), so the Windows rules (`.exe`
+  added once, `;` as the PATH separator with quoted entries, folders with spaces, a `--cc` without `.exe`) and the macOS and
+  Windows advice in the error messages and in the doctor report are unit tested on the Linux host (`ToolchainTests`). Not run on
+  real Windows or macOS machines here; the Windows CI job runs the same tests on Windows.
+- Generated code is unchanged (no emitter or runtime change).
+
 ## `esharp test` on hosted AROS, and the target program's return code (issue #118)
 
 - **`esharp test --target aros` and `--target aros-i386`** build for that target (`--docker` is the toolchain image as for build:
