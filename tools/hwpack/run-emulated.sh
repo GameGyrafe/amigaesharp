@@ -9,6 +9,9 @@
 #                   fast8: the same plus 8 MB fast RAM (a typical accelerated A1200). These are the strictest settings FS-UAE offers
 #                   for an A1200; it does not model the THEA1200's FPGA or a real display.
 #   --fast <MB>     override the fast RAM size of the profile
+#   --mui <3.8|5>   hard-disk mode only: also mount the classic MUI you fetched with tools/mui/fetch-mui.sh (per-user cache, ESHARP_MUI_CACHE or
+#                   ~/.cache/esharp/mui) read-only as the volume MUI: and add its Libs, Locale and Images to the assigns, so mui and muiclass run
+#                   their checks. Without it they print "skip: MUI not installed" (what a stock A1200 does). Never part of the pack.
 #   --timeout <s>   give up after this many seconds (default 900)
 #   --cmd <lines>   AmigaDOS lines to run in the pack drawer instead of "Execute RunAll" (for testing the scripts, e.g. "Execute RunAll RESUME")
 #   --out <dir>     keep the run directory here (default: a new temporary directory, printed at the end)
@@ -21,13 +24,14 @@
 # Without DISPLAY it runs under xvfb-run (needs xvfb and fs-uae installed). Sound goes to the dummy driver.
 set -euo pipefail
 [ -n "${DISPLAY:-}" ] || exec xvfb-run -a -s "-screen 0 800x600x24" "$0" "$@"   # no display: run under Xvfb
-pack=""; rom="${ESHARP_KICKSTART:-}"; wb="${ESHARP_WORKBENCH:-}"; profile=stock; fast=""; timeout=900; out=""; cmd="Execute RunAll"; floppy=""; bootfloppy=""; floppy_speed=0
+pack=""; rom="${ESHARP_KICKSTART:-}"; wb="${ESHARP_WORKBENCH:-}"; profile=stock; fast=""; mui=""; timeout=900; out=""; cmd="Execute RunAll"; floppy=""; bootfloppy=""; floppy_speed=0
 while [ $# -gt 0 ]; do
   case "$1" in
     --rom) rom="$2"; shift 2;;
     --wb) wb="$2"; shift 2;;
     --profile) profile="$2"; shift 2;;
     --fast) fast="$2"; shift 2;;
+    --mui) mui="$2"; shift 2;;
     --timeout) timeout="$2"; shift 2;;
     --out) out="$2"; shift 2;;
     --cmd) cmd="$2"; shift 2;;
@@ -39,6 +43,12 @@ while [ $# -gt 0 ]; do
   esac
 done
 pack="${pack:-obj/hwtest}"
+muidir=""
+if [ -n "$mui" ]; then
+  muidir="${ESHARP_MUI_CACHE:-${XDG_CACHE_HOME:-$HOME/.cache}/esharp/mui}/$mui/files/MUI"
+  [ -f "$muidir/Libs/muimaster.library" ] || { echo "MUI $mui is not in the cache: run tools/mui/fetch-mui.sh $mui first" >&2; exit 2; }
+  [ -z "$floppy$bootfloppy" ] || { echo "--mui works in the hard-disk mode only" >&2; exit 2; }
+fi
 here="$(cd "$(dirname "$0")" && pwd)"
 mkadf() { python3 -I "$here/mkadf.py" "$@"; }
 if [ -n "$floppy$bootfloppy" ]; then
@@ -124,8 +134,11 @@ Makedir RAM:Fonts
 Assign FONTS: RAM:Fonts
 Makedir RAM:Env
 Assign ENV: RAM:Env
-CD DH0:pack
 SEQ
+if [ -n "$muidir" ]; then
+  printf 'Assign LIBS: MUI:Libs ADD\nAssign LOCALE: MUI:Locale ADD\nAssign IMAGES: MUI:Images\n' >> "$run/dh0/S/Startup-sequence"
+fi
+echo "CD DH0:pack" >> "$run/dh0/S/Startup-sequence"
 printf '%s\n' "$cmd" >> "$run/dh0/S/Startup-sequence"
 echo "Echo done >DH0:done" >> "$run/dh0/S/Startup-sequence"
 cat > "$run/run.fs-uae" <<CFG
@@ -145,6 +158,9 @@ window_width = 640
 window_height = 480
 fullscreen = 0
 CFG
+if [ -n "$muidir" ]; then
+  printf 'hard_drive_1 = %s\nhard_drive_1_label = MUI\nhard_drive_1_read_only = 1\n' "$muidir" >> "$run/run.fs-uae"
+fi
 : > "$run/serial.txt"
 export SDL_AUDIODRIVER=dummy
 start=$(date +%s)

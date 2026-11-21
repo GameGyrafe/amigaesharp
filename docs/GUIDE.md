@@ -252,6 +252,21 @@ SDL builds are not verified.
 (`obj/hwtest`, optionally floppy images; `tools/hwpack/README.txt`), and `tools/hwpack/run-emulated.sh` runs the whole pack in
 FS-UAE. Reports from real machines are wanted: [issue #100](https://github.com/GameGyrafe/amigaesharp/issues/100).
 
+Arrival-day checklist (a new Amiga 1200 or THEA1200; the full text is `README.txt` in the pack):
+
+1. Build the pack at the version you will test: `tools/hwpack/build.sh <m68k image>`. Keep that checkout and its `samples/*/obj`
+   (the crash-address map needs the exes of the same build). Copy `obj/hwtest` to the hard disk, or `obj/hwtest.adf` to a floppy
+   (it leaves out `mui`, `muiclass`, `guiclass`, `wbstart`, `rummy` and `cards`: no room).
+2. Shell, `CD` into the drawer, `Execute RunAll` (about 3 to 5 minutes). Every program gets a line in `SUMMARY.txt`; an arrow marks a
+   FAIL line or a count that differs from the emulator's. `mui` and `muiclass` need MUI installed by you and are skipped without it.
+3. By eye, by hand: `gui`, `guiclass`, `boopsi WAIT`, `keys`, the `asl` requester, `wbstart` by double-click (Arguments 2, SEED 42, AUTO yes,
+   Stack 32768), `mui WAIT` and `muiclass WAIT` if MUI is installed; look at `screen`, `aga`, `assets`, `dbuffer` and listen to `sound`.
+4. Send back `SUMMARY.txt`, the `results` drawer, the `BUILD` file, the machine details (README section 4d) and the by-eye answers, as a
+   "Hardware report" issue.
+5. A crash: note the guru number and `results/PROGRESS.txt`, reset, `Execute RunAll RESUME`. With SegTracker, Enforcer or MuForce
+   installed you get "hunk N offset X"; then `esharp addr samples/<program> N X --docker <m68k image>` gives the C# file and line
+   ([DEBUGGING.md](DEBUGGING.md)).
+
 ## MUI
 
 `samples/mui` and `samples/muicheck`. MUI is third-party shareware: nothing of it is in the repository or the packages, and the

@@ -9,6 +9,12 @@
 ; The crashed-program line below carries the program arguments, quoted as RunAll passes them. {args} arrives with its quotes
 ; already resolved, so the one value that holds quotes (mainargs) is spelled out (*** gives a printed *").
 FailAt 1000
+If NOT EXISTS {prog}
+  Echo "{label}: not in this pack (left out of the floppy image for lack of room): skipped" >results/{label}.sum
+  Type results/{label}.sum
+  Type results/{label}.sum >>SUMMARY.txt
+  Skip finish
+EndIf
 If EXISTS T:hwpack-resume
   If EXISTS results/{label}.sum
     Echo "{label}: already done, skipped"

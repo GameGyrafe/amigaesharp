@@ -4,13 +4,33 @@ E# hardware test pack
 Thank you for testing. E# turns C# into native Amiga programs; so far everything has only run
 in an emulator. Your run is the first on real hardware.
 
+0. Arrival-day checklist (about 30 minutes; the details are in the sections below)
+   [ ] Copy this drawer to the hard disk (or write hwtest.adf to a floppy, 1b). Only if copied from a PC:
+       Protect RunAll RunOne +s  and  Protect #? +e
+   [ ] Optional, before the run: install MUI (muimaster.library) yourself if you have it: mui and muiclass then run their checks
+       (section 3a); without it they say "skip: MUI not installed" and are marked skipped, which is fine. Do not install
+       anything else; SegTracker, Enforcer or MuForce are welcome if you already use them (section 4e).
+   [ ] Shell, CD into the drawer, type:  Execute RunAll   (about 3 to 5 minutes; look and listen: sections 4a and 4b)
+   [ ] By eye, by hand (section 4a, about 10 minutes): gui, guiclass, boopsi WAIT, keys, asl requester, wbstart by double-click,
+       and mui WAIT / muiclass WAIT if MUI is installed. Write the answers into the form at the end of section 4.
+   [ ] Send back (section 4d, 5): SUMMARY.txt, the results drawer, the BUILD file from this drawer (the version of this pack),
+       your machine details, the by-eye answers, photos of anything odd.
+   If something crashes: write down the guru number, the program name (results/PROGRESS.txt names it) and, if a tool such as
+   SegTracker, Enforcer or MuForce shows one, the "hunk N offset X" line. We turn that into a C# source line with
+   "esharp addr" (docs/DEBUGGING.md) using the BUILD number. Then  Execute RunAll RESUME  carries on with the other programs.
+
 1. What you need
    An Amiga 1200 or a THEA1200 (68020 or better, AGA, 2 MB chip RAM, Kickstart 3.1, Workbench 3.1 on a
    hard disk or CF card; Kickstart/Workbench 3.0 also runs it, see 1b a)). Other machines are welcome to report (see section 5) but are not the target.
 
 1b. The floppy image (obj/hwtest.adf)
    tools/hwpack/build.sh also writes the whole pack as ONE 880 KB AmigaDOS floppy image, hwtest.adf (FFS, volume
-   HWTEST, a data disk: only E# files, no AmigaOS files, not bootable; about 800 KB used, 80 KB left for results).
+   HWTEST, a data disk: only E# files, no AmigaOS files, not bootable; about 760 KB used, about 120 KB left for results).
+   The floppy leaves out six programs for lack of room: mui and muiclass (they need MUI, which a floppy-only machine rarely
+   has), guiclass (the same window as gui, written as a class), wbstart (the Workbench start check, section 4a) and the two card
+   games rummy (82 KB) and cards (68 KB). RunAll reports each one it would run as "not in this pack ... skipped". They are in the
+   pack drawer: run those from a hard disk copy (or the emulator). The results need about 105 KB of the disk: with less free
+   space the run fills the disk and stalls.
    Every program has a Workbench icon (NAME.info, written by esharp build): open the disk's window on Workbench and double-click a program to
    start it (a console window for its output may open: seen for the wbstart sample, not checked for these programs; RunAll still needs a Shell). The bootable variant in d) has no icons (no room).
    a) A real Amiga 1200 with only a floppy drive (no hard disk, no fast RAM; often Kickstart 3.0). A stock A1200 has ONE
@@ -72,7 +92,7 @@ in an emulator. Your run is the first on real hardware.
          Protect RunAll RunOne +s
          Protect #? +e
    - Type:  Execute RunAll
-   First hwinfo runs, then the programs one after the other (37 runs of 36 programs). Each one writes results/NAME.txt (what it
+   First hwinfo runs, then the programs one after the other (41 runs of 40 programs; the samples named in section 4a are left to you). Each one writes results/NAME.txt (what it
    printed) and results/NAME.sum (its counts); RunAll collects them into SUMMARY.txt, which starts with a
    machine report (hwinfo: CPU, FPU, chipset, Kickstart and library versions, chip and fast RAM), then one line per
    program, then the start and finish times, then every line that needs a look. Several programs open a screen or
@@ -90,7 +110,7 @@ in an emulator. Your run is the first on real hardware.
    by hand would skip finished programs: type  Delete T:hwpack-resume  (or reboot: T: is in RAM). A plain
    Execute RunAll also removes it.
 
-   Time: in an emulator the whole run is about three minutes (the sound, keys, cards, rummy and
+   Time: in an emulator the whole run is about four minutes (the sound, keys, cards, rummy and
    screen programs wait on purpose); a real machine may be a bit slower or faster.
 
 3. What the numbers should be
@@ -102,7 +122,14 @@ in an emulator. Your run is the first on real hardware.
      lambdas 16, closures 23, linq 37, refs 18, patterns 23, objects 21 (and 21 again with the arguments SEED=42 auto, which
      RunAll passes as AmigaDOS arguments), names 12, dates 19, interrupts 14, timing 10, fonts 8, iff 10,
      controls 12, keys 8, asl 3, boopsi 37, screen 23, aga 6, assets 17, rtg 5, sound 21, dbuffer 30, textspeed 1,
-     cards 15, rummy 28.
+     cards 15, rummy 28, retcode 1, mui 32 and muiclass 26 (both only with MUI installed, see below).
+   retcode prints one ok line and ends with return code 0. To see a return code reach the script, run it by hand with
+   the target return code 5:  Execute RunOne retcode-rc5 retcode 1 "TARGETRC=5"  : it must print "rc 5" in results/retcode-rc5.txt and
+   RunOne must answer "return code 5 or higher ... <-- CHECK" (that is the wanted result here, not a failure).
+   muicheck prints the version of muimaster.library ("muimaster.library 19.35" is MUI 3.8, "21.227" MUI 5) or "not installed".
+   MUI is third-party shareware: you install it yourself, nothing of it is in this pack. Without it mui and muiclass print one
+   line, "skip: MUI not installed", and SUMMARY.txt says "skipped, MUI is not installed (optional)": not a failure. With it they
+   open a small window for two seconds. RunAll gives them a 64 KB stack (MUI 5 asks for more than a plain shell has).
    hello, mainargs (run with the arguments ONE "two words" RC=3: it lists the three arguments and ends with
    return code 3, which is not an error) and trace print text, not ok lines (trace also sends 9 lines to the
    serial port; nothing needs to be connected).
@@ -136,6 +163,16 @@ in an emulator. Your run is the first on real hardware.
              type " 1200" and press Return, then click the close gadget. It prints an "event:" line for each thing you
              did and an "events: ..." summary (the number of keys the edit hook saw included), then 38 ok. Quit
              instead of the close gadget also ends it (fewer ok lines then). Do the gadgets look and react right?   yes / no
+      guiclass  The same window as gui, written as a class of its own. Type  guiclass . Click Hello (Reply: "Hello, Amiga!"), then the
+             close gadget: 8 ok. Same look and reaction as gui?                                         yes / no
+      wbstart  Workbench start by double-click (the shell cannot test it). Open the drawer's window on Workbench and double-click the wbstart
+             icon: a window "E# Workbench start" opens with Arguments 2, SEED 42, AUTO yes and Stack 32768 (the icon's tool types and stack size).
+             Close it with its close gadget. From a Shell (wbstart SEED=7) it shows Arguments 1, SEED 7, AUTO no and your shell's stack.
+             Does the icon start it, and are those four values right?                                    yes / no, values
+      mui, muiclass  Only if MUI is installed. Type  Stack 65536  then  muiclass WAIT : a window "E# MUI custom class" with two bar graphs in a
+             group, a slider and Quit. Click or drag on a graph: its level follows the mouse and the slider follows it. Quit ends it (26 ok).
+             Type  mui WAIT : a window with text, buttons, a slider, a string, a cycle gadget, a check mark, a gauge and a list; click things,
+             then Quit or the close gadget. Do they draw and react right? Which MUI (muicheck)?          yes / no, version
       keys   RunAll ran it without a key press. Type  keys , wait for the blank screen and press A within ten
              seconds: it prints a "pressed key ... typed ..." line (your keymap; Shift+A types 65). Send that
              line, and say what keyboard (original, USB adapter, THEA1200 input) you used.             note it
@@ -155,12 +192,21 @@ in an emulator. Your run is the first on real hardware.
       fonts    the "diskfont.library opens" line and which disk font was found                        note them
       timing   the "display runs at ... frames per second" line and "50 WaitVBlank calls took ... ms"   note them
       interrupts  "25 frames: the first server counted ..."                                           note it
-   d) Always send: SUMMARY.txt and the results drawer (or at least every file with a FAIL line in it), and
+   d) Always send: SUMMARY.txt and the results drawer (or at least every file with a FAIL line in it), the BUILD file, and
       your machine: model (A1200 or THEA1200 with its FPGA core and version), CPU and clock, RAM chip/fast,
       accelerator card if any, Kickstart and Workbench version, graphics card or Indivision/scandoubler, how it
       is connected to the display (monitor, TV, HDMI adapter), the total time from SUMMARY.txt, and whether
       anything crashed, hung, or left the screen in a bad state.
       On the serial port: trace writes 9 lines at 9600 baud; if you have a terminal on it, send what it shows.
+
+   e) If something crashes (a guru, a requester "Software Failure", a hang): the guru or requester number and the name of the
+      program that was running (results/PROGRESS.txt) are the minimum; a photo of the screen is fine. If you run SegTracker (it
+      prints "hunk N offset X" for the crashing address) or Enforcer/MuForce (on a machine with an MMU), send that line too: we
+      turn it into a C# file and line with   esharp addr samples/<program> <hunk> <offset> --docker <m68k image>   (the BUILD file
+      in this drawer names the version; the address only fits the exe built from that version; docs/DEBUGGING.md). Without such a
+      tool the number alone does not give a place; then the serial trace of "trace" or a note of how far the program got helps.
+      None of these tools is needed or shipped with the pack; use them only if you already have them. Then reset and type
+      Execute RunAll RESUME (section 2).
 
 5. Where to send it
    Open an issue "Hardware report" on https://github.com/GameGyrafe/amigaesharp/issues (there is a

@@ -8,7 +8,7 @@ namespace HwPackSummary;
 /// "NAME: N ok, M FAIL, K skip" (plus the count an emulated A1200 gives, when known). Usage: Summary NAME FILE [EXPECTED], where EXPECTED is a number
 /// or "text" for a program that prints no ok lines.
 /// Counts lines that start with "ok ", "FAIL " or "skip "; a missing or empty file is reported as such. FAIL lines are
-/// repeated in the output. Return code: 0 fine, 5 the ok count differs from EXPECTED, 10 a FAIL line or no output.
+/// repeated in the output. A result that is only the line "skip: MUI not installed" (the MUI samples) counts as skipped, not as a count difference. Return code: 0 fine, 5 the ok count differs from EXPECTED, 10 a FAIL line or no output.
 /// </summary>
 public static unsafe class Program
 {
@@ -17,6 +17,13 @@ public static unsafe class Program
         if (at + word.Length > size) return false;
         for (int i = 0; i < word.Length; i++) if (p[at + i] != (byte)word[i]) return false;
         return true;
+    }
+
+    static bool HasLine(byte* p, int size, string word)
+    {
+        for (int i = 0; i < size; i++)
+            if ((i == 0 || p[i - 1] == 10) && StartsWith(p, i, size, word)) return true;
+        return false;
     }
 
     [EntryPoint]
@@ -57,7 +64,14 @@ public static unsafe class Program
             Mem.Free(p);
             return 10;
         }
+        // A MUI sample on a machine without MUI prints one "skip: MUI not installed" line and no ok lines: that is optional, not a failure.
+        bool noMui = ok == 0 && fail == 0 && HasLine(p, size, "skip: MUI not installed");
         Mem.Free(p);
+        if (noMui)
+        {
+            Dos.PutStr(": skipped, MUI is not installed (optional, see README.txt)\n");
+            return 0;
+        }
         if (args.Length > 2 && args[2] == "text")
         {
             Dos.PutStr($": text output only, {size} bytes\n");

@@ -53,6 +53,8 @@ Echo "(objects-args: the same program with AmigaDOS arguments)"
 Execute RunOne objects-args objects 21 "SEED=42 auto"
 Echo "(mainargs: prints its arguments and ends with return code 3)"
 Execute RunOne mainargs mainargs text "ONE *"two words*" RC=3"
+Echo "(retcode: ends with return code 0; the README.txt has a check with TARGETRC=5)"
+Execute RunOne retcode retcode 1
 Execute RunOne names names 12
 Execute RunOne dates dates 19
 Echo "(interrupts: a vertical-blank server counts frames)"
@@ -73,6 +75,13 @@ Echo "(asl: allocation checks only; the requester is a by-eye test, see README.t
 Execute RunOne asl asl 3
 Echo "(boopsi: a small window with buttons, a slider and a text field opens and closes again)"
 Execute RunOne boopsi boopsi 37
+Echo "(muicheck: the version of muimaster.library, or 'not installed')"
+Execute RunOne muicheck muicheck text
+Echo "(mui and muiclass need MUI, which you install yourself: without it each prints skip and counts as skipped)"
+Stack 65536
+Execute RunOne mui mui 32
+Execute RunOne muiclass muiclass 26
+Stack 16000
 Echo "(screen: a card picture appears for a few seconds)"
 Execute RunOne screen screen 23
 Echo "(aga: a 256 colour picture appears for a few seconds)"
