@@ -45,8 +45,8 @@ identifier) writes a project you can open in VS Code (with the C# extension): `P
 the same source under .NET against the E# runtime and loads the subset analyzer, a `.gitignore`, and a `.vscode/` folder
 with `tasks.json` (build for m68k and run in FS-UAE, by Docker or by a [local toolchain](#a-local-toolchain-instead-of-docker),
 run on the host, check the subset), `launch.json` (debug the host run
-with the coreclr debugger, so logic can be stepped through; the Amiga build cannot be debugged at source level yet) and
-`extensions.json`. The ES0001-ES0010 subset errors show as you type and in `dotnet build`. ES0101 (a library call newer than
+with the coreclr debugger, so logic can be stepped through; the Amiga build cannot be debugged at source level yet),
+`extensions.json` and `settings.json` (the `esharp.toolchain` setting the local-toolchain tasks read, empty). The ES0001-ES0010 subset errors show as you type and in `dotnet build`. ES0101 (a library call newer than
 the target's libraries; opt in with `[RequiresLib("lib", version)]`) is reported only by `esharp build`/`run`/`test` for the
 m68k, aros and aros-i386 targets, not in the IDE or the host build. ES0103 (a program uses an `internal` or `private protected` member of E#'s library, or a member of an internal library type) is reported by `esharp build`/`run`/`test`; the IDE and the host build already reject the same code with C# error CS0117/CS0122, because there the library is a referenced assembly.
 
@@ -209,7 +209,9 @@ build stops with a message saying which version it found; `--any-cc-version` bui
 compiler gives an error that names the folder and the setting it came from. AROS also needs the SDK sysroot: by default the
 `--toolchain` folder itself (aros) or its `sdk` folder (aros-i386), as in the images; `--sysroot <dir>` or
 `ESHARP_SYSROOT_AROS` / `ESHARP_SYSROOT_AROS_I386` give another. The compiler runs in the output folder with the same command
-line as in Docker, so the same toolchain gives the same bytes.
+line as in Docker, so the same toolchain gives the same bytes. That folder is also the compiler's current directory, as it is
+in Docker (`/work`): a relative path in `--cflags` (`-I include`, `-L lib`) is taken from the output folder (`obj/<target>`
+by default), not from the folder you ran `esharp` in. Give such paths as absolute ones.
 
 Setting one up, per platform ([design/TOOLCHAINS.md](design/TOOLCHAINS.md) has the options, versions, licences and what is
 verified):
@@ -237,9 +239,11 @@ compiler it would use, with the version and where the setting came from, then FS
 hosted AROS images and the MUI cache. `esharp doctor --target m68k --toolchain <dir>` checks one folder.
 
 In VS Code, the tasks "E#: build (m68k, local toolchain)" and "E#: run in FS-UAE (local toolchain)" from `esharp new` pass
-`--toolchain ${config:esharp.toolchain}`: set `"esharp.toolchain": "<dir>"` in your user or workspace `settings.json`, or
-leave it unset and use `ESHARP_TOOLCHAIN_M68K` / `ESHARP_TOOLCHAIN` (VS Code must be started with them in its environment)
-or PATH. The default build task stays the Docker one.
+`--toolchain ${config:esharp.toolchain}`. VS Code stops such a task when the setting is defined nowhere, so `esharp new` writes
+`.vscode/settings.json` with `"esharp.toolchain": ""`. Put the folder there (`"esharp.toolchain": "<dir>"`), or leave it
+empty and use `ESHARP_TOOLCHAIN_M68K` / `ESHARP_TOOLCHAIN` (VS Code must be started with them in its environment) or PATH.
+The workspace value wins over your user `settings.json`: to use a user-wide setting instead, delete the line from the
+workspace file. The default build task stays the Docker one.
 
 AROS needs a hosted AROS to run: `docker build -t esharp-aros-hosted docker/aros-hosted` (downloads a pinned AROS nightly and
 checks its sha256, [docker/aros-hosted](../docker/aros-hosted/README.md)), and

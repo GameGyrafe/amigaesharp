@@ -41,6 +41,12 @@ public class ProjectTemplateTests : IDisposable
         Assert.All(tasks.Where(t => (t.GetProperty("label").GetString() ?? "").Contains("local toolchain")),
             t => Assert.DoesNotContain("--docker", t.GetProperty("args").EnumerateArray().Select(a => a.GetString())));
 
+        // VS Code fails a task whose ${config:...} names a setting that is defined nowhere, so the workspace settings define it
+        // (empty: esharp treats an empty --toolchain as not given).
+        var toolchainSetting = Json(".vscode/settings.json").RootElement.GetProperty(ProjectTemplate.ToolchainSetting);
+        Assert.Equal(JsonValueKind.String, toolchainSetting.ValueKind);
+        Assert.Equal("", toolchainSetting.GetString());
+
         var launch = Json(".vscode/launch.json").RootElement.GetProperty("configurations")[0];
         Assert.Equal("coreclr", launch.GetProperty("type").GetString());
         Assert.Contains("Demo.dll", launch.GetProperty("program").GetString());

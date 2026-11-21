@@ -21,7 +21,10 @@ Docker. `esharp addr` takes `--toolchain` too, and an os4 run builds its estype 
 `esharp doctor` reports, per target, Docker (image present) and local (compiler, version, source), then FS-UAE, Xvfb, xwd,
 the Kickstart setting, the OS4 VM, the hosted AROS images and the MUI cache; offline, exit code 0 (`src/ESharp.Cli/Doctor.cs`).
 `esharp new` adds the VS Code tasks "E#: build (m68k, local toolchain)" and "E#: run in FS-UAE (local toolchain)", which pass
-`--toolchain ${config:esharp.toolchain}` (empty when the setting is unset, and then the variables or PATH apply). Research
+`--toolchain ${config:esharp.toolchain}`, and `.vscode/settings.json` with `"esharp.toolchain": ""`, so the variable always
+resolves (VS Code does not resolve a `${config:...}` for a setting defined nowhere); empty counts as not given, and then the
+variables or PATH apply. A local build runs the compiler in the output folder, as Docker does, so relative `--cflags` paths
+are taken from there (GUIDE). Research
 note with the options per platform, versions and licences: [design/TOOLCHAINS.md](design/TOOLCHAINS.md).
 
 - Verified (Linux x86-64, 2026-11-21): the m68k toolchain copied out of the pinned image (`docker create` + `docker cp`
@@ -43,8 +46,8 @@ note with the options per platform, versions and licences: [design/TOOLCHAINS.md
   folder (os4 and morphos: `stdint.h` not found; AROS: `collect-aros` runs `/opt/.../bin/x86_64-aros-ld`). They only work at the
   image's own path, which needs a root install; not tried, so local builds of those targets are **not verified**.
 - Not verified: local toolchains on macOS and Windows (part 2 of #122, by hand), a self-built AmigaPorts m68k-amigaos-gcc,
-  the VS Code tasks in VS Code itself (`${config:esharp.toolchain}` resolving to an empty string when unset is VS Code's
-  documented behaviour, not tried here), `esharp addr --toolchain` against a real crash, an os4 run with a local compiler.
+  the VS Code tasks in VS Code itself (the unit test checks the files `esharp new` writes, including the empty
+  `esharp.toolchain` in `.vscode/settings.json`; nobody has run the tasks in VS Code), `esharp addr --toolchain` against a real crash, an os4 run with a local compiler.
 
 ## `esharp test` on hosted AROS, and the target program's return code (issue #118)
 

@@ -50,6 +50,7 @@ public static class ProjectTemplate
         File.WriteAllText(Path.Combine(vs, "tasks.json"), root != null ? TasksJson(cliDll) : TasksJson("esharp", Array.Empty<string>()));
         File.WriteAllText(Path.Combine(vs, "launch.json"), LaunchJson(name));
         File.WriteAllText(Path.Combine(vs, "extensions.json"), ExtensionsJson);
+        File.WriteAllText(Path.Combine(vs, "settings.json"), SettingsJson);
     }
 
     /// <summary>
@@ -172,8 +173,9 @@ public static class Program
         string[] Cli(params string[] more) { var l = new List<string>(prefix); l.AddRange(more); return l.ToArray(); }
         var image = "${input:dockerImage}";
         var folder = "${workspaceFolder}";
-        // A local toolchain instead of Docker: the folder from the esharp.toolchain setting (user or workspace settings.json);
-        // when it is not set VS Code passes an empty value, and esharp then reads ESHARP_TOOLCHAIN_M68K / ESHARP_TOOLCHAIN, else PATH.
+        // A local toolchain instead of Docker: the folder from the esharp.toolchain setting. VS Code cannot resolve
+        // ${config:...} for a setting that is not defined anywhere, so `esharp new` writes it empty into .vscode/settings.json
+        // (SettingsJson); empty counts as not given, and esharp then reads ESHARP_TOOLCHAIN_M68K / ESHARP_TOOLCHAIN, else PATH.
         var toolchain = "${config:" + ToolchainSetting + "}";
         return $@"{{
   ""version"": ""2.0.0"",
@@ -214,6 +216,15 @@ public static class Program
     }}
   ]
 }}
+";
+
+    /// <summary>
+    /// Workspace settings: <see cref="ToolchainSetting"/> defined (empty), so the local-toolchain tasks' ${config:...} always
+    /// resolves. Put the toolchain folder here, or delete the line to use the same setting from the user settings.json.
+    /// </summary>
+    public const string SettingsJson = @"{
+  ""esharp.toolchain"": """"
+}
 ";
 
     public const string ExtensionsJson = @"{
