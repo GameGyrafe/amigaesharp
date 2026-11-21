@@ -25,8 +25,8 @@ root="$(cd "$here/../.." && pwd)"
 cd "$root"
 
 # Order: quick pure checks first, then the ones that open a screen or the audio device. RunAll runs them in the order of
-# its own lines; keep the two in step (tools/hwpack/RunAll lists every program but gui, which needs clicks: README.txt).
-samples="hwinfo hello phase2 memory generics properties operators language collections inherit lambdas closures linq refs patterns objects mainargs names dates interrupts trace timing fonts iff controls keys asl boopsi screen aga assets rtg sound dbuffer textspeed cards rummy gui"
+# its own lines; keep the two in step (tools/hwpack/RunAll lists every program but gui, guiclass and wbstart, which need clicks: README.txt).
+samples="hwinfo hello phase2 memory generics properties operators language collections inherit lambdas closures linq refs patterns objects mainargs retcode names dates interrupts trace timing fonts iff controls keys asl boopsi muicheck mui muiclass screen aga assets rtg sound dbuffer textspeed cards rummy gui guiclass wbstart"
 
 # The pack's own counting helper (AmigaDOS cannot count lines), built like a sample.
 buildone() {   # <source dir> <name>
@@ -51,9 +51,10 @@ done
 echo "== Summary (helper)"
 buildone tools/hwpack/summary Summary
 
-# Every program RunAll starts must be in the pack, and every program in the pack except hwinfo (run first by RunAll itself) and gui must be started by RunAll.
+# Every program RunAll starts must be in the pack, and every program in the pack except hwinfo (run first by RunAll itself) and the three that need clicks (gui, guiclass, wbstart) must be started by RunAll.
 for s in $samples; do
-  [ "$s" = gui ] || [ "$s" = hwinfo ] || grep -q "^Execute RunOne [^ ]* $s " "$here/RunAll" || { echo "RunAll does not run $s"; exit 1; }
+  case "$s" in gui|guiclass|wbstart|hwinfo) continue;; esac
+  grep -q "^Execute RunOne [^ ]* $s " "$here/RunAll" || { echo "RunAll does not run $s"; exit 1; }
 done
 grep -o '^Execute RunOne [^ ]* [^ ]*' "$here/RunAll" | awk '{print $4}' | sort -u | while read -r p; do
   [ -f "$out/$p" ] || { echo "RunAll runs $p, which is not in the pack"; exit 1; }
@@ -68,10 +69,16 @@ git rev-parse --short HEAD > "$out/BUILD" 2>/dev/null || echo unknown > "$out/BU
 adf="${out%/}.adf"
 # The icons on the floppy go without their NewIcons image (issue #101): with it they need about 55 KB more than the disk has free.
 # The pack drawer keeps the full icons.
+# The floppy leaves out the programs that need MUI (a floppy-only A1200 has none), guiclass (gui's twin), wbstart (a Workbench-start check)
+# and the two card games (rummy 82 KB, cards 68 KB): the programs grew since the pack was first built, the whole pack is now about 1 MB,
+# over the disk's 880 KB, and the results need about 105 KB (two files per program, each a header block and a data block: with 97 KB free
+# the emulated run filled the disk at the last program and stalled).
+# RunOne reports a program that is not in the drawer as "not in this pack" and goes on.
+floppyskip="mui muiclass guiclass wbstart rummy cards"
 adfdir="$(mktemp -d)"; trap 'rm -rf "$adfdir"' EXIT
-cp -r "$out"/. "$adfdir"/; python3 -I "$here/stripni.py" "$adfdir"/*.info
+cp -r "$out"/. "$adfdir"/; for p in $floppyskip; do rm -f "$adfdir/$p" "$adfdir/$p.info"; done; python3 -I "$here/stripni.py" "$adfdir"/*.info
 python3 -I "$here/mkadf.py" create "$adfdir" "$adf" --name HWTEST --protect 'RunAll=srwed' --protect 'RunOne=srwed' \
-  || { echo "The pack does not fit on one 880 KB floppy. Drop the biggest programs (cards, rummy, ...) from 'samples' above and from tools/hwpack/RunAll." >&2; exit 1; }
+  || { echo "The pack does not fit on one 880 KB floppy. Add the biggest programs (cards, rummy, ...) to floppyskip above (RunOne reports a program that is not there as skipped)." >&2; exit 1; }
 if [ -n "$bootwb" ]; then
   bootadf="${out%/}-boot.adf"
   # The bootable image holds AmigaOS files: refuse to write it anywhere git does not ignore (obj/ is ignored).
@@ -88,7 +95,7 @@ if [ -n "$bootwb" ]; then
   # The bootable image has about 108 KB free without icons and the icons (37 files of 2 KB, 5 blocks each) need about 120 KB, so it
   # is written from a copy of the pack without the .info files; the one-disk pack above and the pack drawer keep them.
   noicons="$(mktemp -d)"; trap 'rm -rf "$noicons" "$adfdir"' EXIT
-  cp -r "$out"/. "$noicons"/; rm -f "$noicons"/*.info
+  cp -r "$out"/. "$noicons"/; rm -f "$noicons"/*.info; for p in $floppyskip; do rm -f "$noicons/$p"; done
   python3 -I "$here/mkadf.py" create "$noicons" "$bootadf" --name HWTEST --bootblock-from "$bootwb" --protect 'RunAll=srwed' --protect 'RunOne=srwed' \
     --protect 'S/Startup-Sequence=srwed' "${from[@]}" --file S/Startup-Sequence="$here/boot-startup" \
     || { echo "The pack plus the AmigaOS files does not fit on one floppy." >&2; exit 1; }
