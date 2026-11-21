@@ -560,7 +560,13 @@ Targets:
         // binutils); -fno-reorder-functions keeps all code in one section of the object, so its line table has one address space.
         // ELF targets: <name>.debug is the same program linked with -g (gcc's code does not change with -g).
         var addrFlags = target.IsM68k ? new[] { "-fno-reorder-functions" } : Array.Empty<string>();
-        if (Compile(target.IsM68k ? addrFlags.Append($"-Wl,-Map,{name}.map").ToArray() : addrFlags, name, link: true) != 0) return 1;
+        // The map has a fixed name while linking (a comma in the project name would split the -Wl option), then takes the exe's.
+        if (Compile(target.IsM68k ? addrFlags.Append("-Wl,-Map,esharp-link.map").ToArray() : addrFlags, name, link: true) != 0) return 1;
+        if (target.IsM68k && File.Exists(Path.Combine(outDir, "esharp-link.map")))
+        {
+            try { File.Move(Path.Combine(outDir, "esharp-link.map"), exe + ".map", true); }
+            catch (IOException e) { return Fail("linker map: " + e.Message); }
+        }
         if (target.IsM68k && Compile(addrFlags.Concat(new[] { "-g", "-c" }).ToArray(), name + ".o", link: false) != 0) return 1;
         if (target.IsAmiga && !target.IsM68k && Compile(new[] { "-g", "-gdwarf-4" }, name + ".debug", link: true) != 0) return 1;   // DWARF 4: the os4 binutils read no 5
 

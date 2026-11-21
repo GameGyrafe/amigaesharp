@@ -225,9 +225,63 @@ Linker script and memory map
         Assert.Equal("here: (no code offset on the host)\n", writer.ToString());
     }
 
+    [Fact]
+    public void FindInlined_reads_the_innermost_inlined_call_from_the_dwarf_dump()
+    {
+        const string info = @"
+ <0><b>: Abbrev Number: 1 (DW_TAG_compile_unit)
+    <19>   DW_AT_low_pc      : 0
+ <1><20>: Abbrev Number: 5 (DW_TAG_subprogram)
+    <21>   DW_AT_name        : (indirect string, offset: 0x1): Divide
+ <1><40>: Abbrev Number: 6 (DW_TAG_subprogram)
+    <41>   DW_AT_name        : (indirect string, offset: 0x2): Main
+    <45>   DW_AT_low_pc      : 0x100
+    <49>   DW_AT_high_pc     : 0x80
+ <2><50>: Abbrev Number: 7 (DW_TAG_lexical_block)
+ <3><51>: Abbrev Number: 8 (DW_TAG_inlined_subroutine)
+    <52>   DW_AT_abstract_origin: <0x20>
+    <56>   DW_AT_ranges      : 0x18
+ <2><70>: Abbrev Number: 8 (DW_TAG_inlined_subroutine)
+    <71>   DW_AT_abstract_origin: <0x20>
+    <75>   DW_AT_low_pc      : 0x1f0
+    <79>   DW_AT_high_pc     : 0x4
+";
+        const string ranges = @"
+    Offset   Begin    End
+    00000018 00000110 00000118
+    00000018 00000120 00000124
+    00000018 <End of list>
+";
+        var hit = Addr.FindInlined(0x122, info, ranges);
+        Assert.Equal("Divide", hit?.Callee);
+        Assert.Equal("Main", hit?.Caller);
+        Assert.Equal("Divide", Addr.FindInlined(0x1f2, info, ranges)?.Callee);
+        Assert.Null(Addr.FindInlined(0x11a, info, ranges));
+        Assert.Null(Addr.FindInlined(0x1f4, info, ranges));
+    }
+
+    [Fact]
+    public void Missing_binutils_are_not_told_to_use_emit_only()
+    {
+        var error = ESharp.Cli.Toolchain.Resolve(Targets.M68k, null, null, _ => "", out _, "esharp-no-such-tool", forBinutils: true);
+        Assert.NotNull(error);
+        Assert.DoesNotContain("--emit-only", error);
+        Assert.Contains("--docker", error);
+        Assert.Contains("--emit-only", ESharp.Cli.Toolchain.Resolve(Targets.M68k, null, null, _ => "", out _, "esharp-no-such-tool")!);   // a build still can
+    }
+
     // ---- real builds in the toolchain images (each skipped when its image is not in the local docker) ----
 
     private const string M68kImage = "amigadev/crosstools:m68k-amigaos@sha256:32ec76dac03a642203f0f09f0416480d6c25de1092ed7ed472db870304a64859";
+
+    /// <summary>A fact that shows as skipped (not passed) when the docker image it builds in is not in the local docker.</summary>
+    public sealed class DockerImageFactAttribute : FactAttribute
+    {
+        public DockerImageFactAttribute(string image)
+        {
+            if (!HasImage(image)) Skip = $"docker image {image} is not available (build it from docker/ or pull it)";
+        }
+    }
 
     private static string SampleDir => Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "..", "samples", "crash");
 
@@ -281,10 +335,9 @@ Linker script and memory map
     /// the right functions, and offsets of the program's data, bss, chip data and chip bss map to its static fields (their places
     /// worked out from the map and the object's symbols, independently of esharp addr).
     /// </summary>
-    [Fact]
+    [DockerImageFact(M68kImage)]
     public void M68k_build_with_chip_hunks_maps_code_and_every_kind_of_data()
     {
-        if (!HasImage(M68kImage)) return;
         var dir = TempDir("m68k");
         try
         {
@@ -315,11 +368,40 @@ Linker script and memory map
                 var text = Lookup(exe, "m68k", M68kImage, hunk.ToString(), offset.ToString("x"));
                 Assert.Contains($"in the program's {what}: {field.Substring(1)} + 0x2", text);
             }
+            // Divide is inlined into Main: the line of its Trace.Where gets an "inlined into" note (found from the object's line table).
+            var lines = Addr.ParseLines(Docker(M68kImage, dir, "m68k-amigaos-objdump", "--dwarf=decodedline", Path.GetFileName(exe) + ".o"));
+            var textPiece = pieces.Single(p => p.File == program && p.Section == ".text");
+            var divideLine = lines.Last(l => l.Line == 38 && l.File.EndsWith("Crash.cs", StringComparison.Ordinal)).Address;
+            var divide = Lookup(exe, "m68k", M68kImage, "0", (textPiece.Address + divideLine + 2 - hs[0].Address).ToString("x"));
+            Assert.Contains("Crash.cs:38", divide);
+            Assert.Contains("C function Es_CrashSample_Program_Divide (inlined into Es_CrashSample_Program_Main)", divide);
+            Assert.DoesNotContain("inlined into", s1);   // Checksum is a function of its own
             Assert.Contains("chip RAM", Lookup(exe, "m68k", M68kImage, "3", "0"));
             Assert.Contains("not in the program's own data", Lookup(exe, "m68k", M68kImage, "1", "0"));   // the start-up code's data comes first
             Assert.Contains("no such hunk: the exe has 5", Lookup(exe, "m68k", M68kImage, "5", "0"));
         }
         finally { try { Directory.Delete(dir, true); } catch { } }
+    }
+
+    /// <summary>A project folder with a comma in its name (the linker option -Wl,-Map,... is split at commas): the map still lands next to the exe.</summary>
+    [DockerImageFact(M68kImage)]
+    public void M68k_build_of_a_project_with_a_comma_in_its_name_writes_its_map()
+    {
+        var root = TempDir("comma");
+        try
+        {
+            var project = Path.Combine(root, "my,game");
+            Directory.CreateDirectory(project);
+            File.WriteAllText(Path.Combine(project, "Game.cs"), "using ESharp;\nusing ESharp.Platform;\nnamespace Game;\npublic static class Program\n{\n    [EntryPoint]\n    public static void Main() { Dos.PutStr(\"hi\\n\"); }\n}\n");
+            Assert.Equal(0, ESharp.Cli.Program.Build(new[] { project, "--target", "m68k", "--docker", M68kImage, "-o", Path.Combine(root, "out") }, out var exe));
+            Assert.True(File.Exists(exe + ".map"), exe + ".map");
+            Assert.Contains("Linker script and memory map", File.ReadAllText(exe + ".map"));
+            Assert.False(File.Exists(Path.Combine(root, "out", "esharp-link.map")));
+            var w = new StringWriter();
+            Assert.Equal(0, Addr.Run(new[] { exe!, "--target", "m68k", "--docker", M68kImage }, w));
+            Assert.Contains("hunks", w.ToString());
+        }
+        finally { try { Directory.Delete(root, true); } catch { } }
     }
 
     /// <summary>The calls of es_trace_where_at in a disassembly, with the function they are in (objdump -d).</summary>
@@ -341,13 +423,17 @@ Linker script and memory map
     /// ELF targets: the code section of the .debug file is byte for byte the exe's; each call of Trace.Where (found in the
     /// disassembly) maps to its own line, in an inlined function too, given as the crash reports give it.
     /// </summary>
-    [Theory]
-    [InlineData("aros", "esharp-amiga-toolchain")]
-    [InlineData("aros-i386", "esharp-aros-i386")]
-    [InlineData("os4", "esharp-amiga-toolchain")]
-    public void Elf_build_maps_trace_calls_to_their_lines(string target, string image)
+    [DockerImageFact("esharp-amiga-toolchain")]
+    public void Elf_build_maps_trace_calls_to_their_lines_aros() => ElfBuildMapsTraceCalls("aros", "esharp-amiga-toolchain");
+
+    [DockerImageFact("esharp-aros-i386")]
+    public void Elf_build_maps_trace_calls_to_their_lines_aros_i386() => ElfBuildMapsTraceCalls("aros-i386", "esharp-aros-i386");
+
+    [DockerImageFact("esharp-amiga-toolchain")]
+    public void Elf_build_maps_trace_calls_to_their_lines_os4() => ElfBuildMapsTraceCalls("os4", "esharp-amiga-toolchain");
+
+    private static void ElfBuildMapsTraceCalls(string target, string image)
     {
-        if (!HasImage(image)) return;
         var dir = TempDir(target);
         try
         {
@@ -374,9 +460,17 @@ Linker script and memory map
             var divide = Lookup(exe, target, image, $"segment {text.Index} .text offset 0x{Offset(inMain[1]) + 1:x}");
             Assert.Contains("Crash.cs:38", divide);
             Assert.Matches(@"C function Es_CrashSample_Program_Divide \(inlined into Es_CrashSample_Program_Main at \S*samples/crash/Crash\.cs:60\)", divide);
-            // Platform code inlined into a user function has the C file's lines (a #line after each user function), not .cs ones.
-            var platform = elf.Symbols.Where(s => s.Name.StartsWith("Es_ESharp_Platform_Args_", StringComparison.Ordinal)).ToList();
-            Assert.NotEmpty(platform);
+            // Platform code is emitted without #line, so an address in it has no .cs line: it is reported as runtime/platform code
+            // with its C function (the program links Args.Has as its own function).
+            var platform = elf.Symbols.Single(s => s.Name == "Es_ESharp_Platform_Args_Has" && s.Kind == 2);
+            var platformText = Lookup(exe, target, image, $"Es_ESharp_Platform_Args_Has+0x{platform.Size / 2:x}");
+            Assert.Contains("in E# runtime/platform code, C function Es_ESharp_Platform_Args_Has", platformText);
+            Assert.DoesNotContain(".cs:", platformText);
+            Assert.Contains("no E# source line is kept for it", platformText);
+            // A segment number that disagrees with the section name (AROS counts segments its own way): the name is used.
+            var disagree = Lookup(exe, target, image, $"segment 77 .text offset 0x{Offset(inMain[0]) + 1:x}");
+            Assert.Contains("using the section name .text", disagree);
+            Assert.Contains("Crash.cs:51", disagree);
             var main = elf.Symbols.Single(s => s.Name == "Es_CrashSample_Program_Main").Value;
             Assert.Contains("Crash.cs:44", Lookup(exe, target, image, $"Es_CrashSample_Program_Main()+0x{inMain[2] + 1 - main:x}"));
             if (!elf.Relocatable) Assert.Contains("Crash.cs:44", Lookup(exe, target, image, $"0x{inMain[2] + 1:x}"));

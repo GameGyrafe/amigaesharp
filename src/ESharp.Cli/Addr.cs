@@ -544,7 +544,7 @@ internal static class Addr
         error = null;
         var tool = ToolPrefix(target) + name;
         if (docker != null) return tool;
-        if (Toolchain.Resolve(target, toolchain, null, Environment.GetEnvironmentVariable, out var choice, tool) is { } e) { error = e; return null; }
+        if (Toolchain.Resolve(target, toolchain, null, Environment.GetEnvironmentVariable, out var choice, tool, forBinutils: true) is { } e) { error = e; return null; }
         return choice!.Compiler;
     }
 
@@ -693,7 +693,17 @@ internal static class Addr
                 o.WriteLine($"  not in the program's own code; {NearExe()} (start-up or library code)");
                 return 0;
             }
-            return PrintLocation(o, loc, null);
+            // The object's DWARF says whether the line is an inlined callee, and into what (the binutils' addr2line cannot read the
+            // Amiga object format, so objdump's dump of .debug_info and .debug_ranges is read here).
+            string? inlinedInto = null;
+            var info = RunTool(docker, dir, objdump, "--dwarf=info", objName);
+            var ranges = RunTool(docker, dir, objdump, "--dwarf=Ranges", objName);
+            if (info.Code == 0 && ranges.Code == 0 && FindInlined(inObject, info.Output, ranges.Output) is { } inl)
+            {
+                loc = loc with { Function = inl.Callee ?? loc.Function };
+                inlinedInto = inl.Caller;
+            }
+            return PrintLocation(o, loc, inlinedInto);
         }
         catch (System.ComponentModel.Win32Exception)
         {
@@ -732,6 +742,95 @@ internal static class Addr
         o.WriteLine($"  C function {loc.Function}" + (inlinedInto != null ? $" (inlined into {inlinedInto})" : ""));
         PrintSource(o, loc.File, loc.Line);
         return 0;
+    }
+
+    // ---- inlined calls in the DWARF of the m68k object ----
+
+    internal sealed record Inlined(string? Callee, string? Caller);
+
+    private static readonly Regex DieRe = new(@"^\s*<(\d+)><([0-9a-f]+)>: Abbrev Number: \d+ \((DW_TAG_\w+)\)", RegexOptions.Compiled);
+    private static readonly Regex AttrRe = new(@"^\s*<[0-9a-f]+>\s+(DW_AT_\w+)\s*:\s*(.*?)\s*$", RegexOptions.Compiled);
+    private static readonly Regex RangeRe = new(@"^\s*([0-9a-f]{8})\s+(?:([0-9a-f]{8})\s+([0-9a-f]{8})|<End of list>)", RegexOptions.Compiled);
+
+    private sealed class Die
+    {
+        public string Tag = "";
+        public Die? Parent;
+        public Dictionary<string, string> Attrs = new();
+    }
+
+    private static long? HexOrDec(string? v)
+    {
+        if (v == null) return null;
+        var m = Regex.Match(v, @"^(?:0x([0-9a-f]+)|(\d+))");
+        return !m.Success ? null : m.Groups[1].Success ? long.Parse(m.Groups[1].Value, NumberStyles.HexNumber) : long.Parse(m.Groups[2].Value, CultureInfo.InvariantCulture);
+    }
+
+    /// <summary>
+    /// The innermost inlined call (DW_TAG_inlined_subroutine) that covers an offset in the object's .text, from
+    /// <c>objdump --dwarf=info</c> and <c>--dwarf=Ranges</c>: the callee's name and the function it was inlined into. Null if none.
+    /// </summary>
+    internal static Inlined? FindInlined(long offset, string dwarfInfo, string dwarfRanges)
+    {
+        var dies = new Dictionary<long, Die>();
+        var list = new List<Die>();
+        var stack = new List<Die>();
+        Die? current = null;
+        foreach (var raw in dwarfInfo.Split('\n'))
+        {
+            var line = raw.TrimEnd('\r');
+            var d = DieRe.Match(line);
+            if (d.Success)
+            {
+                var depth = int.Parse(d.Groups[1].Value, CultureInfo.InvariantCulture);
+                current = new Die { Tag = d.Groups[3].Value };
+                while (stack.Count > depth) stack.RemoveAt(stack.Count - 1);
+                current.Parent = stack.Count > 0 ? stack[^1] : null;
+                stack.Add(current);
+                dies[long.Parse(d.Groups[2].Value, NumberStyles.HexNumber)] = current;
+                list.Add(current);
+                continue;
+            }
+            var a = AttrRe.Match(line);
+            if (a.Success && current != null) current.Attrs[a.Groups[1].Value] = a.Groups[2].Value;
+        }
+
+        var rangeLists = new Dictionary<long, List<(long Begin, long End)>>();
+        foreach (var raw in dwarfRanges.Split('\n'))
+        {
+            var m = RangeRe.Match(raw.TrimEnd('\r'));
+            if (!m.Success) continue;
+            var key = long.Parse(m.Groups[1].Value, NumberStyles.HexNumber);
+            if (!rangeLists.TryGetValue(key, out var l)) rangeLists[key] = l = new List<(long, long)>();
+            if (m.Groups[2].Success) l.Add((long.Parse(m.Groups[2].Value, NumberStyles.HexNumber), long.Parse(m.Groups[3].Value, NumberStyles.HexNumber)));
+        }
+
+        bool Covers(Die x)
+        {
+            if (HexOrDec(x.Attrs.GetValueOrDefault("DW_AT_ranges")) is { } r) return rangeLists.TryGetValue(r, out var l) && l.Any(e => e.Begin <= offset && offset < e.End);
+            return HexOrDec(x.Attrs.GetValueOrDefault("DW_AT_low_pc")) is { } lo && HexOrDec(x.Attrs.GetValueOrDefault("DW_AT_high_pc")) is { } len && lo <= offset && offset < lo + len;   // high_pc is a length (DWARF 4)
+        }
+
+        string? NameOf(Die x, int depth = 0)
+        {
+            if (x.Attrs.TryGetValue("DW_AT_name", out var n))
+            {
+                var colon = n.LastIndexOf("): ", StringComparison.Ordinal);
+                return colon >= 0 ? n.Substring(colon + 3) : n;
+            }
+            foreach (var key in new[] { "DW_AT_abstract_origin", "DW_AT_specification" })
+                if (depth < 4 && x.Attrs.TryGetValue(key, out var o) && Regex.Match(o, @"<0x([0-9a-f]+)>") is { Success: true } m
+                    && dies.TryGetValue(long.Parse(m.Groups[1].Value, NumberStyles.HexNumber), out var target))
+                    return NameOf(target, depth + 1);
+            return null;
+        }
+
+        // Nested inlined calls come later in the dump than the call that holds them, so the last one that covers the offset is the innermost.
+        var inner = list.LastOrDefault(x => x.Tag == "DW_TAG_inlined_subroutine" && Covers(x));
+        if (inner == null) return null;
+        var outer = inner.Parent;
+        while (outer != null && outer.Tag != "DW_TAG_inlined_subroutine" && outer.Tag != "DW_TAG_subprogram") outer = outer.Parent;
+        return new Inlined(NameOf(inner), outer == null ? null : NameOf(outer));
     }
 
     // ---- ELF (AROS, AmigaOS 4, MorphOS) ----
@@ -783,10 +882,14 @@ internal static class Addr
         }
         else
         {
-            section = where.Number != null
-                ? (where.Number.Value >= 0 && where.Number.Value < elf.Sections.Count ? elf.Sections[where.Number.Value] : null)
-                : elf.Sections.FirstOrDefault(s => s.Name == where.Name);
-            if (section == null || (where.Name != null && section.Name != where.Name))
+            // A section name is the more reliable half of "segment 1 .text": the segment number counts what the loader made of the
+            // sections, which need not match the section table's index, so the name wins when both are given.
+            section = where.Name != null
+                ? elf.Sections.FirstOrDefault(s => s.Name == where.Name && s.Alloc && s.Size > 0) ?? elf.Sections.FirstOrDefault(s => s.Name == where.Name)
+                : where.Number != null && where.Number.Value >= 0 && where.Number.Value < elf.Sections.Count ? elf.Sections[where.Number.Value] : null;
+            if (section != null && where.Number != null && where.Name != null && section.Index != where.Number.Value)
+                o.WriteLine($"  (segment {where.Number} is not section {section.Index} here: using the section name {where.Name})");
+            if (section == null)
                 return Fail($"no section {where.Number?.ToString() ?? where.Name}{(where.Number != null && where.Name != null ? " " + where.Name : "")} in {Path.GetFileName(exe)} (loaded sections: {string.Join("; ", loaded.Select(s => $"{s.Index} {s.Name}"))})");
             offset = where.Offset;
         }
