@@ -149,6 +149,9 @@ public static class Program
 
     private static string Q(string s) => JsonSerializer.Serialize(s);
 
+    /// <summary>The VS Code setting the local-toolchain tasks read: the m68k toolchain folder (holding bin/m68k-amigaos-gcc).</summary>
+    public const string ToolchainSetting = "esharp.toolchain";
+
     /// <summary>Tasks that run the esharp CLI through dotnet (a checkout's esharp.dll), so nothing needs to be on PATH.</summary>
     public static string TasksJson(string cliDll) => TasksJson("dotnet", new[] { cliDll });
 
@@ -169,12 +172,17 @@ public static class Program
         string[] Cli(params string[] more) { var l = new List<string>(prefix); l.AddRange(more); return l.ToArray(); }
         var image = "${input:dockerImage}";
         var folder = "${workspaceFolder}";
+        // A local toolchain instead of Docker: the folder from the esharp.toolchain setting (user or workspace settings.json);
+        // when it is not set VS Code passes an empty value, and esharp then reads ESHARP_TOOLCHAIN_M68K / ESHARP_TOOLCHAIN, else PATH.
+        var toolchain = "${config:" + ToolchainSetting + "}";
         return $@"{{
   ""version"": ""2.0.0"",
   ""tasks"": [
 {CliTask("E#: build (m68k)", ",\n      \"group\": { \"kind\": \"build\", \"isDefault\": true }", Cli("build", folder, "--target", "m68k", "--docker", image))},
 {CliTask("E#: run in FS-UAE", "", Cli("run", folder, "--docker", image))},
 {CliTask("E#: run in FS-UAE (headless)", "", Cli("run", folder, "--docker", image, "--headless"))},
+{CliTask("E#: build (m68k, local toolchain)", "", Cli("build", folder, "--target", "m68k", "--toolchain", toolchain))},
+{CliTask("E#: run in FS-UAE (local toolchain)", "", Cli("run", folder, "--toolchain", toolchain))},
 {CliTask("E#: check subset and emit C", "", Cli("build", folder, "--emit-only"))},
 {Task("E#: run on the host", "", "run", "--project", folder)},
 {Task("E#: build for the host", "", "build", folder)}

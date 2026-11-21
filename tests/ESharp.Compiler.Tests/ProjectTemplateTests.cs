@@ -32,6 +32,15 @@ public class ProjectTemplateTests : IDisposable
         var inputs = Json(".vscode/tasks.json").RootElement.GetProperty("inputs").EnumerateArray().Select(i => i.GetProperty("id").GetString());
         Assert.Contains("dockerImage", inputs);
 
+        // Issue #122: the same build and run with a local toolchain, from the esharp.toolchain setting (empty when unset: esharp
+        // then reads ESHARP_TOOLCHAIN_M68K / ESHARP_TOOLCHAIN, else PATH). Docker stays the default build task.
+        Assert.Equal("/opt/esharp/esharp.dll build ${workspaceFolder} --target m68k --toolchain ${config:esharp.toolchain}", Args("E#: build (m68k, local toolchain)"));
+        Assert.Equal("/opt/esharp/esharp.dll run ${workspaceFolder} --toolchain ${config:esharp.toolchain}", Args("E#: run in FS-UAE (local toolchain)"));
+        var defaults = tasks.Where(t => t.TryGetProperty("group", out var g) && g.GetProperty("isDefault").GetBoolean()).Select(t => t.GetProperty("label").GetString());
+        Assert.Equal(new[] { "E#: build (m68k)" }, defaults);
+        Assert.All(tasks.Where(t => (t.GetProperty("label").GetString() ?? "").Contains("local toolchain")),
+            t => Assert.DoesNotContain("--docker", t.GetProperty("args").EnumerateArray().Select(a => a.GetString())));
+
         var launch = Json(".vscode/launch.json").RootElement.GetProperty("configurations")[0];
         Assert.Equal("coreclr", launch.GetProperty("type").GetString());
         Assert.Contains("Demo.dll", launch.GetProperty("program").GetString());

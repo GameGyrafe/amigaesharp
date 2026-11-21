@@ -23,6 +23,10 @@ jobs:
           sudo apt-get update -qq
           sudo apt-get install -y -qq clang
           ESHARP_TEST_CC=clang dotnet test --configuration Release
+      - name: Local m68k toolchain (#122) unpacked from the pinned image; hello and cards with --toolchain, same bytes as --docker
+        run: |
+          tools/local-toolchain/compare.sh "$RUNNER_TEMP/local-toolchain" hello cards
+          ESHARP_TOOLCHAIN_M68K="$RUNNER_TEMP/local-toolchain/m68k-amigaos" dotnet run --project src/ESharp.Cli -c Release -- doctor
   windows:
     # #11: the dotnet test run, the emit-only builds and a package round trip on Windows. No Docker or FS-UAE here.
     runs-on: windows-latest

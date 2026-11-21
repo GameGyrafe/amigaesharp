@@ -13,6 +13,9 @@ dotnet test                                     # unit tests, incl. generated C 
 dotnet run --project src/ESharp.Cli -- build samples/hello --emit-only
 dotnet run --project src/ESharp.Cli -- build samples/hello --target m68k --docker <image>   # also writes obj/m68k/hello.info (Workbench Tool icon with a NewIcons image in the tool types; csproj properties EsStackSize, EsToolTypes, EsIcon, EsNewIcons; Amiga targets only, not --emit-only; src/ESharp.Assets/Icon*.cs and NewIcons.cs, src/ESharp.Cli/IconStep.cs)
 dotnet run --project src/ESharp.Cli -- build samples/hello --target m68k --docker <image>   # os4, morphos too
+dotnet run --project src/ESharp.Cli -- build samples/hello --toolchain <dir>   # a local toolchain instead of Docker (<dir>/bin/m68k-amigaos-gcc; or ESHARP_TOOLCHAIN_M68K / ESHARP_TOOLCHAIN, else PATH; -dumpversion must match the image, --any-cc-version overrides; AROS: --sysroot; src/ESharp.Cli/Toolchain.cs, docs/GUIDE.md "A local toolchain instead of Docker")
+tools/local-toolchain/compare.sh <work dir> hello cards   # copy /opt/m68k-amigaos out of the pinned m68k image, build with --toolchain and with --docker, compare the bytes (identical; also in CI)
+dotnet run --project src/ESharp.Cli -- doctor   # per target: Docker image present, local compiler and version; FS-UAE, Xvfb, Kickstart, OS4 VM, hosted AROS images, MUI cache (offline, exit 0)
 dotnet run --project src/ESharp.Cli -- run samples/hello --docker <image> --headless        # m68k in FS-UAE
 dotnet run --project src/ESharp.Cli -- assets samples/screen                                # PNG -> Assets.g.cs   # also automatic in build/run when stale (mtime); --force rebuilds
 dotnet run --project src/ESharp.Cli -- run samples/screen --docker <image> --headless --screenshot shot.png
@@ -147,4 +150,4 @@ is Kickstart 3.1 (40.069) on `--model A1200` (default). Kickstart 2.04 / A500+ i
 
 ## Next up
 
-See "Next" in `docs/STATUS.md` and the open GitHub issues (tracker #6, v2 epic #5). At the time of writing: the classic A1200 baseline (Kickstart 3.1 in FS-UAE), AmigaOS 4.1 in the QEMU VM, hosted AROS x86-64 and the `sdl` target all run the samples; the packages are on nuget.org. Open: real hardware (#7), MorphOS and PowerPC hardware runs, Windows (#11), debugging (#14), MUI wrappers on the BOOPSI core (#40; the core is done), and the v2 items. Kickstart 2.04 / A500+ is no longer part of the test matrix.
+See "Next" in `docs/STATUS.md` and the open GitHub issues (tracker #6, v2 epic #5). At the time of writing: the classic A1200 baseline (Kickstart 3.1 in FS-UAE), AmigaOS 4.1 in the QEMU VM, hosted AROS x86-64 and the `sdl` target all run the samples; the packages are on nuget.org. Open: local toolchains on macOS and Windows and for the non-m68k targets (#122 part 2; part 1 and docs/design/TOOLCHAINS.md done), real hardware (#7), MorphOS and PowerPC hardware runs, Windows (#11), debugging (#14), MUI wrappers on the BOOPSI core (#40; the core is done), and the v2 items. Kickstart 2.04 / A500+ is no longer part of the test matrix.

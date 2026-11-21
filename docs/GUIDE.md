@@ -43,7 +43,8 @@ Never publish these packages by hand: the release workflow does it (docs/STATUS.
 `esharp new <name>` (or a path such as `games/demo`; the last segment is the project name and must be a valid C#
 identifier) writes a project you can open in VS Code (with the C# extension): `Program.cs`, a `<name>.csproj` that builds
 the same source under .NET against the E# runtime and loads the subset analyzer, a `.gitignore`, and a `.vscode/` folder
-with `tasks.json` (build for m68k, run in FS-UAE, run on the host, check the subset), `launch.json` (debug the host run
+with `tasks.json` (build for m68k and run in FS-UAE, by Docker or by a [local toolchain](#a-local-toolchain-instead-of-docker),
+run on the host, check the subset), `launch.json` (debug the host run
 with the coreclr debugger, so logic can be stepped through; the Amiga build cannot be debugged at source level yet) and
 `extensions.json`. The ES0001-ES0010 subset errors show as you type and in `dotnet build`. ES0101 (a library call newer than
 the target's libraries; opt in with `[RequiresLib("lib", version)]`) is reported only by `esharp build`/`run`/`test` for the
@@ -168,8 +169,10 @@ sets these properties.
 ## Building
 
 Targets (the table with what is verified is in the [README](../README.md#targets) and in STATUS.md): `m68k` (default), `os4`,
-`morphos`, `aros`, `aros-i386`, `sdl`. The compilers live in pinned Docker images, so the build is `--docker <image>`; without
-Docker, install the compiler yourself and drop `--docker` (`--cc` and `--cflags` override it).
+`morphos`, `aros`, `aros-i386`, `sdl`. There are two ways to get the C compiler: **Docker** (the default, used in all the
+examples: the compilers live in pinned images, `--docker <image>`) or a **local toolchain** installed on your machine
+(`--toolchain <dir>`, see [below](#a-local-toolchain-instead-of-docker)). `esharp doctor` says which of the two each target can
+use here. `--cc` and `--cflags` override the compiler and its flags either way.
 
 | Target | Image | Symbols |
 |---|---|---|
@@ -184,10 +187,59 @@ esharp build samples/hello --target os4 --docker esharp-amiga-toolchain
 esharp build samples/hello --emit-only                          # just the C file; no compiler needed
 ```
 
-Build options: `-o <dir>`, `--emit-only`, `--docker [image]`, `--cc`, `--cflags`, `--allow-float`, `--chip-budget <n>`,
+Build options: `-o <dir>`, `--emit-only`, `--docker [image]`, `--toolchain <dir>`, `--sysroot <dir>`, `--any-cc-version`, `--cc`, `--cflags`, `--allow-float`, `--chip-budget <n>`,
 `--debug` (bounds-checked arrays and spans, poisoned arena `Reset`; also defines `TRACE`) and `--trace` (keep `Trace` calls).
 Symbols: `AMIGA` is defined for every Amiga-family target and `M68K`/`PPC`/`X86_64`/`I386` and
 `AMIGAOS3`/`AMIGAOS4`/`MORPHOS`/`AROS` narrow it; `sdl` defines `SDL` only; the dotnet host defines `HOST`.
+
+### A local toolchain instead of Docker
+
+Without `--docker`, `esharp build` (and `run`, `test`, `addr`) runs the target's compiler on this machine. It looks in this
+order:
+
+1. `--toolchain <dir>`: the toolchain's install prefix, the folder that holds `bin/<compiler>` (for m68k the folder the
+   pinned image has at `/opt/m68k-amigaos`; `bin/<compiler>.exe` on Windows). An empty `<dir>` counts as not given.
+2. `ESHARP_TOOLCHAIN_<TARGET>`: `ESHARP_TOOLCHAIN_M68K`, `_OS4`, `_MORPHOS`, `_AROS`, `_AROS_I386`, `_SDL`.
+3. `ESHARP_TOOLCHAIN` (Amiga targets): handy when you only use one.
+4. The compiler on PATH (`m68k-amigaos-gcc`, `ppc-amigaos-gcc`, `ppc-morphos-gcc`, `x86_64-aros-gcc`, `i386-aros-gcc`, `gcc`).
+
+`--docker` and `--toolchain` together are an error; `--docker` ignores the variables. The compiler must report the same
+version as the pinned image's (`-dumpversion`: m68k 6.5.0b, os4 11.5.0, morphos 15.2.0, aros 9.1.0, aros-i386 6.5.0), or the
+build stops with a message saying which version it found; `--any-cc-version` builds anyway (not tested). A missing folder or
+compiler gives an error that names the folder and the setting it came from. AROS also needs the SDK sysroot: by default the
+`--toolchain` folder itself (aros) or its `sdk` folder (aros-i386), as in the images; `--sysroot <dir>` or
+`ESHARP_SYSROOT_AROS` / `ESHARP_SYSROOT_AROS_I386` give another. The compiler runs in the output folder with the same command
+line as in Docker, so the same toolchain gives the same bytes.
+
+Setting one up, per platform ([design/TOOLCHAINS.md](design/TOOLCHAINS.md) has the options, versions, licences and what is
+verified):
+
+- **Linux, m68k (verified):** copy the toolchain out of the pinned image into any folder. Docker is needed once; the result
+  is the image's own compiler, so builds are byte-identical to Docker builds.
+
+  ```bash
+  img=amigadev/crosstools:m68k-amigaos@sha256:32ec76dac03a642203f0f09f0416480d6c25de1092ed7ed472db870304a64859
+  mkdir -p ~/amiga && c=$(docker create "$img") && docker cp "$c:/opt/m68k-amigaos" ~/amiga/m68k-amigaos && docker rm "$c"
+  export ESHARP_TOOLCHAIN_M68K=~/amiga/m68k-amigaos      # or pass --toolchain ~/amiga/m68k-amigaos
+  esharp build samples/hello                               # Compiler .../bin/m68k-amigaos-gcc (from ESHARP_TOOLCHAIN_M68K)
+  esharp run samples/hello --headless --kickstart <rom>
+  ```
+
+  The copied binaries need glibc 2.38 or later (Ubuntu 24.04 and newer). Building the toolchain yourself
+  (AmigaPorts m68k-amigaos-gcc) works the same way if its `-dumpversion` is 6.5.0b (not verified).
+- **macOS and Windows, m68k (not verified):** build AmigaPorts m68k-amigaos-gcc (Homebrew on macOS, MSYS2 on Windows; or the
+  Linux route inside WSL2) and pass its install prefix. The Linux copies above do not run there.
+- **os4, morphos, aros, aros-i386 (not verified):** use Docker. Copies of these toolchains out of the images only work at
+  the image's own path (`/opt/ppc-amigaos` and so on): their include and linker paths are built in.
+
+`esharp doctor` (offline, read-only, exit code 0) prints, per target, whether its Docker image is present and which local
+compiler it would use, with the version and where the setting came from, then FS-UAE, Xvfb, a Kickstart, the OS4 VM, the
+hosted AROS images and the MUI cache. `esharp doctor --target m68k --toolchain <dir>` checks one folder.
+
+In VS Code, the tasks "E#: build (m68k, local toolchain)" and "E#: run in FS-UAE (local toolchain)" from `esharp new` pass
+`--toolchain ${config:esharp.toolchain}`: set `"esharp.toolchain": "<dir>"` in your user or workspace `settings.json`, or
+leave it unset and use `ESHARP_TOOLCHAIN_M68K` / `ESHARP_TOOLCHAIN` (VS Code must be started with them in its environment)
+or PATH. The default build task stays the Docker one.
 
 AROS needs a hosted AROS to run: `docker build -t esharp-aros-hosted docker/aros-hosted` (downloads a pinned AROS nightly and
 checks its sha256, [docker/aros-hosted](../docker/aros-hosted/README.md)), and
@@ -340,8 +392,9 @@ esharp build [path] [options]      check the subset, emit C, run the target C co
 esharp run [path] [options]        build and run (m68k in FS-UAE, os4 in the VM, sdl on the desktop)
 esharp test [path] [options]       run on the host; with --target m68k|os4|aros|aros-i386|sdl also on the target, and compare
 esharp assets [dir|assets.json] [--force]   PNG, ILBM and WAV to Assets.g.cs
-esharp addr <exe | dir> <hunk> <hex offset> [--docker [image]]   crash address to C# file:line
+esharp addr <exe | dir> <hunk> <hex offset> [--docker [image] | --toolchain <dir>]   crash address to C# file:line
 esharp os4vm check|start|install-hook|remove-hook   AmigaOS 4.1 QEMU VM helpers
+esharp doctor [--target <name> [--toolchain <dir>]]   what builds and runs here: Docker images, local toolchains, emulators
 esharp --version
 ```
 
@@ -357,3 +410,4 @@ esharp --version
 | `tools/mui` | fetch classic MUI into a per-user cache |
 | `tools/os4vm` | the AmigaOS 4.1 VM helpers |
 | `tools/package-smoke.sh` | install the packed tool from a folder feed and exercise it |
+| `tools/local-toolchain/compare.sh` | copy the m68k toolchain out of the pinned image, build samples with `--toolchain` and with `--docker`, compare the bytes (also in CI) |

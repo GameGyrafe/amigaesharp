@@ -162,7 +162,7 @@ public static class Os4Vm
         return pids;
     }
 
-    public static (int Exit, string Output) Run(string exe, TimeSpan timeout, string? docker, string? screenshot, string? serialOut = null, bool echo = true, string? input = null, string? programArgs = null, RunInfo? info = null)
+    public static (int Exit, string Output) Run(string exe, TimeSpan timeout, string? docker, string? screenshot, string? serialOut = null, bool echo = true, string? input = null, string? programArgs = null, RunInfo? info = null, string? localCc = null)
     {
         if (ProgramArgsError(programArgs) is { } argsError) return Fail(argsError);
         List<Os4Input.Step>? inputSteps = null;
@@ -188,7 +188,7 @@ public static class Os4Vm
         File.WriteAllText(Path.Combine(cd, "autorun"), Autorun(name, nonce, programArgs));
         File.WriteAllText(Path.Combine(cd, "esrun"), EsRun(name, nonce, programArgs));
         var image = docker ?? Program.DefaultImage(ESharp.Compiler.Targets.Os4);
-        if (!BuildEstype(runDir, cd, docker)) return Fail("could not build the estype helper (needs ppc-amigaos-gcc or --docker)");
+        if (!BuildEstype(runDir, cd, docker, localCc)) return Fail("could not build the estype helper (needs ppc-amigaos-gcc, --toolchain or --docker)");
         var iso = Path.Combine(runDir, "estest.iso");
         if (!MakeIso(runDir, cd, iso, image)) return Fail("could not make the CD image (needs genisoimage, or docker with " + image + ")");
 
@@ -376,7 +376,7 @@ public static class Os4Vm
     }
 
     /// <summary>estype for the CD: compiled once per output directory from the source embedded in esharp.</summary>
-    private static bool BuildEstype(string runDir, string cd, string? docker)
+    private static bool BuildEstype(string runDir, string cd, string? docker, string? localCc)
     {
         using var s = typeof(Os4Vm).Assembly.GetManifestResourceStream("estype.c");
         if (s == null) return false;
@@ -387,8 +387,10 @@ public static class Os4Vm
         if (!File.Exists(cached) || !File.Exists(cachedSrc) || File.ReadAllText(cachedSrc) != File.ReadAllText(Path.Combine(runDir, "estype.c")))
         {
             File.Copy(Path.Combine(runDir, "estype.c"), cachedSrc, overwrite: true);
-            int rc = docker == null && FindOnPath("ppc-amigaos-gcc") != null
-                ? RunTool("ppc-amigaos-gcc", "-O2", "-o", cached, cachedSrc)
+            // Without --docker, the same compiler as the program (a --toolchain folder or PATH).
+            var local = docker == null ? localCc ?? FindOnPath("ppc-amigaos-gcc") : null;
+            int rc = local != null
+                ? RunTool(local, "-O2", "-o", cached, cachedSrc)
                 : RunTool("docker", "run", "--rm", "--user", UserSpec(), "-v", $"{outDir}:/work", "-w", "/work",
                     docker ?? Program.DefaultImage(ESharp.Compiler.Targets.Os4), "ppc-amigaos-gcc", "-O2", "-o", "estype", "estype.c");
             if (rc != 0 || !File.Exists(cached)) { try { File.Delete(cachedSrc); } catch (IOException) { } return false; }

@@ -23,7 +23,7 @@ Usage:
   esharp assets [dir|assets.json] [--force]
                                     Convert PNGs to planar chip data: writes Assets.g.cs next to the manifest
                                     (only when stale; build and run do this automatically)
-  esharp addr <exe | dir> <hunk> <hex offset> [--docker [image]]
+  esharp addr <exe | dir> <hunk> <hex offset> [--docker [image] | --toolchain <dir>]
                                     Map a crash address of a built m68k program to the C# file:line (see docs/DEBUGGING.md)
   esharp test [path] [options]      Run the project on the host; with --target m68k --docker also on the Amiga (or
                                     --target os4 --docker also in the AmigaOS 4.1 VM, --target aros or aros-i386 also on
@@ -31,6 +31,10 @@ Usage:
   esharp os4vm check|start|install-hook|remove-hook [options]
                                     Helpers for the AmigaOS 4.1 QEMU VM in ESHARP_OS4_VM (python3; see the README.md
                                     in the os4vm folder next to esharp.dll)
+  esharp doctor [--target <name> [--toolchain <dir>]]
+                                    What this machine can do: per target, a build by Docker (image present) and/or by a
+                                    local toolchain (compiler, version), and FS-UAE, the OS4 VM and the hosted AROS images.
+                                    Offline and read-only; exit code 0
   esharp --version                  Print the version
 
 Build options:
@@ -39,6 +43,13 @@ Build options:
   --emit-only       Stop after writing the C file
   --docker [image]  Run the C compiler inside the toolchain image (default: esharp-amiga-toolchain; esharp-sdl for sdl,
                     esharp-aros-i386 for aros-i386)
+  --toolchain <dir> Run the compiler of a local toolchain: <dir> is its install prefix, holding bin/<compiler> (for
+                    m68k the folder the pinned image has at /opt/m68k-amigaos). Or set ESHARP_TOOLCHAIN_<TARGET>
+                    (ESHARP_TOOLCHAIN_M68K, _OS4, _MORPHOS, _AROS, _AROS_I386, _SDL) or ESHARP_TOOLCHAIN (Amiga targets).
+                    Without --docker or a toolchain the compiler is looked up on PATH. An empty <dir> counts as not given
+  --sysroot <dir>   AROS: the SDK sysroot of a local toolchain (default: the --toolchain folder for aros, its sdk folder
+                    for aros-i386; or ESHARP_SYSROOT_AROS / ESHARP_SYSROOT_AROS_I386)
+  --any-cc-version  Build with a local compiler whose version differs from the pinned image's (not tested)
   --cc <compiler>   Override the target's C compiler
   --cflags <flags>  Override the target's C compiler flags
   --allow-float     Permit float/double
@@ -111,6 +122,7 @@ Targets:
             "assets" => Assets(args.Skip(1).ToArray()),
             "test" => Test(args.Skip(1).ToArray()),
             "os4vm" => Os4VmHelper(args.Skip(1).ToArray()),
+            "doctor" => Doctor.Run(args.Skip(1).ToArray()),
             _ => Fail($"unknown command '{args[0]}'"),
         };
     }
@@ -135,6 +147,7 @@ Targets:
         string? programArgs = null;
         string? muiOption = null, workbenchOption = null;
         var buildArgs = new List<string>();
+        var toolchainOptions = new List<string>();   // only matter with a --target
         for (var i = 0; i < args.Length; i++)
         {
             switch (args[i])
@@ -160,7 +173,11 @@ Targets:
                     buildArgs.Add(args[i]);
                     if (i + 1 < args.Length && !args[i + 1].StartsWith("-")) buildArgs.Add(args[++i]);
                     break;
-                case "--allow-float": case "--debug": case "--trace": buildArgs.Add(args[i]); break;
+                case "--allow-float": case "--debug": case "--trace": case "--any-cc-version": buildArgs.Add(args[i]); break;
+                case "--toolchain" or "--sysroot" or "--cc" or "--cflags" when i + 1 < args.Length:
+                    if (args[i] is "--toolchain" or "--sysroot" && args[i + 1].Length > 0) toolchainOptions.Add(args[i]);
+                    buildArgs.Add(args[i]); buildArgs.Add(args[++i]);
+                    break;
                 default:
                     if (args[i].StartsWith("-")) return Fail($"unknown option '{args[i]}'");
                     path = args[i];
@@ -178,6 +195,8 @@ Targets:
         var files = CollectSources(path);
         if (files.Count == 0) return Fail($"no .cs files found in '{path}'");
         if (sdl || os4 || aros != null) amigaOnly.RemoveAll(o => o == "--docker");
+        if (!amiga && !sdl && !os4 && aros == null && toolchainOptions.Count > 0)
+            Console.Error.WriteLine($"esharp: warning: {string.Join(", ", toolchainOptions.Distinct())} ignored: the test only runs on the host; add a --target to also build and run it there");
         if (!amiga && amigaOnly.Count > 0)
             Console.Error.WriteLine($"esharp: warning: {string.Join(", ", amigaOnly.Distinct())} ignored, because " +
                 (sdl || os4 || aros != null ? "they only matter for --target m68k" : "the test only runs on the host; add --target m68k to also run in FS-UAE"));
@@ -226,7 +245,7 @@ Targets:
             var rc = Build(buildArgs.ToArray(), out var exe);
             if (rc != 0 || exe == null) return Fail("os4 build failed");
             var info = new RunInfo();
-            var (exit, output) = Os4Vm.Run(exe, TimeSpan.FromSeconds(timeout), DockerImage(buildArgs, Targets.Os4), null, programArgs: programArgs, info: info);
+            var (exit, output) = Os4Vm.Run(exe, TimeSpan.FromSeconds(timeout), DockerImage(buildArgs, Targets.Os4), null, programArgs: programArgs, info: info, localCc: LastLocalCompiler);
             if (exit != 0) return Fail("the os4 run failed (see above)");
             if (!CompareWithHost(hostReport, host.Exit, TestReport.Parse(output), "OS4", info.ReturnCode)) failed = true;
         }
@@ -372,7 +391,10 @@ Targets:
                           (budget != null ? $", budget {budget:N0} ({total * 100.0 / Math.Max(1, budget.Value):0.#}%)" : ""));
     }
 
-    private static int Build(string[] args, out string? builtExe)
+    /// <summary>The local compiler the last <see cref="Build"/> used (null for a Docker build), for helpers built alongside (os4 estype).</summary>
+    internal static string? LastLocalCompiler;
+
+    internal static int Build(string[] args, out string? builtExe)
     {
         builtExe = null;
         string path = ".";
@@ -380,7 +402,9 @@ Targets:
         bool emitOnly = false, allowFloat = false, debug = false, trace = false;
         long? chipBudget = null;
         var target = Targets.M68k;
-        string? cc = null, cflags = null, docker = null;
+        string? cc = null, cflags = null, docker = null, toolchain = null, sysrootOption = null;
+        bool anyVersion = false;
+        LastLocalCompiler = null;
 
         for (var i = 0; i < args.Length; i++)
         {
@@ -406,6 +430,11 @@ Targets:
                     break;
                 case "--cc" when i + 1 < args.Length: cc = args[++i]; break;
                 case "--cflags" when i + 1 < args.Length: cflags = args[++i]; break;
+                // An empty value counts as not given (a VS Code task passes --toolchain ${config:esharp.toolchain} as it is).
+                case "--toolchain" when i + 1 < args.Length: toolchain = args[++i]; break;
+                case "--sysroot" when i + 1 < args.Length: sysrootOption = args[++i]; break;
+                case "--any-cc-version": anyVersion = true; break;
+                case "--toolchain" or "--sysroot": return Fail($"{args[i]} needs a folder");
                 default:
                     if (args[i].StartsWith("-")) return Fail($"unknown option '{args[i]}'");
                     path = args[i];
@@ -413,6 +442,8 @@ Targets:
             }
         }
 
+        if (docker != null && !string.IsNullOrWhiteSpace(toolchain))
+            return Fail("--docker and --toolchain both say where the compiler is: use one (--docker runs it in an image, --toolchain from a folder on this machine)");
         if (docker == "") docker = DefaultImage(target);
         if (SyncAssets(path) is { } assetError) return Fail(assetError);
 
@@ -444,17 +475,40 @@ Targets:
         Console.WriteLine($"Wrote {cFile}");
         if (emitOnly) return 0;
 
+        var userCc = cc != null;
+        string? sysroot;
+        if (docker == null)
+        {
+            // A compiler on this machine: --toolchain, ESHARP_TOOLCHAIN_<TARGET>, ESHARP_TOOLCHAIN, else PATH (Toolchain.cs).
+            if (Toolchain.Resolve(target, toolchain, sysrootOption, Environment.GetEnvironmentVariable, out var choice, cc) is { } tcError)
+                return Fail(tcError);
+            cc = choice!.Compiler;
+            sysroot = choice.Sysroot;
+            if (!userCc && !anyVersion && Toolchain.VersionProblem(target, cc, Toolchain.ReadVersion(cc)) is { } versionError)
+                return Fail(versionError);
+            if (choice.Source != "PATH") Console.WriteLine($"Compiler {cc} (from {choice.Source})");
+            LastLocalCompiler = cc;
+        }
+        else
+        {
+            if (anyVersion) Console.Error.WriteLine("esharp: warning: --any-cc-version ignored with --docker (the image's compiler is used)");
+            sysroot = string.IsNullOrWhiteSpace(sysrootOption) ? (target.Sysroot.Length > 0 ? target.Sysroot : null) : sysrootOption;
+        }
         cc ??= target.Compiler;
+        // --cflags replaces the target's flags; a --sysroot in them wins over the toolchain's.
+        if (cflags != null && cflags.Contains("--sysroot")) sysroot = null;
         cflags ??= target.CFlags;
         var exe = Path.Combine(outDir, name);
 
-        // Inside the container the output directory is mounted at /work.
+        // The compiler runs in the output directory with relative file names, inside the container (mounted at /work) or here,
+        // so a local build passes the compiler the same command line as a Docker build (and gives the same bytes).
         int Compile(string[] flags, string outFile, bool link)
         {
             var compilerArgs = new List<string>();
+            if (sysroot != null) compilerArgs.Add("--sysroot=" + sysroot);
             compilerArgs.AddRange(cflags.Split(' ', StringSplitOptions.RemoveEmptyEntries));
             compilerArgs.AddRange(flags);
-            compilerArgs.AddRange(new[] { "-o", docker == null ? Path.Combine(outDir, outFile) : outFile, docker == null ? cFile : name + ".c" });
+            compilerArgs.AddRange(new[] { "-o", outFile, name + ".c" });
             if (link) compilerArgs.AddRange(target.Libs.Split(' ', StringSplitOptions.RemoveEmptyEntries));
 
             ProcessStartInfo psi;
@@ -466,12 +520,13 @@ Targets:
                 if (docker != null)
                     foreach (var a in new[] { "run", "--rm", "-v", $"{Path.GetFullPath(outDir)}:/work", "-w", "/work", docker, "sh" })
                         psi.ArgumentList.Add(a);
+                else psi.WorkingDirectory = Path.GetFullPath(outDir);
                 psi.ArgumentList.Add("-c");
                 psi.ArgumentList.Add(line);
             }
             else if (docker == null)
             {
-                psi = new ProcessStartInfo(cc) { UseShellExecute = false };
+                psi = new ProcessStartInfo(cc) { UseShellExecute = false, WorkingDirectory = Path.GetFullPath(outDir) };
                 foreach (var a in compilerArgs) psi.ArgumentList.Add(a);
             }
             else
@@ -493,7 +548,7 @@ Targets:
             }
             catch (System.ComponentModel.Win32Exception)
             {
-                return Fail($"'{psi.FileName}' not found. Install {cc} (see docker/Dockerfile), pass --docker, or use --emit-only.");
+                return Fail($"'{psi.FileName}' not found. Install {cc} (see docs/design/TOOLCHAINS.md), pass --docker, --toolchain <dir>, or use --emit-only.");
             }
             return 0;
         }
@@ -631,7 +686,7 @@ Targets:
             if (Os4Vm.ProgramArgsError(programArgs) is { } os4ArgsError) return Fail(os4ArgsError);
             var os4Rc = Build(buildArgs.ToArray(), out var os4Exe);
             if (os4Rc != 0 || os4Exe == null) return os4Rc;
-            var (exit, _) = Os4Vm.Run(os4Exe, TimeSpan.FromSeconds(timeout), DockerImage(buildArgs, Targets.Os4), screenshot, serial, input: input, programArgs: programArgs);
+            var (exit, _) = Os4Vm.Run(os4Exe, TimeSpan.FromSeconds(timeout), DockerImage(buildArgs, Targets.Os4), screenshot, serial, input: input, programArgs: programArgs, localCc: LastLocalCompiler);
             return exit;
         }
         if (targetName != "m68k")
