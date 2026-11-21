@@ -6,6 +6,26 @@ namespace ESharp.Compiler.Tests;
 public class HostTargetTests
 {
     [Fact]
+    public async Task Captures_in_tests_that_run_at_the_same_time_do_not_see_each_others_output()
+    {
+        // Issue #125: Dos.Out was one static field, so a capture in one test also received the output of a sample
+        // running in another test (xunit runs test classes in parallel).
+        var bothCapturing = new Barrier(2);
+        string Run(string text)
+        {
+            using var console = HostConsole.Capture();
+            bothCapturing.SignalAndWait();
+            for (int i = 0; i < 100; i++) ESharp.Platform.Dos.PutStr(text);
+            bothCapturing.SignalAndWait();
+            return console.Output;
+        }
+        var a = Task.Run(() => Run("a"));
+        var b = Task.Run(() => Run("b"));
+        Assert.Equal(new string('a', 100), await a);
+        Assert.Equal(new string('b', 100), await b);
+    }
+
+    [Fact]
     public void Hello_sample_runs_on_the_host()
     {
         using var console = HostConsole.Capture();
