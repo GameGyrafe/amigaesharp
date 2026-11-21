@@ -78,6 +78,15 @@ public static class Trace
         PutNumber(value);
         Put('\n');
     }
+
+    /// <summary>
+    /// Writes <c>label: </c> and where this call is in the program, in the form the target's crash reports use and
+    /// <c>esharp addr</c> takes: <c>hunk 0 offset 0x1a2c</c> (m68k), <c>segment 1 .text offset 0x698</c> (AROS),
+    /// <c>_start+0x9cc</c> (AmigaOS 4). Use it to see how far a program got, or to find a line's code offset.
+    /// </summary>
+    [Conditional("TRACE")]
+    [Native("es_trace_where")]
+    public static extern void Where(string label);
 #elif SDL
     /// <summary>Writes the text to standard error.</summary>
     [Conditional("TRACE")]
@@ -96,6 +105,10 @@ public static class Trace
         Crt.es_std_trace_int(value);
         Crt.es_std_trace_char('\n');
     }
+
+    /// <summary>Writes <c>label: </c> and a note: a desktop build has no code offset to give (the Amiga targets do).</summary>
+    [Conditional("TRACE")]
+    public static void Where(string label) { Crt.es_std_trace(label); Crt.es_std_trace(": (no code offset on this target)\n"); }
 #else
     /// <summary>Where the host writes trace text. Tests replace it to capture the output.</summary>
     public static System.IO.TextWriter Out = System.Console.Error;
@@ -111,5 +124,9 @@ public static class Trace
     /// <summary>Writes <c>label=value</c> and a line feed.</summary>
     [Conditional("TRACE")]
     public static void Value(string label, int value) { Out.Write(label + "=" + value + "\n"); }
+
+    /// <summary>Writes <c>label: </c> and a note: the host has no code offset to give (the Amiga targets do).</summary>
+    [Conditional("TRACE")]
+    public static void Where(string label) { Out.Write(label + ": (no code offset on the host)\n"); }
 #endif
 }

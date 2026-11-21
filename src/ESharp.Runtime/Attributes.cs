@@ -77,11 +77,18 @@ public sealed class ChipRamAttribute : Attribute
 
 /// <summary>
 /// An extern method that is a C function the emitter itself defines in the generated file's prelude (no library header, no body in E#).
-/// Used for operations a single machine instruction does well, such as the 68020 64/32 divide.
+/// Used for operations a single machine instruction does well, such as the 68020 64/32 divide. The C name is the method's
+/// name, or the one given (so a public method can have a C macro of its own name space behind it, such as Trace.Where).
 /// </summary>
 [AttributeUsage(AttributeTargets.Method)]
 public sealed class NativeAttribute : Attribute
 {
+    public NativeAttribute() { }
+
+    public NativeAttribute(string name) { Name = name; }
+
+    /// <summary>The C name, when it is not the method's name.</summary>
+    public string? Name { get; }
 }
 
 /// <summary>

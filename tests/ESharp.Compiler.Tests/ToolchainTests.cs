@@ -200,8 +200,8 @@ printf x > ""$out""
         var calls = File.ReadAllLines(Path.Combine(tc, "calls.txt"));
         Assert.Equal(new[]
         {
-            $"{Path.GetFullPath(outDir)} -noixemul -m68020 -O2 -fwrapv -o demo demo.c",
-            $"{Path.GetFullPath(outDir)} -noixemul -m68020 -O2 -fwrapv -g -c -o demo.o demo.c",
+            $"{Path.GetFullPath(outDir)} -noixemul -m68020 -O2 -fwrapv -fno-reorder-functions -Wl,-Map,demo.map -o demo demo.c",
+            $"{Path.GetFullPath(outDir)} -noixemul -m68020 -O2 -fwrapv -fno-reorder-functions -g -c -o demo.o demo.c",
         }, calls);
     }
 
@@ -212,7 +212,11 @@ printf x > ""$out""
         var tc = FakeGcc("aros", "x86_64-aros-gcc", "9.1.0");
         var outDir = Path.Combine(_dir, "out");
         Assert.Equal(0, Program.Build(new[] { Project(), "--target", "aros", "--toolchain", tc, "-o", outDir }, out _));
-        Assert.Equal($"{Path.GetFullPath(outDir)} --sysroot={tc} -O2 -fwrapv -o demo demo.c", File.ReadAllLines(Path.Combine(tc, "calls.txt")).Single());
+        Assert.Equal(new[]
+        {
+            $"{Path.GetFullPath(outDir)} --sysroot={tc} -O2 -fwrapv -o demo demo.c",
+            $"{Path.GetFullPath(outDir)} --sysroot={tc} -O2 -fwrapv -g -gdwarf-4 -o demo.debug demo.c",   // for esharp addr
+        }, File.ReadAllLines(Path.Combine(tc, "calls.txt")));
     }
 
     [Fact]
