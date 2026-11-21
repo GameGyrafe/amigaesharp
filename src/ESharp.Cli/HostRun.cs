@@ -15,7 +15,7 @@ public static class HostRun
     /// ESharp.Target.Host) or a directory with the packed host assemblies (references to the DLLs), see
     /// <see cref="SourceTree.HostSide"/>.
     /// </summary>
-    public static string ProjectText(string hostSide, IEnumerable<string> sources)
+    public static string ProjectText(string hostSide, IEnumerable<string> sources, IEnumerable<string>? packageDlls = null)
     {
         string refs;
         if (SourceTree.IsHostLibs(hostSide))
@@ -23,6 +23,9 @@ public static class HostRun
                 $"    <Reference Include=\"{a}\"><HintPath>{SecurityElement.Escape(Path.GetFullPath(Path.Combine(hostSide, a + ".dll")))}</HintPath></Reference>\n"));
         else
             refs = "    <ProjectReference Include=\"" + SecurityElement.Escape(Path.Combine(hostSide, "src", "ESharp.Target.Host", "ESharp.Target.Host.csproj")) + "\" />\n";
+        // E# library packages: their DLLs are the HOST builds of the libraries.
+        foreach (var dll in packageDlls ?? Array.Empty<string>())
+            refs += $"    <Reference Include=\"{SecurityElement.Escape(Path.GetFileNameWithoutExtension(dll))}\"><HintPath>{SecurityElement.Escape(Path.GetFullPath(dll))}</HintPath></Reference>\n";
         return "<Project Sdk=\"Microsoft.NET.Sdk\">\n" +
             "  <PropertyGroup>\n    <OutputType>Exe</OutputType>\n    <TargetFramework>net10.0</TargetFramework>\n" +
             "    <Nullable>enable</Nullable>\n    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>\n" +
@@ -34,11 +37,12 @@ public static class HostRun
     }
 
     /// <returns>exit code of the program (or of the build, with BuildFailed set), and its stdout.</returns>
-    public static (int Exit, string Output, bool BuildFailed) Run(string workDir, string hostSide, IEnumerable<string> sources, TimeSpan timeout, IReadOnlyList<string>? programArgs = null)
+    public static (int Exit, string Output, bool BuildFailed) Run(string workDir, string hostSide, IEnumerable<string> sources, TimeSpan timeout,
+        IReadOnlyList<string>? programArgs = null, IReadOnlyList<string>? packageDlls = null)
     {
         Directory.CreateDirectory(workDir);
         var proj = Path.Combine(workDir, "eshosttest.csproj");
-        File.WriteAllText(proj, ProjectText(hostSide, sources));
+        File.WriteAllText(proj, ProjectText(hostSide, sources, packageDlls));
 
         var build = Exec("dotnet", new[] { "build", proj, "-c", "Release", "-nologo", "-v", "q", "-o", Path.Combine(workDir, "out") }, TimeSpan.FromMinutes(5));
         if (build.Exit != 0)

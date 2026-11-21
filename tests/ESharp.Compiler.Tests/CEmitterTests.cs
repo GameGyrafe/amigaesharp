@@ -1465,6 +1465,23 @@ if (p.First() == 3 && Fix.ToInt(q.B) == 2 && Twice(p) == 2 && m == 9) Dos.PutStr
         Assert.Equal("ok\n", output);
     }
 
+    [Fact]
+    public void Generic_copies_go_before_an_else_branch_at_the_end_of_the_class()
+    {
+        // The copies of Pick<T> are added at the end of P, whose closing brace has #else, disabled text and #endif in front of it.
+        const string members = @"
+static T Pick<T>(bool first, T a, T b) where T : unmanaged => first ? a : b;
+#if AMIGA
+static int Mode() => 1;
+#else
+static int Mode() => 2;
+#endif
+";
+        var c = CompileOk(Program(members, "if (Pick(false, 3, 4) == 4 && Mode() == 1) Dos.PutStr(\"ok\\n\");"));
+        if (!HasGcc) return;
+        Assert.Equal((0, "ok\n"), RunWithHostGcc(c));
+    }
+
     // ---- ref locals, ref returns and foreach over the GetEnumerator pattern (issue #12) ----
 
     [Fact]

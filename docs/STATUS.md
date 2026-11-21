@@ -10,6 +10,72 @@ The minimum system is now an **Amiga 1200: 68020, AGA, 2 MB chip RAM, Kickstart 
 - **Kept on purpose:** `HasAga()` and `HasRtg()` with their fallbacks. A classic A1200 always has AGA, but PowerPC, RTG-only and AROS targets may not, so the checks stay as the portable way to ask. **Not yet done:** using 68020 instructions deliberately and AROS (a new target, untested).
 - Verified after the change: all 17 samples built with `-m68020` and run on Kickstart 3.1 (A1200) in FS-UAE: 300 `ok` lines, no `FAIL` (the script shows only the last 25 lines of each sample, so long ones are truncated), 136 unit tests pass. Not verified: PowerPC, real hardware, a 68000/Kickstart 2.04 run (no longer supported).
 
+## E# library packages, part 1: embedded sources, loader and checks (issue #31)
+
+The first wave of the maintainer's decision of 2026-11-21: a library is a .NET class library whose DLL carries its C# sources
+and a manifest as embedded resources; `esharp build`, `run` and `test` find the E# packages of a restored project in
+`obj/project.assets.json` and compile their sources with the program. How to write and use one: docs/GUIDE.md, "Libraries".
+
+- **Embedding:** `src/ESharp.Sdk/buildTransitive/AmigaESharp.Sdk.targets`, now in the AmigaESharp.Sdk package. A project with
+  `EsLibrary=true` gets `HOST` defined, its C# files as `esharp/src/<path>` and a manifest `esharp/library.json` (format 1,
+  id, version, `EsTargets`, `minSdk` = `EsMinSdkVersion` or the referenced Sdk's version read from its nuspec, `EsFeatures`,
+  `PackageLicenseExpression`, and `defines`: the library's own `DefineConstants` symbols without DEBUG/TRACE/RELEASE/HOST, which
+  `esharp build` defines for that package's files only), and the `esharp` package tag. It stops with ESL001-ESL009 on missing
+  or unknown targets, unknown features, `ImplicitUsings`, an `assets.json`, C files, a source outside the project without a
+  `Link`, `<Using>` items (ESL008: their generated file is not embedded) or an E# target symbol in `DefineConstants` (ESL009).
+- **Loading** (`Packages.cs`, `PackageStep.cs`): every package of the restore (direct and transitive) whose compile DLL has the
+  manifest, read through System.Reflection.Metadata; others are skipped (a direct reference that is not an E# library gets a
+  warning). No restore: an error that says to run `dotnet restore`; a csproj newer than the restore: a warning. The build
+  prints each package with its licence, file count and declared features. The host run of `esharp test` references the
+  package DLLs.
+- **Checks** (`PackageChecks.cs`): package code is in the program's user set, so C# errors, the subset rules, ES0101 and
+  ES0099 apply and are reported at `<package Id Version>/File.cs(line,col)` (also in the `#line` directives). New: ES0110
+  target not listed, ES0111 GPL/LGPL/AGPL licence (an SPDX expression where every OR choice is GPL-family; opt out with
+  `EsAllowCopyleft` in the program's csproj, then a warning), ES0112 newer E# needed (skipped for `-dev` builds), ES0113
+  `[AmigaLib]`/`[Native]`/`[InlineAsm]` declared in the package, or a platform `[AmigaLib]`/`[Native]` extern called from it
+  (`Exec.AllocVec`, `Dos.PutStr` on the Amiga targets; per target, so `Dos.PutStr` is fine on sdl), without `EsFeatures`, ES0114 entry point in a package, ES0115
+  the same type in a package and the program or two packages (also `partial`), ES0116 `internal` package member used from
+  outside, ES0117 class derived from a package class (not supported yet), ES0118 unusable package (assets, C files, newer
+  manifest format, bad path, a reserved or invalid symbol in `defines`). Same simple type names in different namespaces get prefixed C names as before.
+- **Sample** `samples/packages`: the library `Tween` (`ESharpSample.Tween`: easing curves, a generic `Tween<T>` struct, a generic
+  method, fixed point, an internal helper) and the game `TweenDemo` (12 checks, including its own `Ease` class next to the
+  package's `Tween.Ease`). `.gitignore` had `**/packages/*`; `samples/packages/*` is re-included.
+
+**Verified (2026-11-21):**
+- `dotnet test`: 721 passed, 2 skipped (the OS4 VM and SDK-backed BindGen tests), 0 failed. New: `PackageTests` (32: in-memory
+  packages; the program with package generics, two packages with the same type name, compiled with the host gcc and run;
+  every check above; licence expressions) and `PackageRoundTripTests` (the samples/packages projects copied to a temp folder,
+  `dotnet pack` of the library into a local folder feed with an AmigaESharp.Sdk assembled from the test build, `dotnet restore`
+  of the game from that feed only with its own package cache, the manifest read back, `esharp build --emit-only`, the host
+  run of `esharp test` (12 ok) and, with the m68k image in docker, the m68k build; 8 s here). The clang run of the tests
+  (`ESHARP_TEST_CC=clang`) was not repeated locally (no clang on this host); CI runs it.
+- `TweenDemo` from a local feed, `esharp test --target m68k --docker <m68k image> --model A1200 --kickstart <Kickstart 3.1 rom>`:
+  host 12 ok, Amiga 12 ok, 0 FAIL, return code 0, "Host and Amiga agree on every check".
+- The same game, `--target os4 --docker esharp-amiga-toolchain` in the AmigaOS 4.1 VM: 12 ok, return code 0, agree; and
+  `--target aros --docker esharp-amiga-toolchain` on hosted AROS x86-64 (esharp-aros-hosted): 12 ok, return code 0, 0 traps, agree.
+- `tools/package-smoke.sh` with `dotnet pack ESharp.sln -p:Version=0.1.0-local.31` and the m68k image: passed, now also with an
+  E# library packed against the packed Sdk into a second local feed (the nuget.config maps `AmigaESharp.*` and `ESharpSmoke.*`
+  to the local feeds only, so `--add-source` is gone from the tool install): the error before restore, the package line,
+  `esharp test` and `dotnet run` of a game that uses it, ES0110 for `--target os4` (the library lists m68k and sdl), ES0111
+  for its GPL-3.0-only 1.0.1, the `EsAllowCopyleft` warning, and the m68k build.
+- Review follow-up: `PackageTests` has a package calling `Exec.AllocVec`/`FreeVec` and `Dos.PutStr` (ES0113 for each method
+  once; with `AmigaLib` declared it builds and runs with the host gcc; the same `Dos.PutStr` call needs nothing on sdl) and a
+  package with its own symbol (the `#if` branch of its file and not of the program's, also through the generic expansion,
+  run with the host gcc; reserved and invalid symbols are ES0118). The round trip now also builds the library with a `<Using>`
+  item (ESL008) and with `AMIGA` in `DefineConstants` (ESL009), and packs it with a symbol of its own, read back from the
+  manifest. Found on the way and fixed: a generic method in a class whose closing brace had `#else`, disabled text and
+  `#endif` in front of it failed to compile (the generic copies' `#line` was inserted by re-parsing that trivia as text);
+  `CEmitterTests` has a program for it, built and run with the host gcc. The m68k C of all 45 samples is byte for byte
+  the same as before the change, so the emulator and VM runs were not repeated.
+- The samples/packages/README.md steps in the checkout (with `NUGET_PACKAGES` set to an empty folder): host 12 ok.
+
+**Not done / not verified:** assets and C files in packages (refused with a clear error; later waves of #31); deriving from
+package classes (ES0117); pruning unused package code (all of a package is emitted, like program code); a game using a
+library through a ProjectReference (use a package, or `esharp.include` for local folders); `[assembly: RequiresLib]` in a
+package applies to the whole program (one assembly); the morphos, aros-i386 and sdl builds of the sample (the library lists
+them; not run); Windows (CI runs the unit tests there, including the round trip without the m68k build); real hardware;
+publishing a library to nuget.org (never done for the sample or the tests).
+
 ## `esharp addr` for any hunk layout, AROS and AmigaOS 4 (issue #126)
 
 `esharp addr` read hunk 0 only and assumed three hunks. It now reads the m68k exe's hunk table itself (types, sizes, memory
@@ -1335,7 +1401,7 @@ Open work as of 2026-11-14 (the GitHub issues are the live list; the v1 tracker 
 - **Windows (#11):** CI now runs a `windows` job (windows-latest, PR head): `dotnet test` (439 passed, 2 skipped, 0 failed; the runner has a MinGW gcc, so the generated-C tests run there and only the Docker/VM/SDK-dependent tests skip), emit-only builds of `samples/hello` and `samples/cards`, `esharp test samples/linq`, a clean `git status` afterwards, and a package round trip against the PR's own packages (`dotnet pack`, install the tool from the folder into a tool path, a nuget.config with the local feed, version and PackageReference checked, NU1603 fails the step, `esharp new`, `dotnet run`, `esharp test`, `esharp build --emit-only`). A `.gitattributes` keeps the working tree LF (the runner has `core.autocrlf=true`), and the native test output is read CRLF-tolerant. Still needs a person on a real Windows machine: Docker Desktop with `--docker` builds, FS-UAE for Windows, VS Code, and Windows with a different (or no) C compiler. `tools/aros-hosted` is Linux-only. macOS was checked, see "VS Code support".
 - **Bindings (#19, #40):** GadTools wrappers (v1), the BOOPSI core with hooks (#40 part 1, see "BOOPSI core and hooks") and the MUI wrappers on it (#40 part 2, see "MUI wrappers") are done. MUI custom classes (#93, see "MUI custom classes") are done too. Open: ReAction (last, if at all).
 - **Display design (not implemented):** [design/DISPLAY.md](design/DISPLAY.md) proposes logical coordinates with an integer scale, mode choice that follows the Workbench's monitor family (MODE option, asl screen-mode requester), 256 colours with a shared palette, a gradient pen (copper on AGA), window mode on the Workbench and multi-scale art. Nothing in it is built or verified yet; it waits for the maintainer's approval.
-- **v2:** AROS i386 (#4: toolchain, target and hosted runs done, see "AROS i386"; the MUI crashes on hosted i386 were an AROS bug, worked around (#105); open: native pc-i386), E# library source packages on NuGet (#31), user classes deriving from platform classes (#42: done for `GtWindow`, see "Classes derived from platform classes"). Capturing lambdas stored in fields and events (#41): done (PR #83), see "Heap closures and events".
+- **v2:** AROS i386 (#4: toolchain, target and hosted runs done, see "AROS i386"; the MUI crashes on hosted i386 were an AROS bug, worked around (#105); open: native pc-i386), E# library source packages on NuGet (#31: part 1 done, see "E# library packages, part 1"; open: assets and C files in packages, deriving from package classes), user classes deriving from platform classes (#42: done for `GtWindow`, see "Classes derived from platform classes"). Capturing lambdas stored in fields and events (#41): done (PR #83), see "Heap closures and events".
 - **Local toolchains (#122):** part 1 done (configuration, `esharp doctor`, VS Code tasks, a local m68k build in CI; see
   "Local toolchains, part 1"). Open: macOS and Windows by hand, and whether os4, morphos and AROS get a local route
   ([design/TOOLCHAINS.md](design/TOOLCHAINS.md) has the options; the maintainer picks).
