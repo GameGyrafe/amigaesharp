@@ -30,8 +30,13 @@ public static class EsCompiler
         // E# library packages: parsed under "<package Id Version>/" paths and checked like the program's own files.
         var packageOf = new Dictionary<SyntaxTree, EsPackage>();
         foreach (var package in options.Packages)
+        {
+            // The library's own DefineConstants symbols (manifest "defines") hold for its files only.
+            var symbols = package.Manifest?.Symbols ?? Array.Empty<string>();
+            var packageParse = symbols.Count == 0 ? parse : parse.WithPreprocessorSymbols(options.Defines.Concat(symbols).Distinct(StringComparer.Ordinal));
             foreach (var s in package.Sources)
-                packageOf[CSharpSyntaxTree.ParseText(s.Text, parse, path: package.PathPrefix + s.Path)] = package;
+                packageOf[CSharpSyntaxTree.ParseText(s.Text, packageParse, path: package.PathPrefix + s.Path)] = package;
+        }
         var packageTrees = packageOf.Keys.ToList();
         var userSet = new HashSet<SyntaxTree>(userTrees.Concat(packageTrees));
 

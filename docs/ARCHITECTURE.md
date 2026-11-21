@@ -146,12 +146,14 @@ CI runs the unit tests on Linux and Windows, a package round trip, the toolchain
 ## Library packages
 
 An E# library (issue #31) is a .NET class library whose DLL carries its C# sources (`esharp/src/<path>`) and a manifest
-(`esharp/library.json`: format, id, version, targets, minSdk, features, licence) as embedded resources, the same idea as the
+(`esharp/library.json`: format, id, version, targets, minSdk, features, defines, licence) as embedded resources, the same idea as the
 compiler embedding Runtime and Platform (`LibrarySources.cs`). The pieces:
 
 - **Embedding**: `src/ESharp.Sdk/buildTransitive/AmigaESharp.Sdk.targets`, imported into every project that references
-  AmigaESharp.Sdk. With `EsLibrary=true` it defines `HOST`, checks `EsTargets`/`EsFeatures`/`ImplicitUsings` and refuses
-  `assets.json` and C files (codes ESL001-ESL007), writes the manifest and adds the resources before the build.
+  AmigaESharp.Sdk. With `EsLibrary=true` it defines `HOST`, checks `EsTargets`/`EsFeatures`/`ImplicitUsings`/`<Using>` items and refuses
+  `assets.json`, C files and E# target symbols in `DefineConstants` (codes ESL001-ESL009), writes the manifest (with the
+  library's own symbols as `defines`) and adds the resources before the build. `EsCompiler` parses each package's files with
+  the target's symbols plus its `defines`; the generic expansion (`Monomorphizer`) re-parses a rewritten tree with that tree's own options.
 - **Loading**: `src/ESharp.Compiler/Packages.cs`. `PackageLoader.FromAssetsFile` walks `obj/project.assets.json` (the first
   target framework, every package of type `package`), `PackageReader` reads the resources of each compile DLL through
   `System.Reflection.Metadata` without loading it, and skips DLLs with no manifest. Problems become `EsPackage.Problems`

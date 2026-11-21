@@ -20,8 +20,21 @@ public sealed record LibraryManifest(
     IReadOnlyList<string> Targets,
     string MinSdk,
     IReadOnlyList<string> Features,
-    string License)
+    string License,
+    IReadOnlyList<string>? Defines = null)
 {
+    /// <summary>
+    /// The library's own preprocessor symbols (its <c>DefineConstants</c> without DEBUG, TRACE, RELEASE and HOST): defined for the
+    /// library's files only, next to the target's symbols.
+    /// </summary>
+    public IReadOnlyList<string> Symbols => Defines ?? Array.Empty<string>();
+
+    /// <summary>Symbols that E# sets itself (the target's, and DEBUG/TRACE per build): a library may not define them.</summary>
+    public static readonly IReadOnlyList<string> ReservedSymbols = new[]
+    {
+        "AMIGA", "M68K", "PPC", "X86_64", "I386", "AMIGAOS3", "AMIGAOS4", "MORPHOS", "AROS", "SDL", "HOST", "DEBUG", "TRACE",
+    };
+
     /// <summary>The manifest format this E# reads; a library made for a newer one is refused.</summary>
     public const int CurrentFormat = 1;
 
@@ -159,7 +172,14 @@ public static class PackageReader
             problems.Add($"its manifest has format {format}; this E# reads format {LibraryManifest.CurrentFormat} (update the esharp tool)");
             return null;
         }
-        var manifest = new LibraryManifest(format, Str("id"), Str("version"), List("targets"), Str("minSdk"), List("features"), Str("license"));
+        var manifest = new LibraryManifest(format, Str("id"), Str("version"), List("targets"), Str("minSdk"), List("features"), Str("license"),
+            List("defines").Distinct(StringComparer.Ordinal).ToList());
+        foreach (var symbol in manifest.Symbols)
+        {
+            if (!IsSymbol(symbol)) problems.Add($"its manifest defines '{symbol}', which is not a preprocessor symbol");
+            else if (LibraryManifest.ReservedSymbols.Contains(symbol, StringComparer.Ordinal))
+                problems.Add($"its manifest defines '{symbol}', a symbol esharp build sets itself (DefineConstants of the library)");
+        }
         if (manifest.Targets.Count == 0) problems.Add("its manifest lists no targets (EsTargets)");
         foreach (var feature in manifest.Features.Where(x => !LibraryManifest.KnownFeatures.Contains(x, StringComparer.OrdinalIgnoreCase)))
             problems.Add($"its manifest declares the unknown feature '{feature}' (known: {string.Join(", ", LibraryManifest.KnownFeatures)})");
@@ -171,6 +191,9 @@ public static class PackageReader
                     : "it declares native C code; C files and headers in packages are not supported yet (C# only for now)");
         return manifest;
     }
+
+    private static bool IsSymbol(string s) =>
+        s.Length > 0 && (char.IsLetter(s[0]) || s[0] == '_') && s.All(c => char.IsLetterOrDigit(c) || c == '_');
 
     private static string Text(byte[] bytes)
     {

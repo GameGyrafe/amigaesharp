@@ -19,8 +19,10 @@ and a manifest as embedded resources; `esharp build`, `run` and `test` find the 
 - **Embedding:** `src/ESharp.Sdk/buildTransitive/AmigaESharp.Sdk.targets`, now in the AmigaESharp.Sdk package. A project with
   `EsLibrary=true` gets `HOST` defined, its C# files as `esharp/src/<path>` and a manifest `esharp/library.json` (format 1,
   id, version, `EsTargets`, `minSdk` = `EsMinSdkVersion` or the referenced Sdk's version read from its nuspec, `EsFeatures`,
-  `PackageLicenseExpression`), and the `esharp` package tag. It stops with ESL001-ESL007 on missing or unknown targets,
-  unknown features, `ImplicitUsings`, an `assets.json`, C files, or a source outside the project without a `Link`.
+  `PackageLicenseExpression`, and `defines`: the library's own `DefineConstants` symbols without DEBUG/TRACE/RELEASE/HOST, which
+  `esharp build` defines for that package's files only), and the `esharp` package tag. It stops with ESL001-ESL009 on missing
+  or unknown targets, unknown features, `ImplicitUsings`, an `assets.json`, C files, a source outside the project without a
+  `Link`, `<Using>` items (ESL008: their generated file is not embedded) or an E# target symbol in `DefineConstants` (ESL009).
 - **Loading** (`Packages.cs`, `PackageStep.cs`): every package of the restore (direct and transitive) whose compile DLL has the
   manifest, read through System.Reflection.Metadata; others are skipped (a direct reference that is not an E# library gets a
   warning). No restore: an error that says to run `dotnet restore`; a csproj newer than the restore: a warning. The build
@@ -30,16 +32,17 @@ and a manifest as embedded resources; `esharp build`, `run` and `test` find the 
   ES0099 apply and are reported at `<package Id Version>/File.cs(line,col)` (also in the `#line` directives). New: ES0110
   target not listed, ES0111 GPL/LGPL/AGPL licence (an SPDX expression where every OR choice is GPL-family; opt out with
   `EsAllowCopyleft` in the program's csproj, then a warning), ES0112 newer E# needed (skipped for `-dev` builds), ES0113
-  `[AmigaLib]`/`[Native]`/`[InlineAsm]` declared in the package without `EsFeatures`, ES0114 entry point in a package, ES0115
+  `[AmigaLib]`/`[Native]`/`[InlineAsm]` declared in the package, or a platform `[AmigaLib]`/`[Native]` extern called from it
+  (`Exec.AllocVec`, `Dos.PutStr` on the Amiga targets; per target, so `Dos.PutStr` is fine on sdl), without `EsFeatures`, ES0114 entry point in a package, ES0115
   the same type in a package and the program or two packages (also `partial`), ES0116 `internal` package member used from
   outside, ES0117 class derived from a package class (not supported yet), ES0118 unusable package (assets, C files, newer
-  manifest format, bad path). Same simple type names in different namespaces get prefixed C names as before.
+  manifest format, bad path, a reserved or invalid symbol in `defines`). Same simple type names in different namespaces get prefixed C names as before.
 - **Sample** `samples/packages`: the library `Tween` (`ESharpSample.Tween`: easing curves, a generic `Tween<T>` struct, a generic
   method, fixed point, an internal helper) and the game `TweenDemo` (12 checks, including its own `Ease` class next to the
   package's `Tween.Ease`). `.gitignore` had `**/packages/*`; `samples/packages/*` is re-included.
 
 **Verified (2026-11-21):**
-- `dotnet test`: 718 passed, 2 skipped (the OS4 VM and SDK-backed BindGen tests), 0 failed. New: `PackageTests` (30: in-memory
+- `dotnet test`: 721 passed, 2 skipped (the OS4 VM and SDK-backed BindGen tests), 0 failed. New: `PackageTests` (32: in-memory
   packages; the program with package generics, two packages with the same type name, compiled with the host gcc and run;
   every check above; licence expressions) and `PackageRoundTripTests` (the samples/packages projects copied to a temp folder,
   `dotnet pack` of the library into a local folder feed with an AmigaESharp.Sdk assembled from the test build, `dotnet restore`
@@ -55,6 +58,15 @@ and a manifest as embedded resources; `esharp build`, `run` and `test` find the 
   to the local feeds only, so `--add-source` is gone from the tool install): the error before restore, the package line,
   `esharp test` and `dotnet run` of a game that uses it, ES0110 for `--target os4` (the library lists m68k and sdl), ES0111
   for its GPL-3.0-only 1.0.1, the `EsAllowCopyleft` warning, and the m68k build.
+- Review follow-up: `PackageTests` has a package calling `Exec.AllocVec`/`FreeVec` and `Dos.PutStr` (ES0113 for each method
+  once; with `AmigaLib` declared it builds and runs with the host gcc; the same `Dos.PutStr` call needs nothing on sdl) and a
+  package with its own symbol (the `#if` branch of its file and not of the program's, also through the generic expansion,
+  run with the host gcc; reserved and invalid symbols are ES0118). The round trip now also builds the library with a `<Using>`
+  item (ESL008) and with `AMIGA` in `DefineConstants` (ESL009), and packs it with a symbol of its own, read back from the
+  manifest. Found on the way and fixed: a generic method in a class whose closing brace had `#else`, disabled text and
+  `#endif` in front of it failed to compile (the generic copies' `#line` was inserted by re-parsing that trivia as text);
+  `CEmitterTests` has a program for it, built and run with the host gcc. The m68k C of all 45 samples is byte for byte
+  the same as before the change, so the emulator and VM runs were not repeated.
 - The samples/packages/README.md steps in the checkout (with `NUGET_PACKAGES` set to an empty folder): host 12 ok.
 
 **Not done / not verified:** assets and C files in packages (refused with a clear error; later waves of #31); deriving from

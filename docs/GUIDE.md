@@ -91,12 +91,18 @@ there. `samples/packages` has a library (`Tween`: easing curves and a generic tw
 ```
 
 then `dotnet pack -o <feed>`. The manifest (`esharp/library.json` in the DLL) holds the package id and version, the targets,
-`minSdk` (`EsMinSdkVersion`, by default the AmigaESharp.Sdk version the library was built against), the features and the
-licence expression. Rules for the code: the same subset as a program (the analyzer from the Sdk runs on the library in the
+`minSdk` (`EsMinSdkVersion`, by default the AmigaESharp.Sdk version the library was built against), the features, the
+library's own symbols and the licence expression. Rules for the code: the same subset as a program (the analyzer from the Sdk runs on the library in the
 IDE and in `dotnet build`); no `[EntryPoint]`; types in a namespace of your own; `public` for what programs may use
 (`internal` stays inside the library, as it would between two assemblies). Declaring `[AmigaLib]` bindings, `[Native]`
-externs or `[InlineAsm]` bodies needs `AmigaLib`, `Native` or `InlineAsm` in `EsFeatures`; using the platform API (which may
-itself be bindings, such as `Dos.PutStr`) does not. C# only for now: an `assets.json` or C files in the project stop the
+externs or `[InlineAsm]` bodies needs `AmigaLib`, `Native` or `InlineAsm` in `EsFeatures`, and so does calling the platform's
+raw ones: any `[AmigaLib]` or `[Native]` extern, such as `Exec.AllocVec`, `Asl.AllocAslRequest` or `Dos.PutStr` (a dos.library
+binding on the Amiga targets; on sdl it is a plain method, so an sdl build does not ask for it). The platform API built on
+them (`Video`, `Gfx`, `Files`, `Font`, ...) needs nothing. Every file needs its own `using` lines: `ImplicitUsings` and
+`<Using>` items stop the library build (ESL004, ESL008), since their generated file is not part of the embedded sources. The
+library's own `DefineConstants` symbols (other than DEBUG, TRACE, RELEASE and HOST) go into the manifest and `esharp build`
+defines them for the library's files only, next to the target's; an E# target symbol there (`AMIGA`, `M68K`, `SDL`, ...)
+stops the library build (ESL009). C# only for now: an `assets.json` or C files in the project stop the
 library build, and `esharp build` refuses a package that carries either (both are planned). Community packages use any id
 plus the `esharp` tag (the step adds it); `AmigaESharp.*` ids are meant for the official packages.
 
@@ -112,12 +118,12 @@ warns. The checks on package code:
 | The package does not list the chosen target | ES0110 |
 | A GPL, LGPL or AGPL licence (every choice of the SPDX expression; `MIT OR GPL-3.0-only` is fine), in any E# package of the restore; allowed with `<EsAllowCopyleft>true</EsAllowCopyleft>` in the game's csproj (a literal value), and then printed as a warning | ES0111 |
 | The package needs a newer esharp (`minSdk`; not checked by a `-dev` build from a checkout) | ES0112 |
-| `[AmigaLib]`, `[Native]` or `[InlineAsm]` in the package without the matching `EsFeatures` entry | ES0113 |
+| `[AmigaLib]`, `[Native]` or `[InlineAsm]` declared in the package, or an `[AmigaLib]`/`[Native]` extern of the platform called from it, without the matching `EsFeatures` entry | ES0113 |
 | An `[EntryPoint]` in a package | ES0114 |
 | The same type (namespace, name, arity; also a `partial` one) in a package and the program, or in two packages | ES0115 |
 | An `internal` member of a package used from the program or another package | ES0116 |
 | A program class derived from a package class (not supported yet) | ES0117 |
-| A package that cannot be used: an unknown manifest format, assets, C files, a bad path | ES0118 |
+| A package that cannot be used: an unknown manifest format, assets, C files, a bad path, a reserved or invalid symbol in its `defines` | ES0118 |
 
 Types with the same name in different namespaces (the program's `Game.Ease` and the package's `Tween.Ease`) are fine: their C
 names carry the namespace, as for any two namespaces. Package code is emitted in full, like program code (unused package

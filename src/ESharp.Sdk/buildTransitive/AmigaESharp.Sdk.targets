@@ -14,10 +14,15 @@
                          externs), InlineAsm ([InlineAsm] bodies); esharp build refuses an undeclared one and prints the declared ones
       EsMinSdkVersion    the oldest E# (esharp tool) it works with; default: the version of this AmigaESharp.Sdk
       PackageLicenseExpression   the licence (SPDX); a GPL-family licence is a build error in programs that use it unless they opt in
+      DefineConstants    the library's own symbols (other than DEBUG, TRACE, RELEASE and HOST) go into the manifest ("defines") and
+                         esharp build defines them for the library's files only; an E# target symbol (AMIGA, M68K, SDL, ...) is refused
+    Every file needs its own using lines: ImplicitUsings and <Using> items are refused (their generated file is not embedded).
     C# only for now: assets (assets.json) and C files are refused here and by esharp build.
   -->
 
   <PropertyGroup Condition="'$(EsLibrary)' == 'true'">
+    <!-- The library's own symbols, before HOST is added: they go into the manifest for the Amiga parse of its files. -->
+    <_EsUserDefines>$(DefineConstants)</_EsUserDefines>
     <!-- The same symbol the esharp host build defines: the DLL is the HOST build of the library. -->
     <DefineConstants>$(DefineConstants);HOST</DefineConstants>
     <PackageTags>$(PackageTags);esharp</PackageTags>
@@ -37,6 +42,9 @@
       <_EsUnknownTarget Include="@(_EsTarget)" Exclude="m68k;os4;morphos;aros;aros-i386;sdl" />
       <_EsFeature Include="$(EsFeatures)" />
       <_EsUnknownFeature Include="@(_EsFeature)" Exclude="AmigaLib;Native;InlineAsm" />
+      <!-- DEBUG/TRACE/RELEASE come from the configuration (esharp build sets DEBUG and TRACE itself); HOST is this step's own. -->
+      <_EsDefine Include="$([MSBuild]::Unescape($(_EsUserDefines.Replace(',', ';').Replace(' ', ''))))" Exclude="DEBUG;TRACE;RELEASE;HOST" />
+      <_EsReservedDefine Include="@(_EsDefine)" Condition="'%(Identity)' == 'AMIGA' or '%(Identity)' == 'M68K' or '%(Identity)' == 'PPC' or '%(Identity)' == 'X86_64' or '%(Identity)' == 'I386' or '%(Identity)' == 'AMIGAOS3' or '%(Identity)' == 'AMIGAOS4' or '%(Identity)' == 'MORPHOS' or '%(Identity)' == 'AROS' or '%(Identity)' == 'SDL'" />
     </ItemGroup>
     <Error Condition="'$(EsTargets)' == ''" Code="ESL001"
            Text="E# library: set EsTargets to the targets the library supports, ';'-separated (m68k;os4;morphos;aros;aros-i386;sdl)" />
@@ -46,6 +54,10 @@
            Text="E# library: unknown feature(s) in EsFeatures: @(_EsUnknownFeature) (known: AmigaLib;Native;InlineAsm)" />
     <Error Condition="'$(ImplicitUsings)' == 'enable' or '$(ImplicitUsings)' == 'true'" Code="ESL004"
            Text="E# library: set ImplicitUsings to disable; the Amiga build compiles only the embedded sources, so every file needs its own using lines" />
+    <Error Condition="'@(Using)' != ''" Code="ESL008"
+           Text="E# library: &lt;Using&gt; items (@(Using)) are not supported; the Amiga build compiles only the embedded sources, so put the using lines in each file" />
+    <Error Condition="'@(_EsReservedDefine)' != ''" Code="ESL009"
+           Text="E# library: DefineConstants sets the E# target symbol(s) @(_EsReservedDefine); esharp build defines those for the chosen target" />
     <Error Condition="Exists('$(MSBuildProjectDirectory)/assets.json')" Code="ESL005"
            Text="E# library: assets in packages are not supported yet (assets.json); E# library packages are C# only for now" />
 
@@ -69,7 +81,8 @@
     <PropertyGroup>
       <_EsTargetsJson>@(_EsTarget->'"%(Identity)"', ', ')</_EsTargetsJson>
       <_EsFeaturesJson>@(_EsFeature->'"%(Identity)"', ', ')</_EsFeaturesJson>
-      <_EsManifestText>{ "format": 1, "id": "$(PackageId)", "version": "$(PackageVersion)", "targets": [$(_EsTargetsJson)], "minSdk": "$(EsMinSdkVersion)", "features": [$(_EsFeaturesJson)], "license": "$(PackageLicenseExpression)" }</_EsManifestText>
+      <_EsDefinesJson>@(_EsDefine->'"%(Identity)"', ', ')</_EsDefinesJson>
+      <_EsManifestText>{ "format": 1, "id": "$(PackageId)", "version": "$(PackageVersion)", "targets": [$(_EsTargetsJson)], "minSdk": "$(EsMinSdkVersion)", "features": [$(_EsFeaturesJson)], "defines": [$(_EsDefinesJson)], "license": "$(PackageLicenseExpression)" }</_EsManifestText>
     </PropertyGroup>
     <WriteLinesToFile File="$(_EsLibraryManifest)" Lines="$(_EsManifestText)" Overwrite="true" WriteOnlyWhenDifferent="true" />
     <ItemGroup>

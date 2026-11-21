@@ -11,7 +11,7 @@ namespace ESharp.Compiler;
 /// <summary>
 /// The checks for E# library packages (issue #31) beyond the subset rules, which run on package sources as on the program's:
 /// the manifest (target list, licence, E# version, problems found when the package was read) and the sources (platform-level
-/// features used but not declared, an entry point, a type declared twice, internal members used from outside, a class derived
+/// features, declared in the package or called from it, that the manifest does not list, an entry point, a type declared twice, internal members used from outside, a class derived
 /// from a package class).
 /// </summary>
 internal static class PackageChecks
@@ -67,6 +67,32 @@ internal static class PackageChecks
                     if (feature != null && package.Manifest != null && !package.Manifest.Declares(feature))
                         diagnostics.Add(Diagnostic.Create(Descriptors.PackageFeature, attr.GetLocation(), package.Id, feature, method.Identifier.Text));
                 }
+        }
+
+        // The same features used rather than declared: a call to (or a method group of) an [AmigaLib] or [Native] extern declared
+        // elsewhere, such as the platform's raw bindings (Exec.Forbid, Asl.AllocAslRequest, Dos.PutStr on the Amiga targets) or
+        // the C runtime's es_std_* functions. The platform API built on them (Gfx, Video, Files, ...) is not raw and needs nothing.
+        // Each such method once per package, at its first use. What is raw depends on the target being built (Dos.PutStr is a
+        // binding on the Amiga targets and a plain method on sdl), so the check is per target, as the build is.
+        var reported = new HashSet<(string Package, string Method)>();
+        foreach (var (tree, package) in packageOf.OrderBy(k => k.Key.FilePath, StringComparer.Ordinal))
+        {
+            if (package.Manifest == null) continue;
+            var model = compilation.GetSemanticModel(tree);
+            foreach (var node in tree.GetRoot().DescendantNodes().OfType<SimpleNameSyntax>())
+            {
+                if (node.Parent is MethodDeclarationSyntax) continue;
+                var info = model.GetSymbolInfo(node);
+                if ((info.Symbol ?? (info.CandidateSymbols.Length == 1 ? info.CandidateSymbols[0] : null)) is not IMethodSymbol called) continue;
+                called = called.ReducedFrom ?? called;
+                called = called.OriginalDefinition;
+                if (!called.IsExtern || PackageOf(called) == package) continue;   // its own externs: the declaration check above
+                var names = called.GetAttributes().Select(a => a.AttributeClass?.Name).ToList();
+                var feature = names.Contains("AmigaLibAttribute") ? "AmigaLib" : names.Contains("NativeAttribute") ? "Native" : null;
+                if (feature == null || package.Manifest.Declares(feature) || !reported.Add((package.Id, called.ToDisplayString()))) continue;
+                diagnostics.Add(Diagnostic.Create(Descriptors.PackageFeature, node.GetLocation(), package.Id, feature,
+                    called.ContainingType.Name + "." + called.Name));
+            }
         }
 
         // An entry point belongs to the program.

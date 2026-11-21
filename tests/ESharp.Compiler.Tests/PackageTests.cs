@@ -217,6 +217,73 @@ public static class P
         Assert.Contains("uses Native ('Raw')", Assert.Single(Build(program, M68k(partly)).Diagnostics, d => d.Id == "ES0113").GetMessage());
     }
 
+    private const string RawUse = "using ESharp.Platform;\nnamespace RawUse;\npublic static unsafe class U {\n" +
+        "  public static int Block() { byte* b = Exec.AllocVec(16, 0); if (b == null) return 0; Exec.FreeVec(b); return 1; }\n" +
+        "  public static void Say(string s) { Dos.PutStr(s); Dos.PutStr(\"\\n\"); }\n}\n";
+
+    [Fact]
+    public void Calling_the_platform_raw_bindings_needs_the_feature_too()
+    {
+        // Not declared in the package, but called from it: Exec.AllocVec/FreeVec and (on the Amiga targets) Dos.PutStr are [AmigaLib] externs.
+        var program = Prelude + "public static class P { [EntryPoint] public static void Main() { RawUse.U.Say(RawUse.U.Block() == 1 ? \"ok\" : \"FAIL\"); } }";
+        var undeclared = Package("Sample.RawUse", new Dictionary<string, string> { ["U.cs"] = RawUse });
+        var features = Build(program, M68k(undeclared)).Diagnostics.Where(d => d.Id == "ES0113").Select(d => d.GetMessage()).ToList();
+        Assert.Equal(3, features.Count);   // each method once, though Dos.PutStr is called twice
+        Assert.Contains(features, m => m.Contains("'Sample.RawUse' uses AmigaLib ('Exec.AllocVec')"));
+        Assert.Contains(features, m => m.Contains("uses AmigaLib ('Exec.FreeVec')"));
+        Assert.Contains(features, m => m.Contains("uses AmigaLib ('Dos.PutStr')"));
+
+        var declared = Package("Sample.RawUse", new Dictionary<string, string> { ["U.cs"] = RawUse }, features: "\"AmigaLib\"");
+        var r = Build(program, M68k(declared));
+        Assert.True(r.Success, string.Join("\n", r.Diagnostics));
+        if (HasGcc) Assert.Equal((0, "ok\n"), RunWithHostGcc(r.C!));
+
+        // On sdl, Dos.PutStr is an ordinary method of the platform (over the C runtime): nothing to declare there.
+        var say = Package("Sample.Say", new Dictionary<string, string>
+        {
+            ["S.cs"] = "using ESharp.Platform;\nnamespace Say;\npublic static class S { public static void Line(string s) { Dos.PutStr(s); } }\n",
+        });
+        var sdl = Build(Prelude + "public static class P { [EntryPoint] public static void Main() { Say.S.Line(\"ok\"); } }",
+            Targets.Sdl.ToOptions(packages: new[] { say }, sdkVersion: "0.1.5"));
+        Assert.True(sdl.Success, string.Join("\n", sdl.Diagnostics));
+    }
+
+    // Pick<T> makes the generic expansion rewrite and re-parse this file, which must keep the library's symbols.
+    private const string Symbols = "namespace Sym;\npublic static class S {\n" +
+        "  public static T Pick<T>(bool first, T a, T b) where T : unmanaged => first ? a : b;\n" +
+        "#if FANCY\n  public static int Mode() => 1;\n  public static int Fancy() => 5;\n" +
+        "#else\n  public static int Mode() => 2;\n#endif\n" +
+        "#if AMIGA\n  public static bool Amiga() => true;\n#else\n  public static bool Amiga() => false;\n#endif\n}\n";
+
+    [Fact]
+    public void A_library_own_symbols_hold_for_its_files_only()
+    {
+        // FANCY is the library's DefineConstants (manifest "defines"): its files see it next to the target's symbols; the program does not.
+        var lib = Package("Sample.Sym", new Dictionary<string, string> { ["S.cs"] = Symbols }, extraManifest: ", \"defines\": [\"FANCY\"]");
+        Assert.Empty(lib.Problems);
+        Assert.Equal(new[] { "FANCY" }, lib.Manifest!.Symbols);
+        var program = Prelude + "public static class P {\n" +
+                      "  static void Check(bool ok, string name) { Dos.PutStr(ok ? \"ok \" : \"FAIL \"); Dos.PutStr(name); Dos.PutStr(\"\\n\"); }\n" +
+                      "  [EntryPoint] public static void Main() {\n" +
+                      "    Check(Sym.S.Mode() == 1 && Sym.S.Pick(false, 3, 4) == 4 && Sym.S.Fancy() == 5, \"library symbol\");\n" +
+                      "    Check(Sym.S.Amiga(), \"target symbol in the library\");\n" +
+                      "#if FANCY\n    Check(false, \"not in the program\");\n#else\n    Check(true, \"not in the program\");\n#endif\n  }\n}\n";
+        var r = Build(program, M68k(lib));
+        Assert.True(r.Success, string.Join("\n", r.Diagnostics));
+        if (HasGcc) Assert.Equal((0, "ok library symbol\nok target symbol in the library\nok not in the program\n"), RunWithHostGcc(r.C!));
+
+        // Without the symbol the other branch is compiled (and Fancy does not exist).
+        var plain = Package("Sample.Sym", new Dictionary<string, string> { ["S.cs"] = Symbols });
+        Assert.Contains(Build(program, M68k(plain)).Diagnostics, d => d.Id == "CS0117" && d.GetMessage().Contains("Fancy"));
+
+        // A target symbol, DEBUG/TRACE or a non-symbol in the manifest: the package cannot be used.
+        var bad = Package("Sample.Sym", new Dictionary<string, string> { ["S.cs"] = Symbols }, extraManifest: ", \"defines\": [\"AMIGA\", \"DEBUG\", \"A-B\"]");
+        Assert.Equal(3, bad.Problems.Count);
+        Assert.Contains(bad.Problems, p => p.Contains("'AMIGA', a symbol esharp build sets itself"));
+        Assert.Contains(bad.Problems, p => p.Contains("'A-B', which is not a preprocessor symbol"));
+        Assert.Contains(Build(program, M68k(bad)).Diagnostics, d => d.Id == "ES0118");
+    }
+
     [Fact]
     public void An_entry_point_in_a_package_is_an_error()
     {

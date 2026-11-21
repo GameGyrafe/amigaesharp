@@ -111,7 +111,7 @@ internal static class Monomorphizer
                 var text = Rewrite(tree,
                     uses.TryGetValue(tree, out var u) ? u : new List<Use>(),
                     instances.TryGetValue(tree, out var i) ? i : new List<Instance>());
-                var fresh = CSharpSyntaxTree.ParseText(text, parse, path: tree.FilePath);
+                var fresh = CSharpSyntaxTree.ParseText(text, (CSharpParseOptions)tree.Options, path: tree.FilePath);
                 compilation = compilation.ReplaceSyntaxTree(tree, fresh);
                 if (newUser.Remove(tree)) newUser.Add(fresh);
             }
@@ -225,11 +225,14 @@ internal static class Monomorphizer
 
     private static SyntaxToken WithDirective(SyntaxToken token, string directive)
     {
-        var old = token.LeadingTrivia.ToFullString();
-        var nl = old.LastIndexOf('\n');
-        var head = old.Substring(0, nl + 1);
-        var tail = old.Substring(nl + 1);
-        return token.WithLeadingTrivia(SyntaxFactory.ParseLeadingTrivia(head + directive + tail));
+        // After the last line end of the token's leading trivia. The trivia is kept as it is, not re-parsed from text: it may hold
+        // #else/#endif and the disabled text between them, which parse differently out of their #if.
+        var trivia = token.LeadingTrivia;
+        var at = 0;
+        for (var i = 0; i < trivia.Count; i++)
+            if (trivia[i].IsKind(SyntaxKind.EndOfLineTrivia) || trivia[i].IsKind(SyntaxKind.DisabledTextTrivia) || trivia[i].IsDirective)
+                at = i + 1;
+        return token.WithLeadingTrivia(trivia.InsertRange(at, SyntaxFactory.ParseLeadingTrivia(directive)));
     }
 
     private static MemberDeclarationSyntax Clone(Instance inst)

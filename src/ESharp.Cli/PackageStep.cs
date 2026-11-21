@@ -64,6 +64,8 @@ public static class PackageStep
             yield return $"Package {p.Id} {p.Version} ({license}): {p.Sources.Count} C# file(s)";
             if (p.Manifest is { Features.Count: > 0 } m)
                 yield return $"  platform-level features: {string.Join(", ", m.Features)}";
+            if (p.Manifest is { Symbols.Count: > 0 } d)
+                yield return $"  its own symbols: {string.Join(", ", d.Symbols)}";
         }
     }
 }

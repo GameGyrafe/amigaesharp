@@ -37,6 +37,27 @@ public class PackageRoundTripTests
                 CopyProject(Path.Combine(RepoRoot, "samples", "packages", project), Path.Combine(work, project));
 
             var packages = Path.Combine(work, "packages");
+            // A symbol of the library's own (DefineConstants): carried in the manifest for the Amiga parse of its files.
+            var csproj = Path.Combine(work, "Tween", "Tween.csproj");
+            var projectText = File.ReadAllText(csproj);
+            const string ownSymbol = "<DefineConstants>$(DefineConstants);TWEEN_OWN</DefineConstants>\n    <EsLibrary>true</EsLibrary>";
+            File.WriteAllText(csproj, projectText.Replace("<EsLibrary>true</EsLibrary>", ownSymbol));
+
+            // <Using> items and E# target symbols stop the library build (their effect would be missing from the Amiga build).
+            foreach (var (code, change) in new[]
+                     {
+                         ("ESL008", "<ItemGroup><Using Include=\"System\" /></ItemGroup>\n</Project>"),
+                         ("ESL009", "<PropertyGroup><DefineConstants>$(DefineConstants);AMIGA</DefineConstants></PropertyGroup>\n</Project>"),
+                     })
+            {
+                File.WriteAllText(csproj, projectText.Replace("</Project>", change));
+                var (exit, log) = DotnetResult(work, packages, "build", "Tween", "-p:ESharpSdkVersion=" + SdkVersion);
+                Assert.True(exit != 0 && log.Contains(code), $"dotnet build with {code} expected to fail:\n{log}");
+            }
+            File.WriteAllText(csproj, projectText.Replace("<EsLibrary>true</EsLibrary>", ownSymbol));
+            foreach (var dir in new[] { "bin", "obj" })
+                if (Directory.Exists(Path.Combine(work, "Tween", dir))) Directory.Delete(Path.Combine(work, "Tween", dir), true);
+
             Dotnet(work, packages, "pack", "Tween", "-o", feed, "-p:ESharpSdkVersion=" + SdkVersion);
             var nupkg = Path.Combine(feed, "ESharpSample.Tween.1.0.0.nupkg");
             Assert.True(File.Exists(nupkg), "no package from dotnet pack");
@@ -52,6 +73,7 @@ public class PackageRoundTripTests
             Assert.Equal(SdkVersion, lib.Manifest.MinSdk);   // the default: the referenced AmigaESharp.Sdk's version
             Assert.Equal("MIT", lib.License);
             Assert.Empty(lib.Manifest.Features);
+            Assert.Equal(new[] { "TWEEN_OWN" }, lib.Manifest.Symbols);   // not DEBUG/RELEASE/TRACE or HOST
             Assert.Equal(new[] { "Ease.cs", "Tween.cs" }, lib.Sources.Select(s => s.Path).ToArray());
 
             var game = Path.Combine(work, "TweenDemo");
@@ -79,6 +101,7 @@ public class PackageRoundTripTests
             finally { Console.SetOut(saved); }
             var text = output.ToString().Replace("\r\n", "\n");
             Assert.Contains("Package ESharpSample.Tween 1.0.0 (MIT): 2 C# file(s)", text);
+            Assert.Contains("  its own symbols: TWEEN_OWN", text);
             Assert.Contains("Host: 12 ok, 0 FAIL", text);
             Assert.Contains("TEST PASSED", text);
             if (m68k) Assert.Contains("Built " + Path.Combine(game, "obj", "m68k", "TweenDemo"), text);
@@ -118,6 +141,12 @@ public class PackageRoundTripTests
 
     private static void Dotnet(string dir, string packages, params string[] args)
     {
+        var (exit, log) = DotnetResult(dir, packages, args);
+        Assert.True(exit == 0, $"dotnet {string.Join(" ", args)} failed:\n{log}");
+    }
+
+    private static (int Exit, string Log) DotnetResult(string dir, string packages, params string[] args)
+    {
         var psi = new ProcessStartInfo("dotnet") { WorkingDirectory = dir, RedirectStandardOutput = true, RedirectStandardError = true };
         foreach (var a in args) psi.ArgumentList.Add(a);
         psi.ArgumentList.Add("-nologo");
@@ -128,7 +157,7 @@ public class PackageRoundTripTests
         var err = p.StandardError.ReadToEndAsync();
         var output = p.StandardOutput.ReadToEnd();
         p.WaitForExit();
-        Assert.True(p.ExitCode == 0, $"dotnet {string.Join(" ", args)} failed:\n{output}\n{err.Result}");
+        return (p.ExitCode, output + "\n" + err.Result);
     }
 
     private static bool HasImage(string image)
