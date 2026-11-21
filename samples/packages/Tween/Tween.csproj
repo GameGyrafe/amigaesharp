@@ -1,0 +1,34 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    An E# library (issue #31): an ordinary class library whose DLL also carries its C# sources and a manifest. EsLibrary=true
+    turns that on (the step is in AmigaESharp.Sdk, buildTransitive/AmigaESharp.Sdk.targets). dotnet pack makes the NuGet package;
+    a game that references it gets the HOST build for dotnet and the sources for esharp build. See samples/packages/README.md.
+  -->
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>disable</Nullable>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+
+    <EsLibrary>true</EsLibrary>
+    <!-- The targets the library supports: esharp build refuses the others (ES0110). -->
+    <EsTargets>m68k;os4;morphos;aros;aros-i386;sdl</EsTargets>
+    <!-- No raw library bindings, [Native] or [InlineAsm]; a library that uses them lists them here, e.g. AmigaLib;InlineAsm. -->
+    <EsFeatures></EsFeatures>
+
+    <IsPackable>true</IsPackable>
+    <PackageId>ESharpSample.Tween</PackageId>
+    <Version>1.0.0</Version>
+    <Authors>Gyrafe Software</Authors>
+    <Description>Sample E# library: easing curves and generic tweens in fixed point (samples/packages in the E# repository).</Description>
+    <PackageLicenseExpression>MIT</PackageLicenseExpression>
+    <!-- The AmigaESharp.Sdk to build against: a local pack of the checkout is 0.1.0-dev (pass -p:ESharpSdkVersion=X for another). -->
+    <ESharpSdkVersion Condition="'$(ESharpSdkVersion)' == ''">0.1.0-dev</ESharpSdkVersion>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="AmigaESharp.Sdk" Version="$(ESharpSdkVersion)" />
+  </ItemGroup>
+
+</Project>

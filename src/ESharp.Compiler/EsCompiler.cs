@@ -27,16 +27,23 @@ public static class EsCompiler
         var libTrees = LibrarySources.Load()
             .Select(s => CSharpSyntaxTree.ParseText(s.Text, parse, path: s.Path))
             .ToList();
-        var userSet = new HashSet<SyntaxTree>(userTrees);
+        // E# library packages: parsed under "<package Id Version>/" paths and checked like the program's own files.
+        var packageOf = new Dictionary<SyntaxTree, EsPackage>();
+        foreach (var package in options.Packages)
+            foreach (var s in package.Sources)
+                packageOf[CSharpSyntaxTree.ParseText(s.Text, parse, path: package.PathPrefix + s.Path)] = package;
+        var packageTrees = packageOf.Keys.ToList();
+        var userSet = new HashSet<SyntaxTree>(userTrees.Concat(packageTrees));
 
         var compilation = CSharpCompilation.Create(
             "ESharpProgram",
-            userTrees.Concat(libTrees),
+            userTrees.Concat(packageTrees).Concat(libTrees),
             References(),
             new CSharpCompilationOptions(OutputKind.ConsoleApplication, allowUnsafe: true,
                 nullableContextOptions: NullableContextOptions.Disable));
 
         var diagnostics = new List<Diagnostic>();
+        PackageChecks.Manifests(options, diagnostics);
 
         // 1. Ordinary C# errors in user code.
         var csErrors = compilation.GetDiagnostics().Where(d => d.Severity == DiagnosticSeverity.Error && IsUser(d, userSet)).ToList();
@@ -53,8 +60,9 @@ public static class EsCompiler
             // ES0100 (software 64-bit maths on a 68020) is about the 68020: sdl runs on a desktop CPU. (The IDE analyzer cannot know the target.)
             .Where(d => IsUser(d, userSet) && !(d.Id == "ES0100" && options.Defines.Contains("SDL"))));
 
-        // 3. Entry point rules.
-        CheckEntryPoint(compilation, userSet, diagnostics);
+        // 3. Entry point rules (the program's files; an entry point in a package is an error of its own), and the package checks.
+        CheckEntryPoint(compilation, new HashSet<SyntaxTree>(userTrees), diagnostics);
+        PackageChecks.Sources(compilation, userTrees, packageOf, diagnostics);
 
         // Chip RAM budget (constant sizes only).
         var chip = ChipBudget.Analyze(compilation, userSet, options.Defines.Contains("M68K"));

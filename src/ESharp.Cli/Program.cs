@@ -205,9 +205,14 @@ Targets:
         if (repo == null) return Fail("cannot find the E# host libraries (the host folder next to esharp.dll) or an E# source tree; reinstall AmigaESharp.Tool or set ESHARP_ROOT to a checkout");
         var baseDir = Directory.Exists(path) ? path : Path.GetDirectoryName(Path.GetFullPath(path)) ?? ".";
 
+        // E# library packages: the host run references their DLLs (the HOST build each package carries).
+        if (PackageStep.Load(path, out var packages) is { } packageError) return Fail(packageError);
+        foreach (var w in packages.Warnings) Console.Error.WriteLine($"esharp: warning: {w}");
+
         Console.WriteLine("Host:");
         var host = HostRun.Run(Path.Combine(baseDir, "obj", "host"), repo, files, TimeSpan.FromSeconds(timeout),
-            programArgs == null ? null : SdlRun.SplitCommandLine(programArgs));
+            programArgs == null ? null : SdlRun.SplitCommandLine(programArgs),
+            packages.Packages.Select(p => p.DllPath).OfType<string>().ToList());
         if (host.BuildFailed) return Fail("host build failed");
         Console.Write(host.Output);
         var hostReport = TestReport.Parse(host.Output);
@@ -451,12 +456,21 @@ Targets:
         var files = CollectSources(path);
         if (files.Count == 0) return Fail($"no .cs files found in '{path}'");
 
+        // E# library packages from the project's restore (obj/project.assets.json), compiled with the program.
+        if (PackageStep.Load(path, out var packages) is { } packageError) return Fail(packageError);
+        foreach (var w in packages.Warnings) Console.Error.WriteLine($"esharp: warning: {w}");
+        foreach (var line in PackageStep.Describe(packages.Packages)) Console.WriteLine(line);
+        if (packages.AllowCopyleft)
+            foreach (var p in packages.Packages.Where(p => Licenses.IsCopyleft(p.License)))
+                Console.Error.WriteLine($"esharp: warning: package {p.Id} {p.Version} is under {p.License}, compiled into the program (allowed by EsAllowCopyleft)");
+
         var baseDir = Directory.Exists(path) ? path : Path.GetDirectoryName(Path.GetFullPath(path)) ?? ".";
         var sources = files.Select(f => new SourceFile(Path.GetRelativePath(Directory.GetCurrentDirectory(), f), File.ReadAllText(f))).ToList();
         var name = Path.GetFileNameWithoutExtension(files[0]);
         if (Directory.Exists(path)) name = new DirectoryInfo(Path.GetFullPath(path)).Name;
         // cFileName: the #line directives after user functions point back at the C file by this name.
-        var result = EsCompiler.Compile(sources, target.ToOptions(allowFloat, debug, chipBudget, trace, cFileName: name + ".c"));
+        var result = EsCompiler.Compile(sources, target.ToOptions(allowFloat, debug, chipBudget, trace, cFileName: name + ".c",
+            packages: packages.Packages, allowCopyleft: packages.AllowCopyleft, sdkVersion: SourceTree.ToolVersion));
 
         foreach (var d in result.Diagnostics)
             Console.Error.WriteLine(d.ToString());

@@ -1,0 +1,22 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    A game that uses the E# library ESharpSample.Tween (../Tween) from a NuGet feed. dotnet restore writes
+    obj/project.assets.json, where esharp build finds the package; see samples/packages/README.md.
+  -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>disable</Nullable>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <DefineConstants>$(DefineConstants);HOST</DefineConstants>
+    <ESharpSdkVersion Condition="'$(ESharpSdkVersion)' == ''">0.1.0-dev</ESharpSdkVersion>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="AmigaESharp.Sdk" Version="$(ESharpSdkVersion)" />
+    <PackageReference Include="ESharpSample.Tween" Version="1.0.0" />
+  </ItemGroup>
+
+</Project>

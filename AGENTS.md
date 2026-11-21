@@ -98,6 +98,8 @@ dotnet run --project src/ESharp.Cli -- run samples/cards --target sdl --docker e
 dotnet run --project src/ESharp.Cli -- test samples/language --target sdl --docker esharp-sdl   # host vs SDL (headless in the image): same ok lines
 dotnet run --project src/ESharp.Cli -- run samples/cards --target sdl --docker esharp-sdl   # no --headless: builds in the image, runs the static binary on this desktop (X11/Wayland); ESHARP_SCALE=n sets the window scale
 dotnet pack ESharp.sln -c Release -o artifacts/packages -p:Version=0.1.0-local.1   # AmigaESharp.Tool + AmigaESharp.Sdk (one version, Directory.Build.props); never push them anywhere
+dotnet pack src/ESharp.Sdk -o <feed> && dotnet pack samples/packages/Tween -o <feed> --source <feed> && dotnet restore samples/packages/TweenDemo --source <feed>   # E# library packages (#31): EsLibrary=true embeds sources + manifest (src/ESharp.Sdk/buildTransitive); esharp build/run/test read obj/project.assets.json (src/ESharp.Compiler/Packages.cs, PackageChecks.cs ES0110-ES0118, src/ESharp.Cli/PackageStep.cs); samples/packages/README.md
+dotnet run --project src/ESharp.Cli -- test samples/packages/TweenDemo --target m68k --docker <image> --model A1200 --kickstart <rom>   # the game using the Tween package (12 ok on host and Amiga); never publish sample or test packages
 tools/package-smoke.sh artifacts/packages 0.1.0-local.1 <m68k image>   # install from that folder feed into a temp tool path, esharp new, build/run/test, ES0001 from the packaged analyzer, m68k build
 ```
 
@@ -128,6 +130,7 @@ Requires the .NET 10 SDK (`global.json`). `src/ESharp.Analyzers` stays on `netst
 - Licence is MIT, copyright Gyrafe Software. The README must keep crediting Wouter van Oortmerssen's Amiga E.
 - Develop on the designated feature branch; do not push to `main` or open pull requests unless the maintainer asks.
 - Generated output (`obj/`, `bin/`, `samples/*/obj`) is ignored; do not commit it.
+- E# library packages (`EsLibrary=true`, docs/GUIDE.md "Libraries"): package code gets every check program code gets; new package rules go in `PackageChecks.cs` with a test in `PackageTests.cs`. C# only for now (assets and C files in packages are later waves of #31); GPL-family packages are a build error unless the program sets `EsAllowCopyleft`. Tests and samples restore from local folder feeds, never from nuget.org.
 
 ## Running the emulator
 

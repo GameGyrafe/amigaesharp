@@ -32,7 +32,7 @@ run, unit tested and debugged on the PC.
 | `src/ESharp.Target.Host` | Managed fakes for tests (`HostConsole`, `HostMem`, a fake chip RAM budget). Built with `HOST`. |
 | `src/ESharp.Assets` | The PNG and IFF ILBM readers, PNG writer, colour reduction and dithering, planar packing, WAV and 8SVX reading, the `assets.json` to `Assets.g.cs` generator with an incremental `Sync` and the Workbench icon writers. |
 | `src/ESharp.Cli` | The `esharp` command: `new`, `build`, `run`, `test`, `assets`, `addr`, `os4vm`, `doctor` (`Doctor.cs`). Where a local compiler comes from (`--toolchain`, `ESHARP_TOOLCHAIN_*`, PATH; version check) is `Toolchain.cs`; Docker builds pass the same command line. The FS-UAE, SDL, host and AmigaOS 4.1 VM harnesses live here, plus the project template (`ProjectTemplate.cs`). Packs the dotnet tool **AmigaESharp.Tool**. |
-| `src/ESharp.Sdk` | Packaging only: **AmigaESharp.Sdk** (Runtime, Platform and Target.Host in `lib/net10.0`, the analyzer in `analyzers/dotnet/cs`). |
+| `src/ESharp.Sdk` | Packaging only: **AmigaESharp.Sdk** (Runtime, Platform and Target.Host in `lib/net10.0`, the analyzer in `analyzers/dotnet/cs`, and `buildTransitive/AmigaESharp.Sdk.targets`, the step that makes a class library with `EsLibrary=true` an E# library). |
 | `tests/ESharp.Compiler.Tests` | The unit tests (xUnit). |
 | `samples/` | Programs that double as feature demos and tests (`ok NAME` / `FAIL NAME` lines). |
 | `tools/` | BindGen, CardArt, AssetSamples, PackageIcon, the hardware pack, hosted AROS and OS4 VM scripts, the MUI fetch script. |
@@ -46,12 +46,14 @@ as assemblies (`host/` next to `esharp.dll`, and in the Sdk package).
 
 `EsCompiler.Compile(sources, options)` does, in order:
 
-1. **Parse** the user files and the embedded Runtime and Platform sources with Roslyn, with the target's preprocessor symbols.
+1. **Parse** the user files, the sources of the E# library packages (`CompileOptions.Packages`, under `<package Id Version>/`
+   paths) and the embedded Runtime and Platform sources with Roslyn, with the target's preprocessor symbols. Package files
+   count as program files from here on: the same C# errors, subset rules and emission (all of their code is emitted).
 2. **C# errors** in user code are reported as they are (a compilation that does not compile is not translated).
 3. **Subset rules** run through `SubsetAnalyzer`: errors such as exceptions, LINQ beyond what is turned into loops, floating
    point without `--allow-float`, async, dynamic, reflection, structs holding references, 64-bit maths on a 68020, a library
    call newer than the target's libraries, and Amiga-only APIs on `sdl` (ES0102).
-4. **Entry point and chip budget** checks (`[EntryPoint]`, `ChipBudget.cs`).
+4. **Entry point, package and chip budget** checks (`[EntryPoint]`, `PackageChecks.cs`, `ChipBudget.cs`).
 5. **Lowering and emission** (`CEmitter`): generics are monomorphised, classes become C structs with vtables, lambdas that
    capture become stack or reference-counted heap closures, LINQ over arrays becomes fused loops, patterns become tests, and
    `[AmigaLib]` calls become calls by name with `proto/<lib>.h` included, on every target (the m68k register call comes from
@@ -140,6 +142,28 @@ no runner; `tools/aros-hosted/aros-hosted.sh` remains for AROS screenshots, inpu
 This is why samples are written as lists of checks: the host run is the reference, and the target run has to agree with it.
 CI runs the unit tests on Linux and Windows, a package round trip, the toolchain image smoke test and the `sdl` target
 (`.github/workflows/ci.yml`); emulator and VM runs are done by hand and recorded in STATUS.md.
+
+## Library packages
+
+An E# library (issue #31) is a .NET class library whose DLL carries its C# sources (`esharp/src/<path>`) and a manifest
+(`esharp/library.json`: format, id, version, targets, minSdk, features, licence) as embedded resources, the same idea as the
+compiler embedding Runtime and Platform (`LibrarySources.cs`). The pieces:
+
+- **Embedding**: `src/ESharp.Sdk/buildTransitive/AmigaESharp.Sdk.targets`, imported into every project that references
+  AmigaESharp.Sdk. With `EsLibrary=true` it defines `HOST`, checks `EsTargets`/`EsFeatures`/`ImplicitUsings` and refuses
+  `assets.json` and C files (codes ESL001-ESL007), writes the manifest and adds the resources before the build.
+- **Loading**: `src/ESharp.Compiler/Packages.cs`. `PackageLoader.FromAssetsFile` walks `obj/project.assets.json` (the first
+  target framework, every package of type `package`), `PackageReader` reads the resources of each compile DLL through
+  `System.Reflection.Metadata` without loading it, and skips DLLs with no manifest. Problems become `EsPackage.Problems`
+  (ES0118). `Licenses` evaluates SPDX expressions (copyleft when every OR choice has a GPL-family id), `SdkVersions` the
+  minimum version. The CLI side is `src/ESharp.Cli/PackageStep.cs` (finds the csproj and the restore, reads `EsAllowCopyleft`,
+  prints the packages); `HostRun` references the package DLLs for the host run.
+- **Checks**: `src/ESharp.Compiler/PackageChecks.cs`, ES0110-ES0118 (descriptors in `Descriptors.cs`; compiler-only, the IDE
+  sees a package as metadata). The analyzer needs no change: package trees are in the user set.
+
+Tests: `PackageTests.cs` (in-memory packages, generated C built and run with the host gcc, every check) and
+`PackageRoundTripTests.cs` (the samples/packages projects: dotnet pack, restore from a local feed, build, host run, m68k
+build with the image); `tools/package-smoke.sh` repeats it with the packed AmigaESharp.Sdk.
 
 ## Packaging
 
