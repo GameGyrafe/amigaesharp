@@ -60,7 +60,7 @@ public static class Toolchain
     /// folder or on PATH, or a path). Returns an error message, or null with <paramref name="choice"/> set.
     /// </summary>
     public static string? Resolve(TargetInfo target, string? option, string? sysrootOption, Func<string, string?> env,
-        out ToolchainChoice? choice, string? cc = null)
+        out ToolchainChoice? choice, string? cc = null, bool forBinutils = false)
     {
         choice = null;
         string? dir = null, source = null;
@@ -82,7 +82,7 @@ public static class Toolchain
                 var found = new[] { Path.Combine(dir, "bin", Exe(name)), Path.Combine(dir, Exe(name)) }.FirstOrDefault(File.Exists);
                 if (found == null)
                     return $"no {Exe(name)} in {Path.Combine(dir, "bin")} (toolchain folder from {source}): give the toolchain's install " +
-                           $"prefix, the folder that holds bin/{target.Compiler} (in the pinned image: {ImageDir(target)}), or build with --docker [image]";
+                           $"prefix, the folder that holds bin/{target.Compiler} (in the pinned image: {ImageDir(target)}), or {(forBinutils ? "pass" : "build with")} --docker [image]";
                 compiler = found;
             }
         }
@@ -97,9 +97,9 @@ public static class Toolchain
             {
                 var found = FindOnPath(name, env);
                 if (found == null)
-                    return $"{name} not found on PATH. Build with --docker [image] (the default way: the pinned toolchain image), " +
+                    return $"{name} not found on PATH. {(forBinutils ? "Pass" : "Build with")} --docker [image] (the default way: the pinned toolchain image), " +
                            $"point --toolchain <dir> or {EnvFor(target)}" + (target.IsAmiga ? $" / {EnvAll}" : "") +
-                           " at a local toolchain (the folder that holds bin/" + name + "), or use --emit-only";
+                           " at a local toolchain (the folder that holds bin/" + name + ")" + (forBinutils ? "" : ", or use --emit-only");
                 compiler = found;
                 source = "PATH";
             }

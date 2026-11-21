@@ -39,9 +39,9 @@ esharp addr samples/crash                                                       
 
 ```
 hunk 0 offset 0x99a
-  hunk 0: code, 5640 bytes
+  hunk 0: code, 5692 bytes
   samples/crash/Crash.cs:38
-  C function Es_CrashSample_Program_Main
+  C function Es_CrashSample_Program_Divide (inlined into Es_CrashSample_Program_Main)
      38: Trace.Where("divide");
 hunk 3 offset 0x4
   hunk 3: data, chip RAM, 16 bytes
@@ -71,7 +71,8 @@ The project directory form picks `obj/<target>/<name>`: m68k when it is there, e
 the symbols of its HUNK_SYMBOL blocks, so any number of hunks works; a program with chip data has five (code, data, bss, chip data,
 chip bss). Every m68k `esharp build` also writes, next to the exe:
 
-- `<name>.map`, the linker map (`-Wl,-Map`): where each input section went. The m68k linker lays the hunks out one after the other
+- `<name>.map`, the linker map (`-Wl,-Map`, written under a fixed name and then moved, so a comma in the project name is no
+  problem): where each input section went. The m68k linker lays the hunks out one after the other
   in its own address space, so a hunk and offset becomes a place in one input file's section: the program's object (`.text`,
   `.data`, `.bss`, `.datachip`, `.bsschip`, common symbols), the start-up code (`ncrt0.o`) or a library member.
 - `<name>.o`, the same C compiled with `-g -c` (same code as in the exe). The hunk exe's own DWARF is not readable by the
@@ -91,14 +92,18 @@ hunk-0 code offsets the old way (the object's code relative to `_main`) and give
 binutils read no DWARF 5). `esharp addr` reads the exe's section table and symbols itself and runs the target's `addr2line -f -i`
 on the `.debug` file for code, which also says when a function was inlined into another. An AROS exe is a relocatable ELF and AROS
 loads each section on its own: its alert's "Segment N" is the ELF section index (`.text` is 1) and "Offset" is the offset in that
-section. An AmigaOS 4 exe is an ELF executable with addresses from 0x01000000; the Grim Reaper's `Symbol()+0x…` is exact. Its
+section. If a pasted line gives a segment number and a section name that disagree, the name is used (with a note). An AmigaOS 4 exe is an ELF executable with addresses from 0x01000000; the Grim Reaper's `Symbol()+0x…` is exact. Its
 "section 1 @ 0x…" was 4 less than the section offset of the same instruction in both crashes produced here (checked against the
 crash-site disassembly in the log), so when a pasted line has both, the symbol form is used.
 
 **Platform code.** Only user code has `.cs` lines. After each user function the generated C now has a `#line` back to the C file
 itself (before, platform functions that followed a user function inherited its `.cs` file and got made-up line numbers). An address
 in E# platform/runtime code (`Es_ESharp_*`) is reported as such, and platform code inlined into a user function is reported with the
-user line it was inlined at (ELF) or as "runtime/platform code inlined into" that function (m68k). The generated `main()` wrapper
+user line it was inlined at (ELF) or as "runtime/platform code inlined into" that function (m68k).
+A user function that gcc inlined into another is reported with its own line and an "inlined into" note on every target. On
+the ELF targets that comes from `addr2line -i` (with the caller's file and line); on m68k the binutils' `addr2line` cannot read
+the amiga-format object, so `esharp addr` reads the `DW_TAG_inlined_subroutine` entries from `objdump --dwarf=info` and
+`--dwarf=Ranges` itself (the note names the function only, not the call line). The generated `main()` wrapper
 and start-up and library code are reported as not the program's own code. Optimised code can attribute an address to a
 neighbouring statement. The maps are valid for the exe built together with them (a rebuild changes the offsets).
 
@@ -118,9 +123,14 @@ line of the call; the call is never a tail jump. Use it to see how far a program
 code is. On m68k the hunk comes from the CLI's `cli_Module` (a program started from the shell); a Workbench start falls back to
 `pr_SegList` entry 3 (not tried). MorphOS prints the label only (no code offset yet); SDL and the host print the label and a note.
 
+`esharp run samples/crash --args CRASH` ends with a timeout by design: the program crashes on purpose and the emulator then
+sits in the "Software Failure" requester (or the hosted AROS alert), which nobody dismisses, so `esharp run` stops it when
+`--timeout` runs out and reports the timeout. Read the trace lines (`--trace --serial <file>`, or `--log` on hosted AROS) and the
+screenshot, not the exit status.
+
 ### What was checked
 
-- Tests (`AddrTests`, `TraceAddrTests`; the Docker ones run when the image is in the local docker): the hunk table reader on a
+- Tests (`AddrTests`, `TraceAddrTests`; the Docker ones run when the image is in the local docker and show as skipped, with the image named, when it is not): the hunk table reader on a
   made-up file with chip and fast hunks, relocations, symbols and a debug block; the map reader (long names on two lines); the
   crash-report forms; addr2line output with inlined frames; an ELF object from the host gcc. `samples/crash` built for m68k: five
   hunks, a code offset from the exe's symbols maps into the right function, and an offset into the program's data, bss, chip data

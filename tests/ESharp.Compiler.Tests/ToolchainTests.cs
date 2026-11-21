@@ -200,7 +200,7 @@ printf x > ""$out""
         var calls = File.ReadAllLines(Path.Combine(tc, "calls.txt"));
         Assert.Equal(new[]
         {
-            $"{Path.GetFullPath(outDir)} -noixemul -m68020 -O2 -fwrapv -fno-reorder-functions -Wl,-Map,demo.map -o demo demo.c",
+            $"{Path.GetFullPath(outDir)} -noixemul -m68020 -O2 -fwrapv -fno-reorder-functions -Wl,-Map,esharp-link.map -o demo demo.c",
             $"{Path.GetFullPath(outDir)} -noixemul -m68020 -O2 -fwrapv -fno-reorder-functions -g -c -o demo.o demo.c",
         }, calls);
     }

@@ -46,6 +46,19 @@ chip bss, five hunks; `CRASH` crashes on purpose). Details in [DEBUGGING.md](DEB
   disk, no MUI): 35 programs with the emulator's ok count, the same counts as on main, `hello`, `mainargs`, `trace` and
   `muicheck` text only, `mui` and `muiclass` "skipped, MUI is not installed", no FAIL. `esharp test --target m68k --kickstart
   <rom>`: crash 1, interrupts 14, closures 23, objects 21 ok, host and Amiga agree. Run in review and again on the PR head.
+- Follow-ups from the review of #128 (issue #129): the Docker tests of `AddrTests` are now one fact per image and show as skipped (with
+  the image named) when the image is not in the local docker, instead of returning early as passed; the platform-code check looks up
+  an address inside `Args.Has` and asserts the "runtime/platform code" report with no `.cs` line; an AROS "segment N .text" whose number
+  disagrees with the section name uses the name (with a note); on m68k an inlined callee gets an "inlined into" note, read from
+  `DW_TAG_inlined_subroutine` in `objdump --dwarf=info`/`Ranges` of the `-g` object (the binutils' `addr2line` cannot read the
+  amiga-format object; the note names the function, not the call line); missing binutils no longer suggest `--emit-only`; the linker
+  map is written as `esharp-link.map` and moved to `<name>.map` (a comma in the project name broke `-Wl,-Map,<name>.map`);
+  DEBUGGING.md has the current hunk size and says `run --args CRASH` ends with a timeout by design. Verified: `dotnet test` 689 passed,
+  2 skipped (SDK-backed BindGen, OS4 VM), with the m68k, aros, aros-i386 and os4 Docker tests run; `esharp addr samples/crash 0 99a`
+  (m68k) gives "Divide (inlined into Main)", `Segment 7 .text offset 0xd15` (aros) uses the name; the m68k exe is byte for byte the
+  same as before the change; Kickstart 3.1 (40.069) A1200 in FS-UAE: `esharp test samples/crash --target m68k` 1 ok, host and Amiga
+  agree, and `run --args CRASH --trace --serial` gives the same three trace lines (`0x912`, `0x7f8`, `0x99a`) and then the timeout.
+  Not verified: the m68k inline note on a program whose inlining has several levels; MorphOS.
 - Built only: morphos (the `.debug` link works and `esharp addr` lists its sections and maps a symbol offset to a line).
 - Not verified: a real Amiga (SegTracker, Enforcer, MuForce), a Workbench start for `Trace.Where` on m68k (`pr_SegList` entry 3),
   MorphOS at run time, the Grim Reaper's own window (the same report was read from the serial log), whether the os4 "@" offset is
