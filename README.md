@@ -91,7 +91,7 @@ Each links to a sample that shows it (every sample prints `ok` lines that `eshar
 - **Low level when you need it:** `[InlineAsm]` (68020 and PowerPC with a C# fallback), `[Interrupt]` VBlank servers
   ([interrupts](samples/interrupts)), raw library bindings and tag lists ([hwinfo](samples/hwinfo)).
 - **Debugging:** host builds step through under the .NET debugger; the Amiga build has a serial `Trace` and `esharp addr` to turn a
-  crash address into a C# line ([trace](samples/trace), [DEBUGGING.md](docs/DEBUGGING.md)).
+  crash address (m68k, AROS, AmigaOS 4) into a C# line ([trace](samples/trace), [crash](samples/crash), [DEBUGGING.md](docs/DEBUGGING.md)).
 - **Workbench integration:** `.info` icons and program arguments from tool types ([wbstart](samples/wbstart),
   [mainargs](samples/mainargs)).
 - **VS Code:** `esharp new` writes a project with tasks, a host debug launch and the subset analyzer showing errors as you type.

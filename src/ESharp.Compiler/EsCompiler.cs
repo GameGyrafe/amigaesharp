@@ -78,7 +78,7 @@ public static class EsCompiler
         (compilation, userSet) = CKeywords.Apply(compilation, userSet);
 
         // 5. Emit C.
-        var emitter = new CEmitter(compilation, userSet, diagnostics, options.BoundsChecks);
+        var emitter = new CEmitter(compilation, userSet, diagnostics, options.BoundsChecks, options.CFileName);
         var c = emitter.Emit();
         return new CompileResult(
             diagnostics.Any(d => d.Severity == DiagnosticSeverity.Error) ? null : c,

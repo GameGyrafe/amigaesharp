@@ -41,8 +41,15 @@ internal sealed partial class CEmitter
     private readonly bool _bounds;
     private bool _usesBounds;
 
-    public CEmitter(CSharpCompilation compilation, HashSet<SyntaxTree> user, List<Diagnostic> diagnostics, bool boundsChecks = false)
+    /// <summary>The name the generated C file gets: after a user function, #line points back at it (so platform code that follows has no .cs lines).</summary>
+    private readonly string _cFileName;
+
+    /// <summary>Stands for "#line &lt;the next line&gt; &lt;the C file&gt;" until the whole file is put together and the line numbers are known.</summary>
+    private const string LineResetMarker = "#line ES_LINE_RESET\n";
+
+    public CEmitter(CSharpCompilation compilation, HashSet<SyntaxTree> user, List<Diagnostic> diagnostics, bool boundsChecks = false, string? cFileName = null)
     {
+        _cFileName = string.IsNullOrEmpty(cFileName) ? "program.c" : cFileName!;
         _bounds = boundsChecks;
         _compilation = compilation;
         _user = user;
@@ -692,7 +699,8 @@ internal sealed partial class CEmitter
             result.AppendLine("}");
             result.AppendLine();
         }
-        if (_natives.Contains("es_rawputchar") || _natives.Contains("es_rawioinit"))
+        var traceWhere = _natives.Contains("es_trace_where");
+        if (_natives.Contains("es_rawputchar") || _natives.Contains("es_rawioinit") || traceWhere)
         {
             // exec's raw serial output: RawIOInit (LVO -504) and RawPutChar (LVO -516) are in no header of the m68k NDK, so call the vectors.
             result.AppendLine("#if defined(__AROS__)");
@@ -723,6 +731,7 @@ internal sealed partial class CEmitter
             result.AppendLine("#endif");
             result.AppendLine();
         }
+        if (traceWhere) EmitTraceWhere(result);
         if (_natives.Contains("es_domethod") || _natives.Contains("es_boopsi_prepare"))
         {
             // es_boopsi_prepare runs at the first BoopsiObject.Create (on the program's own task), so the AROS probe below never
@@ -811,7 +820,26 @@ internal sealed partial class CEmitter
             result.AppendLine();
         }
         result.Append(body);
-        return result.ToString();
+        return ResolveLineResets(result.ToString(), _cFileName);
+    }
+
+    /// <summary>Each reset marker becomes a #line that gives the following line its own number in the C file.</summary>
+    internal static string ResolveLineResets(string c, string cFileName)
+    {
+        if (!c.Contains(LineResetMarker)) return c;
+        var sb = new StringBuilder(c.Length);
+        var line = 1;
+        var name = cFileName.Replace("\\", "/").Replace("\"", "\\\"");
+        var parts = c.Split('\n');
+        for (var i = 0; i < parts.Length; i++)
+        {
+            var part = parts[i];
+            if (i > 0) sb.Append('\n');
+            if (part == LineResetMarker.TrimEnd('\n')) sb.Append("#line ").Append(line + 1).Append(" \"").Append(name).Append('"');
+            else sb.Append(part);
+            line++;
+        }
+        return sb.ToString();
     }
 
     private readonly HashSet<string> _natives = new();
@@ -1365,9 +1393,14 @@ static __attribute__((unused)) int32_t MUI_DeleteCustomClass(void *mcc)
         _ => "t",
     };
 
+    /// <summary>The C name of a [Native] method: the name the attribute gives, else the method's own.</summary>
+    private static string NativeName(IMethodSymbol m) =>
+        GetAttribute(m, "NativeAttribute") is { ConstructorArguments: [{ Value: string name }] } && name.Length > 0 ? name : m.Name;
+
     private static string FuncName(IMethodSymbol m)
     {
-        if (HasAttribute(m, "AmigaLibAttribute") || HasAttribute(m, "NativeAttribute")) return m.Name;
+        if (HasAttribute(m, "NativeAttribute")) return NativeName(m);
+        if (HasAttribute(m, "AmigaLibAttribute")) return m.Name;
         if (m.MethodKind == MethodKind.LocalFunction && m.ContainingSymbol is IMethodSymbol outer)
             return FuncName(outer) + "_" + m.Name;
         if (m.MethodKind == MethodKind.AnonymousFunction)
@@ -2146,6 +2179,7 @@ static __attribute__((unused)) int32_t MUI_DeleteCustomClass(void *mcc)
         _indent--;
         Line("}");
         Line("");
+        if (_lastLineFile != null) _out.Append(LineResetMarker);   // what follows (platform code too) is the C file's own
         _lastLineFile = null;
         EmitInterruptServer(m, decl);
         EmitHookFunction(m, decl);
@@ -3711,7 +3745,7 @@ ADD2SET(es_aros_wbstart, PROGRAM_ENTRIES, -50)
             if (receiver == null) return "0";
         }
 
-        if (HasAttribute(m, "NativeAttribute")) _natives.Add(m.Name);
+        if (HasAttribute(m, "NativeAttribute")) _natives.Add(NativeName(m));
         var lib = GetAttribute(m, "AmigaLibAttribute");
         if (lib != null) UseBase(m.ContainingType);
         if (lib != null && lib.ConstructorArguments[0].Value is not "muimaster")

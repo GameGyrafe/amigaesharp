@@ -276,8 +276,8 @@ tools/aros-hosted/aros-hosted.sh cards --docker esharp-aros-hosted --shot shot.p
 - `--input` scripts: `click X,Y;key 9;key 50+38` with display pixels and X11 key codes (`+` holds keys; needs libXtst),
   `rel DX,DY` moves, `press` clicks where the pointer is, `down`/`up` hold and release (a drag). On `os4` the QEMU monitor sends
   the input and `key N` is an Amiga raw code; on `sdl` the program replays the script itself, with X,Y in its own screen pixels.
-- `--serial <file>` with `--trace` collects the Amiga serial port (`Trace`); `esharp addr` maps a crash address back to C# (see
-  [Debugging](#debugging)).
+- `--serial <file>` with `--trace` collects the Amiga serial port (`Trace`, `Trace.Where`); `esharp addr` maps a crash address or a
+  `Trace.Where` line back to C# (see [Debugging](#debugging)).
 - Runs are unattended; `--timeout <sec>` (default 120) is the limit, and AROS needs about 20 s to boot.
 
 ## Emulators and VMs
@@ -399,9 +399,11 @@ emulator"); see [tools/mui/README.md](../tools/mui/README.md).
 ## Debugging
 
 Logic is easiest to debug on the host: the template's `launch.json` runs the program under the coreclr debugger. On the Amiga
-side there is a serial `Trace` (`--trace`, `--serial <file>`), `esharp addr <exe | dir> <hunk> <hex offset>` to turn a crash
-address into a C# file and line (every m68k build writes `obj/m68k/<name>.o` for it), and `--debug` for bounds-checked
-arrays. A source-level debugger for the Amiga build is open (issue #14). See [DEBUGGING.md](DEBUGGING.md).
+side there is a serial `Trace` (`--trace`, `--serial <file>`; `Trace.Where("label")` writes where the call is as a hunk and
+offset), `esharp addr <exe | dir> [<where>]` to turn a crash address into a C# file and line or a data address into the
+nearest static field (m68k: hunk and offset, any number of hunks, chip ones too; AROS: the alert's segment and offset; AmigaOS 4:
+the Grim Reaper's `Function()+0x…`; every build writes `obj/<target>/<name>.map` and `.o` (m68k) or `.debug` (ELF) for it), and
+`--debug` for bounds-checked arrays. A source-level debugger for the Amiga build is open (issue #14). See [DEBUGGING.md](DEBUGGING.md).
 
 ## esharp commands
 
@@ -411,7 +413,7 @@ esharp build [path] [options]      check the subset, emit C, run the target C co
 esharp run [path] [options]        build and run (m68k in FS-UAE, os4 in the VM, sdl on the desktop)
 esharp test [path] [options]       run on the host; with --target m68k|os4|aros|aros-i386|sdl also on the target, and compare
 esharp assets [dir|assets.json] [--force]   PNG, ILBM and WAV to Assets.g.cs
-esharp addr <exe | dir> <hunk> <hex offset> [--docker [image] | --toolchain <dir>]   crash address to C# file:line
+esharp addr <exe | dir> [<where>] [--target <t>] [--docker [image] | --toolchain <dir>]   crash address to C# file:line
 esharp os4vm check|start|install-hook|remove-hook   AmigaOS 4.1 QEMU VM helpers
 esharp doctor [--target <name> [--toolchain <dir>]]   what builds and runs here: Docker images, local toolchains, emulators
 esharp --version

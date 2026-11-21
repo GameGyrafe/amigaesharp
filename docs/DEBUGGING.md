@@ -1,6 +1,6 @@
 # Debugging E# programs
 
-Three ways to look inside a program on the Amiga side (logic bugs are easiest to debug on the host, in VS Code): a serial trace, a way to turn a crash address into a C# line, and, for questions about registers and memory, FS-UAE's built-in debugger (a manual recipe, see the last section).
+Three ways to look inside a program on the Amiga side (logic bugs are easiest to debug on the host, in VS Code): a serial trace, a way to turn a crash address (or a `Trace.Where` line) into a C# line, and, for questions about registers and memory, FS-UAE's built-in debugger (a manual recipe, see the last section).
 
 ## Serial trace (`Trace`)
 
@@ -8,6 +8,7 @@ Three ways to look inside a program on the Amiga side (logic bugs are easiest to
 Trace.Line("loading level");          // text and a line feed
 Trace.Write("score: ");               // text only
 Trace.Value("lives", lives);          // lives=3
+Trace.Where("loading");               // loading: hunk 0 offset 0x912 (see esharp addr below)
 ```
 
 - **Build switch.** The calls exist only in a build with `--trace` (defines `TRACE`) or `--debug` (which implies `TRACE`).
@@ -17,7 +18,9 @@ Trace.Value("lives", lives);          // lives=3
 - **On the Amiga** the text goes out through exec `RawPutChar` (LVO -516, `RawIOInit` -504 the first time), which writes
   straight to the serial hardware. Kickstart 3.1 has it, no `debug.lib` needed. Line feeds are sent as is (no carriage return).
   On a real machine use a terminal at 9600 baud (what `RawIOInit` sets). The vectors are in no NDK header, so the C prelude calls them
-  directly (m68k) or through `proto/exec.h` (AROS). os4 and MorphOS have no serial trace yet (the calls compile to nothing).
+  directly (m68k) or through `proto/exec.h` (AROS). AmigaOS 4 sends the text through exec `DebugPrintF` to the kernel debug output
+  (the serial port with the kernel option `serial`, as the os4 VM runs use it: `esharp run --target os4 --trace --serial f` shows
+  the lines). MorphOS has no serial trace yet (the calls compile to nothing).
 - **On the host** the text goes to standard error (`Trace.Out`, which tests can replace).
 - **In FS-UAE:** `esharp run samples/trace --trace --headless --serial trace.txt` points the emulator's serial port at a file
   (`serial_port = <file>` in the generated config) and prints the file after the run, on standard error, below the program output.
@@ -26,36 +29,121 @@ Trace.Value("lives", lives);          // lives=3
 ## From a crash address to a C# line (`esharp addr`)
 
 ```
-esharp addr <exe | project dir> <hunk> <hex offset> [--docker [image]]
-esharp addr samples/trace 0 e4 --docker <m68k image>
+esharp addr <exe | project dir> [<where>] [--target <t>] [--docker [image] | --toolchain <dir>]
+esharp addr samples/crash 0 99a --docker <m68k image>                                   # m68k: hunk and hex offset
+esharp addr samples/crash 3 4 --docker <m68k image>                                     # a chip data hunk
+esharp addr samples/crash --target aros "Segment 1 .text (0x41A720C0) Offset 0xD15" --docker   # pasted from the AROS alert
+esharp addr samples/crash --target os4 "Es_CrashSample_Program_Main()+0x108" --docker           # pasted from the Grim Reaper
+esharp addr samples/crash                                                               # no address: list the hunks or sections
 ```
 
 ```
-hunk 0 offset 0xe4
-  samples/trace/TraceDemo.cs:14
-  C function Es_TraceSample_Program_Square
-     14: {
+hunk 0 offset 0x99a
+  hunk 0: code, 5640 bytes
+  samples/crash/Crash.cs:38
+  C function Es_CrashSample_Program_Main
+     38: Trace.Where("divide");
+hunk 3 offset 0x4
+  hunk 3: data, chip RAM, 16 bytes
+  in the program's chip data: Es_CrashSample_Program_Pattern + 0x4
+section 1 .text offset 0xd15
+  .text: code, 9698 bytes
+  samples/crash/Crash.cs:39
+  C function Es_CrashSample_Program_Divide (inlined into Es_CrashSample_Program_Main at samples/crash/Crash.cs:60)
+     39: return a / b;
 ```
 
-How it works, and what was checked:
+`<where>` is what the crash report gives:
 
-- An m68k build is a hunk executable with three hunks: 0 code (`.text`), 1 data, 2 bss. The exe is linked with its sections starting at 0,
-  so a hunk-0 offset is the same number as the address `m68k-amigaos-objdump -t <exe>` prints. Guru reports, Enforcer, SegTracker
-  and MuForce give "hunk N offset X" (hex); that is what `esharp addr` takes (`0 e4`, `0:e4` and `0:0xe4` all work).
-- The hunk exe's own DWARF (built with `-g`) is not readable by the toolchain's `addr2line` or `objdump -l`. The compiler's `-g` object
-  is. So every m68k `esharp build` also writes `<name>.o` next to the exe: the same C compiled with `-g -c` (same code as in the exe).
-  `esharp addr` runs `m68k-amigaos-objdump --dwarf=decodedline` on it, which gives the `.cs` line table because the generated C
-  carries `#line` directives. The exe stays as small as before.
-- The object's code sits at a fixed distance inside hunk 0; `esharp addr` finds it by comparing where the exe and the object put `_main`.
-- The C function comes from the object's symbol table.
-- It needs `m68k-amigaos-objdump`: pass `--docker <image>` (the m68k image of AGENTS.md) or have the toolchain on PATH.
-- Limits: only user code has `#line`. An address in E# platform/runtime code (`Es_ESharp_*` functions) is reported as such, with no
-  source line (look at the caller). Startup and library code, and the generated `main()` wrapper, are reported as not the program's own code.
-  Hunk 1 and 2 give the nearest symbol. Optimised code can attribute an address to a neighbouring statement.
-  The map is valid for the exe built together with that `.o` (rebuild changes the offsets).
-- Checked: a test (`TraceAddrTests`, runs when the pinned m68k image is in the local docker) builds `samples/trace`, takes the addresses of
-  `Square` and `Main` from the exe's symbols and asserts `esharp addr` gives lines in the right function. Not checked: an address
-  taken from a real crash on a running Amiga (see below).
+| Target | Report | Forms `esharp addr` takes |
+|---|---|---|
+| m68k | SegTracker, Enforcer, MuForce: "hunk N offset X"; `Trace.Where` | `0 e4`, `0:e4`, `0:0xe4`, `hunk 0 offset 0xe4`, `Symbol+0x10` (global symbols) |
+| AROS x86-64, i386 | the "Program failed" alert: `Module crash Segment 1 .text (0x…) Offset 0x…` and `Function X (0x…) Offset 0x…`; `Trace.Where` | the whole line or `1 d15`, `.text d15`, `segment 1 .text offset 0xd15`, `Function+0xa5` |
+| AmigaOS 4 | the Grim Reaper / kernel crash log: `ESTEST:crash:Es_..._Main()+0x108 (section 1 @ 0x1114)`; `Trace.Where` | the whole line (the symbol form is used), `Symbol+0x10`, `1 1118` (section and offset), or an address as in the file (`0x100118c`) |
+
+The project directory form picks `obj/<target>/<name>`: m68k when it is there, else the one build found; `--target` picks another.
+`--docker` with no image takes the target's image (esharp-amiga-toolchain, or esharp-aros-i386 for aros-i386); `--toolchain` or
+`ESHARP_TOOLCHAIN*` or PATH give a local toolchain's binutils instead.
+
+### How it works
+
+**m68k.** The exe is a hunk file. `esharp addr` reads its hunk table itself (hunk types, sizes, memory flags: chip, fast, any) and
+the symbols of its HUNK_SYMBOL blocks, so any number of hunks works; a program with chip data has five (code, data, bss, chip data,
+chip bss). Every m68k `esharp build` also writes, next to the exe:
+
+- `<name>.map`, the linker map (`-Wl,-Map`): where each input section went. The m68k linker lays the hunks out one after the other
+  in its own address space, so a hunk and offset becomes a place in one input file's section: the program's object (`.text`,
+  `.data`, `.bss`, `.datachip`, `.bsschip`, common symbols), the start-up code (`ncrt0.o`) or a library member.
+- `<name>.o`, the same C compiled with `-g -c` (same code as in the exe). The hunk exe's own DWARF is not readable by the
+  toolchain's `addr2line` or `objdump -l`; the object's is. `m68k-amigaos-objdump --dwarf=decodedline` on it gives the `.cs` line
+  table (the generated C carries `#line` directives), and its symbol table has the static functions and fields the exe leaves out.
+- Both compiles use `-fno-reorder-functions`, so the object has one code section. Without it gcc puts cold functions in a
+  `.text.unlikely` section, which in an amiga-format object is a second hunk also named `.text`, and the line table's addresses
+  could not be told apart.
+
+A code offset in the program's own code then goes through the object's line table; an offset in data, bss, chip data or chip bss
+gives the nearest symbol of the object (the static field: `Es_<Namespace>_<Class>_<Field>`); anything else gives the nearest symbol
+of the exe and the file it came from (start-up or library code or data). A build without a map (from an older esharp) still maps
+hunk-0 code offsets the old way (the object's code relative to `_main`) and gives the exe's nearest symbol elsewhere.
+
+**ELF targets (AROS x86-64 and i386, AmigaOS 4, MorphOS).** Every build also links `<name>.debug`: the same program linked with
+`-g -gdwarf-4` (gcc's code does not change with `-g`; the tests compare the `.text` bytes of both files; DWARF 4 because the os4
+binutils read no DWARF 5). `esharp addr` reads the exe's section table and symbols itself and runs the target's `addr2line -f -i`
+on the `.debug` file for code, which also says when a function was inlined into another. An AROS exe is a relocatable ELF and AROS
+loads each section on its own: its alert's "Segment N" is the ELF section index (`.text` is 1) and "Offset" is the offset in that
+section. An AmigaOS 4 exe is an ELF executable with addresses from 0x01000000; the Grim Reaper's `Symbol()+0x…` is exact. Its
+"section 1 @ 0x…" was 4 less than the section offset of the same instruction in both crashes produced here (checked against the
+crash-site disassembly in the log), so when a pasted line has both, the symbol form is used.
+
+**Platform code.** Only user code has `.cs` lines. After each user function the generated C now has a `#line` back to the C file
+itself (before, platform functions that followed a user function inherited its `.cs` file and got made-up line numbers). An address
+in E# platform/runtime code (`Es_ESharp_*`) is reported as such, and platform code inlined into a user function is reported with the
+user line it was inlined at (ELF) or as "runtime/platform code inlined into" that function (m68k). The generated `main()` wrapper
+and start-up and library code are reported as not the program's own code. Optimised code can attribute an address to a
+neighbouring statement. The maps are valid for the exe built together with them (a rebuild changes the offsets).
+
+### `Trace.Where`: where the program is, as an address
+
+`Trace.Where("label")` (a `--trace` or `--debug` build, like the other `Trace` calls) writes the label and the address of the call
+to the serial trace, in the crash reports' form, so it can go straight to `esharp addr`:
+
+```
+main: hunk 0 offset 0x912                (m68k: the segment list of the program is walked for the hunk that holds the call)
+main: segment 1 .text offset 0xc7f       (AROS: debug.library DecodeLocationA, the numbers the AROS alert uses)
+main: _start+0x102c                      (AmigaOS 4: relative to the start-up code's _start symbol)
+```
+
+The address is inside the call instruction (the return address minus 2 on m68k, 4 on PowerPC, 1 on x86), so the mapped line is the
+line of the call; the call is never a tail jump. Use it to see how far a program got before it crashed, or to find where a line's
+code is. On m68k the hunk comes from the CLI's `cli_Module` (a program started from the shell); a Workbench start falls back to
+`pr_SegList` entry 3 (not tried). MorphOS prints the label only (no code offset yet); SDL and the host print the label and a note.
+
+### What was checked
+
+- Tests (`AddrTests`, `TraceAddrTests`; the Docker ones run when the image is in the local docker): the hunk table reader on a
+  made-up file with chip and fast hunks, relocations, symbols and a debug block; the map reader (long names on two lines); the
+  crash-report forms; addr2line output with inlined frames; an ELF object from the host gcc. `samples/crash` built for m68k: five
+  hunks, a code offset from the exe's symbols maps into the right function, and an offset into the program's data, bss, chip data
+  and chip bss maps to `Weights`, `_calls`, `Pattern` and `Buffer` (their places worked out from the map and the object's symbols).
+  Built for aros, aros-i386 and os4: the `.text` of the exe and the `.debug` file are byte for byte the same, and each call of
+  `es_trace_where_at` found in the disassembly maps to its `Trace.Where` line (27, 51, 38 inlined into Main at 60, 44), given as
+  section and offset, as the AROS alert line, as `Symbol()+0x…` and as an os4 address.
+- Kickstart 3.1 (40.069) in FS-UAE, A1200, `esharp run samples/crash --trace --serial trace.txt --args CRASH`: the trace has
+  `main: hunk 0 offset 0x912`, `checksum: hunk 0 offset 0x7f8`, `divide: hunk 0 offset 0x99a`; `esharp addr` maps them to
+  `Crash.cs:51`, `:27` and `:38` (the `Trace.Where` lines; Divide is inlined into Main). Then the zero divide shows the "Software
+  Failure" requester, `dh0:crash Program failed (error #80000005)` (screenshot), and the trace has no `poke` line.
+- Hosted AROS x86-64 and i386 (`tools/aros-hosted/aros-hosted.sh crash --args CRASH --log`): the trace lines map to their lines, and
+  the alert's `Segment 1 .text ... Offset` and `Function ... Offset` lines map to `Crash.cs:39`, `return a / b;` in Divide,
+  inlined into Main at line 60, which is the faulting `idiv` (x86-64: `Segment 1 .text ... Offset 0xD15` and `Function
+  Es_CrashSample_Program_Main ... Offset 0xA5`; i386: `Offset 0x00000B9D` and `Offset 0x000000B1`). The alert says "Line 1111 (F)
+  Emulator/Coprocessor error" for the zero divide on hosted AROS.
+- AmigaOS 4.1 in the QEMU VM (`esharp run samples/crash --target os4 --trace --args CRASH`): the PowerPC divide does not trap, the
+  null write does (a DSI exception); the kernel's crash log on the serial port has `ip : ESTEST:crash:Es_CrashSample_Program_Main()+0x108
+  (section 1 @ 0x1114)`, which maps to `Crash.cs:45`, `_box!.Value = value;` in Poke, inlined into Main at line 61 (the `stw` the
+  log's crash-site disassembly marks; its section offset is 0x1118), and the four trace lines (`_start+0x102c`, `+0xa60`,
+  `+0x10fc`, `+0x1110`) map to lines 51, 27, 38 and 44.
+- Not checked: a real Amiga (SegTracker, Enforcer, MuForce output), a Workbench start, MorphOS, a Grim Reaper requester's own
+  window text (the same report was read from the serial log), whether the os4 "section @" offset is always 4 below.
 
 ### What a crash shows on the emulator
 
@@ -64,7 +152,7 @@ A divide by zero (`a / b` with `b == 0`) on Kickstart 3.1 in FS-UAE shows the "S
 trap) and the program name, not the PC. A null write does not crash on an A1200 (no MMU). To get a hunk and offset you need a tool
 that reports the faulting PC: SegTracker (it prints hunk and offset), with Enforcer or MuForce on MMU machines, none of which is part of
 AmigaOS (not tried here). Getting the PC out of an emulator debugger was not tried either.
-Without a PC the serial trace is the way: trace before the suspect call and see how far it got.
+Without a PC, `Trace.Where` before the suspect call gives the last place reached as a hunk and offset.
 
 ## FS-UAE debugger (trial)
 

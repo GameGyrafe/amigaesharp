@@ -10,6 +10,47 @@ The minimum system is now an **Amiga 1200: 68020, AGA, 2 MB chip RAM, Kickstart 
 - **Kept on purpose:** `HasAga()` and `HasRtg()` with their fallbacks. A classic A1200 always has AGA, but PowerPC, RTG-only and AROS targets may not, so the checks stay as the portable way to ask. **Not yet done:** using 68020 instructions deliberately and AROS (a new target, untested).
 - Verified after the change: all 17 samples built with `-m68020` and run on Kickstart 3.1 (A1200) in FS-UAE: 300 `ok` lines, no `FAIL` (the script shows only the last 25 lines of each sample, so long ones are truncated), 136 unit tests pass. Not verified: PowerPC, real hardware, a 68000/Kickstart 2.04 run (no longer supported).
 
+## `esharp addr` for any hunk layout, AROS and AmigaOS 4 (issue #126)
+
+`esharp addr` read hunk 0 only and assumed three hunks. It now reads the m68k exe's hunk table itself (types, sizes, memory
+flags, HUNK_SYMBOL), and every m68k build also writes `<name>.map` (the linker map), so an offset in any hunk is placed in the
+program's object, the start-up code or a library member: code through the object's line table, data, bss, chip data and chip bss
+to the nearest symbol of the object (the static field). Both m68k compiles now use `-fno-reorder-functions` (otherwise cold functions
+go to a second code section of the object, also named `.text`, and its line table is ambiguous); the exe's bytes change with it.
+ELF builds (aros, aros-i386, os4, morphos) also link `<name>.debug` (`-g -gdwarf-4`, same code; the os4 binutils read no DWARF 5),
+and `esharp addr` takes what their crash reports print: the AROS alert's `Segment N .text ... Offset` and `Function ... Offset`
+lines, the Grim Reaper's `Function()+0x…` (and section and offset, or a file address). New: `Trace.Where("label")` writes the
+call's address in the same form (m68k: hunk and offset by walking the segment list; AROS: debug.library `DecodeLocationA`;
+os4: `_start+0x…`), `[Native("c_name")]` (a native method with a C name of its own), a `#line` back to the C file after each user
+function (platform functions after it had inherited the `.cs` file and made-up line numbers), and `samples/crash` (chip data and
+chip bss, five hunks; `CRASH` crashes on purpose). Details in [DEBUGGING.md](DEBUGGING.md#from-a-crash-address-to-a-c-line-esharp-addr).
+
+- Verified: `dotnet test` 685 passed, 2 skipped (the SDK-backed BindGen tests), with the Docker tests run: the m68k crash
+  sample has five hunks, offsets in its data, bss, chip data and chip bss map to `Weights`, `_calls`, `Pattern` and `Buffer`; for
+  aros, aros-i386 and os4 the `.text` of exe and `.debug` are identical and each `Trace.Where` call found in the disassembly maps
+  to its line (also inlined: "Divide (inlined into Main at Crash.cs:60)").
+- Verified, Kickstart 3.1 (40.069), FS-UAE, A1200: `esharp run samples/crash --trace --serial trace.txt --args CRASH` gives
+  `main: hunk 0 offset 0x912`, `checksum: hunk 0 offset 0x7f8`, `divide: hunk 0 offset 0x99a`, which `esharp addr` maps to
+  Crash.cs:51, 27 and 38; then the "Software Failure" requester `dh0:crash Program failed (error #80000005)` (screenshot), no
+  `poke` line. `esharp test samples/crash --target m68k` (no CRASH): 1 ok on host and Amiga.
+- Verified, hosted AROS (x86-64 and i386 images): the alert lines (x86-64 `Offset 0xD15` / `Function ... Offset 0xA5`, i386
+  `Offset 0x00000B9D` / `0x000000B1`) map to Crash.cs:39 `return a / b;` in Divide inlined into Main at line 60, the faulting
+  `idiv`; the `Trace.Where` lines (`segment 1 .text offset ...`) map to 51, 27, 38.
+- Verified, AmigaOS 4.1 VM: the divide does not trap on PowerPC, the null write does (DSI); the kernel crash log on the serial
+  port, `ip : ESTEST:crash:Es_CrashSample_Program_Main()+0x108 (section 1 @ 0x1114)`, maps to Crash.cs:45 `_box!.Value = value;`
+  (Poke, inlined into Main at line 61), the trace lines `_start+0x…` to 51, 27, 38, 44. The log's "section 1 @" values were 4
+  below the section offset of the same instruction (for ip, lr and `_start`, in both crashes produced); the symbol form is exact
+  and is the one used when a whole line is pasted.
+- m68k regression after `-fno-reorder-functions` (it changes every m68k exe), Kickstart 3.1 (40.069), FS-UAE, A1200, the pinned
+  m68k image: `tools/hwpack/build.sh` (44 programs plus Summary) and `run-emulated.sh obj/hwtest --rom <rom> --wb <wb>` (hard
+  disk, no MUI): 35 programs with the emulator's ok count, the same counts as on main, `hello`, `mainargs`, `trace` and
+  `muicheck` text only, `mui` and `muiclass` "skipped, MUI is not installed", no FAIL. `esharp test --target m68k --kickstart
+  <rom>`: crash 1, interrupts 14, closures 23, objects 21 ok, host and Amiga agree. Run in review and again on the PR head.
+- Built only: morphos (the `.debug` link works and `esharp addr` lists its sections and maps a symbol offset to a line).
+- Not verified: a real Amiga (SegTracker, Enforcer, MuForce), a Workbench start for `Trace.Where` on m68k (`pr_SegList` entry 3),
+  MorphOS at run time, the Grim Reaper's own window (the same report was read from the serial log), whether the os4 "@" offset is
+  always 4 below, `esharp addr --toolchain` with a local ELF toolchain.
+
 ## Local toolchains, part 1 (issue #122)
 
 Docker stays the default way to build. A second way, a toolchain on the developer's machine, is now configurable:
@@ -650,7 +691,7 @@ Tried the debugger built into FS-UAE 3.2.35 (A1200, Kickstart 3.1, headless unde
 
 `Trace.Write/Line/Value` (src/ESharp.Platform/Trace.cs) write to the serial port through exec `RawIOInit`/`RawPutChar` (called by vector, LVO -504/-516: they are in no m68k NDK header; the C prelude has the stubs) and to standard error on the host. They are `[Conditional("TRACE")]`: the emitter drops such call statements, and what only they reach, unless the build has `--trace` or `--debug`. `esharp run --serial <file>` (headless) points FS-UAE's `serial_port` at a file and prints it after the run. `esharp addr <exe|dir> <hunk> <hex offset> --docker <image>` maps a hunk-0 offset to the C# file, line and C function using `<name>.o`, which every m68k build now also writes (the same C with `-g -c`, read with `m68k-amigaos-objdump --dwarf=decodedline`).
 Verified: 213 unit tests pass, including the trace sample on the host (stderr text), the C with and without `TRACE` (calls and `Trace` functions gone without it; the sample builds and runs with host gcc both ways), and `esharp addr` on a real m68k build in the docker image (addresses of `Square` and `Main` from the exe's symbols map to lines in those functions, and the first statement of Main to its line). Run in FS-UAE (A1200, Kickstart 3.1 40.069, `--serial`): the nine trace lines arrive in the file in order, and `samples/trace` without `--trace` writes nothing and its exe is 1 KB smaller. Run on hosted AROS (20261106 nightly, x86-64): the nine lines reach the bootstrap output (`aros-hosted.sh trace --log`). A deliberate zero divide on KS 3.1 gives the "Software Failure ... error #80000005" requester with no PC, so no address was taken from a real crash.
-Not verified: real hardware (serial cable, baud rate; the vectors are as I know them from the exec autodocs/fd layout, and they work in FS-UAE with the real 3.1 ROM and on AROS), a hunk offset from a real crash (needs SegTracker/Enforcer, not tried), `esharp addr` for optimised code on a statement boundary, MorphOS (the trace compiles to a no-op stub there; os4 now uses `DebugPrintF`, see "AmigaOS 4.1 VM runs"), AROS x86-64 `esharp addr` (m68k only). The platform/runtime code has no `#line`, so an address in it is reported as runtime code without a source line.
+Not verified: real hardware (serial cable, baud rate; the vectors are as I know them from the exec autodocs/fd layout, and they work in FS-UAE with the real 3.1 ROM and on AROS), a hunk offset from a real crash (needs SegTracker/Enforcer, not tried), `esharp addr` for optimised code on a statement boundary, MorphOS (the trace compiles to a no-op stub there; os4 now uses `DebugPrintF`, see "AmigaOS 4.1 VM runs"). The platform/runtime code has no `#line`, so an address in it is reported as runtime code without a source line. (AROS, os4 and any hunk layout: see the issue #126 section.)
 
 ## GadTools windows (samples/gui, issue #19, first milestone)
 

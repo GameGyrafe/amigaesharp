@@ -34,7 +34,7 @@ buildone() {   # <source dir> <name>
   [ "$name" = trace ] && extra="--trace"   # the trace sample needs TRACE to write to the serial port
   dotnet run --project src/ESharp.Cli -- build "$dir" --target m68k --docker "$image" $extra >/dev/null
   local exe
-  exe="$(find "$dir/obj/m68k" -maxdepth 1 -type f ! -name '*.c' ! -name '*.o' ! -name '*.info' ! -name run | head -1)"
+  exe="$(find "$dir/obj/m68k" -maxdepth 1 -type f ! -name '*.c' ! -name '*.o' ! -name '*.map' ! -name '*.info' ! -name run | head -1)"
   [ -n "$exe" ] || { echo "no executable for $name"; exit 1; }
   cp "$exe" "$out/$name"
   # The Workbench icon `esharp build` wrote next to the program (issue #84): the pack's programs show and start by double-click.

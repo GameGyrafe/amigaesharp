@@ -23,8 +23,9 @@ Usage:
   esharp assets [dir|assets.json] [--force]
                                     Convert PNGs to planar chip data: writes Assets.g.cs next to the manifest
                                     (only when stale; build and run do this automatically)
-  esharp addr <exe | dir> <hunk> <hex offset> [--docker [image] | --toolchain <dir>]
-                                    Map a crash address of a built m68k program to the C# file:line (see docs/DEBUGGING.md)
+  esharp addr <exe | dir> [<where>] [--target <t>] [--docker [image] | --toolchain <dir>]
+                                    Map a crash address to the C# file:line or the nearest symbol: m68k <hunk> <hex offset>,
+                                    AROS <segment> <offset>, os4 <section> <offset>, or Function+0x48 (docs/DEBUGGING.md)
   esharp test [path] [options]      Run the project on the host; with --target m68k --docker also on the Amiga (or
                                     --target os4 --docker also in the AmigaOS 4.1 VM, --target aros or aros-i386 also on
                                     hosted AROS in Docker, or --target sdl --docker also through SDL, headless), and compare
@@ -452,7 +453,10 @@ Targets:
 
         var baseDir = Directory.Exists(path) ? path : Path.GetDirectoryName(Path.GetFullPath(path)) ?? ".";
         var sources = files.Select(f => new SourceFile(Path.GetRelativePath(Directory.GetCurrentDirectory(), f), File.ReadAllText(f))).ToList();
-        var result = EsCompiler.Compile(sources, target.ToOptions(allowFloat, debug, chipBudget, trace));
+        var name = Path.GetFileNameWithoutExtension(files[0]);
+        if (Directory.Exists(path)) name = new DirectoryInfo(Path.GetFullPath(path)).Name;
+        // cFileName: the #line directives after user functions point back at the C file by this name.
+        var result = EsCompiler.Compile(sources, target.ToOptions(allowFloat, debug, chipBudget, trace, cFileName: name + ".c"));
 
         foreach (var d in result.Diagnostics)
             Console.Error.WriteLine(d.ToString());
@@ -468,8 +472,6 @@ Targets:
 
         outDir ??= Path.Combine(baseDir, "obj", target.Name);
         Directory.CreateDirectory(outDir);
-        var name = Path.GetFileNameWithoutExtension(files[0]);
-        if (Directory.Exists(path)) name = new DirectoryInfo(Path.GetFullPath(path)).Name;
         var cFile = Path.Combine(outDir, name + ".c");
         File.WriteAllText(cFile, result.C!);
         Console.WriteLine($"Wrote {cFile}");
@@ -553,9 +555,14 @@ Targets:
             return 0;
         }
 
-        if (Compile(Array.Empty<string>(), name, link: true) != 0) return 1;
-        // m68k: the same C compiled with -g, for 'esharp addr' (the hunk exe's own debug data is not readable by the binutils).
-        if (target.IsM68k && Compile(new[] { "-g", "-c" }, name + ".o", link: false) != 0) return 1;
+        // For 'esharp addr' (docs/DEBUGGING.md). m68k: the linker map says where each section of the program went in the hunks,
+        // and the same C compiled with -g into <name>.o gives the line table (the hunk exe's own debug data is not readable by the
+        // binutils); -fno-reorder-functions keeps all code in one section of the object, so its line table has one address space.
+        // ELF targets: <name>.debug is the same program linked with -g (gcc's code does not change with -g).
+        var addrFlags = target.IsM68k ? new[] { "-fno-reorder-functions" } : Array.Empty<string>();
+        if (Compile(target.IsM68k ? addrFlags.Append($"-Wl,-Map,{name}.map").ToArray() : addrFlags, name, link: true) != 0) return 1;
+        if (target.IsM68k && Compile(addrFlags.Concat(new[] { "-g", "-c" }).ToArray(), name + ".o", link: false) != 0) return 1;
+        if (target.IsAmiga && !target.IsM68k && Compile(new[] { "-g", "-gdwarf-4" }, name + ".debug", link: true) != 0) return 1;   // DWARF 4: the os4 binutils read no 5
 
         Console.WriteLine($"Built {exe}");
         try
