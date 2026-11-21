@@ -315,9 +315,9 @@ build host list is not specific about native Windows beyond that.
    files otherwise, because of an MSYS2 bug), and switch to the legacy gcc as on macOS:
 
    ```bash
-   cd /home/<you>
+   cd /c/msys64/home/<you>
    git clone https://github.com/AmigaPorts/m68k-amigaos-gcc
-   cd /home/<you>/m68k-amigaos-gcc
+   cd /c/msys64/home/<you>/m68k-amigaos-gcc
    make update
    make branch mod=gcc branch=amiga6
    make all PREFIX=/c/amiga/m68k-amigaos -j$(nproc)
