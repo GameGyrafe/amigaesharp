@@ -400,6 +400,19 @@ Targets:
     /// <summary>The local compiler the last <see cref="Build"/> used (null for a Docker build), for helpers built alongside (os4 estype).</summary>
     internal static string? LastLocalCompiler;
 
+    /// <summary>Gives the linker map the exe's name; with no map from this link, an earlier build's <c>&lt;exe&gt;.map</c> is deleted so addr never reads it.</summary>
+    internal static int MoveLinkMap(string outDir, string exe)
+    {
+        var linkMap = Path.Combine(outDir, "esharp-link.map");
+        try
+        {
+            if (File.Exists(linkMap)) File.Move(linkMap, exe + ".map", true);
+            else if (File.Exists(exe + ".map")) File.Delete(exe + ".map");
+        }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException) { return Fail("linker map: " + e.Message); }
+        return 0;
+    }
+
     internal static int Build(string[] args, out string? builtExe)
     {
         builtExe = null;
@@ -576,11 +589,7 @@ Targets:
         var addrFlags = target.IsM68k ? new[] { "-fno-reorder-functions" } : Array.Empty<string>();
         // The map has a fixed name while linking (a comma in the project name would split the -Wl option), then takes the exe's.
         if (Compile(target.IsM68k ? addrFlags.Append("-Wl,-Map,esharp-link.map").ToArray() : addrFlags, name, link: true) != 0) return 1;
-        if (target.IsM68k && File.Exists(Path.Combine(outDir, "esharp-link.map")))
-        {
-            try { File.Move(Path.Combine(outDir, "esharp-link.map"), exe + ".map", true); }
-            catch (IOException e) { return Fail("linker map: " + e.Message); }
-        }
+        if (target.IsM68k && MoveLinkMap(outDir, exe) != 0) return 1;
         if (target.IsM68k && Compile(addrFlags.Concat(new[] { "-g", "-c" }).ToArray(), name + ".o", link: false) != 0) return 1;
         if (target.IsAmiga && !target.IsM68k && Compile(new[] { "-g", "-gdwarf-4" }, name + ".debug", link: true) != 0) return 1;   // DWARF 4: the os4 binutils read no 5
 

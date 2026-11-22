@@ -685,7 +685,8 @@ internal static class Addr
                 if (baseAddr == null) return Fail("cannot find _main in both the exe and its object, so the offsets cannot be related (rebuild: the build writes a linker map)");
                 inObject = offset - baseAddr.Value;
             }
-            var decoded = RunTool(docker, dir, objdump, "--dwarf=decodedline", objName);
+            // One objdump run for the line table, the DIEs and the range lists (each parser skips the lines that are not its own).
+            var decoded = RunTool(docker, dir, objdump, "--dwarf=decodedline,info,Ranges", objName);
             if (decoded.Code != 0) return Fail($"{objdump} failed: {decoded.Output}".TrimEnd());
             var loc = inObject < 0 ? null : Find(inObject, ParseLines(decoded.Output), objList, SourcesOf(exe));
             if (loc == null)
@@ -696,9 +697,7 @@ internal static class Addr
             // The object's DWARF says whether the line is an inlined callee, and into what (the binutils' addr2line cannot read the
             // Amiga object format, so objdump's dump of .debug_info and .debug_ranges is read here).
             string? inlinedInto = null;
-            var info = RunTool(docker, dir, objdump, "--dwarf=info", objName);
-            var ranges = RunTool(docker, dir, objdump, "--dwarf=Ranges", objName);
-            if (info.Code == 0 && ranges.Code == 0 && FindInlined(inObject, info.Output, ranges.Output) is { } inl)
+            if (FindInlined(inObject, decoded.Output, decoded.Output) is { } inl)
             {
                 loc = loc with { Function = inl.Callee ?? loc.Function };
                 inlinedInto = inl.Caller;
@@ -757,7 +756,10 @@ internal static class Addr
         public string Tag = "";
         public Die? Parent;
         public Dictionary<string, string> Attrs = new();
+        public int Version;   // the DWARF version of its compilation unit (0: not in the dump)
     }
+
+    private static readonly Regex VersionRe = new(@"^\s*Version:\s+(\d+)\s*$", RegexOptions.Compiled);
 
     private static long? HexOrDec(string? v)
     {
@@ -776,14 +778,17 @@ internal static class Addr
         var list = new List<Die>();
         var stack = new List<Die>();
         Die? current = null;
+        var version = 0;
         foreach (var raw in dwarfInfo.Split('\n'))
         {
             var line = raw.TrimEnd('\r');
+            var v = VersionRe.Match(line);
+            if (v.Success) { version = int.Parse(v.Groups[1].Value, CultureInfo.InvariantCulture); continue; }
             var d = DieRe.Match(line);
             if (d.Success)
             {
                 var depth = int.Parse(d.Groups[1].Value, CultureInfo.InvariantCulture);
-                current = new Die { Tag = d.Groups[3].Value };
+                current = new Die { Tag = d.Groups[3].Value, Version = version };
                 while (stack.Count > depth) stack.RemoveAt(stack.Count - 1);
                 current.Parent = stack.Count > 0 ? stack[^1] : null;
                 stack.Add(current);
@@ -808,7 +813,10 @@ internal static class Addr
         bool Covers(Die x)
         {
             if (HexOrDec(x.Attrs.GetValueOrDefault("DW_AT_ranges")) is { } r) return rangeLists.TryGetValue(r, out var l) && l.Any(e => e.Begin <= offset && offset < e.End);
-            return HexOrDec(x.Attrs.GetValueOrDefault("DW_AT_low_pc")) is { } lo && HexOrDec(x.Attrs.GetValueOrDefault("DW_AT_high_pc")) is { } len && lo <= offset && offset < lo + len;   // high_pc is a length (DWARF 4)
+            if (HexOrDec(x.Attrs.GetValueOrDefault("DW_AT_low_pc")) is not { } lo || HexOrDec(x.Attrs.GetValueOrDefault("DW_AT_high_pc")) is not { } hi) return false;
+            // DWARF 4 stores high_pc as a length from low_pc (newer objdump says "offset from low_pc"); DWARF 2 and 3 as an address.
+            var isAddress = x.Version is > 0 and < 4 && !x.Attrs["DW_AT_high_pc"].Contains("offset from low_pc", StringComparison.Ordinal);
+            return lo <= offset && offset < (isAddress ? hi : lo + hi);
         }
 
         string? NameOf(Die x, int depth = 0)
