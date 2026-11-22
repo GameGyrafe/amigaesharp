@@ -355,7 +355,7 @@ printf x > ""$out""
         var cc = Path.Combine(x64, "bin", Exe("x86_64-aros-gcc"));   // an absolute --cc
         Assert.Null(Toolchain.Resolve(Targets.Aros, x64, other + "\"", Env(), out var w, cc, Toolchain.HostOs.Windows));
         Assert.Equal(other, w!.Sysroot);
-        Assert.Contains("does not exist", Toolchain.Resolve(Targets.Aros, x64, other + "\"", Env(), out _, null, Toolchain.HostOs.Linux));
+        Assert.Contains("does not exist", Toolchain.Resolve(Targets.Aros, x64, other + "\"", Env(), out _, cc, Toolchain.HostOs.Linux));
         // Only a quote: not given, so the toolchain folder's sysroot is used.
         Assert.Null(Toolchain.Resolve(Targets.Aros, x64, "\"", Env(), out var q, cc, Toolchain.HostOs.Windows));
         Assert.Equal(x64, q!.Sysroot);
