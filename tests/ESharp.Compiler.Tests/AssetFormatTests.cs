@@ -302,7 +302,10 @@ public class AssetFormatTests : IDisposable
         var fsRamp = AssetBuilder.Build(Manifest(dir, @"{ ""images"": [ { ""name"": ""Ramp"", ""file"": ""ramp.png"", ""colors"": 4, ""dither"": ""fs"" } ] }"));
         Assert.NotEqual(flatRamp.Source, fsRamp.Source);
         var plain = AssetBuilder.Build(Manifest(dir, @"{ ""images"": [ { ""name"": ""Ramp"", ""file"": ""ramp.png"", ""colors"": 4, ""dither"": ""none"" } ] }"));
-        Assert.Equal(flatRamp.Source, plain.Source);
+        // The same data; only the manifest's hash line differs (its text does).
+        static string Data(string source) => string.Join("\n", source.Split('\n').Where(l => !l.StartsWith("// input sha256:")));
+        Assert.NotEqual(flatRamp.Source, plain.Source);
+        Assert.Equal(Data(flatRamp.Source), Data(plain.Source));
     }
 
     [Fact]

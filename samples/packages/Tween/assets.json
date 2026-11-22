@@ -1,0 +1,10 @@
+{
+  "namespace": "Tween",
+  "class": "Art",
+  "images": [
+    { "name": "Ball", "file": "ball.png", "colors": 4, "mask": true }
+  ],
+  "samples": [
+    { "name": "Blip", "file": "blip.wav" }
+  ]
+}

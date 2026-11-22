@@ -98,8 +98,8 @@ dotnet run --project src/ESharp.Cli -- run samples/cards --target sdl --docker e
 dotnet run --project src/ESharp.Cli -- test samples/language --target sdl --docker esharp-sdl   # host vs SDL (headless in the image): same ok lines
 dotnet run --project src/ESharp.Cli -- run samples/cards --target sdl --docker esharp-sdl   # no --headless: builds in the image, runs the static binary on this desktop (X11/Wayland); ESHARP_SCALE=n sets the window scale
 dotnet pack ESharp.sln -c Release -o artifacts/packages -p:Version=0.1.0-local.1   # AmigaESharp.Tool + AmigaESharp.Sdk (one version, Directory.Build.props); never push them anywhere
-dotnet pack src/ESharp.Sdk -o <feed> && dotnet pack samples/packages/Tween -o <feed> --source <feed> && dotnet restore samples/packages/TweenDemo --source <feed>   # E# library packages (#31): EsLibrary=true embeds sources + manifest (src/ESharp.Sdk/buildTransitive); esharp build/run/test read obj/project.assets.json (src/ESharp.Compiler/Packages.cs, PackageChecks.cs ES0110-ES0118, src/ESharp.Cli/PackageStep.cs); samples/packages/README.md
-dotnet run --project src/ESharp.Cli -- test samples/packages/TweenDemo --target m68k --docker <image> --model A1200 --kickstart <rom>   # the game using the Tween package (12 ok on host and Amiga); never publish sample or test packages
+dotnet pack src/ESharp.Sdk -o <feed> && dotnet pack samples/packages/Tween -o <feed> --source <feed> && dotnet restore samples/packages/TweenDemo --source <feed>   # E# library packages (#31): EsLibrary=true embeds sources + manifest (src/ESharp.Sdk/buildTransitive), and with an assets.json the Assets.g.cs that esharp assets <library dir> wrote (ESL005/ESL011/ESL012); esharp build/run/test read obj/project.assets.json (src/ESharp.Compiler/Packages.cs, PackageChecks.cs ES0110-ES0118, src/ESharp.Cli/PackageStep.cs); samples/packages/README.md
+dotnet run --project src/ESharp.Cli -- test samples/packages/TweenDemo --target m68k --docker <image> --model A1200 --kickstart <rom>   # the game using the Tween package and its ball sprite and blip sound (18 ok on host and Amiga; run --headless --screenshot shot.png to see the ball along a tween); never publish sample or test packages
 tools/package-smoke.sh artifacts/packages 0.1.0-local.1 <m68k image>   # install from that folder feed into a temp tool path, esharp new, build/run/test, ES0001 from the packaged analyzer, m68k build
 ```
 
@@ -130,7 +130,7 @@ Requires the .NET 10 SDK (`global.json`). `src/ESharp.Analyzers` stays on `netst
 - Licence is MIT, copyright Gyrafe Software. The README must keep crediting Wouter van Oortmerssen's Amiga E.
 - Develop on the designated feature branch; do not push to `main` or open pull requests unless the maintainer asks.
 - Generated output (`obj/`, `bin/`, `samples/*/obj`) is ignored; do not commit it.
-- E# library packages (`EsLibrary=true`, docs/GUIDE.md "Libraries"): package code gets every check program code gets; new package rules go in `PackageChecks.cs` with a test in `PackageTests.cs`. C# only for now (assets and C files in packages are later waves of #31); GPL-family packages are a build error unless the program sets `EsAllowCopyleft`. Tests and samples restore from local folder feeds, never from nuget.org.
+- E# library packages (`EsLibrary=true`, docs/GUIDE.md "Libraries"): package code gets every check program code gets; new package rules go in `PackageChecks.cs` with a test in `PackageTests.cs`. C# and assets (the library's Assets.g.cs, converted when the library is built, docs/GUIDE.md "Assets in a library"); C files in packages are a later wave of #31 (ES0118, ESL006); GPL-family packages are a build error unless the program sets `EsAllowCopyleft`. Tests and samples restore from local folder feeds, never from nuget.org.
 
 ## Running the emulator
 
@@ -156,4 +156,4 @@ is Kickstart 3.1 (40.069) on `--model A1200` (default). Kickstart 2.04 / A500+ i
 
 ## Next up
 
-See "Next" in `docs/STATUS.md` and the open GitHub issues (tracker #6, v2 epic #5). At the time of writing: the classic A1200 baseline (Kickstart 3.1 in FS-UAE), AmigaOS 4.1 in the QEMU VM, hosted AROS x86-64 and the `sdl` target all run the samples; the packages are on nuget.org. Open: local toolchains on macOS and Windows and for the non-m68k targets (#122 part 2; part 1 and docs/design/TOOLCHAINS.md done), real hardware (#7), MorphOS and PowerPC hardware runs, Windows (#11), library packages (#31), and the v2 items. Kickstart 2.04 / A500+ is no longer part of the test matrix.
+See "Next" in `docs/STATUS.md` and the open GitHub issues (tracker #6, v2 epic #5). At the time of writing: the classic A1200 baseline (Kickstart 3.1 in FS-UAE), AmigaOS 4.1 in the QEMU VM, hosted AROS x86-64 and the `sdl` target all run the samples; the packages are on nuget.org. Open: local toolchains on macOS and Windows and for the non-m68k targets (#122 part 2; part 1 and docs/design/TOOLCHAINS.md done), real hardware (#7), MorphOS and PowerPC hardware runs, Windows (#11), C files in library packages (#31), and the v2 items. Kickstart 2.04 / A500+ is no longer part of the test matrix.

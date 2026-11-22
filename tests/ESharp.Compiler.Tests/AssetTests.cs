@@ -158,6 +158,17 @@ public class AssetTests : IDisposable
     }
 
     [Fact]
+    public void Committed_Tween_library_Assets_g_cs_matches_what_the_pipeline_generates()
+    {
+        // The library package's assets (samples/packages/Tween): the package ships this file, so it must be current.
+        var dir = Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "..", "samples", "packages", "Tween");
+        var generated = AssetBuilder.Build(Path.Combine(dir, "assets.json"));
+        Assert.Equal(File.ReadAllText(Path.Combine(dir, "Assets.g.cs")), generated.Source);
+        Assert.Contains("namespace Tween;", generated.Source);
+        Assert.Equal(new[] { 96, 480 }, generated.Reports.Select(r => r.ChipBytes).ToArray());   // 2 planes + mask; the blip
+    }
+
+    [Fact]
     public void Committed_aga_Assets_g_cs_matches_what_the_pipeline_generates()
     {
         var dir = Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "..", "samples", "aga");
@@ -211,6 +222,22 @@ public class AssetTests : IDisposable
         var old = DateTime.UtcNow.AddHours(-1);
         foreach (var f in Directory.GetFiles(dir)) File.SetLastWriteTimeUtc(f, old);
         return dir;
+    }
+
+    [Fact]
+    public void Assets_g_cs_records_each_input_by_content_and_a_crlf_manifest_hashes_the_same()
+    {
+        var dir = ScratchSample();
+        var manifest = Path.Combine(dir, "assets.json");
+        var source = AssetBuilder.Build(manifest).Source;
+        Assert.Contains($"// input sha256:{AssetBuilder.InputHash(File.ReadAllBytes(manifest), text: true)} assets.json\n", source);
+        Assert.Contains($"// input sha256:{AssetBuilder.InputHash(File.ReadAllBytes(Path.Combine(dir, "card.png")), text: false)} card.png\n", source);
+        var lf = File.ReadAllText(manifest).Replace("\r\n", "\n");
+        File.WriteAllText(manifest, lf.Replace("\n", "\r\n"));
+        Assert.Equal(source, AssetBuilder.Build(manifest).Source);
+        // Binary inputs are hashed as they are.
+        Assert.NotEqual(AssetBuilder.InputHash(new byte[] { 13, 10 }, text: false), AssetBuilder.InputHash(new byte[] { 10 }, text: false));
+        Assert.Equal(AssetBuilder.InputHash(new byte[] { 13, 10 }, text: true), AssetBuilder.InputHash(new byte[] { 10 }, text: false));
     }
 
     [Fact]
