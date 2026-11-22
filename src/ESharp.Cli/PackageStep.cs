@@ -55,6 +55,15 @@ public static class PackageStep
         return null;
     }
 
+    /// <summary>
+    /// ES0112 for the packages that need a newer esharp than <paramref name="toolVersion"/>, as the manifest says: `esharp test` checks this
+    /// before the host run loads a package assembly (a library built against a newer Sdk can fail at load before the compile reports it).
+    /// </summary>
+    public static List<string> SdkErrors(IEnumerable<EsPackage> packages, string toolVersion) =>
+        packages.Where(p => p.Manifest != null && SdkVersions.NeedsNewer(p.Manifest.MinSdk, toolVersion))
+            .Select(p => Microsoft.CodeAnalysis.Diagnostic.Create(ESharp.Analyzers.Descriptors.PackageSdk, Microsoft.CodeAnalysis.Location.None,
+                p.Id, p.Version, p.Manifest!.MinSdk, toolVersion).ToString()).ToList();
+
     /// <summary>The lines the build prints for the packages: id, version, licence, files, and the platform-level features each one declares.</summary>
     public static IEnumerable<string> Describe(IEnumerable<EsPackage> packages)
     {

@@ -80,7 +80,7 @@ there. `samples/packages` has a library (`Tween`: easing curves and a generic tw
   <ImplicitUsings>disable</ImplicitUsings>       <!-- required: the Amiga build sees only the embedded files -->
   <EsLibrary>true</EsLibrary>
   <EsTargets>m68k;os4;morphos;aros;aros-i386;sdl</EsTargets>   <!-- required: the targets it supports -->
-  <EsFeatures></EsFeatures>                      <!-- AmigaLib, Native, InlineAsm: platform-level features it uses -->
+  <EsFeatures></EsFeatures>                      <!-- AmigaLib, Native, InlineAsm, Interrupt, HookEntry: platform-level features it uses -->
   <PackageId>MyName.Easing</PackageId>
   <Version>1.0.0</Version>
   <PackageLicenseExpression>MIT</PackageLicenseExpression>
@@ -95,7 +95,7 @@ then `dotnet pack -o <feed>`. The manifest (`esharp/library.json` in the DLL) ho
 library's own symbols and the licence expression. Rules for the code: the same subset as a program (the analyzer from the Sdk runs on the library in the
 IDE and in `dotnet build`); no `[EntryPoint]`; types in a namespace of your own; `public` for what programs may use
 (`internal` stays inside the library, as it would between two assemblies). Declaring `[AmigaLib]` bindings, `[Native]`
-externs or `[InlineAsm]` bodies needs `AmigaLib`, `Native` or `InlineAsm` in `EsFeatures`, and so does calling the platform's
+externs, `[InlineAsm]` bodies, `[Interrupt]` servers or `[HookEntry]` methods needs `AmigaLib`, `Native`, `InlineAsm`, `Interrupt` or `HookEntry` in `EsFeatures`, and so does calling the platform's
 raw ones: any `[AmigaLib]` or `[Native]` extern, such as `Exec.AllocVec`, `Asl.AllocAslRequest` or `Dos.PutStr` (a dos.library
 binding on the Amiga targets; on sdl it is a plain method, so an sdl build does not ask for it). The platform API built on
 them (`Video`, `Gfx`, `Files`, `Font`, ...) needs nothing. Every file needs its own `using` lines: `ImplicitUsings` and
@@ -104,7 +104,7 @@ library's own `DefineConstants` symbols (other than DEBUG, TRACE, RELEASE and HO
 defines them for the library's files only, next to the target's; an E# target symbol there (`AMIGA`, `M68K`, `SDL`, ...)
 stops the library build (ESL009). C# only for now: an `assets.json` or C files in the project stop the
 library build, and `esharp build` refuses a package that carries either (both are planned). Community packages use any id
-plus the `esharp` tag (the step adds it); `AmigaESharp.*` ids are meant for the official packages.
+plus the `esharp` tag (the step adds it). A `Compile` item from outside the project folder without a `Link` (source-only package contentFiles, for one) is not part of the library and is skipped; give it a `Link` to embed it. A package whose compile assets list several DLLs that carry a manifest (`lib/` and `ref/`) is one library, read from the `lib/` one (the restore's runtime assets are read first, then its compile assets); `AmigaESharp.*` ids are meant for the official packages.
 
 **Using a library.** Add a `PackageReference` to the game's csproj, run `dotnet restore` (or `dotnet build`), then build as
 usual. `esharp build` reads `obj/project.assets.json`, takes every package of the restore (direct and transitive) whose DLL
@@ -117,8 +117,8 @@ warns. The checks on package code:
 | The subset rules, ES0101 against the target's library versions, ES0099 and C# errors, as for program code; reported at `<package Id Version>/File.cs(line,col)` (also in the `#line` directives, so `esharp addr` names the package file) | ES0001..., ES0101, ES0099, CS... |
 | The package does not list the chosen target | ES0110 |
 | A GPL, LGPL or AGPL licence (every choice of the SPDX expression; `MIT OR GPL-3.0-only` is fine), in any E# package of the restore; allowed with `<EsAllowCopyleft>true</EsAllowCopyleft>` in the game's csproj (a literal value), and then printed as a warning | ES0111 |
-| The package needs a newer esharp (`minSdk`; not checked by a `-dev` build from a checkout) | ES0112 |
-| `[AmigaLib]`, `[Native]` or `[InlineAsm]` declared in the package, or an `[AmigaLib]`/`[Native]` extern of the platform called from it, without the matching `EsFeatures` entry | ES0113 |
+| The package needs a newer esharp (`minSdk`; not checked by a `-dev` build from a checkout; `esharp test` reports it from the manifest before the host run loads the package DLL) | ES0112 |
+| `[AmigaLib]`, `[Native]`, `[InlineAsm]`, `[Interrupt]` or `[HookEntry]` declared in the package, or an `[AmigaLib]`/`[Native]` extern of the platform called from it, without the matching `EsFeatures` entry | ES0113 |
 | An `[EntryPoint]` in a package | ES0114 |
 | The same type (namespace, name, arity; also a `partial` one) in a package and the program, or in two packages | ES0115 |
 | An `internal` member of a package used from the program or another package | ES0116 |

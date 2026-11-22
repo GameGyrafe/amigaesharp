@@ -20,9 +20,8 @@ and a manifest as embedded resources; `esharp build`, `run` and `test` find the 
   `EsLibrary=true` gets `HOST` defined, its C# files as `esharp/src/<path>` and a manifest `esharp/library.json` (format 1,
   id, version, `EsTargets`, `minSdk` = `EsMinSdkVersion` or the referenced Sdk's version read from its nuspec, `EsFeatures`,
   `PackageLicenseExpression`, and `defines`: the library's own `DefineConstants` symbols without DEBUG/TRACE/RELEASE/HOST, which
-  `esharp build` defines for that package's files only), and the `esharp` package tag. It stops with ESL001-ESL009 on missing
-  or unknown targets, unknown features, `ImplicitUsings`, an `assets.json`, C files, a source outside the project without a
-  `Link`, `<Using>` items (ESL008: their generated file is not embedded) or an E# target symbol in `DefineConstants` (ESL009).
+  `esharp build` defines for that package's files only), and the `esharp` package tag. The manifest is written by an MSBuild inline task that escapes every string, so quotes and backslashes in the id or licence stay valid JSON. It stops with ESL001-ESL009 (ESL007 is no longer used) on missing
+  or unknown targets, unknown features, `ImplicitUsings`, an `assets.json`, C files, `<Using>` items (ESL008: their generated file is not embedded) or an E# target symbol in `DefineConstants` (ESL009). A `Compile` item from outside the project folder without a `Link` (source-only package contentFiles) is skipped, not embedded. `[Interrupt]` and `[HookEntry]` are features too (`Interrupt`, `HookEntry`).
 - **Loading** (`Packages.cs`, `PackageStep.cs`): every package of the restore (direct and transitive) whose compile DLL has the
   manifest, read through System.Reflection.Metadata; others are skipped (a direct reference that is not an E# library gets a
   warning). No restore: an error that says to run `dotnet restore`; a csproj newer than the restore: a warning. The build
@@ -31,8 +30,8 @@ and a manifest as embedded resources; `esharp build`, `run` and `test` find the 
 - **Checks** (`PackageChecks.cs`): package code is in the program's user set, so C# errors, the subset rules, ES0101 and
   ES0099 apply and are reported at `<package Id Version>/File.cs(line,col)` (also in the `#line` directives). New: ES0110
   target not listed, ES0111 GPL/LGPL/AGPL licence (an SPDX expression where every OR choice is GPL-family; opt out with
-  `EsAllowCopyleft` in the program's csproj, then a warning), ES0112 newer E# needed (skipped for `-dev` builds), ES0113
-  `[AmigaLib]`/`[Native]`/`[InlineAsm]` declared in the package, or a platform `[AmigaLib]`/`[Native]` extern called from it
+  `EsAllowCopyleft` in the program's csproj, then a warning), ES0112 newer E# needed (skipped for `-dev` builds; `esharp test` checks the manifest before the host run), ES0113
+  `[AmigaLib]`/`[Native]`/`[InlineAsm]`/`[Interrupt]`/`[HookEntry]` declared in the package, or a platform `[AmigaLib]`/`[Native]` extern called from it
   (`Exec.AllocVec`, `Dos.PutStr` on the Amiga targets; per target, so `Dos.PutStr` is fine on sdl), without `EsFeatures`, ES0114 entry point in a package, ES0115
   the same type in a package and the program or two packages (also `partial`), ES0116 `internal` package member used from
   outside, ES0117 class derived from a package class (not supported yet), ES0118 unusable package (assets, C files, newer

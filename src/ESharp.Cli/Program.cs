@@ -208,6 +208,8 @@ Targets:
         // E# library packages: the host run references their DLLs (the HOST build each package carries).
         if (PackageStep.Load(path, out var packages) is { } packageError) return Fail(packageError);
         foreach (var w in packages.Warnings) Console.Error.WriteLine($"esharp: warning: {w}");
+        // ES0112 from the manifest first: the host run loads the package assemblies, which may need a newer Sdk than this one.
+        if (PackageStep.SdkErrors(packages.Packages, SourceTree.ToolVersion) is { Count: > 0 } sdkErrors) return Fail(string.Join("\n", sdkErrors));
 
         Console.WriteLine("Host:");
         var host = HostRun.Run(Path.Combine(baseDir, "obj", "host"), repo, files, TimeSpan.FromSeconds(timeout),

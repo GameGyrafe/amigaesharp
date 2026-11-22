@@ -11,7 +11,8 @@
       EsLibrary          true to make the project an E# library
       EsTargets          the targets it supports, ';'-separated: m68k;os4;morphos;aros;aros-i386;sdl (required)
       EsFeatures         platform-level features its code uses, ';'-separated: AmigaLib (raw [AmigaLib] bindings), Native ([Native]
-                         externs), InlineAsm ([InlineAsm] bodies); esharp build refuses an undeclared one and prints the declared ones
+                         externs), InlineAsm ([InlineAsm] bodies), Interrupt ([Interrupt]
+                         servers), HookEntry ([HookEntry] methods); esharp build refuses an undeclared one and prints the declared ones
       EsMinSdkVersion    the oldest E# (esharp tool) it works with; default: the version of this AmigaESharp.Sdk
       PackageLicenseExpression   the licence (SPDX); a GPL-family licence is a build error in programs that use it unless they opt in
       DefineConstants    the library's own symbols (other than DEBUG, TRACE, RELEASE and HOST) go into the manifest ("defines") and
@@ -20,12 +21,62 @@
     C# only for now: assets (assets.json) and C files are refused here and by esharp build.
   -->
 
+  <UsingTask TaskName="EsWriteLibraryManifest" TaskFactory="RoslynCodeTaskFactory"
+             AssemblyFile="$(MSBuildToolsPath)/Microsoft.Build.Tasks.Core.dll">
+    <ParameterGroup>
+      <OutputFile Required="true" />
+      <Id />
+      <Version />
+      <Targets ParameterType="System.String[]" />
+      <MinSdk />
+      <Features ParameterType="System.String[]" />
+      <Defines ParameterType="System.String[]" />
+      <License />
+    </ParameterGroup>
+    <Task>
+      <Using Namespace="System.IO" />
+      <Using Namespace="System.Text" />
+      <Code Type="Fragment" Language="cs"><![CDATA[
+        // A small JSON writer: every string goes through Quote (backslash, quote and control characters escaped), so a PackageId or
+        // licence with those characters still gives valid JSON. (System.Text.Json is not available to inline tasks on every host.)
+        Func<string, string> Quote = text =>
+        {
+            var sb = new StringBuilder("\"");
+            foreach (var c in text ?? "")
+            {
+                if (c == '"') sb.Append("\\\"");
+                else if (c == '\\') sb.Append("\\\\");
+                else if (c < ' ') sb.Append("\\u").Append(((int)c).ToString("x4"));
+                else sb.Append(c);
+            }
+            return sb.Append('"').ToString();
+        };
+        Func<string[], string> List = values =>
+        {
+            var parts = new System.Collections.Generic.List<string>();
+            foreach (var v in values ?? new string[0]) parts.Add(Quote(v));
+            return "[" + string.Join(", ", parts) + "]";
+        };
+        var json = "{ \"format\": 1, \"id\": " + Quote(Id) + ", \"version\": " + Quote(Version) + ", \"targets\": " + List(Targets) +
+                   ", \"minSdk\": " + Quote(MinSdk) + ", \"features\": " + List(Features) + ", \"defines\": " + List(Defines) +
+                   ", \"license\": " + Quote(License) + " }\n";
+        System.IO.Directory.CreateDirectory(System.IO.Path.GetDirectoryName(System.IO.Path.GetFullPath(OutputFile)));
+        // Only when different, so an unchanged manifest does not make the build think the library changed.
+        if (!System.IO.File.Exists(OutputFile) || System.IO.File.ReadAllText(OutputFile) != json)
+            System.IO.File.WriteAllText(OutputFile, json, new UTF8Encoding(false));
+      ]]></Code>
+    </Task>
+  </UsingTask>
+
   <PropertyGroup Condition="'$(EsLibrary)' == 'true'">
     <!-- The library's own symbols, before HOST is added: they go into the manifest for the Amiga parse of its files. -->
     <_EsUserDefines>$(DefineConstants)</_EsUserDefines>
     <!-- The same symbol the esharp host build defines: the DLL is the HOST build of the library. -->
     <DefineConstants>$(DefineConstants);HOST</DefineConstants>
     <PackageTags>$(PackageTags);esharp</PackageTags>
+    <!-- The SDK would give a file from outside the project folder a Link of its file name; here only a Link written in the project counts
+         (a Compile item outside without one, such as source-only package contentFiles, is not the library's own source and is skipped). -->
+    <SetLinkMetadataAutomatically>false</SetLinkMetadataAutomatically>
     <_EsLibraryManifest>$(IntermediateOutputPath)esharp-library.json</_EsLibraryManifest>
   </PropertyGroup>
 
@@ -41,7 +92,7 @@
       <_EsTarget Include="$(EsTargets)" />
       <_EsUnknownTarget Include="@(_EsTarget)" Exclude="m68k;os4;morphos;aros;aros-i386;sdl" />
       <_EsFeature Include="$(EsFeatures)" />
-      <_EsUnknownFeature Include="@(_EsFeature)" Exclude="AmigaLib;Native;InlineAsm" />
+      <_EsUnknownFeature Include="@(_EsFeature)" Exclude="AmigaLib;Native;InlineAsm;Interrupt;HookEntry" />
       <!-- DEBUG/TRACE/RELEASE come from the configuration (esharp build sets DEBUG and TRACE itself); HOST is this step's own. -->
       <_EsDefine Include="$([MSBuild]::Unescape($(_EsUserDefines.Replace(',', ';').Replace(' ', ''))))" Exclude="DEBUG;TRACE;RELEASE;HOST" />
       <_EsReservedDefine Include="@(_EsDefine)" Condition="'%(Identity)' == 'AMIGA' or '%(Identity)' == 'M68K' or '%(Identity)' == 'PPC' or '%(Identity)' == 'X86_64' or '%(Identity)' == 'I386' or '%(Identity)' == 'AMIGAOS3' or '%(Identity)' == 'AMIGAOS4' or '%(Identity)' == 'MORPHOS' or '%(Identity)' == 'AROS' or '%(Identity)' == 'SDL'" />
@@ -51,7 +102,7 @@
     <Error Condition="'@(_EsUnknownTarget)' != ''" Code="ESL002"
            Text="E# library: unknown target(s) in EsTargets: @(_EsUnknownTarget) (known: m68k;os4;morphos;aros;aros-i386;sdl)" />
     <Error Condition="'@(_EsUnknownFeature)' != ''" Code="ESL003"
-           Text="E# library: unknown feature(s) in EsFeatures: @(_EsUnknownFeature) (known: AmigaLib;Native;InlineAsm)" />
+           Text="E# library: unknown feature(s) in EsFeatures: @(_EsUnknownFeature) (known: AmigaLib;Native;InlineAsm;Interrupt;HookEntry)" />
     <Error Condition="'$(ImplicitUsings)' == 'enable' or '$(ImplicitUsings)' == 'true'" Code="ESL004"
            Text="E# library: set ImplicitUsings to disable; the Amiga build compiles only the embedded sources, so every file needs its own using lines" />
     <Error Condition="'@(Using)' != ''" Code="ESL008"
@@ -68,6 +119,9 @@
     <ItemGroup>
       <_EsSource Include="@(Compile)" EsPath="$([MSBuild]::MakeRelative('$(MSBuildProjectDirectory)/', '%(Compile.FullPath)'))" />
       <_EsSource Condition="'%(_EsSource.Link)' != ''" EsPath="%(_EsSource.Link)" />
+      <!-- A file from outside the project folder without a Link (source-only package contentFiles, for one) is not the library's own
+           source: it is skipped. Give it a Link to embed it. -->
+      <_EsSource Remove="@(_EsSource)" Condition="'%(_EsSource.Link)' == '' and $([System.String]::Copy('%(_EsSource.EsPath)').StartsWith('..'))" />
       <!-- Generated files (AssemblyInfo and the like, under obj/) are not part of the library's source. -->
       <_EsSource Remove="@(_EsSource)" Condition="$([System.String]::Copy('%(_EsSource.FullPath)').StartsWith('$(_EsObjDir)')) or $([System.String]::Copy('%(_EsSource.FullPath)').StartsWith('$(_EsBinDir)'))" />
       <_EsCFile Include="@(None)" Condition="'%(None.Extension)' == '.c' or '%(None.Extension)' == '.h'" />
@@ -75,16 +129,10 @@
     </ItemGroup>
     <Error Condition="'@(_EsCFile)' != ''" Code="ESL006"
            Text="E# library: C files and headers in packages are not supported yet (@(_EsCFile)); E# library packages are C# only for now" />
-    <Error Condition="$([System.String]::Copy('%(_EsSource.EsPath)').StartsWith('..'))" Code="ESL007"
-           Text="E# library: %(_EsSource.Identity) is outside the project folder; give it a Link path" />
 
-    <PropertyGroup>
-      <_EsTargetsJson>@(_EsTarget->'"%(Identity)"', ', ')</_EsTargetsJson>
-      <_EsFeaturesJson>@(_EsFeature->'"%(Identity)"', ', ')</_EsFeaturesJson>
-      <_EsDefinesJson>@(_EsDefine->'"%(Identity)"', ', ')</_EsDefinesJson>
-      <_EsManifestText>{ "format": 1, "id": "$(PackageId)", "version": "$(PackageVersion)", "targets": [$(_EsTargetsJson)], "minSdk": "$(EsMinSdkVersion)", "features": [$(_EsFeaturesJson)], "defines": [$(_EsDefinesJson)], "license": "$(PackageLicenseExpression)" }</_EsManifestText>
-    </PropertyGroup>
-    <WriteLinesToFile File="$(_EsLibraryManifest)" Lines="$(_EsManifestText)" Overwrite="true" WriteOnlyWhenDifferent="true" />
+    <!-- The manifest is written by a JSON string writer, so quotes and backslashes in PackageId or the licence stay valid. -->
+    <EsWriteLibraryManifest OutputFile="$(_EsLibraryManifest)" Id="$(PackageId)" Version="$(PackageVersion)" Targets="@(_EsTarget)"
+                            MinSdk="$(EsMinSdkVersion)" Features="@(_EsFeature)" Defines="@(_EsDefine)" License="$(PackageLicenseExpression)" />
     <ItemGroup>
       <FileWrites Include="$(_EsLibraryManifest)" />
       <EmbeddedResource Include="$(_EsLibraryManifest)" LogicalName="esharp/library.json" Type="Non-Resx" WithCulture="false" />
