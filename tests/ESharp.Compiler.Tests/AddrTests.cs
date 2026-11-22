@@ -261,6 +261,53 @@ Linker script and memory map
     }
 
     [Fact]
+    public void FindInlined_reads_high_pc_as_an_address_in_dwarf_2_and_3()
+    {
+        const string ranges = "\n    Offset   Begin    End\n";
+        string Info(int version, string highPc) => $@"
+  Compilation Unit @ offset 0x0:
+   Version:       {version}
+ <0><b>: Abbrev Number: 1 (DW_TAG_compile_unit)
+    <19>   DW_AT_low_pc      : 0
+ <1><20>: Abbrev Number: 5 (DW_TAG_subprogram)
+    <21>   DW_AT_name        : Divide
+ <1><40>: Abbrev Number: 6 (DW_TAG_subprogram)
+    <41>   DW_AT_name        : Main
+ <2><70>: Abbrev Number: 8 (DW_TAG_inlined_subroutine)
+    <71>   DW_AT_abstract_origin: <0x20>
+    <75>   DW_AT_low_pc      : 0x1f0
+    <79>   DW_AT_high_pc     : {highPc}
+";
+        // DWARF 3: high_pc is the end address; DWARF 4: a length from low_pc.
+        var v3 = Info(3, "0x1f8");
+        Assert.Equal("Divide", Addr.FindInlined(0x1f2, v3, ranges)?.Callee);
+        Assert.Equal("Divide", Addr.FindInlined(0x1f7, v3, ranges)?.Callee);
+        Assert.Null(Addr.FindInlined(0x1f8, v3, ranges));
+        var v4 = Info(4, "0x8");
+        Assert.Equal("Divide", Addr.FindInlined(0x1f7, v4, ranges)?.Callee);
+        Assert.Null(Addr.FindInlined(0x1f8, v4, ranges));
+        Assert.Null(Addr.FindInlined(0x1ef, v4, ranges));
+    }
+
+    [Fact]
+    public void A_missing_link_map_deletes_a_stale_map_of_an_earlier_build()
+    {
+        var dir = TempDir("stalemap");
+        try
+        {
+            var exe = Path.Combine(dir, "game");
+            File.WriteAllText(exe + ".map", "old");
+            Assert.Equal(0, ESharp.Cli.Program.MoveLinkMap(dir, exe));
+            Assert.False(File.Exists(exe + ".map"));
+            File.WriteAllText(Path.Combine(dir, "esharp-link.map"), "new");
+            File.WriteAllText(exe + ".map", "old");
+            Assert.Equal(0, ESharp.Cli.Program.MoveLinkMap(dir, exe));
+            Assert.Equal("new", File.ReadAllText(exe + ".map"));
+        }
+        finally { try { Directory.Delete(dir, true); } catch { } }
+    }
+
+    [Fact]
     public void Missing_binutils_are_not_told_to_use_emit_only()
     {
         var error = ESharp.Cli.Toolchain.Resolve(Targets.M68k, null, null, _ => "", out _, "esharp-no-such-tool", forBinutils: true);
