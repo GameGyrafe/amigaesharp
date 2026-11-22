@@ -59,8 +59,8 @@ public static class Toolchain
         if (target != Targets.M68k) return "";
         return os switch
         {
-            HostOs.MacOS => " On macOS, build AmigaPorts m68k-amigaos-gcc with Homebrew's tools and pass its install prefix (docs/GUIDE.md, \"A local toolchain instead of Docker\").",
-            HostOs.Windows => " On Windows, build AmigaPorts m68k-amigaos-gcc in MSYS2 (or use WSL2 and the Linux route) and pass its install prefix, the folder that holds bin\\m68k-amigaos-gcc.exe (docs/GUIDE.md, \"A local toolchain instead of Docker\").",
+            HostOs.MacOS => " On macOS, build AmigaPorts m68k-amigaos-gcc with Homebrew's tools and pass its install prefix (docs/GUIDE.md, \"Local m68k toolchain on macOS and Windows\").",
+            HostOs.Windows => " On Windows, build AmigaPorts m68k-amigaos-gcc in MSYS2 (or use WSL2 and the Linux route) and pass its install prefix, the folder that holds bin\\m68k-amigaos-gcc.exe (docs/GUIDE.md, \"Local m68k toolchain on macOS and Windows\").",
             _ => "",
         };
     }
@@ -69,10 +69,12 @@ public static class Toolchain
     public static string? FindOnPath(string name, Func<string, string?>? env = null, HostOs? os = null)
     {
         var path = (env ?? Environment.GetEnvironmentVariable)("PATH") ?? "";
-        var sep = (os ?? CurrentOs) == HostOs.Windows ? ';' : ':';
+        var windows = (os ?? CurrentOs) == HostOs.Windows;
+        var sep = windows ? ';' : ':';
         foreach (var d in path.Split(sep, StringSplitOptions.RemoveEmptyEntries))
         {
-            var dir = d.Trim().Trim('"');
+            // Windows PATH entries may be quoted or padded; on Linux and macOS a quote or a space is part of the name.
+            var dir = windows ? d.Trim().Trim('"') : d;
             if (dir.Length == 0) continue;
             var f = Path.Combine(dir, Exe(name, os));
             if (File.Exists(f)) return f;
@@ -99,6 +101,8 @@ public static class Toolchain
         string compiler;
         if (dir != null)
         {
+            // "C:\x y\" reaches .NET as C:\x y" (the backslash escapes the closing quote): drop the stray quote on Windows.
+            if (os == HostOs.Windows) dir = dir.Trim().Trim('"');
             dir = Expand(dir);
             if (!Directory.Exists(dir))
                 return $"toolchain folder {dir} (from {source}) does not exist; it should be the toolchain's install prefix, the folder " +
