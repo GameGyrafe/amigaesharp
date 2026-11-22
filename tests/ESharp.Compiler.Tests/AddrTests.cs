@@ -307,6 +307,26 @@ Linker script and memory map
         finally { try { Directory.Delete(dir, true); } catch { } }
     }
 
+    /// <summary>A read-only output folder makes File.Move throw UnauthorizedAccessException: reported, not crashed. Needs POSIX permissions and a non-root user, so it does nothing on Windows or as root.</summary>
+    [Fact]
+    public void A_link_map_that_cannot_be_moved_is_reported_as_an_error()
+    {
+        if (OperatingSystem.IsWindows() || Environment.UserName == "root") return;
+        var dir = TempDir("rodir");
+        try
+        {
+            File.WriteAllText(Path.Combine(dir, "esharp-link.map"), "new");
+            File.SetUnixFileMode(dir, UnixFileMode.UserRead | UnixFileMode.UserExecute);
+            try { File.Create(Path.Combine(dir, "probe")).Dispose(); return; }   // the folder is still writable (e.g. CAP_DAC_OVERRIDE): cannot test
+            catch (UnauthorizedAccessException) { }
+            Assert.Equal(1, ESharp.Cli.Program.MoveLinkMap(dir, Path.Combine(dir, "game")));
+        }
+        finally
+        {
+            try { File.SetUnixFileMode(dir, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute); Directory.Delete(dir, true); } catch { }
+        }
+    }
+
     [Fact]
     public void Missing_binutils_are_not_told_to_use_emit_only()
     {
@@ -422,6 +442,7 @@ Linker script and memory map
             var divide = Lookup(exe, "m68k", M68kImage, "0", (textPiece.Address + divideLine + 2 - hs[0].Address).ToString("x"));
             Assert.Contains("Crash.cs:38", divide);
             Assert.Contains("C function Es_CrashSample_Program_Divide (inlined into Es_CrashSample_Program_Main)", divide);
+            Assert.Contains("Divide (inlined into Es_CrashSample_Program_Main", divide);   // Divide inlined into Main
             Assert.DoesNotContain("inlined into", s1);   // Checksum is a function of its own
             Assert.Contains("chip RAM", Lookup(exe, "m68k", M68kImage, "3", "0"));
             Assert.Contains("not in the program's own data", Lookup(exe, "m68k", M68kImage, "1", "0"));   // the start-up code's data comes first

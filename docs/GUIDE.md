@@ -265,7 +265,7 @@ Without `--docker`, `esharp build` (and `run`, `test`, `addr`) runs the target's
 order:
 
 1. `--toolchain <dir>`: the toolchain's install prefix, the folder that holds `bin/<compiler>` (for m68k the folder the
-   pinned image has at `/opt/m68k-amigaos`; `bin/<compiler>.exe` on Windows). An empty `<dir>` counts as not given. On Windows a stray quote at either end of `<dir>` is dropped: `--toolchain "C:\x y\"` reaches the program as `C:\x y"` because the backslash escapes the closing quote (leave the trailing backslash off to be safe).
+   pinned image has at `/opt/m68k-amigaos`; `bin/<compiler>.exe` on Windows). An empty `<dir>` counts as not given. On Windows a stray quote at either end of `<dir>` is dropped (also from `ESHARP_TOOLCHAIN_<TARGET>`, `ESHARP_TOOLCHAIN`, `--sysroot` and the sysroot variables; a value that is only a quote counts as not given): `--toolchain "C:\x y\"` reaches the program as `C:\x y"` because the backslash escapes the closing quote (leave the trailing backslash off to be safe).
 2. `ESHARP_TOOLCHAIN_<TARGET>`: `ESHARP_TOOLCHAIN_M68K`, `_OS4`, `_MORPHOS`, `_AROS`, `_AROS_I386`, `_SDL`.
 3. `ESHARP_TOOLCHAIN` (Amiga targets): handy when you only use one.
 4. The compiler on PATH (`m68k-amigaos-gcc`, `ppc-amigaos-gcc`, `ppc-morphos-gcc`, `x86_64-aros-gcc`, `i386-aros-gcc`, `gcc`).

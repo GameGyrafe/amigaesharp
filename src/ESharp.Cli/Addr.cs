@@ -815,6 +815,7 @@ internal static class Addr
             if (HexOrDec(x.Attrs.GetValueOrDefault("DW_AT_ranges")) is { } r) return rangeLists.TryGetValue(r, out var l) && l.Any(e => e.Begin <= offset && offset < e.End);
             if (HexOrDec(x.Attrs.GetValueOrDefault("DW_AT_low_pc")) is not { } lo || HexOrDec(x.Attrs.GetValueOrDefault("DW_AT_high_pc")) is not { } hi) return false;
             // DWARF 4 stores high_pc as a length from low_pc (newer objdump says "offset from low_pc"); DWARF 2 and 3 as an address.
+            // (A DWARF 4 high_pc in DW_FORM_addr form would be read as a length here; GCC never emits it, so it is not handled.)
             var isAddress = x.Version is > 0 and < 4 && !x.Attrs["DW_AT_high_pc"].Contains("offset from low_pc", StringComparison.Ordinal);
             return lo <= offset && offset < (isAddress ? hi : lo + hi);
         }
