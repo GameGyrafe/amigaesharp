@@ -29,8 +29,7 @@ internal static class PackageChecks
                 diagnostics.Add(Diagnostic.Create(Descriptors.PackageTarget, Location.None, p.Id, p.Version, options.TargetName, string.Join(", ", m.Targets)));
             if (!options.AllowCopyleft && Licenses.IsCopyleft(p.License))
                 diagnostics.Add(Diagnostic.Create(Descriptors.PackageCopyleft, Location.None, p.Id, p.Version, p.License));
-            if (options.SdkVersion is { } have && m.MinSdk.Length > 0 && !SdkVersions.IsDev(have) &&
-                SdkVersions.Numeric(m.MinSdk) is { } needNumber && SdkVersions.Numeric(have) is { } haveNumber && needNumber > haveNumber)
+            if (options.SdkVersion is { } have && SdkVersions.NeedsNewer(m.MinSdk, have))
                 diagnostics.Add(Diagnostic.Create(Descriptors.PackageSdk, Location.None, p.Id, p.Version, m.MinSdk, have));
         }
     }
@@ -49,7 +48,8 @@ internal static class PackageChecks
         }
         var allTrees = programTrees.Concat(packageOf.Keys.OrderBy(t => t.FilePath, StringComparer.Ordinal)).ToList();
 
-        // Platform-level features: an [AmigaLib] or [Native] extern, or an [InlineAsm] body, declared in the package.
+        // Platform-level features declared in the package: an [AmigaLib] or [Native] extern, an [InlineAsm] body, an [Interrupt] server or
+        // a [HookEntry] method (the system calls those with a target-specific convention, from another task or interrupt).
         foreach (var (tree, package) in packageOf.OrderBy(k => k.Key.FilePath, StringComparer.Ordinal))
         {
             var model = compilation.GetSemanticModel(tree);
@@ -62,6 +62,8 @@ internal static class PackageChecks
                         "AmigaLibAttribute" or "AmigaLib" => "AmigaLib",
                         "NativeAttribute" or "Native" => "Native",
                         "InlineAsmAttribute" or "InlineAsm" => "InlineAsm",
+                        "InterruptAttribute" or "Interrupt" => "Interrupt",
+                        "HookEntryAttribute" or "HookEntry" => "HookEntry",
                         _ => null,
                     };
                     if (feature != null && package.Manifest != null && !package.Manifest.Declares(feature))

@@ -113,6 +113,48 @@ public class PackageRoundTripTests
         }
     }
 
+    [Fact]
+    public void Library_manifest_is_valid_json_and_outside_files_are_skipped()
+    {
+        var work = Path.Combine(Path.GetTempPath(), "esharp-pkg-" + Guid.NewGuid().ToString("N"));
+        var feed = Path.Combine(work, "feed");
+        Directory.CreateDirectory(feed);
+        try
+        {
+            File.Copy(Path.Combine(RepoRoot, "global.json"), Path.Combine(work, "global.json"));
+            File.WriteAllText(Path.Combine(work, "nuget.config"),
+                "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n<configuration>\n  <packageSources>\n    <clear />\n" +
+                $"    <add key=\"local\" value=\"{System.Security.SecurityElement.Escape(feed)}\" />\n  </packageSources>\n</configuration>\n");
+            FakeSdkPackage(feed);
+            CopyProject(Path.Combine(RepoRoot, "samples", "packages", "Tween"), Path.Combine(work, "Tween"));
+            // A source file next to the project, not in it, with no Link: skipped (it is not the library's own source).
+            File.WriteAllText(Path.Combine(work, "Outside.cs"), "namespace Outside; public static class O { }\n");
+            File.WriteAllText(Path.Combine(work, "Extra.cs"), "namespace Extra; public static class E { }\n");
+            var csproj = Path.Combine(work, "Tween", "Tween.csproj");
+            // Quotes and a backslash in the id and the licence expression (written into the csproj: the command line eats quotes).
+            const string id = "My\"Lib\\X";
+            const string license = "MIT\" OR \"x\\y";
+            File.WriteAllText(csproj, File.ReadAllText(csproj)
+                .Replace("<PackageId>ESharpSample.Tween</PackageId>", "<PackageId>My&quot;Lib\\X</PackageId>")
+                .Replace("<PackageLicenseExpression>MIT</PackageLicenseExpression>", "<PackageLicenseExpression>MIT&quot; OR &quot;x\\y</PackageLicenseExpression>")
+                .Replace("</Project>", "<ItemGroup><Compile Include=\"..\\Outside.cs\" /><Compile Include=\"..\\Extra.cs\" Link=\"Linked\\Extra.cs\" /></ItemGroup>\n</Project>"));
+            var packages = Path.Combine(work, "packages");
+            Dotnet(work, packages, "build", "Tween", "-p:ESharpSdkVersion=" + SdkVersion);
+            var dll = Directory.GetFiles(Path.Combine(work, "Tween", "bin"), "Tween.dll", SearchOption.AllDirectories).First();
+            var lib = PackageReader.ReadDll(dll, id, "1.0.0");
+            Assert.NotNull(lib);
+            Assert.Empty(lib!.Problems);
+            Assert.Equal(id, lib.Manifest!.Id);
+            Assert.Equal(license, lib.License);
+            // Outside.cs (no Link) is skipped, Extra.cs (a Link) is embedded under its Link path.
+            Assert.Equal(new[] { "Ease.cs", "Linked/Extra.cs", "Tween.cs" }, lib.Sources.Select(s => s.Path).ToArray());
+        }
+        finally
+        {
+            try { Directory.Delete(work, true); } catch (IOException) { } catch (UnauthorizedAccessException) { }
+        }
+    }
+
     /// <summary>
     /// An AmigaESharp.Sdk package as src/ESharp.Sdk packs it (lib/net10.0 host assemblies, the analyzer, buildTransitive targets),
     /// from what this test build already has, so the round trip does not rebuild src/ or depend on a published version.

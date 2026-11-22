@@ -375,4 +375,88 @@ public static class P
         Assert.True(SdkVersions.IsDev("0.1.0-dev"));
         Assert.False(SdkVersions.IsDev("0.1.41"));
     }
+
+    private const string Server = "using ESharp;\nnamespace Srv;\npublic static unsafe class S {\n" +
+        "  [Interrupt] public static int Tick(void* data) { return 0; }\n" +
+        "  [HookEntry] public static nint Entry(void* hook, void* obj, void* msg) { return 0; }\n}\n";
+
+    [Fact]
+    public void Interrupt_and_hook_entry_are_platform_level_features()
+    {
+        var program = Prelude + "public static class P { [EntryPoint] public static void Main() { } }";
+        var undeclared = Package("Sample.Srv", new Dictionary<string, string> { ["S.cs"] = Server });
+        var r = Build(program, M68k(undeclared));
+        var messages = r.Diagnostics.Where(d => d.Id == "ES0113").Select(d => d.GetMessage()).ToList();
+        Assert.Contains(messages, m => m.Contains("Interrupt ('Tick')"));
+        Assert.Contains(messages, m => m.Contains("HookEntry ('Entry')"));
+        var partly = Package("Sample.Srv", new Dictionary<string, string> { ["S.cs"] = Server }, features: "\"Interrupt\"");
+        Assert.Single(Build(program, M68k(partly)).Diagnostics, d => d.Id == "ES0113");
+        var declared = Package("Sample.Srv", new Dictionary<string, string> { ["S.cs"] = Server }, features: "\"interrupt\", \"HookEntry\"");
+        Assert.DoesNotContain(Build(program, M68k(declared)).Diagnostics, d => d.Id == "ES0113" || d.Id == "ES0118");
+    }
+
+    [Fact]
+    public void A_package_that_needs_a_newer_esharp_is_found_from_the_manifest_alone()
+    {
+        // `esharp test` runs this before the host run loads the package DLL.
+        var lib = Package("Sample.Ease", new Dictionary<string, string> { ["Ease.cs"] = EaseLib }, minSdk: "0.2.0");
+        var error = Assert.Single(ESharp.Cli.PackageStep.SdkErrors(new[] { lib, Ease() }, "0.1.5"));
+        Assert.Contains("ES0112", error);
+        Assert.Contains("Package 'Sample.Ease' 1.0.0 needs E# 0.2.0 or newer; this esharp is 0.1.5", error);
+        Assert.Empty(ESharp.Cli.PackageStep.SdkErrors(new[] { lib }, "0.2.0"));
+        Assert.Empty(ESharp.Cli.PackageStep.SdkErrors(new[] { lib }, "0.1.0-dev"));
+    }
+
+    private static string WriteDll(string path, string manifest)
+    {
+        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+        var compilation = Microsoft.CodeAnalysis.CSharp.CSharpCompilation.Create(Path.GetFileNameWithoutExtension(path),
+            new[] { Microsoft.CodeAnalysis.CSharp.CSharpSyntaxTree.ParseText("public class C { }") },
+            new[] { Microsoft.CodeAnalysis.MetadataReference.CreateFromFile(typeof(object).Assembly.Location) },
+            new Microsoft.CodeAnalysis.CSharp.CSharpCompilationOptions(Microsoft.CodeAnalysis.OutputKind.DynamicallyLinkedLibrary));
+        var resources = new[]
+        {
+            new Microsoft.CodeAnalysis.ResourceDescription(PackageReader.ManifestResource, () => new MemoryStream(Encoding.UTF8.GetBytes(manifest)), true),
+            new Microsoft.CodeAnalysis.ResourceDescription(PackageReader.SourcePrefix + "A.cs", () => new MemoryStream(Encoding.UTF8.GetBytes("namespace A; public static class X { }")), true),
+        };
+        using var stream = File.Create(path);
+        Assert.True(compilation.Emit(stream, manifestResources: resources).Success);
+        return path;
+    }
+
+    [Fact]
+    public void Two_compile_dlls_with_a_manifest_are_one_package_read_from_lib()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "esharp-assets-" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            var packageDir = Path.Combine(root, "cache", "sample.two", "1.0.0");
+            const string manifest = "{ \"format\": 1, \"id\": \"Sample.Two\", \"version\": \"1.0.0\", \"targets\": [\"m68k\"], \"minSdk\": \"0.1.0\", \"features\": [], \"license\": \"MIT\" }";
+            var lib = WriteDll(Path.Combine(packageDir, "lib", "net10.0", "Two.dll"), manifest);
+            WriteDll(Path.Combine(packageDir, "ref", "net10.0", "Two.dll"), manifest);
+            var assets = Path.Combine(root, "project.assets.json");
+            File.WriteAllText(assets, System.Text.Json.JsonSerializer.Serialize(new Dictionary<string, object>
+            {
+                ["packageFolders"] = new Dictionary<string, object> { [Path.Combine(root, "cache")] = new { } },
+                ["libraries"] = new Dictionary<string, object> { ["Sample.Two/1.0.0"] = new { type = "package", path = "sample.two/1.0.0" } },
+                ["targets"] = new Dictionary<string, object>
+                {
+                    ["net10.0"] = new Dictionary<string, object>
+                    {
+                        // ref/ listed first on purpose
+                        ["Sample.Two/1.0.0"] = new { type = "package", compile = new Dictionary<string, object> { ["ref/net10.0/Two.dll"] = new { }, ["lib/net10.0/Two.dll"] = new { } } },
+                    },
+                },
+            }));
+            var errors = new List<string>();
+            var found = PackageLoader.FromAssetsFile(assets, errors);
+            Assert.Empty(errors);
+            var package = Assert.Single(found);
+            Assert.Equal(lib, package.DllPath);
+            Assert.Equal(new[] { "A.cs" }, package.Sources.Select(x => x.Path).ToArray());
+            var r = Build(Prelude + "public static class P { [EntryPoint] public static void Main() { } }", M68k(found.ToArray()));
+            Assert.DoesNotContain(r.Diagnostics, d => d.Id == "ES0115");
+        }
+        finally { try { Directory.Delete(root, true); } catch (IOException) { } catch (UnauthorizedAccessException) { } }
+    }
 }

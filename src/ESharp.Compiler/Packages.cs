@@ -38,8 +38,8 @@ public sealed record LibraryManifest(
     /// <summary>The manifest format this E# reads; a library made for a newer one is refused.</summary>
     public const int CurrentFormat = 1;
 
-    /// <summary>The platform-level features a library can declare (<c>EsFeatures</c>): raw library bindings, C functions of the emitter, inline assembly.</summary>
-    public static readonly IReadOnlyList<string> KnownFeatures = new[] { "AmigaLib", "Native", "InlineAsm" };
+    /// <summary>The platform-level features a library can declare (<c>EsFeatures</c>): raw library bindings, C functions of the emitter, inline assembly, interrupt servers and system hook entries.</summary>
+    public static readonly IReadOnlyList<string> KnownFeatures = new[] { "AmigaLib", "Native", "InlineAsm", "Interrupt", "HookEntry" };
 
     public bool Declares(string feature) => Features.Any(f => string.Equals(f, feature, StringComparison.OrdinalIgnoreCase));
 }
@@ -266,16 +266,22 @@ public static class PackageLoader
                     .FirstOrDefault(Directory.Exists);
                 if (packageDir == null) continue;
                 if (!entry.Value.TryGetProperty("compile", out var compile) || compile.ValueKind != JsonValueKind.Object) continue;
-                foreach (var file in compile.EnumerateObject())
+                // One package, one E# library: a package can list several compile DLLs (lib/ and ref/ for the same assembly, or one per
+                // target framework) that all carry the manifest. The lib/ one comes first: it is the real assembly the host run loads,
+                // a ref/ one may be a reference assembly with the resources stripped.
+                var dlls = compile.EnumerateObject().Select(f => f.Name)
+                    .Where(n => n.EndsWith(".dll", StringComparison.OrdinalIgnoreCase))   // "_._" placeholders are skipped
+                    .OrderBy(n => n.StartsWith("lib/", StringComparison.OrdinalIgnoreCase) ? 0 : 1).ThenBy(n => n, StringComparer.Ordinal);
+                foreach (var name in dlls)
                 {
-                    if (!file.Name.EndsWith(".dll", StringComparison.OrdinalIgnoreCase)) continue;   // "_._" placeholders
-                    var dll = Path.Combine(packageDir, file.Name.Replace('/', Path.DirectorySeparatorChar));
+                    var dll = Path.Combine(packageDir, name.Replace('/', Path.DirectorySeparatorChar));
                     if (!File.Exists(dll)) { errors.Add($"package {id} {version}: {dll} is missing (run dotnet restore again)"); continue; }
                     var package = PackageReader.ReadDll(dll, id, version);
                     if (package == null) continue;
                     if (package.License.Length == 0 && NuspecLicense(packageDir, id) is { } nuspecLicense)
                         package = new EsPackage(package.Id, package.Version, package.Manifest, package.Sources, package.DllPath, package.Problems) { License = nuspecLicense };
                     result.Add(package);
+                    break;   // the first DLL with a manifest is the package
                 }
             }
         }
@@ -395,4 +401,8 @@ public static class SdkVersions
 
     /// <summary>A development build of E# (0.1.0-dev, a checkout or a local pack without a version): its number says nothing.</summary>
     public static bool IsDev(string version) => version.EndsWith("-dev", StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>True when a library that needs <paramref name="minSdk"/> (its manifest) is too new for this esharp (<paramref name="have"/>); never on a dev build.</summary>
+    public static bool NeedsNewer(string minSdk, string have) =>
+        minSdk.Length > 0 && !IsDev(have) && Numeric(minSdk) is { } need && Numeric(have) is { } got && need > got;
 }
