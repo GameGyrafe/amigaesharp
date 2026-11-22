@@ -154,7 +154,8 @@ compiler embedding Runtime and Platform (`LibrarySources.cs`). The pieces:
   C files and E# target symbols in `DefineConstants` (codes ESL001-ESL013; ESL010 and ESL011 are warnings), writes the manifest (with the
   library's own symbols as `defines`) and adds the resources before the build. A library with an `assets.json` ships the
   `Assets.g.cs` that `esharp assets` wrote: an inline task reads the namespace, class and input files of `assets.json`
-  (missing file ESL005, no namespace ESL012, older than an input ESL011), and the manifest's `assets` names the file and
+  (missing file ESL005, no namespace ESL012, an input whose content differs from the SHA-256 that `Assets.g.cs` records
+  for it ESL011; a file without those lines, from an older `esharp assets`, by file time), and the manifest's `assets` names the file and
   class. The converted data is shipped rather than the inputs because the conversion is the same for every target (one
   `Assets.g.cs` serves all of them for a program too) and the package then carries exactly what its author built and tested;
   the game's build parses it as any package source, so `[ChipRam]`, the chip report and the C names (`Es_<Namespace>_<Class>_<Field>`)

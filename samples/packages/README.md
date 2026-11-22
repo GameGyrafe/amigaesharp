@@ -25,7 +25,7 @@ dotnet run --project src/ESharp.Cli -- test samples/packages/TweenDemo --target 
 NuGet keeps the first copy of a version in its package cache (`~/.nuget/packages`): after changing the Sdk or the library,
 pack a new version, or set `NUGET_PACKAGES` to an empty folder for these commands. After changing `ball.png`, `blip.wav` or
 `assets.json`, run `esharp assets samples/packages/Tween` before packing (the library build warns, ESL011, when
-`Assets.g.cs` is older than them).
+`Assets.g.cs` was made from other contents: it records a SHA-256 per input).
 
 The unit test `PackageRoundTripTests` does the same in a temporary folder (with its own package cache), and builds the
 game for m68k when the m68k image is in the local docker. How to write and use a library: docs/GUIDE.md, "Libraries".

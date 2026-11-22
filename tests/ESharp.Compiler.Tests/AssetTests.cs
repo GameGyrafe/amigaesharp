@@ -225,6 +225,22 @@ public class AssetTests : IDisposable
     }
 
     [Fact]
+    public void Assets_g_cs_records_each_input_by_content_and_a_crlf_manifest_hashes_the_same()
+    {
+        var dir = ScratchSample();
+        var manifest = Path.Combine(dir, "assets.json");
+        var source = AssetBuilder.Build(manifest).Source;
+        Assert.Contains($"// input sha256:{AssetBuilder.InputHash(File.ReadAllBytes(manifest), text: true)} assets.json\n", source);
+        Assert.Contains($"// input sha256:{AssetBuilder.InputHash(File.ReadAllBytes(Path.Combine(dir, "card.png")), text: false)} card.png\n", source);
+        var lf = File.ReadAllText(manifest).Replace("\r\n", "\n");
+        File.WriteAllText(manifest, lf.Replace("\n", "\r\n"));
+        Assert.Equal(source, AssetBuilder.Build(manifest).Source);
+        // Binary inputs are hashed as they are.
+        Assert.NotEqual(AssetBuilder.InputHash(new byte[] { 13, 10 }, text: false), AssetBuilder.InputHash(new byte[] { 10 }, text: false));
+        Assert.Equal(AssetBuilder.InputHash(new byte[] { 13, 10 }, text: true), AssetBuilder.InputHash(new byte[] { 10 }, text: false));
+    }
+
+    [Fact]
     public void Sync_leaves_a_fresh_Assets_g_cs_untouched()
     {
         var dir = ScratchSample();

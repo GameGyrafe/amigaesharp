@@ -73,11 +73,28 @@ public class PackageRoundTripTests
             var (exit12, log12) = DotnetResult(work, packages, "build", "Tween", "-p:ESharpSdkVersion=" + SdkVersion);
             Assert.True(exit12 != 0 && log12.Contains("ESL012"), $"dotnet build with no assets namespace expected to fail:\n{log12}");
             File.WriteAllText(assetsJson, assetsText);
-            File.SetLastWriteTimeUtc(assetsJson, old);
-            File.SetLastWriteTimeUtc(Path.Combine(lib0, "ball.png"), old.AddMinutes(5));   // edited after the last esharp assets
+            // A fresh clone: git writes Assets.g.cs (capital A) before its inputs, so every input is newer. Same contents: no warning.
+            var ball = Path.Combine(lib0, "ball.png");
+            foreach (var input in new[] { assetsJson, ball, Path.Combine(lib0, "blip.wav") }) File.SetLastWriteTimeUtc(input, old.AddMinutes(5));
+            var (exitClone, logClone) = DotnetResult(work, packages, "build", "Tween", "-p:ESharpSdkVersion=" + SdkVersion);
+            Assert.True(exitClone == 0 && !logClone.Contains("ESL011"), $"dotnet build of a fresh clone expected not to warn:\n{logClone}");
+            // ball.png edited after the last esharp assets (an older time than Assets.g.cs even, so only the content tells): a warning.
+            var ballBytes = File.ReadAllBytes(ball);
+            File.WriteAllBytes(ball, ballBytes.Concat(new byte[] { 0 }).ToArray());
+            File.SetLastWriteTimeUtc(ball, old);
             var (exit11, log11) = DotnetResult(work, packages, "build", "Tween", "-p:ESharpSdkVersion=" + SdkVersion);
-            Assert.True(exit11 == 0 && log11.Contains("ESL011") && log11.Contains("Assets.g.cs is older than ball.png"), $"dotnet build with stale assets expected to warn:\n{log11}");
-            File.SetLastWriteTimeUtc(Path.Combine(lib0, "ball.png"), old);
+            Assert.True(exit11 == 0 && log11.Contains("ESL011") && log11.Contains("Assets.g.cs was not made from the current ball.png;"), $"dotnet build with stale assets expected to warn:\n{log11}");
+            File.WriteAllBytes(ball, ballBytes);
+            // An Assets.g.cs without the input lines (an older esharp assets): checked by file time, so a newer input warns.
+            var generatedText = File.ReadAllText(generated);
+            File.WriteAllText(generated, string.Join("\n", generatedText.Split('\n').Where(l => !l.StartsWith("// input sha256:"))));
+            foreach (var input in new[] { assetsJson, ball, Path.Combine(lib0, "blip.wav") }) File.SetLastWriteTimeUtc(input, old);
+            File.SetLastWriteTimeUtc(generated, old.AddMinutes(1));
+            File.SetLastWriteTimeUtc(ball, old.AddMinutes(5));
+            var (exitOld, logOld) = DotnetResult(work, packages, "build", "Tween", "-p:ESharpSdkVersion=" + SdkVersion);
+            Assert.True(exitOld == 0 && logOld.Contains("ESL011") && logOld.Contains("the current ball.png;"), $"dotnet build with an older Assets.g.cs expected to warn by time:\n{logOld}");
+            File.WriteAllText(generated, generatedText);
+            foreach (var input in new[] { assetsJson, ball, Path.Combine(lib0, "blip.wav") }) File.SetLastWriteTimeUtc(input, old.AddMinutes(5));
             foreach (var dir in new[] { "bin", "obj" })
                 if (Directory.Exists(Path.Combine(work, "Tween", dir))) Directory.Delete(Path.Combine(work, "Tween", dir), true);
 

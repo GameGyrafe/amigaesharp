@@ -140,7 +140,8 @@ static data on the other targets (where `[ChipRam]` is a no-op, as for program a
   in another package is error ES0115, which says that it comes from an `assets.json`; in their own namespaces the C names
   carry the namespace (`Es_Tween_Art_BallPlanes`), so they never clash with the game's assets.
 - **Checks when the library is built.** `assets.json` without an `Assets.g.cs` next to it stops the build (ESL005: run
-  `esharp assets`); an `Assets.g.cs` older than `assets.json` or an input it lists is warning ESL011 (run `esharp assets`
+  `esharp assets`); an `Assets.g.cs` made from another `assets.json` or input than the current one is warning ESL011 (it compares the
+  SHA-256 per input that `esharp assets` writes at the top of the file, so a fresh clone does not warn) (run `esharp assets`
   again so the package carries the current art); a project that removes `Assets.g.cs` from `Compile` stops it (ESL013). Only
   the `assets.json` in the project folder counts as the library's assets.
 

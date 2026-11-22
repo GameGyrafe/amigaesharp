@@ -27,8 +27,11 @@ library".
   The inputs are not in the package (the round trip checks the .nupkg). If a target-dependent conversion is ever added, the
   manifest can name the inputs as well.
 - **Library build** (`AmigaESharp.Sdk.targets`): an inline task reads the namespace, class and input files of `assets.json`.
-  ESL005 (error, was "assets not supported"): no `Assets.g.cs` next to it. ESL011 (warning): `Assets.g.cs` older than
-  `assets.json` or a listed input (or an input missing): run `esharp assets` again. ESL012 (error): no `"namespace"` in
+  ESL005 (error, was "assets not supported"): no `Assets.g.cs` next to it. ESL011 (warning): `assets.json` or a listed input
+  differs from what `Assets.g.cs` was made from (or an input is missing): run `esharp assets` again. `esharp assets` writes
+  an `// input sha256:<hex> <file>` line per input at the top of `Assets.g.cs` and the check compares contents, not file
+  times, so a fresh clone (git writes `Assets.g.cs` before its inputs) does not warn; an `Assets.g.cs` without those lines
+  is checked by time. ESL012 (error): no `"namespace"` in
   `assets.json` (the class would be `Assets.Assets`, open to clashes). ESL013 (error): `Assets.g.cs` removed from `Compile`.
 - **Game build:** the package's `Assets.g.cs` is parsed as any package source: `[ChipRam]` data is `__chip` on m68k, a plain
   static array on the other targets, listed in the chip report and counted by `--chip-budget`, with C names that carry the
@@ -55,7 +58,8 @@ library".
   `<package Sample.Art 1.0.0>/Assets.g.cs(line)`), for os4 (no `__chip`), and the m68k C built and run with the host gcc
   (6 ok: sizes, mask, palette and planes agree, signed sample bytes, the game's own `Sprites` next to the package's); the
   clash cases (game and package, two packages; two packages in their own namespaces build); the manifest `assets` problems.
-  `PackageRoundTripTests`: ESL005, ESL012 and ESL011 from real `dotnet build`s, a warning-free `dotnet pack`, the manifest's
+  `PackageRoundTripTests`: ESL005, ESL012 and ESL011 from real `dotnet build`s (no ESL011 with every input newer than
+  `Assets.g.cs` and unchanged, as after a clone; ESL011 for a changed `ball.png` with an older time; the time fallback), a warning-free `dotnet pack`, the manifest's
   assets, four embedded sources, no PNG/WAV/assets.json in the .nupkg, the `assets:` and chip report lines, host 18 ok, the
   m68k Docker build, and the ball planes in the game's C equal to the library's `Assets.g.cs`; ESL010 naming `Outside.cs`, and
   with `SetLinkMetadataAutomatically=true` `Outside.cs` embedded. `AssetTests`: the committed Tween `Assets.g.cs` is what the

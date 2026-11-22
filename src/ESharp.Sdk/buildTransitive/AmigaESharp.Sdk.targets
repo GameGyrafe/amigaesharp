@@ -24,7 +24,8 @@
     and the manifest names it ("assets": source, namespace, class). The PNG, ILBM and sound inputs are not packed: the game's build
     compiles the converted data exactly as it compiles a program's own Assets.g.cs. assets.json must set "namespace" (the library's
     own), so the asset class cannot collide with the game's or another package's. A missing Assets.g.cs stops the build (ESL005);
-    one older than assets.json or an input it lists is a warning (ESL011: run esharp assets again).
+    one made from another assets.json or input than the current one is a warning (ESL011: run esharp assets again). The check
+    compares contents (the SHA-256 that Assets.g.cs records for each input), not file times, so a fresh clone does not warn.
     C files are refused here (ESL006) and by esharp build: C# and assets only for now.
   -->
 
@@ -108,17 +109,49 @@
         Class = Top("class");
         if (Class.Length == 0) Class = "Assets";
         var dir = Path.GetDirectoryName(Path.GetFullPath(Manifest));
+        // Assets.g.cs names each input it was made from with its SHA-256 ("// input sha256:<hex> <file>", AssetBuilder.InputHash), and
+        // an input whose content differs is stale. File times are no use for that: a fresh clone gives every file the time of the
+        // checkout, and git writes Assets.g.cs (capital A) before its inputs. Only a file without those lines (from an older esharp
+        // assets) is checked by time.
+        var made = new System.Collections.Generic.Dictionary<string, string>();
+        if (File.Exists(Generated))
+            foreach (var line in File.ReadLines(Generated))
+            {
+                if (!line.StartsWith("//")) break;
+                var hm = Regex.Match(line.TrimEnd('\r'), "^// input sha256:([0-9a-f]{64}) (.+)$");
+                if (hm.Success) made[hm.Groups[2].Value] = hm.Groups[1].Value;
+            }
+        Func<string, bool, string> Hash = (path, isText) =>
+        {
+            var bytes = File.ReadAllBytes(path);
+            if (isText)
+            {
+                // A CR before an LF is left out, as AssetBuilder.InputHash does: a CRLF checkout of assets.json hashes the same.
+                var kept = new System.Collections.Generic.List<byte>(bytes.Length);
+                for (var i = 0; i < bytes.Length; i++)
+                    if (!(bytes[i] == 13 && i + 1 < bytes.Length && bytes[i + 1] == 10)) kept.Add(bytes[i]);
+                bytes = kept.ToArray();
+            }
+            using (var sha = System.Security.Cryptography.SHA256.Create())
+                return BitConverter.ToString(sha.ComputeHash(bytes)).Replace("-", "").ToLowerInvariant();
+        };
         var built = File.Exists(Generated) ? File.GetLastWriteTimeUtc(Generated) : DateTime.MinValue;
-        var newer = new System.Collections.Generic.List<string>();
-        if (File.GetLastWriteTimeUtc(Manifest) > built) newer.Add(Path.GetFileName(Manifest));
+        Func<string, string, bool, bool> Changed = (name, path, isText) =>
+        {
+            if (made.Count == 0) return File.GetLastWriteTimeUtc(path) > built;
+            string hash;
+            return !made.TryGetValue(name, out hash) || hash != Hash(path, isText);
+        };
+        var stale = new System.Collections.Generic.List<string>();
+        if (Changed(Path.GetFileName(Manifest), Manifest, true)) stale.Add(Path.GetFileName(Manifest));
         foreach (Match m in Regex.Matches(text, "\"file\"\\s*:\\s*" + str))
         {
             var name = m.Groups[1].Value.Replace("\\\\", "\\").Replace("\\/", "/");
             var input = Path.Combine(dir, name.Replace('/', Path.DirectorySeparatorChar));
-            if (!File.Exists(input)) newer.Add(name + " (missing)");
-            else if (File.GetLastWriteTimeUtc(input) > built) newer.Add(name);
+            if (!File.Exists(input)) stale.Add(name + " (missing)");
+            else if (Changed(name, input, false)) stale.Add(name);
         }
-        Stale = string.Join(", ", newer);
+        Stale = string.Join(", ", stale);
       ]]></Code>
     </Task>
   </UsingTask>
@@ -181,7 +214,7 @@
     <Error Condition="'$(_EsAssetsManifest)' != '' and '$(_EsAssetsNamespace)' == ''" Code="ESL012"
            Text="E# library: assets.json sets no &quot;namespace&quot;; give the assets the library's own namespace, so their class cannot collide with the game's or another package's" />
     <Warning Condition="'$(_EsAssetsManifest)' != '' and '$(_EsAssetsStale)' != ''" Code="ESL011"
-             Text="E# library: Assets.g.cs is older than $(_EsAssetsStale); run esharp assets $(MSBuildProjectDirectory) so the package carries the current assets" />
+             Text="E# library: Assets.g.cs was not made from the current $(_EsAssetsStale); run esharp assets $(MSBuildProjectDirectory) so the package carries the current assets" />
 
     <PropertyGroup>
       <_EsObjDir>$([System.IO.Path]::GetFullPath('$(MSBuildProjectDirectory)/$(BaseIntermediateOutputPath)'))</_EsObjDir>
