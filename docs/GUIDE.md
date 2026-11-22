@@ -65,11 +65,11 @@ Editing in VS Code is verified on macOS (2026-11-10); the editor on Windows and 
 ## Libraries (E# packages)
 
 An E# library is an ordinary .NET class library on NuGet whose DLL also carries its C# sources and a small manifest, both as
-embedded resources (issue #31, first wave). The IDE, `dotnet build`, `dotnet run` and the host side of `esharp test` use the
+embedded resources (issue #31). The IDE, `dotnet build`, `dotnet run` and the host side of `esharp test` use the
 compiled DLL (the library built with `HOST`). `esharp build`, `run` and `test --target` read the sources back out of the
 restored package and compile them with your program for the chosen target, so every `#if AMIGA` / `#elif SDL` branch is
-there. `samples/packages` has a library (`Tween`: easing curves and a generic tween struct) and a game that uses it
-(`TweenDemo`), with the steps in its README.
+there. `samples/packages` has a library (`Tween`: easing curves, a generic tween struct, and a ball sprite and a blip sound
+from its own `assets.json`) and a game that uses it (`TweenDemo`), with the steps in its README.
 
 **Writing a library.** Reference AmigaESharp.Sdk and set `EsLibrary`; the Sdk's MSBuild step (in the package's
 `buildTransitive/`) embeds every C# file of the project and writes the manifest when the library is built:
@@ -92,7 +92,7 @@ there. `samples/packages` has a library (`Tween`: easing curves and a generic tw
 
 then `dotnet pack -o <feed>`. The manifest (`esharp/library.json` in the DLL) holds the package id and version, the targets,
 `minSdk` (`EsMinSdkVersion`, by default the AmigaESharp.Sdk version the library was built against), the features, the
-library's own symbols and the licence expression. Rules for the code: the same subset as a program (the analyzer from the Sdk runs on the library in the
+library's own symbols, the licence expression and, for a library with assets, its asset class. Rules for the code: the same subset as a program (the analyzer from the Sdk runs on the library in the
 IDE and in `dotnet build`); no `[EntryPoint]`; types in a namespace of your own; `public` for what programs may use
 (`internal` stays inside the library, as it would between two assemblies). Declaring `[AmigaLib]` bindings, `[Native]`
 externs, `[InlineAsm]` bodies, `[Interrupt]` servers or `[HookEntry]` methods needs `AmigaLib`, `Native`, `InlineAsm`, `Interrupt` or `HookEntry` in `EsFeatures`, and so does calling the platform's
@@ -102,9 +102,47 @@ them (`Video`, `Gfx`, `Files`, `Font`, ...) needs nothing. Every file needs its 
 `<Using>` items stop the library build (ESL004, ESL008), since their generated file is not part of the embedded sources. The
 library's own `DefineConstants` symbols (other than DEBUG, TRACE, RELEASE and HOST) go into the manifest and `esharp build`
 defines them for the library's files only, next to the target's; an E# target symbol there (`AMIGA`, `M68K`, `SDL`, ...)
-stops the library build (ESL009). C# only for now: an `assets.json` or C files in the project stop the
-library build, and `esharp build` refuses a package that carries either (both are planned). Community packages use any id
-plus the `esharp` tag (the step adds it). A `Compile` item from outside the project folder without a `Link` (source-only package contentFiles, for one) is not part of the library and is skipped; give it a `Link` to embed it. A package whose compile assets list several DLLs that carry a manifest (`lib/` and `ref/`) is one library, read from the `lib/` one (the restore's runtime assets are read first, then its compile assets); `AmigaESharp.*` ids are meant for the official packages.
+stops the library build (ESL009). C files in the project stop the library build (ESL006), and `esharp build` refuses a
+package that carries them (planned). Community packages use any id plus the `esharp` tag (the step adds it); `AmigaESharp.*`
+ids are meant for the official packages. A `Compile` item from outside the project folder without a `Link` (source-only
+package contentFiles, for one) is not part of the library and is skipped, with warning ESL010 naming the file (the HOST DLL
+still has it, so the Amiga build would miss it); give it a `Link` to embed it. A file on another drive (Windows) counts as
+outside too. The step sets `SetLinkMetadataAutomatically` to false only when the project does not set it; set it to true and
+the SDK links such files by their file name, and they are embedded. A package whose compile assets list several DLLs that
+carry a manifest (`lib/` and `ref/`) is one library, read from the `lib/` one (the restore's runtime assets are read first,
+then its compile assets).
+
+**Assets in a library.** A library can ship images and sounds the way a program does ([Assets](#assets)): an `assets.json`
+in the library's project folder, and the `Assets.g.cs` that `esharp assets <library dir>` writes next to it (commit it, as for
+a program). That generated file is an ordinary source of the library: it is compiled into the HOST DLL (so the IDE, `dotnet
+test` and the host side of `esharp test` see the same data) and embedded with the other sources, and the manifest names it
+(`"assets": { "source": "Assets.g.cs", "namespace": ..., "class": ... }`). A game that references the package gets the
+library's planar images, masks, palettes and samples as `[ChipRam]` static data, compiled with the program exactly as the
+game's own `Assets.g.cs` is: in chip RAM on m68k (`__chip`, counted by the chip report and `--chip-budget`), and as plain
+static data on the other targets (where `[ChipRam]` is a no-op, as for program assets), on every target the library lists. The build prints them (`assets: Tween.Art (Assets.g.cs; ...)`).
+
+```json
+{ "namespace": "Tween", "class": "Art",
+  "images":  [ { "name": "Ball", "file": "ball.png", "colors": 4, "mask": true } ],
+  "samples": [ { "name": "Blip", "file": "blip.wav" } ] }
+```
+
+- **Why the converted file and not the PNGs.** The conversion does not depend on the target: a program's one `Assets.g.cs`
+  serves m68k, os4, morphos, aros, aros-i386 and sdl (planar bytes, 12-bit or 24-bit palette values and signed sample bytes
+  read the same on each), and the colour count, depth, dither and AGA choice are set per image in `assets.json`, not per
+  target. Shipping the converted data means the game gets exactly the bytes the library author built, looked at and tested,
+  whichever esharp version the game uses (a later colour reducer cannot change a published library's art), the HOST DLL and the
+  Amiga build hold the same data, and the game's build has nothing to convert. The PNG, ILBM and WAV inputs and
+  `assets.json` stay in the library's source; the package does not carry them. Should a conversion that depends on the target
+  ever be added, the manifest can then name the inputs as well.
+- **Names.** `assets.json` must set `"namespace"` (ESL012), normally the library's own, so the class is `Tween.Art` rather
+  than the default `Assets.Assets`. The same class in the game (its own `assets.json` with the same namespace and class) or
+  in another package is error ES0115, which says that it comes from an `assets.json`; in their own namespaces the C names
+  carry the namespace (`Es_Tween_Art_BallPlanes`), so they never clash with the game's assets.
+- **Checks when the library is built.** `assets.json` without an `Assets.g.cs` next to it stops the build (ESL005: run
+  `esharp assets`); an `Assets.g.cs` older than `assets.json` or an input it lists is warning ESL011 (run `esharp assets`
+  again so the package carries the current art); a project that removes `Assets.g.cs` from `Compile` stops it (ESL013). Only
+  the `assets.json` in the project folder counts as the library's assets.
 
 **Using a library.** Add a `PackageReference` to the game's csproj, run `dotnet restore` (or `dotnet build`), then build as
 usual. `esharp build` reads `obj/project.assets.json`, takes every package of the restore (direct and transitive) whose DLL
@@ -120,10 +158,10 @@ warns. The checks on package code:
 | The package needs a newer esharp (`minSdk`; not checked by a `-dev` build from a checkout; `esharp test` reports it from the manifest before the host run loads the package DLL) | ES0112 |
 | `[AmigaLib]`, `[Native]`, `[InlineAsm]`, `[Interrupt]` or `[HookEntry]` declared in the package, or an `[AmigaLib]`/`[Native]` extern of the platform called from it, without the matching `EsFeatures` entry | ES0113 |
 | An `[EntryPoint]` in a package | ES0114 |
-| The same type (namespace, name, arity; also a `partial` one) in a package and the program, or in two packages | ES0115 |
+| The same type (namespace, name, arity; also a `partial` one) in a package and the program, or in two packages (also an asset class: the message names the `assets.json`) | ES0115 |
 | An `internal` member of a package used from the program or another package | ES0116 |
 | A program class derived from a package class (not supported yet) | ES0117 |
-| A package that cannot be used: an unknown manifest format, assets, C files, a bad path, a reserved or invalid symbol in its `defines` | ES0118 |
+| A package that cannot be used: an unknown manifest format or resource, C files, a bad path, a reserved or invalid symbol in its `defines`, an asset declaration it cannot read or whose generated source it does not carry | ES0118 |
 
 Types with the same name in different namespaces (the program's `Game.Ease` and the package's `Tween.Ease`) are fine: their C
 names carry the namespace, as for any two namespaces. Package code is emitted in full, like program code (unused package
@@ -201,7 +239,8 @@ there); both PowerPC targets are big-endian, so asset formats need no change.
 
 `assets.json` lists images, tile sheets, palettes and sounds; `esharp assets samples/screen` turns them into
 `Assets.g.cs` (planar chip data, palettes, 8-bit signed samples) next to the manifest. `esharp build`, `run` and `test` do
-this automatically when an input is newer than the output (`--force` rebuilds); commit the `Assets.g.cs` it writes.
+this automatically when an input is newer than the output (`--force` rebuilds); commit the `Assets.g.cs` it writes. A library
+package ships its assets the same way ([Libraries](#libraries-e-packages), "Assets in a library").
 Details in docs/STATUS.md ("Asset dithering, ILBM and sound assets"):
 
 - Images are PNGs, or IFF ILBM files (`.iff`, `.ilbm`, `.lbm`; 1 to 8 planes, uncompressed or ByteRun1, masks; HAM and

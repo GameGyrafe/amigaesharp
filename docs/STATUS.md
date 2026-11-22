@@ -10,6 +10,75 @@ The minimum system is now an **Amiga 1200: 68020, AGA, 2 MB chip RAM, Kickstart 
 - **Kept on purpose:** `HasAga()` and `HasRtg()` with their fallbacks. A classic A1200 always has AGA, but PowerPC, RTG-only and AROS targets may not, so the checks stay as the portable way to ask. **Not yet done:** using 68020 instructions deliberately and AROS (a new target, untested).
 - Verified after the change: all 17 samples built with `-m68020` and run on Kickstart 3.1 (A1200) in FS-UAE: 300 `ok` lines, no `FAIL` (the script shows only the last 25 lines of each sample, so long ones are truncated), 136 unit tests pass. Not verified: PowerPC, real hardware, a 68000/Kickstart 2.04 run (no longer supported).
 
+## E# library packages, part 2: assets in packages (issue #31)
+
+Item 3 of the maintainer's decision of 2026-11-21 ("assets in packages come later"): a library can now ship images and sounds.
+C files in packages stay out (ES0118 and ESL006 still refuse them). How to use it: docs/GUIDE.md, "Libraries", "Assets in a
+library".
+
+- **Design: the package carries the converted `Assets.g.cs`, not the PNG/ILBM/WAV inputs.** A library with an `assets.json` in
+  its project folder commits the `Assets.g.cs` that `esharp assets <library dir>` writes, as a program does. It is an ordinary
+  source of the library: compiled into the HOST DLL (IDE, `dotnet test`, the host side of `esharp test`) and embedded as
+  `esharp/src/Assets.g.cs`; the manifest says so with `"assets": { "source", "namespace", "class" }` (still format 1: an older
+  esharp refuses a manifest with `assets` with its "not supported yet" message). Why: the conversion does not depend on the
+  target (one `Assets.g.cs` already serves every target of a program; colours, depth, dither and AGA are per image in
+  `assets.json`), so shipping the result gives the game exactly the bytes the library author built and tested, whatever esharp
+  version the game uses, keeps the HOST DLL and the Amiga build on the same data, and leaves the game's build nothing to convert.
+  The inputs are not in the package (the round trip checks the .nupkg). If a target-dependent conversion is ever added, the
+  manifest can name the inputs as well.
+- **Library build** (`AmigaESharp.Sdk.targets`): an inline task reads the namespace, class and input files of `assets.json`.
+  ESL005 (error, was "assets not supported"): no `Assets.g.cs` next to it. ESL011 (warning): `Assets.g.cs` older than
+  `assets.json` or a listed input (or an input missing): run `esharp assets` again. ESL012 (error): no `"namespace"` in
+  `assets.json` (the class would be `Assets.Assets`, open to clashes). ESL013 (error): `Assets.g.cs` removed from `Compile`.
+- **Game build:** the package's `Assets.g.cs` is parsed as any package source: `[ChipRam]` data is `__chip` on m68k, a plain
+  static array on the other targets, listed in the chip report and counted by `--chip-budget`, with C names that carry the
+  namespace (`Es_Tween_Art_BallPlanes`). `esharp build` prints `assets: Tween.Art (Assets.g.cs; ...)` under the package line.
+  The same asset class in the game (its own `assets.json`) or in two packages is ES0115, whose message now says that the type
+  comes from an `assets.json`. ES0118: a manifest `assets` entry it cannot read, or one whose source the package does not carry;
+  an unknown `esharp/...` resource is "not known (a library made for a newer E#?)".
+- **Library packages review items (#138, "Library packages (#137)"):** a `Compile` item from outside the project folder without
+  a `Link` is still skipped, now with warning ESL010 naming the file; `SetLinkMetadataAutomatically=false` is set only when the
+  project does not set it (with `true`, the SDK links such a file by its name and it is embedded; tested); a path on another
+  drive (absolute after `MakeRelative`, Windows) counts as outside; generated files under obj/ and bin/ are dropped before
+  the outside check, so an obj/ outside the project folder should give no warning (not tried); the GUIDE's lib/ref and outside-file sentences
+  now follow the community-id / `AmigaESharp.*` pair.
+- **Sample:** `samples/packages/Tween` has `assets.json` with `ball.png` (16x16 shaded ball, 3 colours + transparent, masked) and
+  `blip.wav` (480 samples at 8000 Hz, a falling square tone), both drawn in code by `tools/AssetSamples --tween` (original, no
+  third-party art), the generated `Assets.g.cs` (class `Tween.Art`, 576 bytes of chip RAM) and `Ball.cs` (palette, masked draw,
+  play the blip). `TweenDemo` checks the asset data, plays the blip, draws the ball at five points of an in-out tween on a
+  320x200x3 screen, checks a drawn pixel and a masked corner, prints `SHOT` (18 checks, was 12).
+
+**Verified (2026-11-22):**
+- `dotnet test`: 741 passed, 2 skipped (the OS4 VM and SDK-backed BindGen tests), 0 failed. New in `PackageTests`: a package
+  whose `Assets.g.cs` is made by `AssetBuilder` from a PNG and a WAV written by the test, compiled for m68k (the planes, mask and
+  sample lines are `static __chip`, the palette is not; the chip report lists the three arrays with their sizes at
+  `<package Sample.Art 1.0.0>/Assets.g.cs(line)`), for os4 (no `__chip`), and the m68k C built and run with the host gcc
+  (6 ok: sizes, mask, palette and planes agree, signed sample bytes, the game's own `Sprites` next to the package's); the
+  clash cases (game and package, two packages; two packages in their own namespaces build); the manifest `assets` problems.
+  `PackageRoundTripTests`: ESL005, ESL012 and ESL011 from real `dotnet build`s, a warning-free `dotnet pack`, the manifest's
+  assets, four embedded sources, no PNG/WAV/assets.json in the .nupkg, the `assets:` and chip report lines, host 18 ok, the
+  m68k Docker build, and the ball planes in the game's C equal to the library's `Assets.g.cs`; ESL010 naming `Outside.cs`, and
+  with `SetLinkMetadataAutomatically=true` `Outside.cs` embedded. `AssetTests`: the committed Tween `Assets.g.cs` is what the
+  pipeline writes. The clang run of the tests was not repeated locally (no clang here); CI runs it.
+- `TweenDemo` from a local feed (Sdk and Tween packed from this checkout, `NUGET_PACKAGES` empty), `esharp test --target m68k
+  --docker <m68k image> --model A1200 --kickstart <Kickstart 3.1 rom>`: host 18 ok, Amiga 18 ok, 0 FAIL, return code 0, "Host
+  and Amiga agree on every check". `esharp run ... --headless --screenshot`: the screenshot shows five blue shaded balls with
+  their highlight at the upper left, round with no square edges (masked), on an orange dotted in-out path from lower
+  left to upper right, and the grey bar with "TWEEN + PACKAGE ART".
+- The same game with `--target sdl --docker esharp-sdl`: 18 ok both sides, agree; `--target aros --docker esharp-amiga-toolchain`
+  (hosted AROS x86-64): 18 ok, return code 0, 0 traps, agree; `--target os4` in the AmigaOS 4.1 VM: 17 ok, 1 skipped (no sound
+  hardware in the VM: "package sound plays"), return code 0, agree.
+- `tools/package-smoke.sh` with `dotnet pack ESharp.sln -c Release -p:Version=0.1.0-local.231` and the m68k image: passed; the
+  smoke library now has an `assets.json` with a 4-sample WAV made by `printf`, converted by the packed tool's `esharp assets`;
+  the game's emit-only C has `static __chip uint8_t Es_SmokeLib_Sounds_TickData[4] = { 0, 100, 156, 0 };`, its program reads the
+  sample, and the m68k build passes.
+
+**Not done / not verified:** C files and headers in packages (ES0118, ESL006); an `assets.json` in a subfolder of a library
+is not the library's assets (only the project folder's counts; its `Assets.g.cs` would still be embedded as a plain source);
+the other-drive outside check was not run on Windows (no second drive here; CI's Windows job runs the round trip without it);
+the morphos and aros-i386 builds of the sample; real hardware; the MSBuild step in Visual Studio's .NET Framework MSBuild
+(the inline tasks use only what that MSBuild has, not tried).
+
 ## E# library packages, part 1: embedded sources, loader and checks (issue #31)
 
 The first wave of the maintainer's decision of 2026-11-21: a library is a .NET class library whose DLL carries its C# sources
@@ -68,7 +137,7 @@ and a manifest as embedded resources; `esharp build`, `run` and `test` find the 
   the same as before the change, so the emulator and VM runs were not repeated.
 - The samples/packages/README.md steps in the checkout (with `NUGET_PACKAGES` set to an empty folder): host 12 ok.
 
-**Not done / not verified:** assets and C files in packages (refused with a clear error; later waves of #31); deriving from
+**Not done / not verified:** assets (done since, see part 2) and C files in packages (refused with a clear error; a later wave of #31); deriving from
 package classes (ES0117); pruning unused package code (all of a package is emitted, like program code); a game using a
 library through a ProjectReference (use a package, or `esharp.include` for local folders); `[assembly: RequiresLib]` in a
 package applies to the whole program (one assembly); the morphos, aros-i386 and sdl builds of the sample (the library lists
@@ -1414,7 +1483,7 @@ Open work as of 2026-11-14 (the GitHub issues are the live list; the v1 tracker 
 - **Windows (#11):** CI now runs a `windows` job (windows-latest, PR head): `dotnet test` (439 passed, 2 skipped, 0 failed; the runner has a MinGW gcc, so the generated-C tests run there and only the Docker/VM/SDK-dependent tests skip), emit-only builds of `samples/hello` and `samples/cards`, `esharp test samples/linq`, a clean `git status` afterwards, and a package round trip against the PR's own packages (`dotnet pack`, install the tool from the folder into a tool path, a nuget.config with the local feed, version and PackageReference checked, NU1603 fails the step, `esharp new`, `dotnet run`, `esharp test`, `esharp build --emit-only`). A `.gitattributes` keeps the working tree LF (the runner has `core.autocrlf=true`), and the native test output is read CRLF-tolerant. Still needs a person on a real Windows machine: Docker Desktop with `--docker` builds, FS-UAE for Windows, VS Code, and Windows with a different (or no) C compiler. `tools/aros-hosted` is Linux-only. macOS was checked, see "VS Code support".
 - **Bindings (#19, #40):** GadTools wrappers (v1), the BOOPSI core with hooks (#40 part 1, see "BOOPSI core and hooks") and the MUI wrappers on it (#40 part 2, see "MUI wrappers") are done. MUI custom classes (#93, see "MUI custom classes") are done too. Open: ReAction (last, if at all).
 - **Display design (not implemented):** [design/DISPLAY.md](design/DISPLAY.md) proposes logical coordinates with an integer scale, mode choice that follows the Workbench's monitor family (MODE option, asl screen-mode requester), 256 colours with a shared palette, a gradient pen (copper on AGA), window mode on the Workbench and multi-scale art. Nothing in it is built or verified yet; it waits for the maintainer's approval.
-- **v2:** AROS i386 (#4: toolchain, target and hosted runs done, see "AROS i386"; the MUI crashes on hosted i386 were an AROS bug, worked around (#105); open: native pc-i386), E# library source packages on NuGet (#31: part 1 done, see "E# library packages, part 1"; open: assets and C files in packages, deriving from package classes), user classes deriving from platform classes (#42: done for `GtWindow`, see "Classes derived from platform classes"). Capturing lambdas stored in fields and events (#41): done (PR #83), see "Heap closures and events".
+- **v2:** AROS i386 (#4: toolchain, target and hosted runs done, see "AROS i386"; the MUI crashes on hosted i386 were an AROS bug, worked around (#105); open: native pc-i386), E# library source packages on NuGet (#31: parts 1 and 2 done, see "E# library packages, part 1" and "part 2: assets in packages"; open: C files in packages, deriving from package classes), user classes deriving from platform classes (#42: done for `GtWindow`, see "Classes derived from platform classes"). Capturing lambdas stored in fields and events (#41): done (PR #83), see "Heap closures and events".
 - **Local toolchains (#122):** part 1 done (configuration, `esharp doctor`, VS Code tasks, a local m68k build in CI; see
   "Local toolchains, part 1"). Open: macOS and Windows by hand, and whether os4, morphos and AROS get a local route
   ([design/TOOLCHAINS.md](design/TOOLCHAINS.md) has the options; the maintainer picks).

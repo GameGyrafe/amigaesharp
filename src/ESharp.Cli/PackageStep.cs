@@ -64,7 +64,7 @@ public static class PackageStep
             .Select(p => Microsoft.CodeAnalysis.Diagnostic.Create(ESharp.Analyzers.Descriptors.PackageSdk, Microsoft.CodeAnalysis.Location.None,
                 p.Id, p.Version, p.Manifest!.MinSdk, toolVersion).ToString()).ToList();
 
-    /// <summary>The lines the build prints for the packages: id, version, licence, files, and the platform-level features each one declares.</summary>
+    /// <summary>The lines the build prints for the packages: id, version, licence, files, the platform-level features each one declares and its assets.</summary>
     public static IEnumerable<string> Describe(IEnumerable<EsPackage> packages)
     {
         foreach (var p in packages)
@@ -73,6 +73,8 @@ public static class PackageStep
             yield return $"Package {p.Id} {p.Version} ({license}): {p.Sources.Count} C# file(s)";
             if (p.Manifest is { Features.Count: > 0 } m)
                 yield return $"  platform-level features: {string.Join(", ", m.Features)}";
+            if (p.Manifest?.Assets is { } a)
+                yield return $"  assets: {a.FullName} ({a.Source}; images and samples converted when the library was built)";
             if (p.Manifest is { Symbols.Count: > 0 } d)
                 yield return $"  its own symbols: {string.Join(", ", d.Symbols)}";
         }

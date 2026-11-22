@@ -3,7 +3,7 @@
 #   install AmigaESharp.Tool into a tool path, `esharp new` a project (PackageReference to AmigaESharp.Sdk),
 #   dotnet build and run it, check that the subset analyzer from the package reports ES0001, `esharp test` it on the
 #   host, `esharp build --emit-only`, and with an image also an m68k build in Docker. Then an E# library package (issue #31):
-#   a class library with EsLibrary=true packed against the packed AmigaESharp.Sdk into a second local feed, a new game that
+#   a class library with EsLibrary=true and an assets.json (a short sound) packed against the packed AmigaESharp.Sdk into a second local feed, a new game that
 #   references it (esharp build, esharp test, the target and GPL checks), and with an image its m68k build.
 #
 #   tools/package-smoke.sh <feed dir> <version> [m68k docker image]
@@ -97,19 +97,28 @@ public static class Twice
     public static int Of(int x) => Pick(true, x * 2, 0);
 }
 EOF
+# Assets in the library (#31): a short sound, converted by esharp assets into Assets.g.cs, which the package carries.
+printf 'RIFF\x28\x00\x00\x00WAVEfmt \x10\x00\x00\x00\x01\x00\x01\x00\x40\x1f\x00\x00\x40\x1f\x00\x00\x01\x00\x08\x00data\x04\x00\x00\x00\x80\xe4\x1c\x80' > smokelib/tick.wav
+cat > smokelib/assets.json <<'EOF2'
+{ "namespace": "SmokeLib", "class": "Sounds", "samples": [ { "name": "Tick", "file": "tick.wav" } ] }
+EOF2
+"$esharp" assets smokelib
+grep -q 'TickLength = 4' smokelib/Assets.g.cs
 dotnet pack smokelib -o libfeed -nologo
 dotnet pack smokelib -o libfeed -nologo -p:Version=1.0.1 -p:PackageLicenseExpression=GPL-3.0-only
 "$esharp" new uselib
 sed -i.orig "s|<PackageReference Include=\"AmigaESharp.Sdk\" Version=\"$version\" />|&<PackageReference Include=\"ESharpSmoke.Lib\" Version=\"1.0.0\" />|" uselib/uselib.csproj
 grep -q 'Include="ESharpSmoke.Lib"' uselib/uselib.csproj
-sed -i.orig 's|sum == 55 ?|sum == 55 \&\& SmokeLib.Twice.Of(21) == 42 ?|' uselib/Program.cs
+sed -i.orig 's|sum == 55 ?|sum == 55 \&\& SmokeLib.Twice.Of(21) == 42 \&\& SmokeLib.Sounds.TickData[1] == 100 ?|' uselib/Program.cs
 grep -q 'SmokeLib.Twice.Of' uselib/Program.cs
 if "$esharp" build uselib --emit-only > nolib.log 2>&1; then echo "expected an error before dotnet restore"; exit 1; fi
 grep -q 'dotnet restore' nolib.log
 dotnet restore uselib
 "$esharp" build uselib --emit-only | tee lib.log
-grep -q 'Package ESharpSmoke.Lib 1.0.0 (MIT): 1 C# file(s)' lib.log
+grep -q 'Package ESharpSmoke.Lib 1.0.0 (MIT): 2 C# file(s)' lib.log
+grep -q 'assets: SmokeLib.Sounds (Assets.g.cs' lib.log
 grep -q '<package ESharpSmoke.Lib 1.0.0>/Twice.cs' uselib/obj/m68k/uselib.c
+grep -q '^static __chip uint8_t Es_SmokeLib_Sounds_TickData\[4\] = { 0, 100, 156, 0 };' uselib/obj/m68k/uselib.c
 (cd uselib && "$esharp" test) | tee libtest.log
 grep -q 'TEST PASSED' libtest.log
 dotnet run --project uselib | grep -q 'ok sum of 1 to 10'

@@ -55,10 +55,34 @@ public class PackageRoundTripTests
                 Assert.True(exit != 0 && log.Contains(code), $"dotnet build with {code} expected to fail:\n{log}");
             }
             File.WriteAllText(csproj, projectText.Replace("<EsLibrary>true</EsLibrary>", ownSymbol));
+
+            // The library's assets: Assets.g.cs (written by esharp assets) is the package's asset data. Missing, it stops the build;
+            // older than an input, it is a warning; an assets.json without a namespace of its own stops the build.
+            var lib0 = Path.Combine(work, "Tween");
+            var generated = Path.Combine(lib0, "Assets.g.cs");
+            var assetsJson = Path.Combine(lib0, "assets.json");
+            var old = DateTime.UtcNow.AddHours(-2);
+            foreach (var input in new[] { assetsJson, Path.Combine(lib0, "ball.png"), Path.Combine(lib0, "blip.wav") }) File.SetLastWriteTimeUtc(input, old);
+            File.SetLastWriteTimeUtc(generated, old.AddMinutes(1));
+            File.Move(generated, generated + ".away");
+            var (exit5, log5) = DotnetResult(work, packages, "build", "Tween", "-p:ESharpSdkVersion=" + SdkVersion);
+            Assert.True(exit5 != 0 && log5.Contains("ESL005") && log5.Contains("run esharp assets"), $"dotnet build without Assets.g.cs expected to fail:\n{log5}");
+            File.Move(generated + ".away", generated);
+            var assetsText = File.ReadAllText(assetsJson);
+            File.WriteAllText(assetsJson, assetsText.Replace("\"namespace\": \"Tween\",", "// no namespace\n"));
+            var (exit12, log12) = DotnetResult(work, packages, "build", "Tween", "-p:ESharpSdkVersion=" + SdkVersion);
+            Assert.True(exit12 != 0 && log12.Contains("ESL012"), $"dotnet build with no assets namespace expected to fail:\n{log12}");
+            File.WriteAllText(assetsJson, assetsText);
+            File.SetLastWriteTimeUtc(assetsJson, old);
+            File.SetLastWriteTimeUtc(Path.Combine(lib0, "ball.png"), old.AddMinutes(5));   // edited after the last esharp assets
+            var (exit11, log11) = DotnetResult(work, packages, "build", "Tween", "-p:ESharpSdkVersion=" + SdkVersion);
+            Assert.True(exit11 == 0 && log11.Contains("ESL011") && log11.Contains("Assets.g.cs is older than ball.png"), $"dotnet build with stale assets expected to warn:\n{log11}");
+            File.SetLastWriteTimeUtc(Path.Combine(lib0, "ball.png"), old);
             foreach (var dir in new[] { "bin", "obj" })
                 if (Directory.Exists(Path.Combine(work, "Tween", dir))) Directory.Delete(Path.Combine(work, "Tween", dir), true);
 
-            Dotnet(work, packages, "pack", "Tween", "-o", feed, "-p:ESharpSdkVersion=" + SdkVersion);
+            var (packExit, packLog) = DotnetResult(work, packages, "pack", "Tween", "-o", feed, "-p:ESharpSdkVersion=" + SdkVersion);
+            Assert.True(packExit == 0 && !packLog.Contains("ESL0"), $"dotnet pack failed or warned:\n{packLog}");
             var nupkg = Path.Combine(feed, "ESharpSample.Tween.1.0.0.nupkg");
             Assert.True(File.Exists(nupkg), "no package from dotnet pack");
 
@@ -74,7 +98,11 @@ public class PackageRoundTripTests
             Assert.Equal("MIT", lib.License);
             Assert.Empty(lib.Manifest.Features);
             Assert.Equal(new[] { "TWEEN_OWN" }, lib.Manifest.Symbols);   // not DEBUG/RELEASE/TRACE or HOST
-            Assert.Equal(new[] { "Ease.cs", "Tween.cs" }, lib.Sources.Select(s => s.Path).ToArray());
+            Assert.Equal(new[] { "Assets.g.cs", "Ball.cs", "Ease.cs", "Tween.cs" }, lib.Sources.Select(s => s.Path).ToArray());
+            Assert.Equal(new PackageAssets("Assets.g.cs", "Tween", "Art"), lib.Manifest.Assets);
+            // The package carries the converted assets (in the DLL), not the inputs.
+            using (var zip = ZipFile.OpenRead(nupkg))
+                Assert.DoesNotContain(zip.Entries, e => e.FullName.EndsWith(".png") || e.FullName.EndsWith(".wav") || e.FullName.EndsWith("assets.json"));
 
             var game = Path.Combine(work, "TweenDemo");
             Assert.NotNull(ESharp.Cli.PackageStep.Load(game, out _));   // not restored yet: says to run dotnet restore
@@ -87,25 +115,42 @@ public class PackageRoundTripTests
             var m68k = HasImage(M68kImage);
             var output = new StringWriter();
             var saved = Console.Out;
+            var savedError = Console.Error;
             Console.SetOut(output);
+            Console.SetError(output);   // build errors, so a failure shows them
             try
             {
-                Assert.Equal(0, ESharp.Cli.Program.Build(new[] { game, "--emit-only" }, out _));
-                Assert.Equal(0, ESharp.Cli.Program.Test(new[] { game }));
+                Assert.True(ESharp.Cli.Program.Build(new[] { game, "--emit-only" }, out _) == 0, output.ToString());
+                Assert.True(ESharp.Cli.Program.Test(new[] { game }) == 0, output.ToString());
                 if (m68k)
                 {
-                    Assert.Equal(0, ESharp.Cli.Program.Build(new[] { game, "--target", "m68k", "--docker", M68kImage }, out var exe));
+                    Assert.True(ESharp.Cli.Program.Build(new[] { game, "--target", "m68k", "--docker", M68kImage }, out var exe) == 0, output.ToString());
                     Assert.True(File.Exists(exe) && new FileInfo(exe!).Length > 0, "no m68k program");
                 }
             }
-            finally { Console.SetOut(saved); }
+            finally { Console.SetOut(saved); Console.SetError(savedError); }
             var text = output.ToString().Replace("\r\n", "\n");
-            Assert.Contains("Package ESharpSample.Tween 1.0.0 (MIT): 2 C# file(s)", text);
+            Assert.Contains("Package ESharpSample.Tween 1.0.0 (MIT): 4 C# file(s)", text);
+            Assert.Contains("  assets: Tween.Art (Assets.g.cs; images and samples converted when the library was built)", text);
+            // The package's chip data is counted as the program's would be: 64 + 32 bytes of ball, 480 of blip.
+            Assert.Matches(@"static +Art\.BallPlanes +64 bytes +<package ESharpSample\.Tween 1\.0\.0>/Assets\.g\.cs\(", text);
+            Assert.Matches(@"static +Art\.BallMask +32 bytes", text);
+            Assert.Matches(@"static +Art\.BlipData +480 bytes", text);
             Assert.Contains("  its own symbols: TWEEN_OWN", text);
-            Assert.Contains("Host: 12 ok, 0 FAIL", text);
+            Assert.Contains("Host: 18 ok, 0 FAIL", text);
             Assert.Contains("TEST PASSED", text);
             if (m68k) Assert.Contains("Built " + Path.Combine(game, "obj", "m68k", "TweenDemo"), text);
-            Assert.Contains("\"<package ESharpSample.Tween 1.0.0>/Tween.cs\"", File.ReadAllText(Path.Combine(game, "obj", "m68k", "TweenDemo.c")));
+            var gameC = File.ReadAllText(Path.Combine(game, "obj", "m68k", "TweenDemo.c")).Replace("\r\n", "\n");
+            Assert.Contains("\"<package ESharpSample.Tween 1.0.0>/Tween.cs\"", gameC);
+            Assert.Contains("\"<package ESharpSample.Tween 1.0.0>/Ball.cs\"", gameC);
+            // The ball's planes as the library's Assets.g.cs has them, in chip RAM.
+            var planes = gameC.Split('\n').Single(l => l.Contains("Tween_Art_BallPlanes[") && l.StartsWith("static "));
+            Assert.StartsWith("static __chip ", planes);
+            var hex = File.ReadAllLines(Path.Combine(RepoRoot, "samples", "packages", "Tween", "Assets.g.cs"))
+                .SkipWhile(l => !l.Contains("BallPlanes =")).Skip(2).TakeWhile(l => !l.Contains("};"))
+                .SelectMany(l => l.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)).ToList();
+            Assert.Equal(64, hex.Count);
+            Assert.EndsWith("[64] = { " + string.Join(", ", hex.Select(h => Convert.ToInt32(h, 16))) + " };", planes);
         }
         finally
         {
@@ -139,7 +184,11 @@ public class PackageRoundTripTests
                 .Replace("<PackageLicenseExpression>MIT</PackageLicenseExpression>", "<PackageLicenseExpression>MIT&quot; OR &quot;x\\y</PackageLicenseExpression>")
                 .Replace("</Project>", "<ItemGroup><Compile Include=\"..\\Outside.cs\" /><Compile Include=\"..\\Extra.cs\" Link=\"Linked\\Extra.cs\" /></ItemGroup>\n</Project>"));
             var packages = Path.Combine(work, "packages");
-            Dotnet(work, packages, "build", "Tween", "-p:ESharpSdkVersion=" + SdkVersion);
+            var (exit, log) = DotnetResult(work, packages, "build", "Tween", "-p:ESharpSdkVersion=" + SdkVersion);
+            Assert.True(exit == 0, log);
+            // The skipped file is named in a warning (it is in the HOST DLL, but esharp build will not see it).
+            Assert.Contains(log.Split('\n'), l => l.Contains("warning ESL010") && l.Contains("Outside.cs is outside the project folder"));
+            Assert.DoesNotContain(log.Split('\n'), l => l.Contains("warning ESL010") && l.Contains("Extra.cs"));
             var dll = Directory.GetFiles(Path.Combine(work, "Tween", "bin"), "Tween.dll", SearchOption.AllDirectories).First();
             var lib = PackageReader.ReadDll(dll, id, "1.0.0");
             Assert.NotNull(lib);
@@ -147,7 +196,15 @@ public class PackageRoundTripTests
             Assert.Equal(id, lib.Manifest!.Id);
             Assert.Equal(license, lib.License);
             // Outside.cs (no Link) is skipped, Extra.cs (a Link) is embedded under its Link path.
-            Assert.Equal(new[] { "Ease.cs", "Linked/Extra.cs", "Tween.cs" }, lib.Sources.Select(s => s.Path).ToArray());
+            Assert.Equal(new[] { "Assets.g.cs", "Ball.cs", "Ease.cs", "Linked/Extra.cs", "Tween.cs" }, lib.Sources.Select(s => s.Path).ToArray());
+
+            // An author who sets SetLinkMetadataAutomatically keeps it: then the SDK links Outside.cs by its file name, and it is embedded.
+            File.WriteAllText(csproj, File.ReadAllText(csproj).Replace("<EsLibrary>true</EsLibrary>",
+                "<EsLibrary>true</EsLibrary>\n    <SetLinkMetadataAutomatically>true</SetLinkMetadataAutomatically>"));
+            (exit, log) = DotnetResult(work, packages, "build", "Tween", "-p:ESharpSdkVersion=" + SdkVersion);
+            Assert.True(exit == 0 && !log.Contains("ESL010"), log);
+            lib = PackageReader.ReadDll(dll, id, "1.0.0");
+            Assert.Equal(new[] { "Assets.g.cs", "Ball.cs", "Ease.cs", "Linked/Extra.cs", "Outside.cs", "Tween.cs" }, lib!.Sources.Select(s => s.Path).ToArray());
         }
         finally
         {

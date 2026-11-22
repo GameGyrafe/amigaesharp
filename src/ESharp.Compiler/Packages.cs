@@ -21,7 +21,8 @@ public sealed record LibraryManifest(
     string MinSdk,
     IReadOnlyList<string> Features,
     string License,
-    IReadOnlyList<string>? Defines = null)
+    IReadOnlyList<string>? Defines = null,
+    PackageAssets? Assets = null)
 {
     /// <summary>
     /// The library's own preprocessor symbols (its <c>DefineConstants</c> without DEBUG, TRACE, RELEASE and HOST): defined for the
@@ -42,6 +43,18 @@ public sealed record LibraryManifest(
     public static readonly IReadOnlyList<string> KnownFeatures = new[] { "AmigaLib", "Native", "InlineAsm", "Interrupt", "HookEntry" };
 
     public bool Declares(string feature) => Features.Any(f => string.Equals(f, feature, StringComparison.OrdinalIgnoreCase));
+}
+
+/// <summary>
+/// The assets of an E# library (the manifest's <c>"assets"</c>): the library's <c>assets.json</c> was turned into C# by <c>esharp assets</c>
+/// before the library was built, and that generated file (<see cref="Source"/>, one of the embedded sources) is the package's asset data:
+/// planar <c>[ChipRam]</c> images, palettes and samples in the class <see cref="Namespace"/>.<see cref="Class"/>, compiled with the program
+/// on every target as a program's own <c>Assets.g.cs</c> is.
+/// </summary>
+public sealed record PackageAssets(string Source, string Namespace, string Class)
+{
+    /// <summary>The asset class with its namespace, as programs name it.</summary>
+    public string FullName => Namespace.Length > 0 ? Namespace + "." + Class : Class;
 }
 
 /// <summary>An E# library package: its manifest and C# sources, read from the package DLL.</summary>
@@ -130,9 +143,7 @@ public static class PackageReader
             if (name == ManifestResource || !name.StartsWith("esharp/", StringComparison.Ordinal)) continue;
             if (!name.StartsWith(SourcePrefix, StringComparison.Ordinal))
             {
-                problems.Add(name.StartsWith("esharp/assets/", StringComparison.Ordinal)
-                    ? $"it carries assets ({name}); assets in packages are not supported yet (E# library packages are C# only for now)"
-                    : $"it carries '{name}', which this E# does not know (a library made for a newer E#?)");
+                problems.Add($"it carries '{name}', which this E# does not know (a library made for a newer E#?)");
                 continue;
             }
             var rel = name.Substring(SourcePrefix.Length).Replace('\\', '/');
@@ -150,6 +161,8 @@ public static class PackageReader
             }
             sources.Add(new SourceFile(rel, Text(bytes)));
         }
+        if (manifest?.Assets is { } assets && !sources.Any(src => src.Path == assets.Source))
+            problems.Add($"its manifest names the asset source '{assets.Source}', which the package does not carry");
         return new EsPackage(packageId, packageVersion, manifest, sources, dllPath, problems) { License = manifest?.License ?? "" };
     }
 
@@ -183,12 +196,24 @@ public static class PackageReader
         if (manifest.Targets.Count == 0) problems.Add("its manifest lists no targets (EsTargets)");
         foreach (var feature in manifest.Features.Where(x => !LibraryManifest.KnownFeatures.Contains(x, StringComparer.OrdinalIgnoreCase)))
             problems.Add($"its manifest declares the unknown feature '{feature}' (known: {string.Join(", ", LibraryManifest.KnownFeatures)})");
-        foreach (var key in new[] { "assets", "native" })
-            if (root.TryGetProperty(key, out var extra) && !(extra.ValueKind is JsonValueKind.Null or JsonValueKind.False ||
-                                                              extra.ValueKind == JsonValueKind.Array && extra.GetArrayLength() == 0))
-                problems.Add(key == "assets"
-                    ? "it declares assets; assets in packages are not supported yet (C# only for now)"
-                    : "it declares native C code; C files and headers in packages are not supported yet (C# only for now)");
+        if (root.TryGetProperty("native", out var native) && !(native.ValueKind is JsonValueKind.Null or JsonValueKind.False ||
+                                                              native.ValueKind == JsonValueKind.Array && native.GetArrayLength() == 0))
+            problems.Add("it declares native C code; C files and headers in packages are not supported yet (C# only for now)");
+        if (root.TryGetProperty("assets", out var assets) && assets.ValueKind is not (JsonValueKind.Null or JsonValueKind.False))
+        {
+            string AssetStr(string name) => assets.ValueKind == JsonValueKind.Object && assets.TryGetProperty(name, out var v) && v.ValueKind == JsonValueKind.String ? v.GetString()!.Trim() : "";
+            var source = AssetStr("source").Replace('\\', '/');
+            var ns = AssetStr("namespace");
+            var cls = AssetStr("class");
+            if (assets.ValueKind != JsonValueKind.Object)
+                problems.Add("its manifest declares assets in a form this E# does not know (a library made for a newer E#?)");
+            else if (source.Length == 0 || !source.EndsWith(".cs", StringComparison.OrdinalIgnoreCase))
+                problems.Add("its manifest declares assets without the C# source they were generated into");
+            else if (!IsSymbol(cls) || ns.Length > 0 && !ns.Split('.').All(IsSymbol))
+                problems.Add($"its manifest declares the asset class '{ns}.{cls}', which is not a C# namespace and class name");
+            else
+                manifest = manifest with { Assets = new PackageAssets(source, ns, cls) };
+        }
         return manifest;
     }
 

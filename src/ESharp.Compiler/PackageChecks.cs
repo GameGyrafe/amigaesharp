@@ -103,7 +103,12 @@ internal static class PackageChecks
                 diagnostics.Add(Diagnostic.Create(Descriptors.PackageEntryPoint, entry.Locations[0], p.Id, entry.ToDisplayString()));
 
         // The same type (namespace, name and arity) declared in two places: C# would merge partial declarations silently.
+        // Generated asset classes (Assets.g.cs from an assets.json, the program's or a package's) are named in the message, since the
+        // fix is in that assets.json ("namespace", "class").
         var declared = new Dictionary<string, List<(string Origin, Location At)>>(StringComparer.Ordinal);
+        bool IsAssets(Location at) => at.SourceTree is { } t && (packageOf.TryGetValue(t, out var p)
+            ? p.Manifest?.Assets is { } a && t.FilePath == p.PathPrefix + a.Source
+            : string.Equals(System.IO.Path.GetFileName(t.FilePath), "Assets.g.cs", StringComparison.OrdinalIgnoreCase));
         foreach (var tree in allTrees)
         {
             var model = compilation.GetSemanticModel(tree);
@@ -120,9 +125,10 @@ internal static class PackageChecks
         {
             var origins = list.Select(l => l.Origin).Distinct().ToList();
             if (origins.Count < 2) continue;
+            string Label(string origin) => list.Any(l => l.Origin == origin && IsAssets(l.At)) ? origin + " (its assets: the \"namespace\" and \"class\" of its assets.json)" : origin;
             foreach (var other in origins.Skip(1))
                 diagnostics.Add(Diagnostic.Create(Descriptors.PackageNameClash, list.First(l => l.Origin == other).At,
-                    key.Replace('`', '\''), origins[0], other));
+                    key.Replace('`', '\''), Label(origins[0]), Label(other)));
         }
 
         foreach (var tree in allTrees)

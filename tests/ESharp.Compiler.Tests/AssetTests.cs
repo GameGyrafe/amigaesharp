@@ -158,6 +158,17 @@ public class AssetTests : IDisposable
     }
 
     [Fact]
+    public void Committed_Tween_library_Assets_g_cs_matches_what_the_pipeline_generates()
+    {
+        // The library package's assets (samples/packages/Tween): the package ships this file, so it must be current.
+        var dir = Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "..", "samples", "packages", "Tween");
+        var generated = AssetBuilder.Build(Path.Combine(dir, "assets.json"));
+        Assert.Equal(File.ReadAllText(Path.Combine(dir, "Assets.g.cs")), generated.Source);
+        Assert.Contains("namespace Tween;", generated.Source);
+        Assert.Equal(new[] { 96, 480 }, generated.Reports.Select(r => r.ChipBytes).ToArray());   // 2 planes + mask; the blip
+    }
+
+    [Fact]
     public void Committed_aga_Assets_g_cs_matches_what_the_pipeline_generates()
     {
         var dir = Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "..", "samples", "aga");

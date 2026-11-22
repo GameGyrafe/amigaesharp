@@ -336,22 +336,151 @@ public static class P
     }
 
     [Fact]
-    public void Assets_c_files_and_unknown_manifests_are_refused()
+    public void C_files_unknown_resources_and_unknown_manifests_are_refused()
     {
-        var assets = Package("Sample.Art", new Dictionary<string, string> { ["A.cs"] = "namespace A; public static class X { }" },
+        var unknown = Package("Sample.Art", new Dictionary<string, string> { ["A.cs"] = "namespace A; public static class X { }" },
             extraResources: new Dictionary<string, byte[]> { ["esharp/assets/cards.png"] = new byte[] { 1 } });
         var cfile = Package("Sample.C", new Dictionary<string, string> { ["A.cs"] = "namespace C; public static class X { }", ["fast.c"] = "int f;" });
-        var declared = Package("Sample.D", new Dictionary<string, string>(), extraManifest: ", \"assets\": [\"x.png\"]");
+        var native = Package("Sample.Native", new Dictionary<string, string>(), extraManifest: ", \"native\": [\"fast.c\"]");
         var newer = PackageReader.FromResources(new Dictionary<string, byte[]>(), Encoding.UTF8.GetBytes("{ \"format\": 2, \"id\": \"Sample.N\" }"), "Sample.N", "1.0.0");
         var program = Prelude + "public static class P { [EntryPoint] public static void Main() { } }";
-        var r = Build(program, M68k(assets, cfile, declared, newer));
+        var r = Build(program, M68k(unknown, cfile, native, newer));
         var messages = r.Diagnostics.Where(d => d.Id == "ES0118").Select(d => d.GetMessage()).ToList();
-        Assert.Contains(messages, m => m.StartsWith("Package 'Sample.Art' 1.0.0: it carries assets (esharp/assets/cards.png); assets in packages are not supported yet"));
+        Assert.Contains(messages, m => m.StartsWith("Package 'Sample.Art' 1.0.0: it carries 'esharp/assets/cards.png', which this E# does not know"));
         Assert.Contains(messages, m => m.Contains("'Sample.C'") && m.Contains("C files and headers in packages are not supported yet"));
-        Assert.Contains(messages, m => m.Contains("'Sample.D'") && m.Contains("declares assets"));
+        Assert.Contains(messages, m => m.Contains("'Sample.Native'") && m.Contains("declares native C code"));
         Assert.Contains(messages, m => m.Contains("'Sample.N'") && m.Contains("format 2"));
         var mismatch = PackageReader.FromResources(new Dictionary<string, byte[]>(), Encoding.UTF8.GetBytes("{ \"format\": 1, \"id\": \"A\", \"targets\": [\"m68k\"] }"), "B", "1.0.0");
         Assert.Contains(mismatch.Problems, p => p.Contains("names the library 'A', not 'B'"));
+    }
+
+    /// <summary>The Assets.g.cs that esharp assets writes for an assets.json with a 16x2 four-colour image (masked) and a short sound.</summary>
+    private static string GeneratedAssets(string ns, string cls)
+    {
+        var dir = Path.Combine(Path.GetTempPath(), "esharp-pkgassets-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(dir);
+        try
+        {
+            // Row 0: transparent, red, green, blue repeated; row 1: all red.
+            var px = new byte[16 * 2 * 4];
+            byte[][] colours = { new byte[] { 0, 0, 0, 0 }, new byte[] { 255, 0, 0, 255 }, new byte[] { 0, 255, 0, 255 }, new byte[] { 0, 0, 255, 255 } };
+            for (var x = 0; x < 16; x++)
+            {
+                Array.Copy(colours[x % 4], 0, px, x * 4, 4);
+                Array.Copy(colours[1], 0, px, (16 + x) * 4, 4);
+            }
+            File.WriteAllBytes(Path.Combine(dir, "dot.png"), ESharp.Assets.Png.Write(new ESharp.Assets.RgbaImage(16, 2, px)));
+            var wav = new List<byte>();
+            void Tag(string t) { foreach (var c in t) wav.Add((byte)c); }
+            void Le32(int v) { for (var i = 0; i < 4; i++) wav.Add((byte)(v >> (8 * i))); }
+            void Le16(int v) { wav.Add((byte)v); wav.Add((byte)(v >> 8)); }
+            Tag("RIFF"); Le32(36 + 6); Tag("WAVE"); Tag("fmt "); Le32(16); Le16(1); Le16(1); Le32(8000); Le32(8000); Le16(1); Le16(8); Tag("data"); Le32(6);
+            wav.AddRange(new byte[] { 128, 228, 28, 128, 200, 56 });
+            File.WriteAllBytes(Path.Combine(dir, "tick.wav"), wav.ToArray());
+            File.WriteAllText(Path.Combine(dir, "assets.json"),
+                $"{{ \"namespace\": \"{ns}\", \"class\": \"{cls}\", \"images\": [ {{ \"name\": \"Dot\", \"file\": \"dot.png\", \"colors\": 4, \"mask\": true }} ], " +
+                "\"samples\": [ { \"name\": \"Tick\", \"file\": \"tick.wav\" } ] }");
+            return ESharp.Assets.AssetBuilder.Build(Path.Combine(dir, "assets.json")).Source;
+        }
+        finally { Directory.Delete(dir, true); }
+    }
+
+    private static EsPackage ArtPackage(string id = "Sample.Art", string ns = "Art", string cls = "Sprites") =>
+        Package(id, new Dictionary<string, string>
+        {
+            ["Assets.g.cs"] = GeneratedAssets(ns, cls),
+            ["Draw.cs"] = $"namespace {ns};\npublic static class Dots {{ public static int Opaque() {{ int n = 0; foreach (var b in {cls}.DotMask) for (int i = 0; i < 8; i++) if ((b & (0x80 >> i)) != 0) n++; return n; }} }}\n",
+        }, extraManifest: $", \"assets\": {{ \"source\": \"Assets.g.cs\", \"namespace\": \"{ns}\", \"class\": \"{cls}\" }}");
+
+    private const string ArtGame = Prelude + @"
+namespace Game;
+
+public static class Sprites { public static int Mine = 7; }
+
+public static class P
+{
+    static void Check(bool ok, string name) { Dos.PutStr(ok ? ""ok "" : ""FAIL ""); Dos.PutStr(name); Dos.PutStr(""\n""); }
+
+    [EntryPoint]
+    public static void Main()
+    {
+        Check(Art.Sprites.DotWidth == 16 && Art.Sprites.DotHeight == 2 && Art.Sprites.DotDepth == 2 && Art.Sprites.DotPalette.Length == 4, ""constants"");
+        Check(Art.Sprites.DotPlanes.Length == 8 && Art.Sprites.DotMask.Length == 4, ""chip data sizes"");
+        Check(Art.Sprites.DotMask[0] == 0x77 && Art.Sprites.DotMask[1] == 0x77 && Art.Sprites.DotMask[2] == 0xFF && Art.Dots.Opaque() == 28, ""mask from the package"");
+        int red = Art.Sprites.DotPalette[1] == 0xF00 ? 1 : Art.Sprites.DotPalette[2] == 0xF00 ? 2 : 3;
+        int row1 = (Art.Sprites.DotPlanes[2] == 0xFF ? 1 : 0) | (Art.Sprites.DotPlanes[6] == 0xFF ? 2 : 0);
+        Check(Art.Sprites.DotPalette[red] == 0xF00 && row1 == red && Art.Sprites.DotPalette[0] == 0, ""planes and palette agree"");
+        Check(Art.Sprites.TickLength == 6 && Art.Sprites.TickRate == 8000 && (sbyte)Art.Sprites.TickData[1] == 100 && (sbyte)Art.Sprites.TickData[2] == -100, ""sample"");
+        Check(Game.Sprites.Mine == 7, ""the game's own Sprites class next to the package's"");
+    }
+}
+";
+
+    [Fact]
+    public void Package_assets_are_chip_data_under_the_package_namespace_and_run()
+    {
+        var art = ArtPackage();
+        Assert.Empty(art.Problems);
+        Assert.Equal(new PackageAssets("Assets.g.cs", "Art", "Sprites"), art.Manifest!.Assets);
+        var r = Build(ArtGame, M68k(art));
+        Assert.True(r.Success, string.Join("\n", r.Diagnostics));
+        // The package's images and sample are static [ChipRam] data, as a program's own assets: __chip on m68k, in the chip budget.
+        var c = r.C!;
+        foreach (var field in new[] { "DotPlanes", "DotMask", "TickData" })
+            Assert.Contains(c.Split('\n'), l => l.StartsWith("static __chip ") && l.Contains("Art_Sprites_" + field));
+        Assert.DoesNotContain(c.Split('\n'), l => l.Contains("__chip") && l.Contains("DotPalette"));
+        Assert.Equal(new[] { ("Sprites.DotPlanes", 8L), ("Sprites.DotMask", 4L), ("Sprites.TickData", 6L) },
+            r.Chip.Select(e => (e.What, e.Bytes)).ToArray());
+        Assert.All(r.Chip, e => Assert.StartsWith("<package Sample.Art 1.0.0>/Assets.g.cs(", e.Location));
+        // PowerPC: no __chip (chip memory is allocated at run time there), the same data.
+        var os4 = Build(ArtGame, Targets.Os4.ToOptions(packages: new[] { art }, sdkVersion: "0.1.5"));
+        Assert.True(os4.Success, string.Join("\n", os4.Diagnostics));
+        Assert.DoesNotContain("__chip", os4.C!);
+        Assert.Contains("Art_Sprites_DotPlanes", os4.C!);
+        if (!HasGcc) return;
+        var (code, output) = RunWithHostGcc(c.Replace("static __chip ", "static "));   // the host gcc has no chip RAM
+        Assert.Equal(0, code);
+        Assert.Equal("ok constants\nok chip data sizes\nok mask from the package\nok planes and palette agree\nok sample\n" +
+                     "ok the game's own Sprites class next to the package's\n", output);
+    }
+
+    [Fact]
+    public void Package_assets_in_the_same_class_as_the_game_or_another_package_are_an_error()
+    {
+        // The game's assets.json chose the package's namespace and class: C# says CS0101, and ES0115 names the assets.json of both.
+        var program = Prelude + "namespace Art { public static class Sprites { public const int MineWidth = 1; } }\n" +
+                      "public static class P { [EntryPoint] public static void Main() { } }";
+        var r = EsCompiler.Compile(new[] { new SourceFile("Assets.g.cs", program) }, M68k(ArtPackage()));
+        var d = Assert.Single(r.Diagnostics, x => x.Id == "ES0115");
+        Assert.Equal("'Art.Sprites' is declared in the program (its assets: the \"namespace\" and \"class\" of its assets.json) and in package 'Sample.Art' " +
+                     "(its assets: the \"namespace\" and \"class\" of its assets.json); a package and the program, or two packages, cannot declare the same type (use a namespace of your own)",
+            d.GetMessage());
+        var twin = Build(Prelude + "public static class P { [EntryPoint] public static void Main() { } }", M68k(ArtPackage(), ArtPackage("Sample.Twin")));
+        Assert.Contains(twin.Diagnostics, x => x.Id == "ES0115" && x.GetMessage().StartsWith("'Art.Sprites' is declared in package 'Sample.Art' (its assets"));
+        // In their own namespaces, two packages with assets are fine.
+        var two = Build(Prelude + "public static class P { [EntryPoint] public static void Main() { Dos.PutStr(Art.Sprites.DotWidth + Other.Sprites.DotWidth == 32 ? \"ok\\n\" : \"FAIL\\n\"); } }",
+            M68k(ArtPackage(), ArtPackage("Sample.Other", ns: "Other")));
+        Assert.True(two.Success, string.Join("\n", two.Diagnostics));
+    }
+
+    [Fact]
+    public void Package_asset_declarations_are_checked()
+    {
+        var missing = Package("Sample.M", new Dictionary<string, string> { ["A.cs"] = "namespace M; public static class X { }" },
+            extraManifest: ", \"assets\": { \"source\": \"Assets.g.cs\", \"namespace\": \"M\", \"class\": \"Art\" }");
+        Assert.Contains(missing.Problems, p => p.Contains("names the asset source 'Assets.g.cs', which the package does not carry"));
+        var list = Package("Sample.L", new Dictionary<string, string>(), extraManifest: ", \"assets\": [\"x.png\"]");
+        Assert.Contains(list.Problems, p => p.Contains("declares assets in a form this E# does not know"));
+        var badClass = Package("Sample.B", new Dictionary<string, string> { ["Assets.g.cs"] = "" },
+            extraManifest: ", \"assets\": { \"source\": \"Assets.g.cs\", \"namespace\": \"B\", \"class\": \"1x\" }");
+        Assert.Contains(badClass.Problems, p => p.Contains("asset class 'B.1x'"));
+        var noSource = Package("Sample.S", new Dictionary<string, string>(), extraManifest: ", \"assets\": { \"namespace\": \"S\", \"class\": \"Art\" }");
+        Assert.Contains(noSource.Problems, p => p.Contains("without the C# source"));
+        var none = Package("Sample.N", new Dictionary<string, string>(), extraManifest: ", \"assets\": null");
+        Assert.Empty(none.Problems);
+        Assert.Null(none.Manifest!.Assets);
+        Assert.Contains("  assets: Art.Sprites (Assets.g.cs; images and samples converted when the library was built)",
+            ESharp.Cli.PackageStep.Describe(new[] { ArtPackage() }));
     }
 
     [Fact]

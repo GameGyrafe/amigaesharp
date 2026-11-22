@@ -146,26 +146,33 @@ CI runs the unit tests on Linux and Windows, a package round trip, the toolchain
 ## Library packages
 
 An E# library (issue #31) is a .NET class library whose DLL carries its C# sources (`esharp/src/<path>`) and a manifest
-(`esharp/library.json`: format, id, version, targets, minSdk, features, defines, licence) as embedded resources, the same idea as the
+(`esharp/library.json`: format, id, version, targets, minSdk, features, defines, licence, and `assets` when it has them) as embedded resources, the same idea as the
 compiler embedding Runtime and Platform (`LibrarySources.cs`). The pieces:
 
 - **Embedding**: `src/ESharp.Sdk/buildTransitive/AmigaESharp.Sdk.targets`, imported into every project that references
   AmigaESharp.Sdk. With `EsLibrary=true` it defines `HOST`, checks `EsTargets`/`EsFeatures`/`ImplicitUsings`/`<Using>` items and refuses
-  `assets.json`, C files and E# target symbols in `DefineConstants` (codes ESL001-ESL009), writes the manifest (with the
-  library's own symbols as `defines`) and adds the resources before the build. `EsCompiler` parses each package's files with
+  C files and E# target symbols in `DefineConstants` (codes ESL001-ESL013; ESL010 and ESL011 are warnings), writes the manifest (with the
+  library's own symbols as `defines`) and adds the resources before the build. A library with an `assets.json` ships the
+  `Assets.g.cs` that `esharp assets` wrote: an inline task reads the namespace, class and input files of `assets.json`
+  (missing file ESL005, no namespace ESL012, older than an input ESL011), and the manifest's `assets` names the file and
+  class. The converted data is shipped rather than the inputs because the conversion is the same for every target (one
+  `Assets.g.cs` serves all of them for a program too) and the package then carries exactly what its author built and tested;
+  the game's build parses it as any package source, so `[ChipRam]`, the chip report and the C names (`Es_<Namespace>_<Class>_<Field>`)
+  work as for program assets. `EsCompiler` parses each package's files with
   the target's symbols plus its `defines`; the generic expansion (`Monomorphizer`) re-parses a rewritten tree with that tree's own options.
 - **Loading**: `src/ESharp.Compiler/Packages.cs`. `PackageLoader.FromAssetsFile` walks `obj/project.assets.json` (the first
   target framework, every package of type `package`), `PackageReader` reads the resources of each compile DLL through
   `System.Reflection.Metadata` without loading it, and skips DLLs with no manifest. Problems become `EsPackage.Problems`
-  (ES0118). `Licenses` evaluates SPDX expressions (copyleft when every OR choice has a GPL-family id), `SdkVersions` the
+  (ES0118; also an `assets` entry it cannot read, or one whose source the package does not carry: `PackageAssets`). `Licenses` evaluates SPDX expressions (copyleft when every OR choice has a GPL-family id), `SdkVersions` the
   minimum version. The CLI side is `src/ESharp.Cli/PackageStep.cs` (finds the csproj and the restore, reads `EsAllowCopyleft`,
   prints the packages); `HostRun` references the package DLLs for the host run.
 - **Checks**: `src/ESharp.Compiler/PackageChecks.cs`, ES0110-ES0118 (descriptors in `Descriptors.cs`; compiler-only, the IDE
-  sees a package as metadata). The analyzer needs no change: package trees are in the user set.
+  sees a package as metadata). ES0115 names an `assets.json` when the clashing type is a generated asset class. The analyzer needs no change: package trees are in the user set.
 
-Tests: `PackageTests.cs` (in-memory packages, generated C built and run with the host gcc, every check) and
+Tests: `PackageTests.cs` (in-memory packages, generated C built and run with the host gcc, every check; a package whose
+`Assets.g.cs` comes from `AssetBuilder`, its chip data checked in the C and the chip report and read back by the program) and
 `PackageRoundTripTests.cs` (the samples/packages projects: dotnet pack, restore from a local feed, build, host run, m68k
-build with the image); `tools/package-smoke.sh` repeats it with the packed AmigaESharp.Sdk.
+build with the image; the library's asset checks ESL005, ESL011, ESL012 and the outside-file warning ESL010); `tools/package-smoke.sh` repeats it with the packed AmigaESharp.Sdk.
 
 ## Packaging
 
