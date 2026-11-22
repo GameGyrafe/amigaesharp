@@ -325,6 +325,38 @@ printf x > ""$out""
     }
 
     [Fact]
+    public void Setup_advice_links_the_subsection()
+    {
+        foreach (var os in new[] { Toolchain.HostOs.MacOS, Toolchain.HostOs.Windows })
+            Assert.Contains("\"Local m68k toolchain on macOS and Windows\"", Toolchain.SetupAdvice(Targets.M68k, os));
+    }
+
+    [Fact]
+    public void A_stray_quote_after_a_trailing_backslash_is_trimmed_on_windows_only()
+    {
+        var dir = Path.Combine(_dir, "x y");
+        Directory.CreateDirectory(Path.Combine(dir, "bin"));
+        File.WriteAllText(Path.Combine(dir, "bin", "m68k-amigaos-gcc.exe"), "");
+        Assert.Null(Toolchain.Resolve(Targets.M68k, dir + "\"", null, Env(), out var c, null, Toolchain.HostOs.Windows));
+        Assert.Equal(Path.Combine(dir, "bin", "m68k-amigaos-gcc.exe"), c!.Compiler);
+        // Elsewhere a quote is part of the name and the folder does not exist.
+        Assert.Contains("does not exist", Toolchain.Resolve(Targets.M68k, dir + "\"", null, Env(), out _, null, Toolchain.HostOs.Linux));
+    }
+
+    [Fact]
+    public void Path_entries_are_trimmed_on_windows_only()
+    {
+        var dir = Path.Combine(_dir, "padded");
+        Directory.CreateDirectory(dir);
+        File.WriteAllText(Path.Combine(dir, "tool.exe"), "");
+        File.WriteAllText(Path.Combine(dir, "tool"), "");
+        Func<string, string?> env = n => n == "PATH" ? dir + " " : null;   // padding after the folder
+        Assert.Equal(Path.Combine(dir, "tool.exe"), Toolchain.FindOnPath("tool", env, Toolchain.HostOs.Windows));
+        // Elsewhere the space is part of the name (no such folder, so nothing is found; on Windows the file system would ignore it).
+        if (!OperatingSystem.IsWindows()) Assert.Null(Toolchain.FindOnPath("tool", env, Toolchain.HostOs.Linux));
+    }
+
+    [Fact]
     public void A_cc_without_exe_is_found_on_windows()
     {
         var f = Path.Combine(_dir, "cc dir", "gcc-m68k");
