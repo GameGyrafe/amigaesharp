@@ -332,6 +332,36 @@ printf x > ""$out""
     }
 
     [Fact]
+    public void A_value_that_is_only_a_quote_counts_as_not_given_on_windows()
+    {
+        var win = Toolchain.HostOs.Windows;
+        // Not given: the option falls through to the environment, then to PATH.
+        var good = Path.Combine(_dir, "envdir");
+        Directory.CreateDirectory(Path.Combine(good, "bin"));
+        File.WriteAllText(Path.Combine(good, "bin", "m68k-amigaos-gcc.exe"), "");
+        Assert.Null(Toolchain.Resolve(Targets.M68k, "\"", null, Env(("ESHARP_TOOLCHAIN_M68K", good + "\"")), out var c, null, win));
+        Assert.Equal("ESHARP_TOOLCHAIN_M68K", c!.Source);
+        Assert.Null(Toolchain.Resolve(Targets.M68k, null, null, Env(("ESHARP_TOOLCHAIN_M68K", "\""), ("ESHARP_TOOLCHAIN", good + "\"")), out var d, null, win));
+        Assert.Equal("ESHARP_TOOLCHAIN", d!.Source);
+        Assert.Contains("not found", Toolchain.Resolve(Targets.M68k, "\"", null, Env(("ESHARP_TOOLCHAIN", "\"")), out _, "esharp-no-such-tool", win));
+    }
+
+    [Fact]
+    public void A_stray_quote_on_sysroot_is_trimmed_on_windows_only()
+    {
+        var x64 = FakeToolchain("sysq", "x86_64-aros-gcc");
+        var other = Path.Combine(_dir, "other sysroot");
+        Directory.CreateDirectory(other);
+        var cc = Path.Combine(x64, "bin", Exe("x86_64-aros-gcc"));   // an absolute --cc
+        Assert.Null(Toolchain.Resolve(Targets.Aros, x64, other + "\"", Env(), out var w, cc, Toolchain.HostOs.Windows));
+        Assert.Equal(other, w!.Sysroot);
+        Assert.Contains("does not exist", Toolchain.Resolve(Targets.Aros, x64, other + "\"", Env(), out _, null, Toolchain.HostOs.Linux));
+        // Only a quote: not given, so the toolchain folder's sysroot is used.
+        Assert.Null(Toolchain.Resolve(Targets.Aros, x64, "\"", Env(), out var q, cc, Toolchain.HostOs.Windows));
+        Assert.Equal(x64, q!.Sysroot);
+    }
+
+    [Fact]
     public void A_stray_quote_after_a_trailing_backslash_is_trimmed_on_windows_only()
     {
         var dir = Path.Combine(_dir, "x y");
@@ -374,6 +404,9 @@ printf x > ""$out""
         var mac = Toolchain.Resolve(Targets.M68k, missing, null, Env(), out _, null, Toolchain.HostOs.MacOS)!;
         Assert.Contains("Homebrew", mac);
         Assert.Contains("docs/GUIDE.md", mac);
+        // The advice names a GUIDE heading: it must still exist there.
+        var guide = File.ReadAllText(Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "..", "docs", "GUIDE.md"));
+        Assert.Matches(@"(?m)^#+ Local m68k toolchain on macOS and Windows\s*$", guide);
         var win = Toolchain.Resolve(Targets.M68k, null, null, Env(), out _, null, Toolchain.HostOs.Windows)!;
         Assert.Contains("MSYS2", win);
         Assert.Contains("WSL2", win);

@@ -92,17 +92,19 @@ public static class Toolchain
     {
         var os = hostOs ?? CurrentOs;
         choice = null;
+        // "C:\x y\" reaches .NET as C:\x y" (the backslash escapes the closing quote): on Windows drop padding and stray quotes from
+        // --toolchain, --sysroot, ESHARP_TOOLCHAIN_<TARGET>, ESHARP_TOOLCHAIN and ESHARP_SYSROOT_*, before the empty check, so a value
+        // that is only a quote counts as not given.
+        string? Given(string? s) => NonEmpty(os == HostOs.Windows ? s?.Trim().Trim('"').Trim() : s);
         string? dir = null, source = null;
-        if (NonEmpty(option) is { } o) { dir = o; source = "--toolchain"; }
-        else if (NonEmpty(env(EnvFor(target))) is { } t) { dir = t; source = EnvFor(target); }
-        else if (target.IsAmiga && NonEmpty(env(EnvAll)) is { } a) { dir = a; source = EnvAll; }
+        if (Given(option) is { } o) { dir = o; source = "--toolchain"; }
+        else if (Given(env(EnvFor(target))) is { } t) { dir = t; source = EnvFor(target); }
+        else if (target.IsAmiga && Given(env(EnvAll)) is { } a) { dir = a; source = EnvAll; }
 
         var name = cc ?? target.Compiler;
         string compiler;
         if (dir != null)
         {
-            // "C:\x y\" reaches .NET as C:\x y" (the backslash escapes the closing quote): drop the stray quote on Windows.
-            if (os == HostOs.Windows) dir = dir.Trim().Trim('"');
             dir = Expand(dir);
             if (!Directory.Exists(dir))
                 return $"toolchain folder {dir} (from {source}) does not exist; it should be the toolchain's install prefix, the folder " +
@@ -143,9 +145,9 @@ public static class Toolchain
         }
 
         string? sysroot = null;
-        if (target.Sysroot.Length > 0 || NonEmpty(sysrootOption) != null)
+        if (target.Sysroot.Length > 0 || Given(sysrootOption) != null)
         {
-            var given = NonEmpty(sysrootOption) is { } so ? (so, "--sysroot") : NonEmpty(env(SysrootEnvFor(target))) is { } se ? (se, SysrootEnvFor(target)) : default;
+            var given = Given(sysrootOption) is { } so ? (so, "--sysroot") : Given(env(SysrootEnvFor(target))) is { } se ? (se, SysrootEnvFor(target)) : default;
             if (given.Item1 != null)
             {
                 sysroot = Expand(given.Item1);
