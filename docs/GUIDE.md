@@ -104,7 +104,7 @@ library's own `DefineConstants` symbols (other than DEBUG, TRACE, RELEASE and HO
 defines them for the library's files only, next to the target's; an E# target symbol there (`AMIGA`, `M68K`, `SDL`, ...)
 stops the library build (ESL009). C# only for now: an `assets.json` or C files in the project stop the
 library build, and `esharp build` refuses a package that carries either (both are planned). Community packages use any id
-plus the `esharp` tag (the step adds it). A `Compile` item from outside the project folder without a `Link` (source-only package contentFiles, for one) is not part of the library and is skipped; give it a `Link` to embed it. A package whose compile assets list several DLLs that carry a manifest (`lib/` and `ref/`) is one library, read from the `lib/` one; `AmigaESharp.*` ids are meant for the official packages.
+plus the `esharp` tag (the step adds it). A `Compile` item from outside the project folder without a `Link` (source-only package contentFiles, for one) is not part of the library and is skipped; give it a `Link` to embed it. A package whose compile assets list several DLLs that carry a manifest (`lib/` and `ref/`) is one library, read from the `lib/` one (the restore's runtime assets are read first, then its compile assets); `AmigaESharp.*` ids are meant for the official packages.
 
 **Using a library.** Add a `PackageReference` to the game's csproj, run `dotnet restore` (or `dotnet build`), then build as
 usual. `esharp build` reads `obj/project.assets.json`, takes every package of the restore (direct and transitive) whose DLL

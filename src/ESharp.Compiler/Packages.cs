@@ -231,7 +231,7 @@ public static class PackageReader
 public static class PackageLoader
 {
     /// <summary>
-    /// Every package of the restore (direct and transitive references) whose compile DLL carries an E# manifest. Packages without one
+    /// Every package of the restore (direct and transitive references) whose DLL (runtime or compile asset) carries an E# manifest. Packages without one
     /// (the AmigaESharp.Sdk host libraries, analyzers, test frameworks) are not compiled into the program and are skipped.
     /// </summary>
     public static List<EsPackage> FromAssetsFile(string assetsJson, List<string> errors)
@@ -265,13 +265,19 @@ public static class PackageLoader
                 var packageDir = folders.Select(f => Path.Combine(f, pathElement.GetString()!.Replace('/', Path.DirectorySeparatorChar)))
                     .FirstOrDefault(Directory.Exists);
                 if (packageDir == null) continue;
-                if (!entry.Value.TryGetProperty("compile", out var compile) || compile.ValueKind != JsonValueKind.Object) continue;
-                // One package, one E# library: a package can list several compile DLLs (lib/ and ref/ for the same assembly, or one per
-                // target framework) that all carry the manifest. The lib/ one comes first: it is the real assembly the host run loads,
-                // a ref/ one may be a reference assembly with the resources stripped.
-                var dlls = compile.EnumerateObject().Select(f => f.Name)
-                    .Where(n => n.EndsWith(".dll", StringComparison.OrdinalIgnoreCase))   // "_._" placeholders are skipped
-                    .OrderBy(n => n.StartsWith("lib/", StringComparison.OrdinalIgnoreCase) ? 0 : 1).ThenBy(n => n, StringComparer.Ordinal);
+                // One package, one E# library: a package can list several DLLs that all carry the manifest (lib/ and ref/ for the same
+                // assembly, or one per target framework). A real restore lists lib/ under "runtime" and ref/ under "compile", so the
+                // runtime assets come first: lib/ is the real assembly the host run loads (a ref/ one may be a reference assembly with the
+                // resources stripped). Compile assets are the fallback (a package with only ref/, or lib/ listed there as well).
+                var names = new List<string>();
+                foreach (var kind in new[] { "runtime", "compile" })
+                {
+                    if (!entry.Value.TryGetProperty(kind, out var section) || section.ValueKind != JsonValueKind.Object) continue;
+                    names.AddRange(section.EnumerateObject().Select(f => f.Name)
+                        .Where(n => n.EndsWith(".dll", StringComparison.OrdinalIgnoreCase))   // "_._" placeholders are skipped
+                        .OrderBy(n => n.StartsWith("lib/", StringComparison.OrdinalIgnoreCase) ? 0 : 1).ThenBy(n => n, StringComparer.Ordinal));
+                }
+                var dlls = names.Distinct(StringComparer.OrdinalIgnoreCase).ToList();
                 foreach (var name in dlls)
                 {
                     var dll = Path.Combine(packageDir, name.Replace('/', Path.DirectorySeparatorChar));

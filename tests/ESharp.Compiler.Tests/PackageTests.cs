@@ -443,8 +443,8 @@ public static class P
                 {
                     ["net10.0"] = new Dictionary<string, object>
                     {
-                        // ref/ listed first on purpose
-                        ["Sample.Two/1.0.0"] = new { type = "package", compile = new Dictionary<string, object> { ["ref/net10.0/Two.dll"] = new { }, ["lib/net10.0/Two.dll"] = new { } } },
+                        // as a real restore lists it: ref/ under compile, lib/ under runtime
+                        ["Sample.Two/1.0.0"] = new { type = "package", compile = new Dictionary<string, object> { ["ref/net10.0/Two.dll"] = new { } }, runtime = new Dictionary<string, object> { ["lib/net10.0/Two.dll"] = new { } } },
                     },
                 },
             }));
