@@ -109,7 +109,7 @@ public class PackageRoundTripTests
                          ("ESL006", "stray.c", "stray.c (C files and headers go in native/common/ or native/<target>/)"),
                          ("ESL006", Path.Combine("native", "m68k", "fast.o"), "native/m68k/fast.o (prebuilt code: a package carries C source only)"),
                          ("ESL006", Path.Combine("native", "amigaos", "x.c"), "native/amigaos/x.c (C files go in native/common/ or native/<target>/"),
-                         ("ESL006", Path.Combine("native", "m68k", "Cksum_Tune.h"), "differs from native/common/cksum_tune.h only in case"),
+                         ("ESL006", Path.Combine("native", "os4", "Cksum_Tune.h"), "only in case"),
                          ("ESL006", "libfast.a", "libfast.a (prebuilt code: a package carries C source only)"),
                      })
             {

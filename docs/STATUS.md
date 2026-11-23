@@ -94,7 +94,7 @@ pastes in for `es_std_*`/`es_sdl_*` [Native] calls), so packages get one way of 
   builds). ES0123 (new): a `[Native]` extern in the program, or in another package, whose C name starts with a package's prefix is
   refused (it would be an implicit declaration in the program's C): by name given and by method name, and from another package.
   File names that differ only in case across `native/` folders are refused: `PathProblem`, the ES0118 reading of a DLL, the manifest
-  list and the SDK library task (ESL006, a real `dotnet build` of `Checksum` with `native/m68k/Cksum_Tune.h`).
+  list and the SDK library task (ESL006, a real `dotnet build` of `Checksum` with `native/os4/Cksum_Tune.h`, a folder of its own so it is a different file on Windows too).
 - `-fno-common` on the other compilers, two files that both define `int shared_count;` plus a `main`, linked with the compiler of
   the `esharp-amiga-toolchain` and `esharp-aros-i386` images: m68k (gcc 6.5.0), AROS x86-64 (gcc 9.1.0), AROS i386 (gcc 6.5.0) and
   MorphOS (gcc 15.2.0) merge the variables silently by default (no "multiple definition") and report "multiple definition of
