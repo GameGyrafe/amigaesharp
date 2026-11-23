@@ -12,6 +12,8 @@ namespace ESharp.Compiler.Tests;
 /// samples/mui on dotnet and, as generated C, against a fake muimaster.library under the sanitizers (each object disposed once, by
 /// its parent; no leak), the overrides of library classes in their vtables, and setter properties in object initializers.
 /// </summary>
+// BoopsiObject.Live is one static counter shared by every sample run in process: these classes run one at a time.
+[Collection("BoopsiHost")]
 public class MuiTests
 {
     private static CompileOptions Defines(params string[] d) => new() { Defines = d };
