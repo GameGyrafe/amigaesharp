@@ -28,21 +28,28 @@ public static unsafe class Cast
     private static readonly System.Collections.Generic.Dictionary<string, ulong> ToNative = new();
     private static readonly System.Collections.Generic.Dictionary<ulong, string> FromNative = new();
 
+    // The host tables are process-wide and test classes run in parallel (several samples in one process): every access is locked, as a
+    // Dictionary mutated by two threads loses entries or throws (#141).
+    private static readonly object HostLock = new();
+
     public static byte* StringToPtr(string s)
     {
-        if (!ToNative.TryGetValue(s, out var address))
+        lock (HostLock)
         {
-            var bytes = System.Text.Encoding.Latin1.GetBytes(s);
-            var p = (byte*)System.Runtime.InteropServices.NativeMemory.AllocZeroed((nuint)bytes.Length + 1);
-            for (int i = 0; i < bytes.Length; i++) p[i] = bytes[i];
-            address = (ulong)p;
-            ToNative[s] = address;
-            FromNative[address] = s;
+            if (!ToNative.TryGetValue(s, out var address))
+            {
+                var bytes = System.Text.Encoding.Latin1.GetBytes(s);
+                var p = (byte*)System.Runtime.InteropServices.NativeMemory.AllocZeroed((nuint)bytes.Length + 1);
+                for (int i = 0; i < bytes.Length; i++) p[i] = bytes[i];
+                address = (ulong)p;
+                ToNative[s] = address;
+                FromNative[address] = s;
+            }
+            return (byte*)address;
         }
-        return (byte*)address;
     }
 
-    public static string PtrToString(byte* p) { return FromNative[(ulong)p]; }
+    public static string PtrToString(byte* p) { lock (HostLock) return FromNative[(ulong)p]; }
 
     // Host: objects get made-up addresses (never dereferenced), kept in both directions.
     private static readonly System.Collections.Generic.Dictionary<object, ulong> ObjToNative = new(System.Collections.Generic.ReferenceEqualityComparer.Instance);
@@ -51,17 +58,20 @@ public static unsafe class Cast
 
     internal static void* ObjectToPtr<T>(T o) where T : class
     {
-        if (!ObjToNative.TryGetValue(o, out var address))
+        lock (HostLock)
         {
-            address = _nextObject;
-            _nextObject += 16;
-            ObjToNative[o] = address;
-            NativeToObj[address] = o;
+            if (!ObjToNative.TryGetValue(o, out var address))
+            {
+                address = _nextObject;
+                _nextObject += 16;
+                ObjToNative[o] = address;
+                NativeToObj[address] = o;
+            }
+            return (void*)address;
         }
-        return (void*)address;
     }
 
-    internal static T PtrToObject<T>(void* p) where T : class { return (T)NativeToObj[(ulong)p]; }
+    internal static T PtrToObject<T>(void* p) where T : class { lock (HostLock) return (T)NativeToObj[(ulong)p]; }
 #endif
 }
 

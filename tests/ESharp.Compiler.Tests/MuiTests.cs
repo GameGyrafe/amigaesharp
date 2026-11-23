@@ -734,4 +734,28 @@ int main(void)
         Assert.False(bad.Success);
         Assert.Contains(bad.Diagnostics, d => d.Id == "ES0007");
     }
+
+    /// <summary>
+    /// The host string and object address tables of Cast are process-wide and samples run in parallel in one process (#141: "its text
+    /// reads back" failed once). Without the lock a Dictionary mutated by two threads loses entries, throws, or hands two objects one address.
+    /// </summary>
+    [Fact]
+    public unsafe void Cast_host_tables_survive_parallel_use()
+    {
+        var errors = new System.Collections.Concurrent.ConcurrentBag<string>();
+        System.Threading.Tasks.Parallel.For(0, 16, new System.Threading.Tasks.ParallelOptions { MaxDegreeOfParallelism = 16 }, t =>
+        {
+            try
+            {
+                for (int i = 0; i < 3000; i++)
+                {
+                    var s = $"cast-{t}-{i}";
+                    var back = ESharp.Platform.Cast.PtrToString(ESharp.Platform.Cast.StringToPtr(s));
+                    if (back != s) errors.Add($"{s} came back as {back}");
+                }
+            }
+            catch (Exception e) { errors.Add(e.GetType().Name + ": " + e.Message); }
+        });
+        Assert.Empty(errors.Take(5));
+    }
 }
