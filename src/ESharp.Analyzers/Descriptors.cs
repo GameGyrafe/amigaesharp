@@ -167,6 +167,10 @@ public static class Descriptors
         "ES0122", "Two packages with overlapping native prefixes",
         "Packages '{0}' (native prefix '{1}') and '{2}' (native prefix '{3}') could export the same C names; give one of them another EsNativePrefix");
 
+    public static readonly DiagnosticDescriptor PackageNativeForeign = Error(
+        "ES0123", "[Native] extern for a package's C function",
+        "The [Native] extern '{0}' names '{1}', a C function of package '{2}' (native prefix '{3}'); only the package declares its own C functions: call its C# method instead");
+
     public static System.Collections.Immutable.ImmutableArray<DiagnosticDescriptor> SubsetRules =>
         System.Collections.Immutable.ImmutableArray.Create(
             Exceptions, Linq, FloatingPoint, AsyncAwait, Dynamic, Reflection,

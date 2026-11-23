@@ -163,13 +163,14 @@ public static class PackageReader
 
         var sources = new List<SourceFile>();
         var native = new List<NativeFile>();
+        var allNative = resources.Keys.Where(k => k.StartsWith(NativePrefix, StringComparison.Ordinal)).Select(k => k.Substring(NativePrefix.Length)).ToList();
         foreach (var (name, bytes) in resources.OrderBy(r => r.Key, StringComparer.Ordinal))
         {
             if (name == ManifestResource || !name.StartsWith("esharp/", StringComparison.Ordinal)) continue;
             if (name.StartsWith(NativePrefix, StringComparison.Ordinal))
             {
                 var nativePath = name.Substring(NativePrefix.Length);
-                if (PackageNatives.PathProblem(nativePath) is { } bad) problems.Add($"it carries '{name}': {bad}");
+                if (PackageNatives.PathProblem(nativePath, allNative) is { } bad) problems.Add($"it carries '{name}': {bad}");
                 else
                 {
                     var slash = nativePath.IndexOf('/');
@@ -258,8 +259,8 @@ public static class PackageReader
                 problems.Add($"its manifest gives the native prefix '{prefix}': {bad}");
             else if (files.Count == 0)
                 problems.Add("its manifest declares native C without any file");
-            else if (files.Select(PackageNatives.PathProblem).FirstOrDefault(x => x != null) is { } badPath)
-                problems.Add($"its manifest lists the C file '{files.First(x => PackageNatives.PathProblem(x) != null)}': {badPath}");
+            else if (files.Select(f => (File: f, Problem: PackageNatives.PathProblem(f, files))).FirstOrDefault(x => x.Problem != null) is { Problem: { } badPath } badFile)
+                problems.Add($"its manifest lists the C file '{badFile.File}': {badPath}");
             else
                 manifest = manifest with { Native = new PackageNative(prefix, files.Distinct(StringComparer.Ordinal).ToList()) };
         }
