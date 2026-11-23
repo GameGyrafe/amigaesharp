@@ -557,8 +557,12 @@ Targets:
             if (sysroot != null) compilerArgs.Add("--sysroot=" + sysroot);
             compilerArgs.AddRange(cflags.Split(' ', StringSplitOptions.RemoveEmptyEntries));
             compilerArgs.AddRange(flags);
+            // -fno-common: a variable two packages both define (a name a macro made, which ES0120 does not see) is a link error,
+            // not one merged variable (the pinned m68k gcc 6.5 defaults to -fcommon).
+            var native = withNative && nativeSources.Count > 0;
+            if (native) compilerArgs.Add(PackageNatives.CFlags);
             compilerArgs.AddRange(new[] { "-o", outFile, name + ".c" });
-            if (withNative) compilerArgs.AddRange(nativeSources);
+            if (native) compilerArgs.AddRange(nativeSources);
             if (link) compilerArgs.AddRange(target.Libs.Split(' ', StringSplitOptions.RemoveEmptyEntries));
 
             ProcessStartInfo psi;

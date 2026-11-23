@@ -175,7 +175,9 @@ compiler embedding Runtime and Platform (`LibrarySources.cs`). The pieces:
 - **Package C**: `src/ESharp.Compiler/PackageNatives.cs`. `Select` picks a target's files (common, a target file in place of a
   common one of the same name); `Check` gives ES0119 (no `.c` for the target), ES0120 (an exported name without the prefix:
   `ExportedSymbols` is a light reading of the C source, comments, strings and preprocessor lines left out, file-level definitions
-  that are not `static`) and ES0122 (overlapping prefixes); `Prototypes` makes the C prototype of each `[Native]` extern whose
+  that are not `static`, K&R definitions and `extern` with an initializer included, the name taken from inside a parenthesised
+  declarator such as `(*hook)`) and ES0122 (overlapping prefixes); `CFlags` (`-fno-common`) goes on the compiler line of a build with package C, so
+  uninitialised variables of the same name in two translation units are a link error, not merged; `Prototypes` makes the C prototype of each `[Native]` extern whose
   name has the package's prefix from its C# signature (numbers, bool, string, pointers to those or void; else ES0121). The
   emitter puts them after the includes (`CEmitter.PackagePrototypes`), so the program's C never includes a package header, and
   `Outputs` gives `CompileResult.Native`: `esharp-native/<id>/` with the chosen files, each `.c` starting with

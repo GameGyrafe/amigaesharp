@@ -27,7 +27,7 @@ public sealed record NativeOutput(string Path, string Text, bool Compile, string
 /// prefix (ES0120), prefixes of two packages may not overlap (ES0122), and none starts with <c>es_</c> (E#'s own C names are
 /// <c>es_*</c>, <c>Es_*</c>, <c>ES_*</c>), so no two packages and no package and the program define the same C name. The check reads
 /// the C source (<see cref="ExportedSymbols"/>); a name made by a macro escapes it, and then the linker's duplicate-symbol
-/// error is what stops the build.</item>
+/// error is what stops the build (package C is built with <see cref="CFlags"/>, so uninitialised variables are not merged).</item>
 /// </list>
 /// </summary>
 public static class PackageNatives
@@ -37,6 +37,13 @@ public static class PackageNatives
 
     /// <summary>The folder under the build's output folder that holds the package C, one sub-folder per package.</summary>
     public const string OutputFolder = "esharp-native";
+
+    /// <summary>
+    /// Compiler flags for a build with package C: <c>-fno-common</c>, so an uninitialised variable two translation units both
+    /// define (<c>int x;</c>) is a duplicate-symbol error at link time, not one merged variable (gcc before 10, the pinned m68k
+    /// gcc 6.5 among them, defaults to <c>-fcommon</c>). This is what stops a build when a name a macro makes escapes ES0120.
+    /// </summary>
+    public const string CFlags = "-fno-common";
 
     public static IReadOnlyList<string> Folders { get; } = new[] { "common" }.Concat(Targets.All.Select(t => t.Name)).ToArray();
 
@@ -229,8 +236,11 @@ public static class PackageNatives
 
     /// <summary>
     /// The functions and variables a C file defines with external linkage, with their line: definitions at file level that are
-    /// not static (a function body, or a variable without extern), skipping prototypes, typedefs, struct, union and enum
-    /// declarations and preprocessor lines. A light reading, not a C parser: names a macro makes are not seen.
+    /// not static (a function body, also with K&amp;R parameter declarations; a variable without extern, or an extern variable with an
+    /// initializer), skipping prototypes, typedefs, struct, union and enum declarations and preprocessor lines. Declarators in
+    /// parentheses are read for the name inside (<c>void (*hook)(int);</c>, <c>int (*table[4])(void);</c>, <c>int (*f(void))(int) { }</c>).
+    /// A light reading, not a C parser: names a macro makes are not seen (the build links package C with <see cref="CFlags"/>, so a
+    /// name two packages both define is a linker error).
     /// </summary>
     public static List<(string Name, int Line)> ExportedSymbols(string text)
     {
@@ -244,10 +254,13 @@ public static class PackageNatives
             if (tok == "{")
             {
                 var close = Matching(tokens, i, "{", "}");
-                var isFunction = stmt.Count > 0 && stmt[^1].Text == ")" && !stmt.Any(s => s.Text == "=");
+                // A function body: after the declarator's ')' or, K&R, after the parameter declarations (a ';' in the statement).
+                var head = Head(stmt);
+                var isFunction = !head.Any(s => s.Text == "=") && (stmt.Count > 0 && stmt[^1].Text == ")" || head.Count < stmt.Count)
+                    && Declarator(head, 0, head.Count) is { IsFunction: true };
                 if (isFunction)
                 {
-                    if (!stmt.Any(s => s.Text is "static" or "typedef") && FunctionName(stmt) is { } fn) result.Add(fn);
+                    if (!head.Any(s => s.Text is "static" or "typedef") && Declarator(head, 0, head.Count) is { Name: { } fn }) result.Add(fn);
                     stmt.Clear();
                 }
                 else stmt.Add(("{}", line));
@@ -256,7 +269,8 @@ public static class PackageNatives
             }
             if (tok == ";")
             {
-                if (!stmt.Any(s => s.Text is "static" or "typedef" or "extern")) result.AddRange(VariableNames(stmt));
+                if (KnrParameters(stmt)) { stmt.Add((";", line)); i++; continue; }
+                if (!stmt.Any(s => s.Text is "static" or "typedef")) result.AddRange(VariableNames(stmt, stmt.Any(s => s.Text == "extern")));
                 stmt.Clear();
                 i++;
                 continue;
@@ -273,44 +287,108 @@ public static class PackageNatives
         return result;
     }
 
-    /// <summary>The name of a function definition: the identifier before the first '(' at depth 0 (a pointer declarator "(*f)" too).</summary>
-    private static (string, int)? FunctionName(List<(string Text, int Line)> stmt)
+    /// <summary>The statement up to its first ';' (a K&amp;R definition's head without its parameter declarations).</summary>
+    private static List<(string Text, int Line)> Head(List<(string Text, int Line)> stmt)
     {
-        for (var k = 0; k < stmt.Count; k++)
-        {
-            if (stmt[k].Text != "(") continue;
-            if (k > 0 && IsName(stmt[k - 1].Text)) return stmt[k - 1];
-            // int (*name(void))(int): the name is inside the first parentheses
-            for (var j = k + 1; j < stmt.Count && stmt[j].Text != ")"; j++)
-                if (IsName(stmt[j].Text) && j + 1 < stmt.Count && stmt[j + 1].Text == "(") return stmt[j];
-            return null;
-        }
-        return null;
+        var k = stmt.FindIndex(s => s.Text == ";");
+        return k < 0 ? stmt : stmt.GetRange(0, k);
     }
 
-    /// <summary>The names a declaration at file level defines: one per declarator, skipping prototypes and bare struct/enum tags.</summary>
-    private static IEnumerable<(string, int)> VariableNames(List<(string Text, int Line)> stmt)
+    /// <summary>
+    /// True when the statement so far is a K&amp;R function head (<c>int f(a, b)</c>, maybe with parameter declarations already read):
+    /// a function declarator whose identifier list is followed by more at depth 0, which only parameter declarations can be.
+    /// </summary>
+    private static bool KnrParameters(List<(string Text, int Line)> stmt)
     {
-        var depth = 0;
-        (string, int)? last = null;
-        var skip = false;     // after '=' up to the next ',' at depth 0
-        var prototype = false;
+        if (stmt.Any(s => s.Text == ";")) return true;
+        if (stmt.Any(s => s.Text is "=" or "typedef")) return false;
+        if (Declarator(stmt, 0, stmt.Count) is not { IsFunction: true, End: var end } || end >= stmt.Count || stmt[end].Text is "," or "(" or "[")
+            return false;
+        // The parameter list is an identifier list, and the declaration after it declares only names from it: int f(a, b) int a;
+        var open = end - 1;
+        for (var depth = 0; open >= 0; open--)
+        {
+            if (stmt[open].Text == ")") depth++;
+            else if (stmt[open].Text == "(" && --depth == 0) break;
+        }
+        if (open < 0) return false;
+        var list = stmt.GetRange(open + 1, end - 1 - open - 1);
+        if (list.Count == 0 || list.Where((s, n) => n % 2 == 0 ? !IsName(s.Text) : s.Text != ",").Any()) return false;
+        var ids = new HashSet<string>(list.Where(s => s.Text != ",").Select(s => s.Text), StringComparer.Ordinal);
+        var names = VariableNames(stmt.GetRange(end, stmt.Count - end), false).ToList();
+        return names.Count > 0 && names.All(n => ids.Contains(n.Item1));
+    }
+
+    /// <summary>The names a declaration at file level defines: one per declarator, skipping prototypes and bare struct/enum tags;
+    /// with <paramref name="isExtern"/> only those with an initializer (<c>extern int x = 5;</c> is a definition).</summary>
+    private static IEnumerable<(string, int)> VariableNames(List<(string Text, int Line)> stmt, bool isExtern)
+    {
+        var start = 0;
         for (var k = 0; k <= stmt.Count; k++)
         {
-            var t = k < stmt.Count ? stmt[k].Text : ",";
-            if (t is "(" or "[") { if (depth == 0 && t == "(" && !skip && last != null && k > 0 && stmt[k - 1].Text == last.Value.Item1) prototype = true; depth++; continue; }
-            if (t is ")" or "]") { depth--; continue; }
-            if (depth > 0) continue;
-            if (t == "=") { skip = true; continue; }
-            if (t == ",")
+            if (k < stmt.Count)
             {
-                if (last != null && !prototype) yield return last.Value;
-                last = null; skip = false; prototype = false;
+                var t = stmt[k].Text;
+                if (t is "(" or "[") { k = Matching(stmt, k, t, t == "(" ? ")" : "]"); continue; }
+                if (t != ",") continue;
+            }
+            // One declarator (the first with the declaration specifiers): stmt[start..k), its initializer after a '=' at depth 0.
+            var end = k;
+            var hasInit = false;
+            for (var j = start; j < k; j++)
+            {
+                if (stmt[j].Text is "(" or "[") { j = Matching(stmt, j, stmt[j].Text, stmt[j].Text == "(" ? ")" : "]"); continue; }
+                if (stmt[j].Text == "=") { end = j; hasInit = true; break; }
+            }
+            if (Declarator(stmt, start, end) is { Name: { } name, IsFunction: false } && (!isExtern || hasInit)) yield return name;
+            start = k + 1;
+        }
+    }
+
+    /// <summary>
+    /// The name a declarator in <paramref name="stmt"/>[from..to) declares (the specifiers before it skipped: the last identifier
+    /// that is not a struct/union/enum tag), whether it declares a function (its name directly followed by a parameter list), and
+    /// where the declarator ends. A '(' is a grouping when nothing named comes before it or its first token is '*', '^' or '('
+    /// (a parameter list cannot start so); the name is then the one inside, and parameter lists after the grouping belong to the
+    /// pointed-to type: <c>void (*hook)(int)</c> is a variable, <c>int (*f(void))(int)</c> a function.
+    /// </summary>
+    private static (( string, int)? Name, bool IsFunction, int End)? Declarator(List<(string Text, int Line)> stmt, int from, int to)
+    {
+        (string, int)? name = null;
+        var isFunction = false;
+        var nameAt = -1;   // index of the name when it is directly in this level (a following '(' is then its parameter list)
+        for (var k = from; k < to; k++)
+        {
+            var t = stmt[k].Text;
+            if (t == "[") { k = Math.Min(Matching(stmt, k, "[", "]"), to - 1); nameAt = -1; continue; }
+            if (t == "(")
+            {
+                var close = Math.Min(Matching(stmt, k, "(", ")"), to - 1);
+                var first = k + 1 < close ? stmt[k + 1].Text : ")";
+                var grouping = first is "*" or "^" or "(" || k == from || !(IsName(stmt[k - 1].Text) || stmt[k - 1].Text is ")" or "]");
+                if (grouping && Declarator(stmt, k + 1, close) is { Name: { } inner } d)
+                {
+                    name = inner;
+                    isFunction = d.IsFunction;
+                    nameAt = -1;
+                }
+                else if (nameAt == k - 1)
+                {
+                    // The parameter list of the name: the declarator ends here (K&R parameter declarations may follow).
+                    return (name, true, close + 1);
+                }
+                k = close;
                 continue;
             }
-            if (skip) continue;
-            if (IsName(t) && !(k > 0 && stmt[k - 1].Text is "struct" or "union" or "enum")) last = stmt[k];
+            if (t == "{}") { nameAt = -1; continue; }
+            if (IsName(t) && !(k > from && stmt[k - 1].Text is "struct" or "union" or "enum"))
+            {
+                name = stmt[k];
+                nameAt = k;
+                isFunction = false;
+            }
         }
+        return name == null ? null : (name, isFunction, to);
     }
 
     private static bool IsName(string t) => t.Length > 0 && (char.IsLetter(t[0]) || t[0] == '_') && !NotNames.Contains(t);

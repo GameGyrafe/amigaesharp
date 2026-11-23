@@ -95,7 +95,8 @@ public static class P
     public static (int exitCode, string output) RunWithHostGccAndNative(string c, IEnumerable<NativeOutput> native, params string[] programArgs)
     {
         var files = native.ToList();
-        return RunWithHostGccFlags(c, "", files.ToDictionary(n => n.Path, n => n.Text), programArgs, files.Where(n => n.Compile).Select(n => n.Path).ToList());
+        // The flags esharp build adds when there is package C.
+        return RunWithHostGccFlags(c, PackageNatives.CFlags, files.ToDictionary(n => n.Path, n => n.Text), programArgs, files.Where(n => n.Compile).Select(n => n.Path).ToList());
     }
 
     private static (int exitCode, string output) RunWithHostGccFlags(string c, string flags, System.Collections.Generic.IReadOnlyDictionary<string, string>? extraHeaders, string[]? programArgs = null,

@@ -183,7 +183,9 @@ MyLib/
   `esharpsample_checksum_`). It must start with a letter, end in `_`, and not start with `es_` (E#'s own C names are `es_*`,
   `Es_*` and `ES_*`; ESL014). Two packages whose prefixes overlap (one starts with the other) stop the game's build (ES0122). So
   no two packages, and no package and the program, define the same C name. The check reads the C source; a name made by a macro
-  escapes it, and then the linker's duplicate-symbol error stops the build. `static` helpers need no prefix.
+  escapes it, and then the linker's duplicate-symbol error stops the build (a build with package C passes `-fno-common`, so
+  this holds for uninitialised variables too: gcc before 10, the m68k one among them, would otherwise merge `int x;` in two
+  files into one variable). `static` helpers need no prefix.
 - **Security.** A package's C is compiled into your game and runs with the game's privileges, as the game's own code does: on
   the Amiga that is the whole machine (no memory protection on AmigaOS 3). Read it before you use the package, as you would read
   its C#. The build prints every C file it compiles for the target:

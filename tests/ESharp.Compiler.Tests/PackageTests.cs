@@ -472,6 +472,48 @@ public static unsafe class P
     }
 
     [Fact]
+    public void A_variable_two_packages_define_through_a_macro_is_a_link_error()
+    {
+        // The macro hides the name from ES0120; the uninitialised definitions would be merged into one variable under -fcommon
+        // (the default of gcc before 10, the pinned m68k gcc 6.5 among them). The build's PackageNatives.CFlags make it an error.
+        const string c = "#define SHARED(n) int n\nSHARED(shared_count);\nint {0}touch(void) {{ return ++shared_count; }}\n";
+        var a = NativePackage("Sample.A", "pa_", new Dictionary<string, string> { ["common/a.c"] = string.Format(c, "pa_") }, "namespace PA; public static class N { }");
+        var b = NativePackage("Sample.B", "pb_", new Dictionary<string, string> { ["common/b.c"] = string.Format(c, "pb_") }, "namespace PB; public static class N { }");
+        var r = Build(Prelude + "public static class P { [EntryPoint] public static void Main() { } }", M68k(a, b));
+        Assert.True(r.Success, string.Join("\n", r.Diagnostics));
+        Assert.Equal("-fno-common", PackageNatives.CFlags);
+        if (!HasGcc) return;
+        var dir = Path.Combine(Path.GetTempPath(), "esharp-native-" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            foreach (var n in r.Native)
+            {
+                var path = Path.Combine(dir, n.Path.Replace('/', Path.DirectorySeparatorChar));
+                Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+                File.WriteAllText(path, n.Text);
+            }
+            File.WriteAllText(Path.Combine(dir, "main.c"), "int main(void) { return 0; }\n");
+            (int Code, string Err) Link(string flag)
+            {
+                var psi = new System.Diagnostics.ProcessStartInfo(Cc) { RedirectStandardError = true, RedirectStandardOutput = true, WorkingDirectory = dir };
+                foreach (var x in new[] { "-std=gnu11", flag, "-o", "prog", "main.c" }.Concat(r.Native.Where(n => n.Compile).Select(n => n.Path.Replace('/', Path.DirectorySeparatorChar))))
+                    psi.ArgumentList.Add(x);
+                using var proc = System.Diagnostics.Process.Start(psi)!;
+                var err = proc.StandardError.ReadToEnd();
+                proc.StandardOutput.ReadToEnd();
+                proc.WaitForExit();
+                return (proc.ExitCode, err);
+            }
+            var strict = Link(PackageNatives.CFlags);
+            Assert.NotEqual(0, strict.Code);
+            Assert.Contains("shared_count", strict.Err);
+            // The hazard the flag removes: with common symbols the two definitions link as one variable, without a word.
+            Assert.Equal(0, Link("-fcommon").Code);
+        }
+        finally { try { Directory.Delete(dir, true); } catch (IOException) { } catch (UnauthorizedAccessException) { } }
+    }
+
+    [Fact]
     public void A_target_without_C_files_of_a_package_that_has_them_is_an_error()
     {
         var onlyM68k = NativePackage("Sample.Fx", "fx_", new Dictionary<string, string> { ["m68k/fx.c"] = "int fx_one(void) { return 1; }\n" },
@@ -581,9 +623,25 @@ multi_line
 {
     return 0;
 }
+void (*hook)(int);
+int (*table[4])(void);
+int (*fptr_a)(int), (*fptr_b)(int) = 0, plain;
+int knr(a, b)
+    int a;
+    char *b;
+{ return a + *b; }
+int after_knr = 1;
+extern int ext_init = 5;
+extern void (*ext_hook)(int);
+UBYTE (*ptr_typedef_name)(int);
+int (*nested_ret(int (*arg)(int)))(int) { return arg; }
+static void (*static_hook)(int);
+typedef void (*hook_t)(int);
+int (*proto_ret(void))(int);
 ";
         var names = PackageNatives.ExportedSymbols(c).Select(s => $"{s.Name}:{s.Line}").ToList();
-        Assert.Equal(new[] { "f1:6", "v1:7", "v2:7", "v3:7", "arr:8", "text:9", "callback_setter:12", "instance:16", "with_attr:17", "inl:18", "multi_line:20" }, names);
+        Assert.Equal(new[] { "f1:6", "v1:7", "v2:7", "v3:7", "arr:8", "text:9", "callback_setter:12", "instance:16", "with_attr:17", "inl:18", "multi_line:20",
+            "hook:25", "table:26", "fptr_a:27", "fptr_b:27", "plain:27", "knr:28", "after_knr:32", "ext_init:33", "ptr_typedef_name:35", "nested_ret:36" }, names);
     }
 
     [Fact]

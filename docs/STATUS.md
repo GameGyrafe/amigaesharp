@@ -38,8 +38,12 @@ pastes in for `es_std_*`/`es_sdl_*` [Native] calls), so packages get one way of 
   declaration does not compile (tested with the host gcc: "conflicting types", named at the package file through a `#line`).
 - **Symbol clashes.** Every function and variable a package's C exports must start with its native prefix (`EsNativePrefix`,
   default from the package id; not `es_`, which is E#'s own): ES0120, from a light reading of the C source (comments, strings and
-  preprocessor lines left out; file-level definitions that are not `static`). Two packages with overlapping prefixes: ES0122.
-  Names made by macros escape the reading; then the linker's duplicate-symbol error stops the build (not tried).
+  preprocessor lines left out; file-level definitions that are not `static`, K&R definitions and `extern` with an initializer
+  included; the name inside a parenthesised declarator, as in `void (*hook)(int);` or `int (*table[4])(void);`). Two packages
+  with overlapping prefixes: ES0122. Names made by macros escape the reading; then the linker's duplicate-symbol error stops
+  the build: a build with package C passes `-fno-common`, because the pinned m68k gcc 6.5 defaults to `-fcommon` and would
+  merge `int x;` of two packages into one variable without a word (checked in the m68k image: two files with `int
+  shared_count;` link by default and fail with "multiple definition of `shared_count'" with the flag).
 - **Security and licence.** The GUIDE says plainly that a package's C runs with the game's privileges (on AmigaOS 3: the whole
   machine) and that the build prints every C file it compiles; the copyleft check covers the package as a whole.
 - **#141 (assets in packages):** the manifest's assets namespace and class now come from the `Assets.g.cs` the package carries
@@ -55,14 +59,16 @@ pastes in for `es_std_*`/`es_sdl_*` [Native] calls), so packages get one way of 
   C# loop agree), 20 checks in all.
 
 **Verified (2026-11-23):**
-- `dotnet test`: 754 passed, 2 skipped (the OS4 VM and SDK-backed BindGen tests), 0 failed. New in `PackageTests`: a package
+- `dotnet test`: 755 passed, 2 skipped (the OS4 VM and SDK-backed BindGen tests), 0 failed. New in `PackageTests`: a package
   with `common/fx.c`, `common/fx_tune.h` and `m68k/fx_tune.h` built for m68k, its C compiled with the program's C under the host
   gcc and run (4 lines: a string to C, a 16.16 multiply, a sum through a pointer, the m68k header in use), the prototypes in the
   program's C and no package header there, the output files and the `#line`; a C definition that does not match its C#
   declaration fails to compile ("conflicting types" at `<package Sample.Fx 1.0.0>/native/common/fx.c`); ES0119 (m68k-only C
   built for os4), ES0120 (3 unprefixed names among static, extern, prototype, typedef and struct declarations), ES0122, ES0121
   (`ref`, struct, struct pointer; an `es_` extern is left alone), the ES0118 manifest/resource cases, the C reading on a file
-  of awkward declarations, the default prefix, the printed file list per target. `PackageRoundTripTests`: real `dotnet build`s
+  of awkward declarations (function pointer variables and arrays, K&R, `extern` with an initializer), two packages that define
+  the same variable through a macro (no ES0120; with `-fno-common` the host link fails naming it, with `-fcommon` it links),
+  the default prefix, the printed file list per target. `PackageRoundTripTests`: real `dotnet build`s
   of `Checksum` with `stray.c`, `native/m68k/fast.o`, `native/amigaos/x.c`, `libfast.a` (ESL006), without NativeC (ESL015), with
   prefix `es_cksum_` (ESL014); a warning-free pack whose DLL carries the three C files and the manifest's `native` and whose
   .nupkg has no C, object or archive files beside the DLL; the game restored with both packages, host 20 ok, the m68k Docker
@@ -72,6 +78,8 @@ pastes in for `es_std_*`/`es_sdl_*` [Native] calls), so packages get one way of 
   --target m68k --docker <m68k image> --model A1200 --kickstart <Kickstart 3.1 rom>`: host 20 ok, Amiga 20 ok, 0 FAIL, return
   code 0, "Host and Amiga agree on every check". `esharp run ... --headless --screenshot`: the same picture as in part 2 (five
   blue shaded balls on an orange dotted in-out path, the grey "TWEEN + PACKAGE ART" bar).
+- After `-fno-common` was added to builds with package C, the TweenDemo `esharp test` runs were repeated: m68k (Kickstart 3.1,
+  A1200) 20 ok both sides, agree; sdl 20 ok, agree; hosted AROS x86-64 20 ok, return code 0, 0 traps, agree.
 - The same game with `--target sdl --docker esharp-sdl`: 20 ok both sides, agree (the common header used); `--target aros
   --docker esharp-amiga-toolchain` (hosted AROS x86-64): 20 ok, return code 0, 0 traps, agree.
 - `--toolchain` (the m68k toolchain copied out of the pinned image) against `--docker`: the TweenDemo executable (25,316 bytes),
@@ -81,9 +89,10 @@ pastes in for `es_std_*`/`es_sdl_*` [Native] calls), so packages get one way of 
   has the prototype, and the m68k build compiles the package C.
 
 **Not done / not verified:** os4, morphos and aros-i386 runs of the sample with package C (the os4 VM was not run for this; the
-C is plain and target-neutral, but that is not a run); real hardware; the linker backstop for macro-made names; package C in
+C is plain and target-neutral, but that is not a run); real hardware; the linker backstop on targets other than m68k
+and the host gcc (the flag is the same on each, but only those two were tried); package C in
 `esharp addr` (its line table is the program's only); passing E# structs to a package's C (refused, ES0121); per-package C
-flags or defines (none: the target's flags apply); the morphos and aros-i386 builds of the sample; Windows CI runs the new
+flags or defines (none: the target's flags apply, plus `-fno-common`); the morphos and aros-i386 builds of the sample; Windows CI runs the new
 tests (not run locally). Deriving from package classes (ES0117) stays open.
 
 ## E# library packages, part 2: assets in packages (issue #31)
