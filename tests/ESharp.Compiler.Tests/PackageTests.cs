@@ -1,7 +1,11 @@
 using System.Collections.Generic;
+using System.Collections.Immutable;
 using System.Text;
+using ESharp.Analyzers;
 using ESharp.Compiler;
 using Microsoft.CodeAnalysis;
+using Microsoft.CodeAnalysis.CSharp;
+using Microsoft.CodeAnalysis.Diagnostics;
 using static ESharp.Compiler.Tests.TestHelpers;
 
 namespace ESharp.Compiler.Tests;
@@ -325,14 +329,183 @@ public static class P
         Assert.Contains("'Ease.Curves.Clamp(int)' is internal to package 'Sample.Ease' and cannot be used from the program", d.GetMessage());
     }
 
-    [Fact]
-    public void Deriving_from_a_package_class_is_an_error()
+    // An [Extensible] class of a package: virtual and abstract members, a constructor with arguments, a static count of the objects
+    // made, and package code that calls the overridable members (Run, Describe). The program's Actor has the same simple name.
+    internal const string ActorLib = @"using ESharp;
+
+namespace Anim;
+
+[Extensible]
+public abstract class Actor
+{
+    public static int Made;
+    public int X;
+    public int Steps;
+    protected int Speed;
+
+    public Actor(int speed) { Speed = speed; Made++; }
+
+    /// <summary>One step: Move (overridable), then OnStep (abstract).</summary>
+    public void Run(int steps)
     {
-        var lib = Package("Sample.Base", new Dictionary<string, string> { ["Base.cs"] = "namespace B;\npublic class Animal { public int Legs; }\n" });
-        var program = Prelude + "public class Dog : B.Animal { }\npublic static class P { [EntryPoint] public static void Main() { var a = new B.Animal(); a.Legs = 4; } }";
+        for (int i = 0; i < steps; i++) { X = Move(X); Steps++; OnStep(); }
+        if (Steps >= 3) OnFinished();
+    }
+
+    protected virtual int Move(int x) => x + Speed;
+    protected abstract void OnStep();
+    protected virtual void OnFinished() { }
+    public virtual int Kind => 1;
+}
+
+/// <summary>A class of the package that is not made for deriving.</summary>
+public class Plain { public int Legs; }
+
+/// <summary>Package code that takes any Actor, the program's ones too.</summary>
+public static class Stage
+{
+    public static int Total(Actor a, Actor b) => a.X + b.X + a.Kind * 100 + b.Kind * 1000;
+}
+";
+
+    internal const string ActorGame = Prelude + @"using Anim;
+
+namespace Game;
+
+public sealed class Actor : Anim.Actor
+{
+    public int Ticks;
+    public bool Finished;
+    public Actor() : base(2) { }
+    protected override int Move(int x) => base.Move(x) * 2;
+    protected override void OnStep() { Ticks++; }
+    protected override void OnFinished() { Finished = true; }
+    public override int Kind => 7;
+}
+
+public class Walker : Anim.Actor
+{
+    public int Seen;
+    public Walker(int speed) : base(speed) { }
+    protected override void OnStep() { Seen += X; }
+}
+
+public class Runner : Walker
+{
+    public Runner() : base(5) { }
+    protected override int Move(int x) => x + 10 * Speed;
+}
+
+public static class P
+{
+    static void Check(bool ok, string name) { Dos.PutStr(ok ? ""ok "" : ""FAIL ""); Dos.PutStr(name); Dos.PutStr(""\n""); }
+
+    [EntryPoint]
+    public static void Main()
+    {
+        var a = new Actor();
+        a.Run(3);
+        Check(a.X == 28 && a.Ticks == 3 && a.Finished && a.Steps == 3, ""overrides called from package code, base call into the package"");
+        var w = new Walker(3);
+        w.Run(2);
+        Check(w.X == 6 && w.Seen == 9, ""inherited virtual of the package, abstract member implemented"");
+        Anim.Actor r = new Runner();
+        r.Run(1);
+        Check(r.X == 50 && r.Kind == 1 && r is Walker && !(r is Actor) && (r as Runner) != null, ""two levels down, is and as"");
+        Check(Stage.Total(a, w) == 28 + 6 + 700 + 1000, ""program objects passed to package code"");
+        Check(Anim.Actor.Made == 3, ""the package constructor ran for each"");
+        Heap.Free(ref a);
+        Heap.Free(ref w);
+        Heap.Free(ref r);
+    }
+}
+";
+
+    [Theory]
+    [InlineData("m68k")]
+    [InlineData("sdl")]
+    public void A_program_class_derives_from_an_Extensible_package_class_and_runs(string target)
+    {
+        var lib = Package("Sample.Anim", new Dictionary<string, string> { ["Actor.cs"] = ActorLib });
+        var r = Build(ActorGame, target == "sdl" ? Targets.Sdl.ToOptions(packages: new[] { lib }, sdkVersion: "0.1.5") : M68k(lib));
+        Assert.True(r.Success, string.Join("\n", r.Diagnostics));
+        if (!HasGcc) return;
+        var (code, output) = RunWithHostGcc(r.C!);
+        Assert.Equal(0, code);
+        Assert.Equal("ok overrides called from package code, base call into the package\n" +
+                     "ok inherited virtual of the package, abstract member implemented\n" +
+                     "ok two levels down, is and as\n" +
+                     "ok program objects passed to package code\n" +
+                     "ok the package constructor ran for each\n", output);
+    }
+
+    [Fact]
+    public void Deriving_from_a_package_class_not_marked_Extensible_is_an_error()
+    {
+        var lib = Package("Sample.Anim", new Dictionary<string, string> { ["Actor.cs"] = ActorLib });
+        var program = Prelude + "public class Dog : Anim.Plain { }\npublic static class P { [EntryPoint] public static void Main() { var a = new Anim.Plain(); a.Legs = 4; } }";
         var r = Build(program, M68k(lib));
-        Assert.Contains(r.Diagnostics, d => d.Id == "ES0117" && d.GetMessage().Contains("'Dog' derives from 'B.Animal' of package 'Sample.Base'"));
-        Assert.True(Build(Prelude + "public static class P { [EntryPoint] public static void Main() { var a = new B.Animal(); a.Legs = 4; } }", M68k(lib)).Success);
+        var d = Assert.Single(r.Diagnostics, x => x.Id == "ES0117");
+        Assert.Equal("'Dog' derives from 'Anim.Plain' of package 'Sample.Anim', which is not marked [Extensible]; only package classes made for it (marked [Extensible] in the package) can be base classes of another package's or the program's classes", d.GetMessage());
+        Assert.DoesNotContain(r.Diagnostics, x => x.Id == "ES0007");
+        Assert.True(Build(Prelude + "public static class P { [EntryPoint] public static void Main() { var a = new Anim.Plain(); a.Legs = 4; } }", M68k(lib)).Success);
+
+        // Within the package itself any class can be a base class; another package needs [Extensible] too.
+        var inside = Package("Sample.Zoo", new Dictionary<string, string> { ["Zoo.cs"] = "namespace Zoo;\npublic class Animal { public int Legs; }\npublic class Cat : Animal { }\n" });
+        Assert.True(Build(Prelude + "public static class P { [EntryPoint] public static void Main() { var c = new Zoo.Cat(); c.Legs = 4; } }", M68k(inside)).Success);
+        var other = Package("Sample.Pets", new Dictionary<string, string> { ["Pets.cs"] = "namespace Pets;\npublic class Dog : Zoo.Animal { }\npublic class Hero : Anim.Actor { public Hero() : base(1) { } protected override void OnStep() { } }\n" });
+        var two = Build(Prelude + "public static class P { [EntryPoint] public static void Main() { } }", M68k(inside, other, lib));
+        var e = Assert.Single(two.Diagnostics, x => x.Id == "ES0117");
+        Assert.StartsWith("'Dog' derives from 'Zoo.Animal' of package 'Sample.Zoo'", e.GetMessage());
+    }
+
+    /// <summary>
+    /// The IDE and the dotnet host build see a package as a referenced assembly: its HOST build, with [Extensible] and the
+    /// [assembly: EsLibrary(id)] that AmigaESharp.Sdk adds in metadata. The analyzer must agree with esharp build there.
+    /// </summary>
+    private static ImmutableArray<Diagnostic> AnalyzeAgainstPackageAssembly(string program, string library, string assemblyInfo)
+    {
+        var refs = PlatformSubclassTests.HostReferences().ToList();
+        var options = new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary, allowUnsafe: true);
+        var parse = new CSharpParseOptions(preprocessorSymbols: new[] { "HOST" });
+        var lib = CSharpCompilation.Create("Anim", new[] { CSharpSyntaxTree.ParseText(library, parse), CSharpSyntaxTree.ParseText(assemblyInfo, parse) }, refs, options);
+        Assert.Empty(lib.GetDiagnostics().Where(d => d.Severity == DiagnosticSeverity.Error));
+        using var image = new System.IO.MemoryStream();
+        Assert.True(lib.Emit(image).Success);
+        var game = CSharpCompilation.Create("Game", new[] { CSharpSyntaxTree.ParseText(program, parse) },
+            refs.Append(MetadataReference.CreateFromImage(image.ToArray())), options);
+        Assert.Empty(game.GetDiagnostics().Where(d => d.Severity == DiagnosticSeverity.Error));
+        return game.WithAnalyzers(ImmutableArray.Create<DiagnosticAnalyzer>(new SubsetAnalyzer())).GetAnalyzerDiagnosticsAsync().GetAwaiter().GetResult();
+    }
+
+    [Fact]
+    public void The_analyzer_reads_Extensible_from_the_package_assembly_as_esharp_build_reads_it_from_source()
+    {
+        const string withId = "[assembly: ESharp.EsLibrary(\"Sample.Anim\")]";
+        // [Extensible]: no diagnostic, as in esharp build (A_program_class_derives_from_an_Extensible_package_class_and_runs).
+        var ok = AnalyzeAgainstPackageAssembly(ActorGame, ActorLib, withId);
+        Assert.DoesNotContain(ok, d => d.Id is "ES0007" or "ES0117");
+
+        // Not [Extensible]: ES0117 with the same message esharp build gives (Deriving_from_a_package_class_not_marked_Extensible_is_an_error).
+        var dog = Prelude + "public class Dog : Anim.Plain { }\n";
+        var bad = Assert.Single(AnalyzeAgainstPackageAssembly(dog, ActorLib, withId), d => d.Id is "ES0007" or "ES0117");
+        var source = Assert.Single(Build(dog + "public static class P { [EntryPoint] public static void Main() { } }",
+            M68k(Package("Sample.Anim", new Dictionary<string, string> { ["Actor.cs"] = ActorLib }))).Diagnostics, d => d.Id is "ES0007" or "ES0117");
+        Assert.Equal("ES0117", bad.Id);
+        Assert.Equal(source.GetMessage(), bad.GetMessage());
+
+        // A package DLL without the assembly attribute (GenerateAssemblyInfo off): named by its assembly, same rule.
+        var bare = Assert.Single(AnalyzeAgainstPackageAssembly(dog, ActorLib, "// no assembly info"), d => d.Id is "ES0007" or "ES0117");
+        Assert.Equal("ES0117", bare.Id);
+        Assert.Contains("of package 'Anim'", bare.GetMessage());
+
+        // A generic method of the package is monomorphised as the program's own are (not ES0008), in the IDE as in esharp build.
+        var generic = Prelude + "public static class G { public static int F() => Anim.Pick.One(false, 1, 2); }\n";
+        const string pickLib = "namespace Anim;\npublic static class Pick { public static T One<T>(bool first, T a, T b) where T : unmanaged => first ? a : b; }\n";
+        Assert.DoesNotContain(AnalyzeAgainstPackageAssembly(generic, ActorLib, withId + "\n" + pickLib), d => d.Id == "ES0008");
+
+        // A .NET class is still ES0007.
+        Assert.Contains(AnalyzeAgainstPackageAssembly(Prelude + "public class R : System.Random { }\n", ActorLib, withId), d => d.Id == "ES0007");
     }
 
     [Fact]

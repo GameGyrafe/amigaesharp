@@ -174,12 +174,26 @@ public sealed class OwnedAttribute : Attribute
 }
 
 /// <summary>
-/// On a class of the E# library (ESharp.Platform, ESharp.Runtime): a class of the program may derive from it and override its
-/// virtual members (<c>class MyWindow : GtWindow</c>). Library classes without it cannot be base classes (ES0007), so what is
-/// meant to be extended is said explicitly. The analyzer reads it from source (esharp build) and from the referenced assembly
-/// (an IDE project made by <c>esharp new</c>) alike.
+/// On a class of the E# library (ESharp.Platform, ESharp.Runtime) or of an E# library package: a class of the program (or of
+/// another package) may derive from it and override its virtual members (<c>class MyWindow : GtWindow</c>). Library classes
+/// without it cannot be base classes (ES0007; ES0117 for a package's class), so what is meant to be extended is said explicitly.
+/// The analyzer reads it from source (esharp build) and from the referenced assembly (an IDE project made by <c>esharp new</c>,
+/// a game that references the package) alike.
 /// </summary>
 [AttributeUsage(AttributeTargets.Class, Inherited = false)]
 public sealed class ExtensibleAttribute : Attribute
 {
+}
+
+/// <summary>
+/// On the HOST assembly of an E# library package: its package id. AmigaESharp.Sdk adds it to every EsLibrary=true build (in the
+/// generated assembly info, not in the embedded sources), so the analyzer can name the package where the program sees it as a
+/// referenced assembly (ES0117). Not written by hand.
+/// </summary>
+[AttributeUsage(AttributeTargets.Assembly)]
+public sealed class EsLibraryAttribute : Attribute
+{
+    public EsLibraryAttribute(string id) { Id = id; }
+
+    public string Id { get; }
 }

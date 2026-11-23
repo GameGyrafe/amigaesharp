@@ -12,7 +12,7 @@ namespace ESharp.Compiler;
 /// The checks for E# library packages (issue #31) beyond the subset rules, which run on package sources as on the program's:
 /// the manifest (target list, licence, E# version, problems found when the package was read) and the sources (platform-level
 /// features, declared in the package or called from it, that the manifest does not list, an entry point, a type declared twice, internal members used from outside, a class derived
-/// from a package class).
+/// from a package class not marked [Extensible]).
 /// </summary>
 internal static class PackageChecks
 {
@@ -138,9 +138,12 @@ internal static class PackageChecks
             packageOf.TryGetValue(tree, out var here);
             var origin = Origin(tree);
 
-            // A class of the program (or of another package) derived from a package's class.
+            // A class of the program (or of another package) derived from a package's class that is not marked [Extensible]. An
+            // [Extensible] one is compiled with the program like any other class (vtables, overrides, constructor chaining); the
+            // analyzer gives the same ES0117 in the IDE, where the package is a referenced assembly (SubsetAnalyzer.CheckClass).
             foreach (var cls in tree.GetRoot().DescendantNodes().OfType<ClassDeclarationSyntax>())
-                if (model.GetDeclaredSymbol(cls) is { BaseType: { } baseType } type && PackageOf(baseType) is { } owner && owner != here)
+                if (model.GetDeclaredSymbol(cls) is { BaseType: { } baseType } type && PackageOf(baseType) is { } owner && owner != here &&
+                    !baseType.OriginalDefinition.GetAttributes().Any(a => a.AttributeClass is { Name: "ExtensibleAttribute", ContainingNamespace: { Name: "ESharp", ContainingNamespace.IsGlobalNamespace: true } }))
                     diagnostics.Add(Diagnostic.Create(Descriptors.PackageDerive, cls.Identifier.GetLocation(), type.Name, baseType.ToDisplayString(), owner.Id));
 
             // Internal members of a package, used from elsewhere: one assembly here, two in the dotnet host build.

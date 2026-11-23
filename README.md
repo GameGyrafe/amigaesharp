@@ -141,7 +141,7 @@ Early, and honest about it. Details and dates are in [docs/STATUS.md](docs/STATU
 - **Not verified:** any real Amiga hardware, MorphOS runs, AROS on native PCs, RTG on a real card, Windows beyond CI (no Docker or
   FS-UAE there), and the SDL target on macOS and Windows.
 - **Known gaps:** the emitter reports `ES0099` for what it cannot do yet (a list is in STATUS.md, "Known limits of the emitter"); user
-  classes may derive from platform classes only when those are marked `[Extensible]` (so far `GtWindow`); there is no garbage
+  classes may derive from platform or package classes only when those are marked `[Extensible]` (`GtWindow`, a package's own); there is no garbage
   collector, so a stored closure is freed with `Heap.Free`; floating point is off by default; no exceptions, async or reflection; no
   source-level debugger for the Amiga build (host builds can be debugged under .NET).
 

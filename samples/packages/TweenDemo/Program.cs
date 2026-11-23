@@ -15,8 +15,30 @@ public static class Ease
 }
 
 /// <summary>
+/// The game's own mover, derived from the package's [Extensible] class Tween.Mover: an ease-in curve instead of the linear one,
+/// and one hop back along the path when it first arrives. Mover.Step (package code) calls both overrides.
+/// </summary>
+public sealed class Hopper : Mover
+{
+    public int Hops;
+
+    public Hopper() : base(new Point(0, 0), new Point(100, 40), 4) { }
+
+    protected override int Shape(int t) => Tween.Ease.InQuad(t);
+
+    protected override void OnArrived()
+    {
+        if (Arrivals < 2)
+        {
+            Hops++;
+            Path.Restart(true);
+        }
+    }
+}
+
+/// <summary>
 /// Uses the E# library ESharpSample.Tween from a package: easing curves, the generic Tween struct (with int and with the library's
-/// Point), a generic method, fixed point, and the library's assets (a masked ball sprite and a blip sound from its assets.json),
+/// Point), a generic method, fixed point, a class of the game derived from the library's [Extensible] Mover, and the library's assets (a masked ball sprite and a blip sound from its assets.json),
 /// drawn along a tween on a screen; and the C function of the library ESharpSample.Checksum (its own C, compiled with the game). Every check prints "ok NAME" or "FAIL NAME"; esharp test compares the host and Amiga runs.
 /// Prints "SHOT" while the screen shows the ball's path.
 /// </summary>
@@ -94,6 +116,20 @@ public static class Program
 
         Ease.Bounces = Ease.Twice(21);
         Check(Ease.Bounces == 42, "own Ease next to the package's");
+
+        // A class of the game derived from the package's [Extensible] Mover: its overrides are called from the package's Step.
+        var plain = new Mover(new Point(0, 0), new Point(100, 40), 4);
+        plain.Step();
+        Mover hop = new Hopper();
+        hop.Step();
+        Value("hopper x after one frame", hop.At.X);
+        Check(plain.At.X == 25 && plain.At.Y == 10 && hop.At.X == 6 && hop.At.Y == 2, "derived package class: overridden curve");
+        int taken = hop.Finish();
+        Hopper hopper = hop as Hopper;
+        Check(taken == 7 && hop.Arrivals == 2 && hopper != null && hopper.Hops == 1 && hop.At.X == 0 && hop.At.Y == 0,
+              "derived package class: override called at the end, hop back");
+        Heap.Free(ref hop);
+        Heap.Free(ref plain);
 
         // The library's assets (Tween.Art, generated from its assets.json and shipped in the package).
         Check(Art.BallWidth == 16 && Art.BallHeight == 16 && Art.BallDepth == 2 && Art.BallPalette.Length == 4 &&

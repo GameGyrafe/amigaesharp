@@ -25,7 +25,7 @@ run, unit tested and debugged on the PC.
 
 | Project | What it is |
 |---|---|
-| `src/ESharp.Analyzers` | The subset rules (`ES0001`-`ES0015`, `ES0020`..., `ES0098`-`ES0103`, in `Descriptors.cs`, `SubsetAnalyzer.cs`, `ClosureRules.cs`; `LibraryVersions.cs` for ES0101). One analyzer, used by the IDE (it stays on `netstandard2.0` so IDEs can load it) and by the compiler. A program class may derive only from its own classes or from a library class marked `[Extensible]`; the rule has to hold where the library is source (the compiler) and where it is metadata (the IDE). |
+| `src/ESharp.Analyzers` | The subset rules (`ES0001`-`ES0015`, `ES0020`..., `ES0098`-`ES0103`, ES0117 where a package is metadata, in `Descriptors.cs`, `SubsetAnalyzer.cs`, `ClosureRules.cs`; `LibraryVersions.cs` for ES0101). One analyzer, used by the IDE (it stays on `netstandard2.0` so IDEs can load it) and by the compiler. A program class may derive only from its own classes or from a library or package class marked `[Extensible]`; the rule has to hold where the library or package is source (the compiler) and where it is metadata (the IDE). |
 | `src/ESharp.Compiler` | `EsCompiler.Compile`: parse with Roslyn, report C# errors in user code, run the analyzer, check the entry point and the chip RAM budget, then `CEmitter` (split over `CEmitter*.cs`: closures, LINQ, patterns, inline asm, C names) writes C. `Monomorphizer.cs` instantiates generics. `Targets.cs` is the CPU x OS target model. `CRuntime/es_std.h` and `es_sdl.h` are C runtime pieces pasted into the C of the `sdl` target when a `[Native]` extern named `es_std_*` / `es_sdl_*` is called. |
 | `src/ESharp.Runtime` | Attributes (`[EntryPoint]`, `[AmigaLib]`, `[ChipRam]`, ...) and `Fix`. Parsed together with user code. |
 | `src/ESharp.Platform` | The platform layer: `Video`, `Input`, `Sound`, `Dos`, `Mem`, `Heap`, collections, `Gui`, BOOPSI, MUI, IFF, fonts, and the `[AmigaLib]` bindings. Parsed together with user code, with the symbols below choosing the implementation. `Layout.g.cs` holds struct offsets measured per target. |
@@ -171,7 +171,18 @@ compiler embedding Runtime and Platform (`LibrarySources.cs`). The pieces:
   minimum version. The CLI side is `src/ESharp.Cli/PackageStep.cs` (finds the csproj and the restore, reads `EsAllowCopyleft`,
   prints the packages); `HostRun` references the package DLLs for the host run.
 - **Checks**: `src/ESharp.Compiler/PackageChecks.cs`, ES0110-ES0122 (descriptors in `Descriptors.cs`; compiler-only, the IDE
-  sees a package as metadata). ES0115 names an `assets.json` when the clashing type is a generated asset class. The analyzer needs no change: package trees are in the user set.
+  sees a package as metadata, except ES0117 below). ES0115 names an `assets.json` when the clashing type is a generated asset class. The subset rules need no
+  change for package code: package trees are in the user set.
+- **Deriving from a package class**: a package class marked `[Extensible]` can be the base of a class of the program or of
+  another package. In `esharp build` nothing is special about it: package trees are user trees, so the emitter lays out the
+  hierarchy (class tables, `es_base`, `X_new`/`X_new_init` chaining, `is`/`as`) as within one program; `PackageChecks` gives
+  ES0117 only for a base without the attribute whose package differs from the deriving class's. Where the package is a referenced
+  assembly (IDE, `dotnet build` of the game) `SubsetAnalyzer.CheckClass` does the same from metadata: a base type from an
+  assembly that is an E# package (`EsPackageId`: the `[assembly: ESharp.EsLibrary(id)]` that the Sdk targets add through an
+  `AssemblyAttribute` item, or, without it, an assembly that references ESharp.Runtime/ESharp.Platform, named by its assembly
+  name) is accepted when it has `[Extensible]` and is ES0117 (same descriptor, same message) when not; any other metadata base
+  stays ES0007. ES0117 is in `Descriptors.SubsetRules` for that. The same `EsPackageId` keeps a package's generic methods from
+  being ES0008 in the IDE (in `esharp build` they are source and monomorphised).
 - **Package C**: `src/ESharp.Compiler/PackageNatives.cs`. `Select` picks a target's files (common, a target file in place of a
   common one of the same name); `Check` gives ES0119 (no `.c` for the target), ES0120 (an exported name without the prefix:
   `ExportedSymbols` is a light reading of the C source, comments, strings and preprocessor lines left out, file-level definitions
@@ -190,7 +201,9 @@ Tests: `PackageTests.cs` (in-memory packages, generated C built and run with the
 `Assets.g.cs` comes from `AssetBuilder`, its chip data checked in the C and the chip report and read back by the program) and
 `PackageRoundTripTests.cs` (the samples/packages projects: dotnet pack, restore from a local feed, build, host run, m68k
 build with the image; the library's asset checks ESL005, ESL011, ESL012 and the outside-file warning ESL010; the C library
-`Checksum`: ESL006, ESL014, ESL015, the embedded C and the package C in the m68k build); `PackageTests.cs` also builds a package's
+`Checksum`: ESL006, ESL014, ESL015, the embedded C and the package C in the m68k build; the `[EsLibrary]` and `[Extensible]` metadata
+of the packed DLL, `dotnet build` of the game with its class derived from `Tween.Mover` and ES0117 from both `dotnet build` and
+`esharp build` for a class derived from a class without the attribute); `PackageTests.cs` also builds a package's
 C with the program's C under the host gcc and runs it, and checks a mismatched C definition fails to compile; `tools/package-smoke.sh` repeats it with the packed AmigaESharp.Sdk.
 
 ## Packaging

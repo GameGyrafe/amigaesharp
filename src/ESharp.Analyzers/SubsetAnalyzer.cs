@@ -220,9 +220,23 @@ public sealed partial class SubsetAnalyzer : DiagnosticAnalyzer
             }
             else if (!baseType.Locations.Any(l => l.IsInSource))
             {
-                c.ReportDiagnostic(Diagnostic.Create(Descriptors.HeapClass, decl.Identifier.GetLocation(), decl.Identifier.Text,
-                    $"it inherits from '{baseType.Name}': only a plain, non-generic class declared in the program, or an [Extensible] E# library class, can be a base class"));
-                return;
+                // An E# library package is source in esharp build (PackageChecks gives ES0117 there) and a referenced assembly in the
+                // IDE and the dotnet host build: the same rule here, by the [Extensible] attribute in its metadata.
+                if (EsPackageId(baseType.OriginalDefinition.ContainingAssembly) is { } package)
+                {
+                    if (!IsExtensible(baseType))
+                    {
+                        c.ReportDiagnostic(Diagnostic.Create(Descriptors.PackageDerive, decl.Identifier.GetLocation(), decl.Identifier.Text,
+                            baseType.OriginalDefinition.ToDisplayString(), package));
+                        return;
+                    }
+                }
+                else
+                {
+                    c.ReportDiagnostic(Diagnostic.Create(Descriptors.HeapClass, decl.Identifier.GetLocation(), decl.Identifier.Text,
+                        $"it inherits from '{baseType.Name}': only a plain, non-generic class declared in the program, an [Extensible] E# library class or an [Extensible] class of an E# library package can be a base class"));
+                    return;
+                }
             }
         }
         foreach (var member in decl.Members)
@@ -284,9 +298,11 @@ public sealed partial class SubsetAnalyzer : DiagnosticAnalyzer
 
         CheckSince(c, method);
 
-        // E#'s own library is source in esharp build but a referenced assembly in a host project (esharp new): its generic
-        // methods (Heap.Free<T>) are monomorphised like the program's own, so they are not "library generics".
-        if (method.IsGenericMethod && !linqSubset && !method.OriginalDefinition.Locations.Any(l => l.IsInSource) && !IsESharpLibrary(method))
+        // E#'s own library and E# library packages are source in esharp build but referenced assemblies in a host project (esharp
+        // new, a game that references a package): their generic methods (Heap.Free<T>, a package's Pick<T>) are monomorphised like
+        // the program's own, so they are not "library generics".
+        if (method.IsGenericMethod && !linqSubset && !method.OriginalDefinition.Locations.Any(l => l.IsInSource) && !IsESharpLibrary(method) &&
+            EsPackageId(method.OriginalDefinition.ContainingAssembly) == null)
             c.ReportDiagnostic(Diagnostic.Create(Descriptors.Generics, c.Node.GetLocation(), method.Name));
     }
 
@@ -337,6 +353,24 @@ public sealed partial class SubsetAnalyzer : DiagnosticAnalyzer
                 return;
             }
         }
+    }
+
+    /// <summary>
+    /// The package id of a referenced assembly that is an E# library package: the <c>[assembly: ESharp.EsLibrary(id)]</c> that
+    /// AmigaESharp.Sdk writes into every EsLibrary build, or, for a DLL without it (GenerateAssemblyInfo off), the assembly name of
+    /// one that references ESharp.Runtime or ESharp.Platform. Null for any other assembly (.NET's own, for one).
+    /// </summary>
+    private static string? EsPackageId(IAssemblySymbol? assembly)
+    {
+        if (assembly == null || assembly.Name is "ESharp.Platform" or "ESharp.Runtime") return null;
+        foreach (var a in assembly.GetAttributes())
+            if (a.AttributeClass is { Name: "EsLibraryAttribute", ContainingNamespace: { Name: "ESharp", ContainingNamespace.IsGlobalNamespace: true } } &&
+                a.ConstructorArguments.Length == 1 && a.ConstructorArguments[0].Value is string id && id.Length > 0)
+                return id;
+        foreach (var module in assembly.Modules)
+            if (module.ReferencedAssemblies.Any(r => r.Name is "ESharp.Runtime" or "ESharp.Platform"))
+                return assembly.Name;
+        return null;
     }
 
     /// <summary>The library class is marked <c>[ESharp.Extensible]</c>: programs may derive from it.</summary>

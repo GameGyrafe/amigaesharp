@@ -192,6 +192,41 @@ MyLib/
   `native C (prefix cksum_; compiled into the program, runs with its privileges): native/common/adler32.c, native/m68k/cksum_tune.h`.
   The licence check (ES0111) covers the package as a whole, C included.
 
+**Classes to derive from.** A class of a library that games may derive from is marked `[Extensible]` (from `ESharp`, as
+`GtWindow` is in the platform); its virtual and abstract members are then the library's extension points:
+
+```csharp
+// in the library (samples/packages/Tween/Mover.cs)
+[Extensible]
+public class Mover
+{
+    public Mover(Point from, Point to, int frames) { ... }
+    protected virtual int Shape(int t) => Ease.Linear(t);   // the curve
+    protected virtual void OnArrived() { }                    // called by Step at the end of the path
+    public bool Step() { ... Shape(...) ... OnArrived(); ... }
+}
+
+// in the game (samples/packages/TweenDemo/Program.cs)
+public sealed class Hopper : Mover
+{
+    public Hopper() : base(new Point(0, 0), new Point(100, 40), 4) { }
+    protected override int Shape(int t) => Tween.Ease.InQuad(t);
+    protected override void OnArrived() { ... }
+}
+```
+
+The game's class works as any class of a hierarchy within a program: constructors chain into the library's (`: base(...)`),
+`override`, `base.` calls, abstract members, `is`/`as`, a derived class of the derived class, the object passed to the
+library's code as its base type and freed through it (`Heap.Free`). Since the package is compiled from its sources with the
+game, the C is the same as for classes of one program (one class table per class, the derived struct starting with the
+library's), on every target. A class of a package that is not `[Extensible]` cannot be a base class of the game's classes or of
+another package's (ES0117: "'Dog' derives from 'Zoo.Animal' of package 'Sample.Zoo', which is not marked [Extensible]; ...");
+within its own package any class may derive from any other. The IDE and `dotnet build` of the game give the same ES0117 and
+accept the same `[Extensible]` bases, reading the attribute from the package's DLL: the Sdk step writes the package id into
+that DLL (`[assembly: ESharp.EsLibrary("<PackageId>")]`, in the generated assembly info, not in the embedded sources), so the
+IDE names the package as `esharp build` does. Marking a class `[Extensible]` makes its protected and virtual members part of
+the library's public contract: changing them later breaks the games that derive from it.
+
 **Using a library.** Add a `PackageReference` to the game's csproj, run `dotnet restore` (or `dotnet build`), then build as
 usual. `esharp build` reads `obj/project.assets.json`, takes every package of the restore (direct and transitive) whose DLL
 has an E# manifest, and prints each one (`Package MyName.Easing 1.0.0 (MIT): 2 C# file(s)`, plus the platform-level features
@@ -212,7 +247,7 @@ warns. The checks on package code:
 | An `[EntryPoint]` in a package | ES0114 |
 | The same type (namespace, name, arity; also a `partial` one) in a package and the program, or in two packages (also an asset class: the message names the `assets.json`) | ES0115 |
 | An `internal` member of a package used from the program or another package | ES0116 |
-| A program class derived from a package class (not supported yet) | ES0117 |
+| A class of the program or of another package derived from a package class that is not marked `[Extensible]` (also in the IDE and `dotnet build`, from the package's DLL) | ES0117 |
 | A package that cannot be used: an unknown manifest format or resource, asset inputs (images, sounds) in it, a bad path, a reserved or invalid symbol in its `defines`, an asset declaration it cannot read or whose generated source it does not carry, a C file outside `esharp/native/common` or `esharp/native/<target>`, prebuilt code, C files the manifest does not list (or listed files it does not carry), native C without the `NativeC` feature or the other way round, a bad native prefix | ES0118 |
 
 Types with the same name in different namespaces (the program's `Game.Ease` and the package's `Tween.Ease`) are fine: their C
@@ -239,7 +274,8 @@ attributes (`[EntryPoint]`, `[AmigaLib]`, `[ChipRam]`, ...) and a small intrinsi
   reference-counted heap closures that you free with `Heap.Free` (`Heap.LiveClosures` is the leak check). A delegate given to an
   `[Owned]` parameter or a property setter is the callee's to free; if it is a field, or a local you use again or free, the callee
   takes a reference of its own, so you still free yours.
-- User classes that derive from a platform class marked `[Extensible]` (so far `GtWindow`, see `samples/guiclass`).
+- User classes that derive from a platform class marked `[Extensible]` (so far `GtWindow`, see `samples/guiclass`) or from
+  an `[Extensible]` class of an E# library package (see "Classes to derive from" under [Libraries](#libraries-e-packages)).
 - Slow or opt-in: `long`/`ulong` (software 64-bit, rule ES0100 on the 68020), `float`/`double` (off by default, ES0003; `--allow-float`).
 
 **Not supported** (the analyzer or the emitter says so; the emitter reports `ES0099` and never miscompiles): exceptions, `async`,
