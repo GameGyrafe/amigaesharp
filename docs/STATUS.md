@@ -83,7 +83,7 @@ pastes in for `es_std_*`/`es_sdl_*` [Native] calls), so packages get one way of 
 - The same game with `--target sdl --docker esharp-sdl`: 20 ok both sides, agree (the common header used); `--target aros
   --docker esharp-amiga-toolchain` (hosted AROS x86-64): 20 ok, return code 0, 0 traps, agree.
 - `--toolchain` (the m68k toolchain copied out of the pinned image) against `--docker`: the TweenDemo executable (25,316 bytes),
-  its C and its .info are byte-identical.
+  its C and its .info are byte-identical (before `-fno-common` was added; not re-run since, though both builds get the same flag).
 - `tools/package-smoke.sh` with `dotnet pack ESharp.sln -c Release -p:Version=0.1.0-local.311` and the m68k image: passed; the
   smoke library now has `native/common/triple.c` with the default prefix `esharpsmoke_lib_`, the game calls it, the emit-only C
   has the prototype, and the m68k build compiles the package C.
