@@ -150,6 +150,8 @@ public class PackageRoundTripTests
             Assert.Equal(new[] { "common/adler32.c", "common/cksum_tune.h", "m68k/cksum_tune.h" }, cksLib.Manifest.Native.Files.ToArray());
             Assert.Equal(new[] { "common/adler32.c", "common/cksum_tune.h", "m68k/cksum_tune.h" }, cksLib.Native.Select(n => n.Path).ToArray());
 
+            // A class of the library that is not [Extensible] (only in this copy): the game may not derive from it (ES0117 below).
+            File.WriteAllText(Path.Combine(work, "Tween", "Plain.cs"), "namespace Tween;\n\npublic class Plain\n{\n    public int N;\n}\n");
             var (packExit, packLog) = DotnetResult(work, packages, "pack", "Tween", "-o", feed, "-p:ESharpSdkVersion=" + SdkVersion);
             Assert.True(packExit == 0 && !packLog.Contains("ESL0"), $"dotnet pack failed or warned:\n{packLog}");
             var nupkg = Path.Combine(feed, "ESharpSample.Tween.1.0.0.nupkg");
@@ -167,7 +169,15 @@ public class PackageRoundTripTests
             Assert.Equal("MIT", lib.License);
             Assert.Empty(lib.Manifest.Features);
             Assert.Equal(new[] { "TWEEN_OWN" }, lib.Manifest.Symbols);   // not DEBUG/RELEASE/TRACE or HOST
-            Assert.Equal(new[] { "Assets.g.cs", "Ball.cs", "Ease.cs", "Tween.cs" }, lib.Sources.Select(s => s.Path).ToArray());
+            Assert.Equal(new[] { "Assets.g.cs", "Ball.cs", "Ease.cs", "Mover.cs", "Plain.cs", "Tween.cs" }, lib.Sources.Select(s => s.Path).ToArray());
+            // The HOST DLL says in metadata what the analyzer needs where the game sees it as a reference: the package id
+            // ([assembly: EsLibrary], from AmigaESharp.Sdk) and which classes are [Extensible].
+            var meta = Microsoft.CodeAnalysis.CSharp.CSharpCompilation.Create("probe", references: PlatformSubclassTests.HostReferences()
+                .Append(Microsoft.CodeAnalysis.MetadataReference.CreateFromFile(dllCopy)));
+            var mover = meta.GetTypeByMetadataName("Tween.Mover")!;
+            Assert.Contains(mover.ContainingAssembly.GetAttributes(), a => a.AttributeClass?.Name == "EsLibraryAttribute" && (string?)a.ConstructorArguments[0].Value == "ESharpSample.Tween");
+            Assert.Contains(mover.GetAttributes(), a => a.AttributeClass?.Name == "ExtensibleAttribute");
+            Assert.DoesNotContain(meta.GetTypeByMetadataName("Tween.Plain")!.GetAttributes(), a => a.AttributeClass?.Name == "ExtensibleAttribute");
             Assert.Equal(new PackageAssets("Assets.g.cs", "Tween", "Art"), lib.Manifest.Assets);
             // The package carries the converted assets (in the DLL), not the inputs.
             using (var zip = ZipFile.OpenRead(nupkg))
@@ -179,6 +189,25 @@ public class PackageRoundTripTests
             Assert.Null(ESharp.Cli.PackageStep.Load(game, out var found));
             Assert.Equal(new[] { "ESharpSample.Checksum", "ESharpSample.Tween" }, found.Packages.Select(p => p.Id).ToArray());
             Assert.False(found.AllowCopyleft);
+
+            // The dotnet build of the game (the IDE's view: the package is a referenced assembly, the analyzer reads its metadata):
+            // Hopper derives from the package's [Extensible] Mover, fine; a class derived from Plain is ES0117, as in esharp build.
+            var (gameExit, gameLog) = DotnetResult(work, packages, "build", "TweenDemo", "--no-restore", "-p:ESharpSdkVersion=" + SdkVersion);
+            Assert.True(gameExit == 0 && !gameLog.Contains("ES0117") && !gameLog.Contains("ES0007"), $"dotnet build of the game failed:\n{gameLog}");
+            const string derive = "'Bad' derives from 'Tween.Plain' of package 'ESharpSample.Tween', which is not marked [Extensible]";
+            var bad = Path.Combine(game, "Bad.cs");
+            File.WriteAllText(bad, "namespace TweenDemo;\n\npublic class Bad : Tween.Plain\n{\n}\n");
+            var (badExit, badLog) = DotnetResult(work, packages, "build", "TweenDemo", "--no-restore", "-p:ESharpSdkVersion=" + SdkVersion);
+            Assert.True(badExit != 0 && badLog.Contains("error ES0117: " + derive), $"dotnet build with a class derived from Plain expected to fail with ES0117:\n{badLog}");
+            var badOutput = new StringWriter();
+            var savedOut = Console.Out;
+            var savedErr = Console.Error;
+            Console.SetOut(badOutput);
+            Console.SetError(badOutput);
+            try { Assert.True(ESharp.Cli.Program.Build(new[] { game, "--emit-only" }, out _) != 0, badOutput.ToString()); }
+            finally { Console.SetOut(savedOut); Console.SetError(savedErr); }
+            Assert.Contains("ES0117: " + derive, badOutput.ToString());
+            File.Delete(bad);
 
             var m68k = HasImage(M68kImage);
             var output = new StringWriter();
@@ -198,14 +227,14 @@ public class PackageRoundTripTests
             }
             finally { Console.SetOut(saved); Console.SetError(savedError); }
             var text = output.ToString().Replace("\r\n", "\n");
-            Assert.Contains("Package ESharpSample.Tween 1.0.0 (MIT): 4 C# file(s)", text);
+            Assert.Contains("Package ESharpSample.Tween 1.0.0 (MIT): 6 C# file(s)", text);
             Assert.Contains("  assets: Tween.Art (Assets.g.cs; images and samples converted when the library was built)", text);
             // The package's chip data is counted as the program's would be: 64 + 32 bytes of ball, 480 of blip.
             Assert.Matches(@"static +Art\.BallPlanes +64 bytes +<package ESharpSample\.Tween 1\.0\.0>/Assets\.g\.cs\(", text);
             Assert.Matches(@"static +Art\.BallMask +32 bytes", text);
             Assert.Matches(@"static +Art\.BlipData +480 bytes", text);
             Assert.Contains("  its own symbols: TWEEN_OWN", text);
-            Assert.Contains("Host: 20 ok, 0 FAIL", text);
+            Assert.Contains("Host: 22 ok, 0 FAIL", text);
             Assert.Contains("Package ESharpSample.Checksum 1.0.0 (MIT): 1 C# file(s)", text);
             Assert.Contains("  native C (prefix cksum_; compiled into the program, runs with its privileges): native/common/adler32.c, native/m68k/cksum_tune.h", text);
             var nativeDir = Path.Combine(game, "obj", "m68k", "esharp-native", "ESharpSample.Checksum");
@@ -271,7 +300,7 @@ public class PackageRoundTripTests
             Assert.Equal(id, lib.Manifest!.Id);
             Assert.Equal(license, lib.License);
             // Outside.cs (no Link) is skipped, Extra.cs (a Link) is embedded under its Link path.
-            Assert.Equal(new[] { "Assets.g.cs", "Ball.cs", "Ease.cs", "Linked/Extra.cs", "Tween.cs" }, lib.Sources.Select(s => s.Path).ToArray());
+            Assert.Equal(new[] { "Assets.g.cs", "Ball.cs", "Ease.cs", "Linked/Extra.cs", "Mover.cs", "Tween.cs" }, lib.Sources.Select(s => s.Path).ToArray());
 
             // An author who sets SetLinkMetadataAutomatically keeps it: then the SDK links Outside.cs by its file name, and it is embedded.
             File.WriteAllText(csproj, File.ReadAllText(csproj).Replace("<EsLibrary>true</EsLibrary>",
@@ -279,7 +308,7 @@ public class PackageRoundTripTests
             (exit, log) = DotnetResult(work, packages, "build", "Tween", "-p:ESharpSdkVersion=" + SdkVersion);
             Assert.True(exit == 0 && !log.Contains("ESL010"), log);
             lib = PackageReader.ReadDll(dll, id, "1.0.0");
-            Assert.Equal(new[] { "Assets.g.cs", "Ball.cs", "Ease.cs", "Linked/Extra.cs", "Outside.cs", "Tween.cs" }, lib!.Sources.Select(s => s.Path).ToArray());
+            Assert.Equal(new[] { "Assets.g.cs", "Ball.cs", "Ease.cs", "Linked/Extra.cs", "Mover.cs", "Outside.cs", "Tween.cs" }, lib!.Sources.Select(s => s.Path).ToArray());
 
             // assets.json renames the class but esharp assets has not run again: a warning (ESL011), and the manifest names the class
             // the package really has, the one in Assets.g.cs (Tween.Art), not the one assets.json asks for.

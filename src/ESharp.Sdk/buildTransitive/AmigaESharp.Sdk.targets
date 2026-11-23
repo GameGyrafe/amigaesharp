@@ -283,6 +283,14 @@
     <_EsLibraryManifest>$(IntermediateOutputPath)esharp-library.json</_EsLibraryManifest>
   </PropertyGroup>
 
+  <!-- The package id in the HOST DLL's metadata ([assembly: ESharp.EsLibrary(id)], in the generated assembly info, which is not
+       embedded): the analyzer names the package with it when a game derives from one of its classes (ES0117). -->
+  <ItemGroup Condition="'$(EsLibrary)' == 'true'">
+    <AssemblyAttribute Include="ESharp.EsLibraryAttribute">
+      <_Parameter1>$(PackageId)</_Parameter1>
+    </AssemblyAttribute>
+  </ItemGroup>
+
   <Target Name="EsLibraryEmbedSources" BeforeTargets="BeforeBuild" Condition="'$(EsLibrary)' == 'true'">
     <!-- The version of this AmigaESharp.Sdk, from the nuspec next to this file in the restored package (no nuspec: no default). -->
     <XmlPeek Condition="'$(EsMinSdkVersion)' == '' and Exists('$(MSBuildThisFileDirectory)../amigaesharp.sdk.nuspec')"

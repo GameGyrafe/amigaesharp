@@ -99,6 +99,25 @@ public static class Twice
     public static int Of(int x) => Pick(true, x * 2, 0);
 }
 EOF
+# A class made for deriving ([Extensible]) and one that is not (#31).
+cat > smokelib/Counter.cs <<'EOF'
+using ESharp;
+
+namespace SmokeLib;
+
+[Extensible]
+public class Counter
+{
+    public int N;
+    public void Bump() { N += Step(); }
+    protected virtual int Step() => 1;
+}
+
+public class Box
+{
+    public int Size;
+}
+EOF
 # C in the library (#31): native/common/triple.c, called through a [Native] extern (C# on the dotnet host). No EsNativePrefix,
 # so the prefix comes from the package id: esharpsmoke_lib_.
 mkdir -p smokelib/native/common
@@ -135,7 +154,7 @@ if "$esharp" build uselib --emit-only > nolib.log 2>&1; then echo "expected an e
 grep -q 'dotnet restore' nolib.log
 dotnet restore uselib
 "$esharp" build uselib --emit-only | tee lib.log
-grep -q 'Package ESharpSmoke.Lib 1.0.0 (MIT): 3 C# file(s)' lib.log
+grep -q 'Package ESharpSmoke.Lib 1.0.0 (MIT): 4 C# file(s)' lib.log
 grep -q 'native C (prefix esharpsmoke_lib_; compiled into the program, runs with its privileges): native/common/triple.c' lib.log
 grep -q '^extern int32_t esharpsmoke_lib_triple(int32_t);' uselib/obj/m68k/uselib.c
 grep -q 'esharpsmoke_lib_triple' uselib/obj/m68k/esharp-native/ESharpSmoke.Lib/triple.c
@@ -145,6 +164,24 @@ grep -q '^static __chip uint8_t Es_SmokeLib_Sounds_TickData\[4\] = { 0, 100, 156
 (cd uselib && "$esharp" test) | tee libtest.log
 grep -q 'TEST PASSED' libtest.log
 dotnet run --project uselib | grep -q 'ok sum of 1 to 10'
+# A class of the game derived from the library's [Extensible] Counter (#31): esharp build compiles it with the library's source,
+# and dotnet build accepts it too (the packaged analyzer reads [Extensible] from the library's DLL). A class derived from Box,
+# which is not [Extensible], is ES0117 in both.
+cat > uselib/Fast.cs <<'EOF'
+public class Fast : SmokeLib.Counter
+{
+    protected override int Step() => 2;
+}
+EOF
+dotnet build uselib -nologo > derive.log 2>&1 || { cat derive.log; echo "expected the derived class to build with dotnet"; exit 1; }
+"$esharp" build uselib --emit-only > derive2.log 2>&1 || { cat derive2.log; echo "expected the derived class to build with esharp"; exit 1; }
+grep -q 'Fast_Step' uselib/obj/m68k/uselib.c
+echo 'public class Bad : SmokeLib.Box { }' > uselib/Bad.cs
+if dotnet build uselib -nologo > derive3.log 2>&1; then echo "expected ES0117 from the packaged analyzer"; exit 1; fi
+grep -q "error ES0117: 'Bad' derives from 'SmokeLib.Box' of package 'ESharpSmoke.Lib', which is not marked \\[Extensible\\]" derive3.log
+if "$esharp" build uselib --emit-only > derive4.log 2>&1; then echo "expected ES0117 from esharp build"; exit 1; fi
+grep -q "ES0117: 'Bad' derives from 'SmokeLib.Box' of package 'ESharpSmoke.Lib', which is not marked \\[Extensible\\]" derive4.log
+rm uselib/Bad.cs
 if "$esharp" build uselib --target os4 --emit-only > os4.log 2>&1; then echo "expected ES0110 for a target the library does not list"; exit 1; fi
 grep -q 'ES0110' os4.log
 sed -i.orig 's|Include="ESharpSmoke.Lib" Version="1.0.0"|Include="ESharpSmoke.Lib" Version="1.0.1"|' uselib/uselib.csproj

@@ -12,7 +12,7 @@ namespace ESharp.Compiler;
 /// The checks for E# library packages (issue #31) beyond the subset rules, which run on package sources as on the program's:
 /// the manifest (target list, licence, E# version, problems found when the package was read) and the sources (platform-level
 /// features, declared in the package or called from it, that the manifest does not list, an entry point, a type declared twice, internal members used from outside, a class derived
-/// from a package class).
+/// from a package class not marked [Extensible]).
 /// </summary>
 internal static class PackageChecks
 {
@@ -138,25 +138,71 @@ internal static class PackageChecks
             packageOf.TryGetValue(tree, out var here);
             var origin = Origin(tree);
 
-            // A class of the program (or of another package) derived from a package's class.
+            // A class of the program (or of another package) derived from a package's class that is not marked [Extensible]. An
+            // [Extensible] one is compiled with the program like any other class (vtables, overrides, constructor chaining); the
+            // analyzer gives the same ES0117 in the IDE, where the package is a referenced assembly (SubsetAnalyzer.CheckClass).
             foreach (var cls in tree.GetRoot().DescendantNodes().OfType<ClassDeclarationSyntax>())
-                if (model.GetDeclaredSymbol(cls) is { BaseType: { } baseType } type && PackageOf(baseType) is { } owner && owner != here)
+                if (model.GetDeclaredSymbol(cls) is { BaseType: { } baseType } type && PackageOf(baseType) is { } owner && owner != here &&
+                    !baseType.OriginalDefinition.GetAttributes().Any(a => a.AttributeClass is { Name: "ExtensibleAttribute", ContainingNamespace: { Name: "ESharp", ContainingNamespace.IsGlobalNamespace: true } }))
                     diagnostics.Add(Diagnostic.Create(Descriptors.PackageDerive, cls.Identifier.GetLocation(), type.Name, baseType.ToDisplayString(), owner.Id));
 
-            // Internal members of a package, used from elsewhere: one assembly here, two in the dotnet host build.
-            foreach (var node in tree.GetRoot().DescendantNodes().Where(n => n is SimpleNameSyntax or BaseObjectCreationExpressionSyntax))
+            // Internal members of a package, used from elsewhere: one assembly here, two in the dotnet host build. Besides names and
+            // object creations: constructor initializers (: base(5)), the implicit base() call of a constructor or of a class without
+            // one, and overrides of an internal virtual or abstract member (CS0122 and CS0115 in the dotnet host build).
+            void Report(ISymbol? symbol, Location at)
             {
-                var info = model.GetSymbolInfo(node);
-                var symbol = info.Symbol ?? (info.CandidateSymbols.Length == 1 ? info.CandidateSymbols[0] : null);
-                if (symbol == null || symbol is INamespaceSymbol) continue;
+                if (symbol == null || symbol is INamespaceSymbol) return;
                 symbol = symbol.OriginalDefinition;
-                if (PackageOf(symbol) is not { } owner || owner == here) continue;
-                if (!IsInternal(symbol)) continue;
-                diagnostics.Add(Diagnostic.Create(Descriptors.PackageInternal, node.GetLocation(),
+                if (PackageOf(symbol) is not { } owner || owner == here) return;
+                if (!IsInternal(symbol)) return;
+                diagnostics.Add(Diagnostic.Create(Descriptors.PackageInternal, at,
                     symbol.ToDisplayString(SymbolDisplayFormat.CSharpErrorMessageFormat), owner.Id, origin));
+            }
+            foreach (var node in tree.GetRoot().DescendantNodes())
+            {
+                switch (node)
+                {
+                    case SimpleNameSyntax or BaseObjectCreationExpressionSyntax or ConstructorInitializerSyntax or PrimaryConstructorBaseTypeSyntax:
+                        var info = model.GetSymbolInfo(node);
+                        Report(info.Symbol ?? (info.CandidateSymbols.Length == 1 ? info.CandidateSymbols[0] : null),
+                            node is ConstructorInitializerSyntax ci ? ci.ThisOrBaseKeyword.GetLocation() : node.GetLocation());
+                        break;
+                    case ConstructorDeclarationSyntax { Initializer: null } ctor when !ctor.Modifiers.Any(SyntaxKind.StaticKeyword):
+                        Report(ImplicitBaseConstructor(model.GetDeclaredSymbol(ctor)?.ContainingType), ctor.Identifier.GetLocation());
+                        break;
+                    case ClassDeclarationSyntax { ParameterList: null } cls when model.GetDeclaredSymbol(cls) is { } type &&
+                                                                                  type.InstanceConstructors.All(c => c.IsImplicitlyDeclared):
+                        Report(ImplicitBaseConstructor(type), cls.Identifier.GetLocation());
+                        break;
+                    case MethodDeclarationSyntax or PropertyDeclarationSyntax or IndexerDeclarationSyntax or EventDeclarationSyntax or EventFieldDeclarationSyntax:
+                        var members = node is EventFieldDeclarationSyntax ef
+                            ? ef.Declaration.Variables.Select(v => model.GetDeclaredSymbol(v))
+                            : new[] { model.GetDeclaredSymbol(node) };
+                        foreach (var member in members)
+                            Report(member switch
+                            {
+                                IMethodSymbol m => m.OverriddenMethod,
+                                IPropertySymbol pr => pr.OverriddenProperty,
+                                IEventSymbol ev => ev.OverriddenEvent,
+                                _ => null,
+                            }, node switch
+                            {
+                                MethodDeclarationSyntax md => md.Identifier.GetLocation(),
+                                PropertyDeclarationSyntax pd => pd.Identifier.GetLocation(),
+                                EventDeclarationSyntax ed => ed.Identifier.GetLocation(),
+                                _ => node.GetLocation(),
+                            });
+                        break;
+                }
             }
         }
     }
+
+    /// <summary>The base constructor that a constructor without an initializer, or a class without a constructor, calls: base().</summary>
+    private static IMethodSymbol? ImplicitBaseConstructor(INamedTypeSymbol? type) =>
+        type is { TypeKind: TypeKind.Class, IsStatic: false, BaseType: { } b }
+            ? b.InstanceConstructors.Where(c => c.Parameters.All(p => p.IsOptional || p.IsParams)).OrderBy(c => c.Parameters.Length).FirstOrDefault()
+            : null;
 
     /// <summary>The symbol, or a type that contains it, is internal (or private protected): out of reach from another assembly.</summary>
     private static bool IsInternal(ISymbol symbol)

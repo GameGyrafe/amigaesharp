@@ -144,8 +144,8 @@ public static class Descriptors
         "'{0}' is internal to package '{1}' and cannot be used from {2} (the dotnet host build rejects it too)");
 
     public static readonly DiagnosticDescriptor PackageDerive = Error(
-        "ES0117", "Class derived from a package class",
-        "'{0}' derives from '{1}' of package '{2}'; deriving from a package class is not supported yet");
+        "ES0117", "Class derived from a package class not marked [Extensible]",
+        "'{0}' derives from '{1}' of package '{2}', which is not marked [Extensible]; only package classes made for it (marked [Extensible] in the package) can be base classes of another package's or the program's classes");
 
     public static readonly DiagnosticDescriptor PackageInvalid = Error(
         "ES0118", "Package cannot be used",
@@ -175,5 +175,5 @@ public static class Descriptors
         System.Collections.Immutable.ImmutableArray.Create(
             Exceptions, Linq, FloatingPoint, AsyncAwait, Dynamic, Reflection,
             HeapClass, Generics, Interfaces, SlowArithmetic, LibraryTooOld, ReferenceField, FixedArrays,
-            BorrowedDelegate, ClosureNeverFreed, DelegateTypeArgument, RemoveLambda, LibraryInternal);
+            BorrowedDelegate, ClosureNeverFreed, DelegateTypeArgument, RemoveLambda, LibraryInternal, PackageDerive);
 }

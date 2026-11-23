@@ -831,9 +831,10 @@ Targets:
 
     private static List<string> SourcesUnder(string path)
     {
+        // obj/ and bin/ below the project folder only: a project that itself lies under some obj/ folder keeps its sources.
         var sep = Path.DirectorySeparatorChar;
         return Directory.EnumerateFiles(path, "*.cs", SearchOption.AllDirectories)
-            .Where(f => !f.Contains($"{sep}obj{sep}") && !f.Contains($"{sep}bin{sep}"))
+            .Where(f => sep + Path.GetRelativePath(path, f) is var rel && !rel.Contains($"{sep}obj{sep}") && !rel.Contains($"{sep}bin{sep}"))
             .OrderBy(f => f, StringComparer.Ordinal)
             .ToList();
     }

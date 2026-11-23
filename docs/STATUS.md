@@ -10,6 +10,62 @@ The minimum system is now an **Amiga 1200: 68020, AGA, 2 MB chip RAM, Kickstart 
 - **Kept on purpose:** `HasAga()` and `HasRtg()` with their fallbacks. A classic A1200 always has AGA, but PowerPC, RTG-only and AROS targets may not, so the checks stay as the portable way to ask. **Not yet done:** using 68020 instructions deliberately and AROS (a new target, untested).
 - Verified after the change: all 17 samples built with `-m68020` and run on Kickstart 3.1 (A1200) in FS-UAE: 300 `ok` lines, no `FAIL` (the script shows only the last 25 lines of each sample, so long ones are truncated), 136 unit tests pass. Not verified: PowerPC, real hardware, a 68000/Kickstart 2.04 run (no longer supported).
 
+## E# library packages, part 4: classes derived from package classes (issue #31)
+
+The last code item of #31: a class of the program (or of another package) may derive from a package class marked
+`[Extensible]`, as from `GtWindow`. How to use it: docs/GUIDE.md, "Libraries", "Classes to derive from".
+
+- **Compiler.** Package code is compiled from its sources with the program (user trees), so the hierarchy is built as within
+  one program: class tables, the derived struct starting with the package's, constructor chaining into the package's
+  constructor, overrides called from package code, `base.` calls, abstract members, `is`/`as`, `Heap.Free` through the base
+  type. No emitter change was needed. `PackageChecks` now gives ES0117 only when the base class has no `[Extensible]`; the
+  message says so: "'Dog' derives from 'Zoo.Animal' of package 'Sample.Zoo', which is not marked [Extensible]; only package
+  classes made for it (marked [Extensible] in the package) can be base classes of another package's or the program's
+  classes". Within one package any class may still derive from any other.
+- **IDE / `dotnet build` of the game.** There the package is a referenced assembly. `SubsetAnalyzer.CheckClass` recognises an
+  E# package assembly by `[assembly: ESharp.EsLibrary("<PackageId>")]` (new attribute in ESharp.Runtime; the Sdk targets add
+  it to every `EsLibrary=true` build through an `AssemblyAttribute` item, in the generated assembly info, which is not embedded),
+  or, without it, by a reference to ESharp.Runtime/ESharp.Platform (then named by its assembly name). An `[Extensible]` base
+  from such an assembly is accepted; one without is ES0117 with the same message as `esharp build`; other metadata bases
+  stay ES0007. ES0117 joined the analyzer's supported diagnostics.
+- **Found on the way and fixed:** (1) the analyzer reported ES0008 in the IDE for a call of a package's generic method
+  (TweenDemo's `Lerp.Pick`: `dotnet build` of the game failed; it had not been tried before), since only E#'s own library
+  assemblies were exempt; package assemblies are now too, as in `esharp build`, where they are source. (2) `esharp build`
+  skipped every source of a project that lies below any folder named `obj` or `bin` (it tested the full path), so a project
+  under a temporary folder in `obj/` had "no .cs files"; only `obj/` and `bin/` below the project folder are skipped now.
+- **Sample.** `Tween` has `Mover` (`[Extensible]`: a point along a `Tween<Point>`, virtual `Shape` (the curve, linear) and
+  `OnArrived`, both called by its `Step`). `TweenDemo` derives `Hopper` (ease-in curve, one hop back on the first arrival) and
+  has 2 new checks (22 in all). `tools/package-smoke.sh`: the smoke library has an `[Extensible]` `Counter` and a plain
+  `Box`; the game's `Fast : Counter` builds with `dotnet build` and `esharp build`, and `Bad : Box` is ES0117 in both.
+
+**Verified (2026-11-23):**
+- `dotnet test`: 759 passed, 2 skipped (the OS4 VM and SDK-backed BindGen tests), 0 failed. New in `PackageTests`: a package with an
+  abstract `[Extensible]` class (virtual and abstract members, a constructor with an argument, a static count) and a program
+  with `Game.Actor` (same simple name as the package's `Anim.Actor`), a class without overrides of `Move` and a class two levels
+  down, built for m68k and for sdl and run with the host gcc (5 ok lines each: overrides called from package code, base call
+  into the package, `is`/`as`, program objects passed to package code, the package constructor run for each); ES0117 for a
+  non-`[Extensible]` package class (exact message), none within one package, ES0117 for a class of another package; the
+  analyzer against the package compiled to a DLL in memory (with and without the assembly attribute): no ES0007/ES0117 for the
+  same program, ES0117 with the same message as `esharp build` for the plain class, no ES0008 for a package's generic method,
+  ES0007 for a .NET base. `PackageRoundTripTests`: the packed Tween DLL has `[EsLibrary("ESharpSample.Tween")]` and
+  `[Extensible]` on `Mover` (not on a plain class added in the test's copy), `dotnet build` of TweenDemo passes, a `Bad :
+  Tween.Plain` file makes both `dotnet build` and `esharp build` fail with the same ES0117, host 22 ok, the m68k build.
+- `TweenDemo` from a local feed (Sdk, Tween and Checksum packed from this checkout, empty `NUGET_PACKAGES`), `esharp test
+  --target m68k --docker <m68k image> --model A1200 --kickstart <Kickstart 3.1 rom>`: host 22 ok, Amiga 22 ok, 0 FAIL, return
+  code 0, "Host and Amiga agree on every check" ("hopper x after one frame 6" on both). `esharp run ... --headless
+  --screenshot`: the same picture as before (five blue balls on the orange dotted path, the grey "TWEEN + PACKAGE ART" bar;
+  the mover is not drawn).
+- `--target sdl --docker esharp-sdl`: 22 ok both sides, agree. `--target aros --docker esharp-amiga-toolchain` (hosted AROS
+  x86-64): 22 ok, return code 0, 0 traps, agree. `--target os4 --docker esharp-amiga-toolchain` in the AmigaOS 4.1 VM: 21 ok,
+  1 skipped ("package sound plays", as before), return code 0, agree.
+- `tools/package-smoke.sh` with `dotnet pack ESharp.sln -c Release -p:Version=0.1.0-local.1` and the m68k image: passed.
+
+**Not verified:** morphos and aros-i386 runs of the sample; real hardware; Windows CI runs the new tests (not run locally);
+the analyzer in an actual IDE (Visual Studio, VS Code) rather than `dotnet build` and in-memory compilations (the same
+analyzer and metadata); a package class deriving from a platform `[Extensible]` class (`GtWindow`) and a game deriving from
+that in turn (not tried). Changing an `[Extensible]` class's protected or virtual members breaks games derived from it; there
+is no check for that across package versions.
+
 ## E# library packages, part 3: C files and headers in packages (issue #31)
 
 Item 2 of the maintainer's decision of 2026-11-21 ("C files and headers in packages come later"), and the "Assets in packages
@@ -117,7 +173,7 @@ C is plain and target-neutral, but that is not a run); real hardware; the linker
 and the host gcc (the compilers of the images were run directly, see the follow-ups above); package C in
 `esharp addr` (its line table is the program's only); passing E# structs to a package's C (refused, ES0121); per-package C
 flags or defines (none: the target's flags apply, plus `-fno-common`); the morphos and aros-i386 builds of the sample; Windows CI runs the new
-tests (not run locally). Deriving from package classes (ES0117) stays open.
+tests (not run locally). Deriving from package classes (ES0117): done since, see part 4.
 
 ## E# library packages, part 2: assets in packages (issue #31)
 
@@ -216,7 +272,7 @@ and a manifest as embedded resources; `esharp build`, `run` and `test` find the 
   `[AmigaLib]`/`[Native]`/`[InlineAsm]`/`[Interrupt]`/`[HookEntry]` declared in the package, or a platform `[AmigaLib]`/`[Native]` extern called from it
   (`Exec.AllocVec`, `Dos.PutStr` on the Amiga targets; per target, so `Dos.PutStr` is fine on sdl), without `EsFeatures`, ES0114 entry point in a package, ES0115
   the same type in a package and the program or two packages (also `partial`), ES0116 `internal` package member used from
-  outside, ES0117 class derived from a package class (not supported yet), ES0118 unusable package (assets, C files, newer
+  outside (also through inheritance: a `base(...)` call or the implicit `base()` to an internal constructor, an override of an internal or `private protected` member), ES0117 class derived from a package class (not supported then; since part 4 only from one not marked `[Extensible]`), ES0118 unusable package (assets, C files, newer
   manifest format, bad path, a reserved or invalid symbol in `defines`). Same simple type names in different namespaces get prefixed C names as before.
 - **Sample** `samples/packages`: the library `Tween` (`ESharpSample.Tween`: easing curves, a generic `Tween<T>` struct, a generic
   method, fixed point, an internal helper) and the game `TweenDemo` (12 checks, including its own `Ease` class next to the
@@ -251,7 +307,7 @@ and a manifest as embedded resources; `esharp build`, `run` and `test` find the 
 - The samples/packages/README.md steps in the checkout (with `NUGET_PACKAGES` set to an empty folder): host 12 ok.
 
 **Not done / not verified:** assets (done since, see part 2) and C files in packages (refused with a clear error; a later wave of #31); deriving from
-package classes (ES0117); pruning unused package code (all of a package is emitted, like program code); a game using a
+package classes (ES0117; done since, see part 4); pruning unused package code (all of a package is emitted, like program code); a game using a
 library through a ProjectReference (use a package, or `esharp.include` for local folders); `[assembly: RequiresLib]` in a
 package applies to the whole program (one assembly); the morphos, aros-i386 and sdl builds of the sample (the library lists
 them; not run); Windows (CI runs the unit tests there, including the round trip without the m68k build); real hardware;
@@ -1562,7 +1618,7 @@ Found by comparing what a real card game needs (heavy use of collections, tuples
 | Interfaces | Plain-method interfaces (no properties, events, generic methods or default implementations). Two ways to use them: as generic constraints (`where T : IScorer`, monomorphised, any struct or class, static dispatch), and as **variable types** (`IRules rules = new FlatRules();`, fields, parameters, returns, statics): an interface value is a C struct of the object pointer and a table of functions, so the call is dynamic. Only **classes** can be converted to an interface value (a struct would need boxing: ES0099). `x == null`, `x is null`, `default`, equality (same object) and `Heap.Free(ref x)` (frees the object) work. `ref`/`out`/`in` parameters, and `is`/`as`/type patterns back to a class work. Not done: interface-to-interface conversion and tests, inheritance between interfaces |
 | Lambdas, method groups and delegates (`Func<>`, `Action<>`, `Predicate<>`, user `delegate` types) | Done: a delegate is a function pointer plus an environment; lambdas may capture locals, parameters and `this` (by reference: on the stack when only borrowed, in a heap closure when stored, returned or added to an event; see "Heap closures and events"). Calls `f(x)`, `f.Invoke(x)` and `f?.Invoke(x)` (void delegates), `null` and `== null` work; field-like events (`event Action E;`, `+=`, `-=`, raise) on classes. Not done: delegates as struct fields, `delegate { }` anonymous methods, instance-method groups, combining plain delegates (`+=` outside events), local functions that capture |
 | LINQ | Over arrays and `Enumerable.Range`, as fused loops: Where, Select, Take, Skip, Count, Sum, Min, Max, Any, All, First, Last, Contains, Aggregate, OrderBy/ThenBy (stack copy, stable insertion sort) and simple queries (see the top of this file). No `ToArray`/`ToList`, no sequences stored in variables |
-| Still missing (needed by bigger games) | `OrderBy`/`ToArray`/`ToList`, float values in strings, `is`/`as` to interface types, inheritance from generic or library classes (except the `[Extensible]` platform classes: `GtWindow`) |
+| Still missing (needed by bigger games) | `OrderBy`/`ToArray`/`ToList`, float values in strings, `is`/`as` to interface types, inheritance from generic or library classes (except `[Extensible]` ones: the platform's `GtWindow`, and package classes) |
 
 ## Phase 4: card demo (done on the emulator)
 
@@ -1596,7 +1652,7 @@ Open work as of 2026-11-14 (the GitHub issues are the live list; the v1 tracker 
 - **Windows (#11):** CI now runs a `windows` job (windows-latest, PR head): `dotnet test` (439 passed, 2 skipped, 0 failed; the runner has a MinGW gcc, so the generated-C tests run there and only the Docker/VM/SDK-dependent tests skip), emit-only builds of `samples/hello` and `samples/cards`, `esharp test samples/linq`, a clean `git status` afterwards, and a package round trip against the PR's own packages (`dotnet pack`, install the tool from the folder into a tool path, a nuget.config with the local feed, version and PackageReference checked, NU1603 fails the step, `esharp new`, `dotnet run`, `esharp test`, `esharp build --emit-only`). A `.gitattributes` keeps the working tree LF (the runner has `core.autocrlf=true`), and the native test output is read CRLF-tolerant. Still needs a person on a real Windows machine: Docker Desktop with `--docker` builds, FS-UAE for Windows, VS Code, and Windows with a different (or no) C compiler. `tools/aros-hosted` is Linux-only. macOS was checked, see "VS Code support".
 - **Bindings (#19, #40):** GadTools wrappers (v1), the BOOPSI core with hooks (#40 part 1, see "BOOPSI core and hooks") and the MUI wrappers on it (#40 part 2, see "MUI wrappers") are done. MUI custom classes (#93, see "MUI custom classes") are done too. Open: ReAction (last, if at all).
 - **Display design (not implemented):** [design/DISPLAY.md](design/DISPLAY.md) proposes logical coordinates with an integer scale, mode choice that follows the Workbench's monitor family (MODE option, asl screen-mode requester), 256 colours with a shared palette, a gradient pen (copper on AGA), window mode on the Workbench and multi-scale art. Nothing in it is built or verified yet; it waits for the maintainer's approval.
-- **v2:** AROS i386 (#4: toolchain, target and hosted runs done, see "AROS i386"; the MUI crashes on hosted i386 were an AROS bug, worked around (#105); open: native pc-i386), E# library source packages on NuGet (#31: parts 1, 2 and 3 done, see "E# library packages, part 1", "part 2: assets in packages" and "part 3: C files and headers in packages"; open: deriving from package classes), user classes deriving from platform classes (#42: done for `GtWindow`, see "Classes derived from platform classes"). Capturing lambdas stored in fields and events (#41): done (PR #83), see "Heap closures and events".
+- **v2:** AROS i386 (#4: toolchain, target and hosted runs done, see "AROS i386"; the MUI crashes on hosted i386 were an AROS bug, worked around (#105); open: native pc-i386), E# library source packages on NuGet (#31: parts 1 to 4 done, see "E# library packages, part 1", "part 2: assets in packages", "part 3: C files and headers in packages" and "part 4: classes derived from package classes"; the `AmigaESharp.*` id prefix is the maintainer's step), user classes deriving from platform classes (#42: done for `GtWindow`, see "Classes derived from platform classes"). Capturing lambdas stored in fields and events (#41): done (PR #83), see "Heap closures and events".
 - **Local toolchains (#122):** part 1 done (configuration, `esharp doctor`, VS Code tasks, a local m68k build in CI; see
   "Local toolchains, part 1"). Open: macOS and Windows by hand, and whether os4, morphos and AROS get a local route
   ([design/TOOLCHAINS.md](design/TOOLCHAINS.md) has the options; the maintainer picks).
