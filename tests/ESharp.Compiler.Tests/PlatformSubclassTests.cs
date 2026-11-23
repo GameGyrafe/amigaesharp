@@ -9,6 +9,8 @@ using static ESharp.Compiler.Tests.TestHelpers;
 namespace ESharp.Compiler.Tests;
 
 /// <summary>Classes of the program that derive from [Extensible] platform classes (issue #42): class MyWindow : GtWindow.</summary>
+// BoopsiObject.Live is one static counter shared by every sample run in process: these classes run one at a time.
+[Collection("BoopsiHost")]
 public class PlatformSubclassTests
 {
     private static string SamplePath => Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "..", "samples", "guiclass", "GuiClass.cs");

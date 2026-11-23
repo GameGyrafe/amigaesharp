@@ -10,6 +10,8 @@ namespace ESharp.Compiler.Tests;
 /// BOOPSI core (issue #40, part 1): [HookEntry] methods and their per-target entries, the Hook class (a C# delegate as a struct
 /// Hook), BoopsiObject / BoopsiWindow ownership against a fake intuition.library, and samples/boopsi.
 /// </summary>
+// BoopsiObject.Live is one static counter shared by every sample run in process: these classes run one at a time.
+[Collection("BoopsiHost")]
 public class BoopsiTests
 {
     private static CompileOptions Defines(params string[] d) => new() { Defines = d };
