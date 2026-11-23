@@ -34,7 +34,12 @@ public static class Ball
         Draw(p.X - Size / 2, p.Y - Size / 2);
     }
 
-    /// <summary>Plays the blip once on a free voice (Sound must be open); the voice, or -1.</summary>
+    /// <summary>
+    /// Plays the blip once on a free voice (Sound must be open); the voice, or -1. The pointer taken in <c>fixed</c> is used by
+    /// the sound hardware after the block ends: in the E# builds (Amiga and sdl) that is fine, Art.BlipData is static C data that never moves.
+    /// On the dotnet host a pinned pointer is only valid inside the block, which holds here because the host fake of Sound.Play
+    /// copies nothing and plays nothing; host code that kept the pointer would need the array pinned for as long as it plays.
+    /// </summary>
     public static unsafe int PlayBlip(int volume)
     {
         Sample blip = default;

@@ -151,6 +151,22 @@ public static class Descriptors
         "ES0118", "Package cannot be used",
         "Package '{0}' {1}: {2}");
 
+    public static readonly DiagnosticDescriptor PackageNativeTarget = Error(
+        "ES0119", "Package has no C files for the target",
+        "Package '{0}' {1} has native C, but none for target '{2}' (no .c file in its native/common or native/{2} folder); it has: {3}");
+
+    public static readonly DiagnosticDescriptor PackageNativeName = Error(
+        "ES0120", "Package C symbol without the package's prefix",
+        "Package '{0}' {1}: {2} defines '{3}', which does not start with the package's native prefix '{4}'; every function and variable its C files export must start with it (or be static), so the C of two packages and of the program cannot clash");
+
+    public static readonly DiagnosticDescriptor PackageNativeSignature = Error(
+        "ES0121", "Package [Native] extern with a type C cannot be given",
+        "Package '{0}': the [Native] extern '{1}' ({2}) has {3}; a package's own C function takes and returns only numbers, bool, string (const char *) and pointers to those or void (no ref, out, in, struct or generic types)");
+
+    public static readonly DiagnosticDescriptor PackageNativePrefix = Error(
+        "ES0122", "Two packages with overlapping native prefixes",
+        "Packages '{0}' (native prefix '{1}') and '{2}' (native prefix '{3}') could export the same C names; give one of them another EsNativePrefix");
+
     public static System.Collections.Immutable.ImmutableArray<DiagnosticDescriptor> SubsetRules =>
         System.Collections.Immutable.ImmutableArray.Create(
             Exceptions, Linq, FloatingPoint, AsyncAwait, Dynamic, Reflection,

@@ -47,6 +47,9 @@ internal sealed partial class CEmitter
     /// <summary>Stands for "#line &lt;the next line&gt; &lt;the C file&gt;" until the whole file is put together and the line numbers are known.</summary>
     private const string LineResetMarker = "#line ES_LINE_RESET\n";
 
+    /// <summary>The C prototypes of the packages' own C functions ([Native] externs of packages with native C), put after the includes.</summary>
+    public IReadOnlyList<string> PackagePrototypes { get; init; } = Array.Empty<string>();
+
     public CEmitter(CSharpCompilation compilation, HashSet<SyntaxTree> user, List<Diagnostic> diagnostics, bool boundsChecks = false, string? cFileName = null)
     {
         _cFileName = string.IsNullOrEmpty(cFileName) ? "program.c" : cFileName!;
@@ -322,6 +325,12 @@ internal sealed partial class CEmitter
         result.AppendLine("#include <stdbool.h>");
         result.AppendLine("#include <stddef.h>");
         result.AppendLine("#include <stdint.h>");
+        if (PackagePrototypes.Count > 0)
+        {
+            // Defined in the packages' C files, which the build compiles next to this one (esharp-native/<package>/).
+            result.AppendLine("/* C functions of E# library packages (their native C, compiled with the program) */");
+            foreach (var proto in PackagePrototypes) result.AppendLine(proto);
+        }
         // [LibraryBase] libraries may be absent (libnix refuses to start a program whose startup list names a missing
         // library) or are devices, so their base is renamed to a variable of ours that SetBase fills in; nothing refers to
         // the usual name, so neither libnix nor AROS's autoinit tries to open it.

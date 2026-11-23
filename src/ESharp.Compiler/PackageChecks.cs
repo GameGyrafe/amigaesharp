@@ -32,6 +32,7 @@ internal static class PackageChecks
             if (options.SdkVersion is { } have && SdkVersions.NeedsNewer(m.MinSdk, have))
                 diagnostics.Add(Diagnostic.Create(Descriptors.PackageSdk, Location.None, p.Id, p.Version, m.MinSdk, have));
         }
+        PackageNatives.Check(options, diagnostics);
     }
 
     /// <summary>Checks on the parsed sources of the program and the packages (<paramref name="packageOf"/>: each package tree's package).</summary>

@@ -1,6 +1,8 @@
+using System;
 using ESharp;
 using ESharp.Platform;
 using Tween;
+using Checksum;
 
 namespace TweenDemo;
 
@@ -15,12 +17,14 @@ public static class Ease
 /// <summary>
 /// Uses the E# library ESharpSample.Tween from a package: easing curves, the generic Tween struct (with int and with the library's
 /// Point), a generic method, fixed point, and the library's assets (a masked ball sprite and a blip sound from its assets.json),
-/// drawn along a tween on a screen. Every check prints "ok NAME" or "FAIL NAME"; esharp test compares the host and Amiga runs.
+/// drawn along a tween on a screen; and the C function of the library ESharpSample.Checksum (its own C, compiled with the game). Every check prints "ok NAME" or "FAIL NAME"; esharp test compares the host and Amiga runs.
 /// Prints "SHOT" while the screen shows the ball's path.
 /// </summary>
 public static class Program
 {
     static int failures;
+
+    static byte[] Wikipedia = { 87, 105, 107, 105, 112, 101, 100, 105, 97 };   // the text "Wikipedia", whose Adler-32 is 0x11E60398
 
     static void Check(bool ok, string name)
     {
@@ -31,6 +35,18 @@ public static class Program
     }
 
     static void Value(string name, int v) { Dos.PutStr($"{name} {v}\n"); }
+
+    /// <summary>Adler-32 written out in the game's own C#, to check the package's C against.</summary>
+    static uint OwnAdler(ReadOnlySpan<byte> data)
+    {
+        uint a = 1, b = 0;
+        for (int i = 0; i < data.Length; i++)
+        {
+            a = (a + data[i]) % 65521;
+            b = (b + a) % 65521;
+        }
+        return (b << 16) | a;
+    }
 
     [EntryPoint]
     public static int Main()
@@ -84,6 +100,14 @@ public static class Program
               Art.BallPlanes.Length == 2 * 2 * 16 && Art.BallMask.Length == 2 * 16, "package sprite: size, depth and palette");
         Check(!Ball.Opaque(0, 0) && !Ball.Opaque(15, 15) && Ball.Opaque(8, 8) && Ball.Opaque(1, 8) && Art.BallPalette[0] == 0, "package sprite: the mask is the circle");
         Check(Art.BlipLength == 480 && Art.BlipRate == 8000 && Art.BlipData.Length == 480 && (sbyte)Art.BlipData[0] > 80 && (sbyte)Art.BlipData[479] > -4, "package sound: length, rate and data");
+
+        // The C function of a second package (ESharpSample.Checksum: Adler-32 in C on the targets, C# on the dotnet host).
+        ReadOnlySpan<byte> text = Wikipedia;
+        Check(Adler32.Of(text) == 0x11E60398u && Adler32.Of(text.Slice(0, 0)) == Adler32.Start, "package C: checksum of a known text");
+        uint whole = Adler32.Of(Art.BlipData);
+        ReadOnlySpan<byte> blip = Art.BlipData;
+        uint parts = Adler32.Update(Adler32.Update(Adler32.Start, blip.Slice(0, 100)), blip.Slice(100, blip.Length - 100));
+        Check(whole == parts && whole == OwnAdler(Art.BlipData), "package C: checksum of the sound, in parts and by the game's own loop");
 
         if (Sound.Available && Sound.Open())
         {

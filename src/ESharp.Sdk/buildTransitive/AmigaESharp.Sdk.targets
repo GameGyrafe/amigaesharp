@@ -12,7 +12,10 @@
       EsTargets          the targets it supports, ';'-separated: m68k;os4;morphos;aros;aros-i386;sdl (required)
       EsFeatures         platform-level features its code uses, ';'-separated: AmigaLib (raw [AmigaLib] bindings), Native ([Native]
                          externs), InlineAsm ([InlineAsm] bodies), Interrupt ([Interrupt]
-                         servers), HookEntry ([HookEntry] methods); esharp build refuses an undeclared one and prints the declared ones
+                         servers), HookEntry ([HookEntry] methods), NativeC (C files of its own, below); esharp build refuses an
+                         undeclared one and prints the declared ones
+      EsNativePrefix     the prefix of every C name the library's C files export (default: the PackageId in lower case, other
+                         characters as '_', then '_'; ESharpSample.Checksum gives esharpsample_checksum_)
       EsMinSdkVersion    the oldest E# (esharp tool) it works with; default: the version of this AmigaESharp.Sdk
       PackageLicenseExpression   the licence (SPDX); a GPL-family licence is a build error in programs that use it unless they opt in
       DefineConstants    the library's own symbols (other than DEBUG, TRACE, RELEASE and HOST) go into the manifest ("defines") and
@@ -26,7 +29,13 @@
     own), so the asset class cannot collide with the game's or another package's. A missing Assets.g.cs stops the build (ESL005);
     one made from another assets.json or input than the current one is a warning (ESL011: run esharp assets again). The check
     compares contents (the SHA-256 that Assets.g.cs records for each input), not file times, so a fresh clone does not warn.
-    C files are refused here (ESL006) and by esharp build: C# and assets only for now.
+
+    C files and headers: a library that sets NativeC in EsFeatures keeps them in native/common/ (every target) and native/<target>/
+    (m68k, os4, morphos, aros, aros-i386, sdl; a file there replaces the common file of the same name), one level deep, as .c and .h
+    source. They are embedded as esharp/native/<folder>/<name> and listed in the manifest ("native": prefix, files); the game's
+    build compiles the common files and those of its target with the program (docs/GUIDE.md, "C in a library"). Refused (ESL006):
+    a .c or .h anywhere else in the project, any other file in native/ and prebuilt code anywhere (.o, .obj, .a, .lib, .so, .dylib):
+    a package carries C source only. NativeC without a native/ folder, or the other way round, is ESL015; a bad prefix ESL014.
   -->
 
   <UsingTask TaskName="EsWriteLibraryManifest" TaskFactory="RoslynCodeTaskFactory"
@@ -43,6 +52,8 @@
       <AssetsSource />
       <AssetsNamespace />
       <AssetsClass />
+      <NativePrefix />
+      <NativeFiles ParameterType="System.String[]" />
     </ParameterGroup>
     <Task>
       <Using Namespace="System.IO" />
@@ -72,7 +83,9 @@
                    ", \"minSdk\": " + Quote(MinSdk) + ", \"features\": " + List(Features) + ", \"defines\": " + List(Defines) +
                    ", \"license\": " + Quote(License) +
                    (string.IsNullOrEmpty(AssetsSource) ? "" : ", \"assets\": { \"source\": " + Quote(AssetsSource) + ", \"namespace\": " + Quote(AssetsNamespace) +
-                                                              ", \"class\": " + Quote(AssetsClass) + " }") + " }\n";
+                                                              ", \"class\": " + Quote(AssetsClass) + " }") +
+                   (NativeFiles == null || NativeFiles.Length == 0 ? "" : ", \"native\": { \"prefix\": " + Quote(NativePrefix) + ", \"files\": " + List(NativeFiles) + " }") +
+                   " }\n";
         System.IO.Directory.CreateDirectory(System.IO.Path.GetDirectoryName(System.IO.Path.GetFullPath(OutputFile)));
         // Only when different, so an unchanged manifest does not make the build think the library changed.
         if (!System.IO.File.Exists(OutputFile) || System.IO.File.ReadAllText(OutputFile) != json)
@@ -86,6 +99,7 @@
     <ParameterGroup>
       <Manifest Required="true" />
       <Generated Required="true" />
+      <JsonNamespace Output="true" />
       <Namespace Output="true" />
       <Class Output="true" />
       <Stale Output="true" />
@@ -94,8 +108,10 @@
       <Using Namespace="System.IO" />
       <Using Namespace="System.Text.RegularExpressions" />
       <Code Type="Fragment" Language="cs"><![CDATA[
-        // Only what the build needs from assets.json: the namespace and class of the generated file, and the input files (for the
-        // age check). A light reading (System.Text.Json is not available to inline tasks on every host); esharp assets reads it in full.
+        // Only what the build needs from assets.json: its namespace (ESL012) and the input files (for the age check). A light reading
+        // (System.Text.Json is not available to inline tasks on every host); esharp assets reads it in full. Top takes the first
+        // "namespace" or "class" key in the file: assets.json has those only at the top level (an image or sample entry has name,
+        // file, colors, mask, ...), so the first one is the top one. Should the schema ever nest keys of those names, read it as JSON.
         const string str = "\"((?:[^\"\\\\]|\\\\.)*)\"";   // a JSON string, its text in group 1
         var text = File.ReadAllText(Manifest);
         // Comments (esharp assets allows them) become spaces; strings stay as they are.
@@ -105,9 +121,21 @@
             var m = Regex.Match(text, "\"" + key + "\"\\s*:\\s*" + str);
             return m.Success ? m.Groups[1].Value.Trim() : "";
         };
-        Namespace = Top("namespace");
+        JsonNamespace = Top("namespace");
+        // The manifest names the class the package really has: the namespace and class of Assets.g.cs as esharp assets wrote it
+        // ("namespace X;" and "public static class Y" at the top level). When Assets.g.cs is stale (ESL011 is only a warning), those
+        // can differ from assets.json's; assets.json's are used only when Assets.g.cs has neither.
+        Namespace = JsonNamespace;
         Class = Top("class");
         if (Class.Length == 0) Class = "Assets";
+        if (File.Exists(Generated))
+        {
+            var code = File.ReadAllText(Generated);
+            var ns = Regex.Match(code, @"^namespace\s+([A-Za-z_][A-Za-z0-9_.]*)\s*;", RegexOptions.Multiline);
+            var cls = Regex.Match(code, @"^public\s+static\s+(?:unsafe\s+)?(?:partial\s+)?class\s+([A-Za-z_][A-Za-z0-9_]*)", RegexOptions.Multiline);
+            if (ns.Success) Namespace = ns.Groups[1].Value;
+            if (cls.Success) Class = cls.Groups[1].Value;
+        }
         var dir = Path.GetDirectoryName(Path.GetFullPath(Manifest));
         // Assets.g.cs names each input it was made from with its SHA-256 ("// input sha256:<hex> <file>", AssetBuilder.InputHash), and
         // an input whose content differs is stale. File times are no use for that: a fresh clone gives every file the time of the
@@ -156,6 +184,79 @@
     </Task>
   </UsingTask>
 
+  <UsingTask TaskName="EsLibraryNativeFiles" TaskFactory="RoslynCodeTaskFactory"
+             AssemblyFile="$(MSBuildToolsPath)/Microsoft.Build.Tasks.Core.dll">
+    <ParameterGroup>
+      <ProjectDir Required="true" />
+      <Files ParameterType="Microsoft.Build.Framework.ITaskItem[]" />
+      <Id />
+      <Prefix />
+      <Native ParameterType="Microsoft.Build.Framework.ITaskItem[]" Output="true" />
+      <Refused Output="true" />
+      <PrefixOut Output="true" />
+      <PrefixProblem Output="true" />
+    </ParameterGroup>
+    <Task>
+      <Using Namespace="System.IO" />
+      <Using Namespace="System.Text.RegularExpressions" />
+      <Code Type="Fragment" Language="cs"><![CDATA[
+        // The rules of src/ESharp.Compiler/PackageNatives.cs (PathProblem, PrefixProblem, DefaultPrefix), here for the library build.
+        var folders = new[] { "common", "m68k", "os4", "morphos", "aros", "aros-i386", "sdl" };
+        var prebuilt = new[] { ".o", ".obj", ".a", ".lib", ".so", ".dylib" };
+        var native = new System.Collections.Generic.List<Microsoft.Build.Framework.ITaskItem>();
+        var refused = new System.Collections.Generic.List<string>();
+        var root = Path.GetFullPath(ProjectDir).TrimEnd('/', '\\') + Path.DirectorySeparatorChar;
+        var seen = new System.Collections.Generic.HashSet<string>();
+        foreach (var item in Files ?? new Microsoft.Build.Framework.ITaskItem[0])
+        {
+            var full = Path.GetFullPath(item.GetMetadata("FullPath"));
+            if (!seen.Add(full)) continue;
+            var rel = full.StartsWith(root, StringComparison.OrdinalIgnoreCase) ? full.Substring(root.Length).Replace('\\', '/') : null;
+            var name = Path.GetFileName(full);
+            var ext = Path.GetExtension(full).ToLowerInvariant();
+            if (rel != null && rel.StartsWith("native/", StringComparison.Ordinal))
+            {
+                var parts = rel.Split('/');
+                if (name.StartsWith(".")) continue;   // .DS_Store, .gitkeep and the like
+                if (parts.Length != 3 || Array.IndexOf(folders, parts[1]) < 0)
+                    refused.Add(rel + " (C files go in native/common/ or native/<target>/: " + string.Join(", ", folders, 1, folders.Length - 1) + ", one level deep)");
+                else if (!Regex.IsMatch(name, "^[A-Za-z0-9_][A-Za-z0-9_.-]*\\.[ch]$"))
+                    refused.Add(rel + (Array.IndexOf(prebuilt, ext) >= 0 ? " (prebuilt code: a package carries C source only)" : " (only .c and .h source with plain file names)"));
+                else if (name.StartsWith("esharp_", StringComparison.OrdinalIgnoreCase))
+                    refused.Add(rel + " (file names starting with esharp_ are the build's own)");
+                else
+                {
+                    var t = new Microsoft.Build.Utilities.TaskItem(full);
+                    t.SetMetadata("EsPath", parts[1] + "/" + parts[2]);
+                    native.Add(t);
+                }
+            }
+            else if (ext == ".c" || ext == ".h")
+                refused.Add((rel ?? full) + " (C files and headers go in native/common/ or native/<target>/)");
+            else if (Array.IndexOf(prebuilt, ext) >= 0)
+                refused.Add((rel ?? full) + " (prebuilt code: a package carries C source only)");
+        }
+        native.Sort((a, b) => string.CompareOrdinal(a.GetMetadata("EsPath"), b.GetMetadata("EsPath")));
+        Native = native.ToArray();
+        refused.Sort(StringComparer.Ordinal);
+        Refused = string.Join("; ", refused);
+        var prefix = (Prefix ?? "").Trim();
+        if (prefix.Length == 0)
+        {
+            var sb = new System.Text.StringBuilder();
+            foreach (var c in (Id ?? "").ToLowerInvariant()) sb.Append((c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') ? c : '_');
+            var s = Regex.Replace(sb.ToString(), "_+", "_").Trim('_');
+            if (s.Length == 0 || !char.IsLetter(s[0])) s = "lib_" + s;
+            prefix = s.TrimEnd('_') + "_";
+        }
+        PrefixOut = prefix;
+        PrefixProblem = prefix.Length < 3 || !Regex.IsMatch(prefix, "^[A-Za-z][A-Za-z0-9_]*_$")
+            ? "a native prefix is a C name of at least 3 characters that starts with a letter and ends with '_' (such as mylib_)"
+            : prefix.StartsWith("es_", StringComparison.OrdinalIgnoreCase) ? "es_ is E#'s own (the generated C's names)" : "";
+      ]]></Code>
+    </Task>
+  </UsingTask>
+
   <PropertyGroup Condition="'$(EsLibrary)' == 'true'">
     <!-- The library's own symbols, before HOST is added: they go into the manifest for the Amiga parse of its files. -->
     <_EsUserDefines>$(DefineConstants)</_EsUserDefines>
@@ -180,7 +281,8 @@
       <_EsTarget Include="$(EsTargets)" />
       <_EsUnknownTarget Include="@(_EsTarget)" Exclude="m68k;os4;morphos;aros;aros-i386;sdl" />
       <_EsFeature Include="$(EsFeatures)" />
-      <_EsUnknownFeature Include="@(_EsFeature)" Exclude="AmigaLib;Native;InlineAsm;Interrupt;HookEntry" />
+      <_EsUnknownFeature Include="@(_EsFeature)" Exclude="AmigaLib;Native;InlineAsm;Interrupt;HookEntry;NativeC" />
+      <_EsNativeC Include="@(_EsFeature)" Condition="'%(Identity)' == 'NativeC'" />
       <!-- DEBUG/TRACE/RELEASE come from the configuration (esharp build sets DEBUG and TRACE itself); HOST is this step's own. -->
       <_EsDefine Include="$([MSBuild]::Unescape($(_EsUserDefines.Replace(',', ';').Replace(' ', ''))))" Exclude="DEBUG;TRACE;RELEASE;HOST" />
       <_EsReservedDefine Include="@(_EsDefine)" Condition="'%(Identity)' == 'AMIGA' or '%(Identity)' == 'M68K' or '%(Identity)' == 'PPC' or '%(Identity)' == 'X86_64' or '%(Identity)' == 'I386' or '%(Identity)' == 'AMIGAOS3' or '%(Identity)' == 'AMIGAOS4' or '%(Identity)' == 'MORPHOS' or '%(Identity)' == 'AROS' or '%(Identity)' == 'SDL'" />
@@ -190,7 +292,7 @@
     <Error Condition="'@(_EsUnknownTarget)' != ''" Code="ESL002"
            Text="E# library: unknown target(s) in EsTargets: @(_EsUnknownTarget) (known: m68k;os4;morphos;aros;aros-i386;sdl)" />
     <Error Condition="'@(_EsUnknownFeature)' != ''" Code="ESL003"
-           Text="E# library: unknown feature(s) in EsFeatures: @(_EsUnknownFeature) (known: AmigaLib;Native;InlineAsm;Interrupt;HookEntry)" />
+           Text="E# library: unknown feature(s) in EsFeatures: @(_EsUnknownFeature) (known: AmigaLib;Native;InlineAsm;Interrupt;HookEntry;NativeC)" />
     <Error Condition="'$(ImplicitUsings)' == 'enable' or '$(ImplicitUsings)' == 'true'" Code="ESL004"
            Text="E# library: set ImplicitUsings to disable; the Amiga build compiles only the embedded sources, so every file needs its own using lines" />
     <Error Condition="'@(Using)' != ''" Code="ESL008"
@@ -207,11 +309,12 @@
     <Error Condition="'$(_EsAssetsManifest)' != '' and !Exists('$(_EsAssetsSource)')" Code="ESL005"
            Text="E# library: assets.json has no Assets.g.cs next to it; run esharp assets $(MSBuildProjectDirectory) (and commit the file it writes), so the package carries the converted assets" />
     <EsCheckLibraryAssets Condition="'$(_EsAssetsManifest)' != ''" Manifest="$(_EsAssetsManifest)" Generated="$(_EsAssetsSource)">
+      <Output TaskParameter="JsonNamespace" PropertyName="_EsAssetsJsonNamespace" />
       <Output TaskParameter="Namespace" PropertyName="_EsAssetsNamespace" />
       <Output TaskParameter="Class" PropertyName="_EsAssetsClass" />
       <Output TaskParameter="Stale" PropertyName="_EsAssetsStale" />
     </EsCheckLibraryAssets>
-    <Error Condition="'$(_EsAssetsManifest)' != '' and '$(_EsAssetsNamespace)' == ''" Code="ESL012"
+    <Error Condition="'$(_EsAssetsManifest)' != '' and '$(_EsAssetsJsonNamespace)' == ''" Code="ESL012"
            Text="E# library: assets.json sets no &quot;namespace&quot;; give the assets the library's own namespace, so their class cannot collide with the game's or another package's" />
     <Warning Condition="'$(_EsAssetsManifest)' != '' and '$(_EsAssetsStale)' != ''" Code="ESL011"
              Text="E# library: Assets.g.cs was not made from the current $(_EsAssetsStale); run esharp assets $(MSBuildProjectDirectory) so the package carries the current assets" />
@@ -232,25 +335,39 @@
       <_EsSkipped Include="@(_EsSource)" Condition="'%(_EsSource.EsOutside)' == 'true'" />
       <_EsSource Remove="@(_EsSkipped)" />
       <_EsAssetsEmbedded Include="@(_EsSource)" Condition="'$(_EsAssetsSourceName)' != '' and '%(_EsSource.EsPath)' == '$(_EsAssetsSourceName)'" />
-      <_EsCFile Include="@(None)" Condition="'%(None.Extension)' == '.c' or '%(None.Extension)' == '.h'" />
-      <_EsCFile Include="@(Content)" Condition="'%(Content.Extension)' == '.c' or '%(Content.Extension)' == '.h'" />
+      <_EsProjectFile Include="@(None);@(Content)" />
     </ItemGroup>
+    <!-- C files and headers (native/common, native/<target>): checked, then embedded with the sources (see the top of this file). -->
+    <EsLibraryNativeFiles ProjectDir="$(MSBuildProjectDirectory)" Files="@(_EsProjectFile)" Id="$(PackageId)" Prefix="$(EsNativePrefix)">
+      <Output TaskParameter="Native" ItemName="_EsNativeFile" />
+      <Output TaskParameter="Refused" PropertyName="_EsNativeRefused" />
+      <Output TaskParameter="PrefixOut" PropertyName="_EsNativePrefix" />
+      <Output TaskParameter="PrefixProblem" PropertyName="_EsNativePrefixProblem" />
+    </EsLibraryNativeFiles>
     <Warning Condition="'%(_EsSkipped.FullPath)' != ''" Code="ESL010"
              Text="E# library: %(_EsSkipped.FullPath) is outside the project folder and has no Link, so it is not embedded (esharp build will not see it, though the HOST DLL has it); give the Compile item a Link to embed it" />
     <Error Condition="'$(_EsAssetsSourceName)' != '' and '@(_EsAssetsEmbedded)' == ''" Code="ESL013"
            Text="E# library: Assets.g.cs is not compiled (a Compile Remove?); it is the package's asset data, so leave it in the project" />
-    <Error Condition="'@(_EsCFile)' != ''" Code="ESL006"
-           Text="E# library: C files and headers in packages are not supported yet (@(_EsCFile)); E# library packages are C# only for now" />
+    <Error Condition="'$(_EsNativeRefused)' != ''" Code="ESL006"
+           Text="E# library: not packed: $(_EsNativeRefused); a library's C is source in native/common/ or native/&lt;target&gt;/ (.c and .h), and prebuilt code is refused" />
+    <Error Condition="'@(_EsNativeFile)' != '' and '@(_EsNativeC)' == ''" Code="ESL015"
+           Text="E# library: the project has C files in native/ (@(_EsNativeFile->'%(EsPath)')); add NativeC to EsFeatures, so programs that use the library see that it brings C code" />
+    <Error Condition="'@(_EsNativeFile)' == '' and '@(_EsNativeC)' != ''" Code="ESL015"
+           Text="E# library: EsFeatures lists NativeC but the project has no C files in native/common/ or native/&lt;target&gt;/" />
+    <Error Condition="'@(_EsNativeFile)' != '' and '$(_EsNativePrefixProblem)' != ''" Code="ESL014"
+           Text="E# library: the native prefix '$(_EsNativePrefix)' (EsNativePrefix, or made from the PackageId): $(_EsNativePrefixProblem)" />
 
     <!-- The manifest is written by a JSON string writer, so quotes and backslashes in PackageId or the licence stay valid. -->
     <EsWriteLibraryManifest OutputFile="$(_EsLibraryManifest)" Id="$(PackageId)" Version="$(PackageVersion)" Targets="@(_EsTarget)"
                             MinSdk="$(EsMinSdkVersion)" Features="@(_EsFeature)" Defines="@(_EsDefine)" License="$(PackageLicenseExpression)"
                             AssetsSource="$(_EsAssetsSourceName)"
-                            AssetsNamespace="$(_EsAssetsNamespace)" AssetsClass="$(_EsAssetsClass)" />
+                            AssetsNamespace="$(_EsAssetsNamespace)" AssetsClass="$(_EsAssetsClass)"
+                            NativePrefix="$(_EsNativePrefix)" NativeFiles="@(_EsNativeFile->'%(EsPath)')" />
     <ItemGroup>
       <FileWrites Include="$(_EsLibraryManifest)" />
       <EmbeddedResource Include="$(_EsLibraryManifest)" LogicalName="esharp/library.json" Type="Non-Resx" WithCulture="false" />
       <EmbeddedResource Include="@(_EsSource)" LogicalName="esharp/src/$([System.String]::Copy('%(_EsSource.EsPath)').Replace('\', '/'))" Type="Non-Resx" WithCulture="false" />
+      <EmbeddedResource Include="@(_EsNativeFile)" LogicalName="esharp/native/%(_EsNativeFile.EsPath)" Type="Non-Resx" WithCulture="false" />
     </ItemGroup>
   </Target>
 </Project>

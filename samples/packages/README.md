@@ -6,19 +6,27 @@
   --tween samples/packages/Tween`). `esharp assets samples/packages/Tween` turns them into `Assets.g.cs` (class `Tween.Art`),
   which is committed and shipped as one of the library's sources; `Ball.cs` draws the sprite and plays the sound. `dotnet pack`
   makes the NuGet package `ESharpSample.Tween`, whose DLL carries the C# sources (with `Assets.g.cs`) and the manifest.
-- `TweenDemo/` is a game that references that package. `esharp test` runs its checks on the PC and, with a target, on the
+- `Checksum/` is an E# library with C of its own (`EsFeatures` `Native;NativeC`, `EsNativePrefix` `cksum_`): `Adler32.cs`
+  declares the C function `cksum_adler32` as a `[Native]` extern (with a C# version under `#if HOST` for dotnet), and
+  `native/common/adler32.c` is that function, an Adler-32 checksum written for this sample. `native/common/cksum_tune.h`
+  says how many bytes the inner loop sums per pass (1); `native/m68k/cksum_tune.h` replaces it on m68k (8). `dotnet pack`
+  makes `ESharpSample.Checksum`, whose DLL carries the C# source, the three C files and the manifest. The game's build prints
+  the C files it compiles and writes them to `obj/<target>/esharp-native/ESharpSample.Checksum/`.
+- `TweenDemo/` is a game that references both packages. `esharp test` runs its checks on the PC and, with a target, on the
   Amiga, and compares them. It plays the blip and draws the ball at five points of a tween on a 320x200 screen, prints
-  `SHOT`, and keeps the screen up for three seconds (`esharp run ... --headless --screenshot shot.png` to see it).
+  `SHOT`, and keeps the screen up for three seconds (`esharp run ... --headless --screenshot shot.png` to see it). It also
+checks the Checksum package's C against a known value and against an Adler-32 loop of its own in C#.
 
-Both projects reference AmigaESharp.Sdk at `0.1.0-dev` (what `dotnet pack` of a checkout makes; pass
+The projects reference AmigaESharp.Sdk at `0.1.0-dev` (what `dotnet pack` of a checkout makes; pass
 `-p:ESharpSdkVersion=<version>` to use a released one). From the repository root, with a local folder feed (nothing is
 published, and nothing for this sample comes from nuget.org):
 
 ```bash
 dotnet pack src/ESharp.Sdk -o /tmp/esfeed                    # AmigaESharp.Sdk 0.1.0-dev, with the E# library step
 dotnet pack samples/packages/Tween -o /tmp/esfeed --source /tmp/esfeed   # ESharpSample.Tween 1.0.0
+dotnet pack samples/packages/Checksum -o /tmp/esfeed --source /tmp/esfeed   # ESharpSample.Checksum 1.0.0
 dotnet restore samples/packages/TweenDemo --source /tmp/esfeed
-dotnet run --project src/ESharp.Cli -- test samples/packages/TweenDemo                       # host: 18 ok
+dotnet run --project src/ESharp.Cli -- test samples/packages/TweenDemo                       # host: 20 ok
 dotnet run --project src/ESharp.Cli -- test samples/packages/TweenDemo --target m68k --docker <image> --kickstart <rom>
 ```
 
