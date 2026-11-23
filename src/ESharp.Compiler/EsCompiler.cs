@@ -70,6 +70,8 @@ public static class EsCompiler
         PackageChecks.Sources(compilation, userTrees, packageOf, diagnostics);
         // The C prototypes of the packages' own C functions (their [Native] externs), for the program's C and esharp_natives.h.
         var prototypes = PackageNatives.Prototypes(compilation, packageOf, diagnostics);
+        PackageNatives.CheckTargetHasC(options, prototypes, diagnostics);
+        PackageNatives.CheckForeignExterns(compilation, userTrees, packageOf, diagnostics);
 
         // Chip RAM budget (constant sizes only).
         var chip = ChipBudget.Analyze(compilation, userSet, options.Defines.Contains("M68K"));

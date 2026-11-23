@@ -200,7 +200,7 @@
       <Using Namespace="System.IO" />
       <Using Namespace="System.Text.RegularExpressions" />
       <Code Type="Fragment" Language="cs"><![CDATA[
-        // The rules of src/ESharp.Compiler/PackageNatives.cs (PathProblem, PrefixProblem, DefaultPrefix), here for the library build.
+        // The rules of src/ESharp.Compiler/PackageNatives.cs (PathProblem with its case check, PrefixProblem, DefaultPrefix), here for the library build.
         var folders = new[] { "common", "m68k", "os4", "morphos", "aros", "aros-i386", "sdl" };
         var prebuilt = new[] { ".o", ".obj", ".a", ".lib", ".so", ".dylib" };
         var native = new System.Collections.Generic.List<Microsoft.Build.Framework.ITaskItem>();
@@ -235,6 +235,20 @@
                 refused.Add((rel ?? full) + " (C files and headers go in native/common/ or native/<target>/)");
             else if (Array.IndexOf(prebuilt, ext) >= 0)
                 refused.Add((rel ?? full) + " (prebuilt code: a package carries C source only)");
+        }
+        // File names that differ only in case are one file on Windows and macOS (a target's header would replace the common one there).
+        var byName = new System.Collections.Generic.Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        native.Sort((a, b) => string.CompareOrdinal(a.GetMetadata("EsPath"), b.GetMetadata("EsPath")));
+        foreach (var t in native.ToArray())
+        {
+            var esPath = t.GetMetadata("EsPath");
+            var fileName = esPath.Substring(esPath.IndexOf('/') + 1);
+            if (byName.TryGetValue(fileName, out var first) && first.Substring(first.IndexOf('/') + 1) != fileName)
+            {
+                refused.Add("native/" + esPath + " (its name differs from native/" + first + " only in case: one file on Windows and macOS)");
+                native.Remove(t);
+            }
+            else byName[fileName] = esPath;
         }
         native.Sort((a, b) => string.CompareOrdinal(a.GetMetadata("EsPath"), b.GetMetadata("EsPath")));
         Native = native.ToArray();

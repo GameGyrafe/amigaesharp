@@ -83,7 +83,7 @@ pastes in for `es_std_*`/`es_sdl_*` [Native] calls), so packages get one way of 
   what the DLL carries (a C file in `esharp/src/`, a bad folder or name, prebuilt code), files the manifest lists that the DLL
   lacks or the other way round, NativeC and `native` not going together, a bad prefix, and asset inputs (`esharp/assets/*`,
   the specific message is back).
-- **Build.** For the chosen target the game's build takes the common files plus the target's (none with a `.c`: ES0119), writes
+- **Build.** For the chosen target the game's build takes the common files plus the target's (none with a `.c`, while the package declares `[Native]` externs for its C in the C# compiled for the target: ES0119; a library with C for some targets only and C# for the others builds on the others), writes
   them to `obj/<target>/esharp-native/<package id>/` and compiles each `.c` as a translation unit of its own in the same compiler
   command as the program's C (Docker or `--toolchain`; not in the `-c` object that `esharp addr` reads). The build prints them:
   `native C (prefix cksum_; compiled into the program, runs with its privileges): native/common/adler32.c, native/m68k/cksum_tune.h`.
@@ -139,14 +139,38 @@ pastes in for `es_std_*`/`es_sdl_*` [Native] calls), so packages get one way of 
 - The same game with `--target sdl --docker esharp-sdl`: 20 ok both sides, agree (the common header used); `--target aros
   --docker esharp-amiga-toolchain` (hosted AROS x86-64): 20 ok, return code 0, 0 traps, agree.
 - `--toolchain` (the m68k toolchain copied out of the pinned image) against `--docker`: the TweenDemo executable (25,316 bytes),
-  its C and its .info are byte-identical (before `-fno-common` was added; not re-run since, though both builds get the same flag).
+  its C and its .info are byte-identical (before `-fno-common` was added; re-run after it, see the follow-ups of #144 below).
 - `tools/package-smoke.sh` with `dotnet pack ESharp.sln -c Release -p:Version=0.1.0-local.311` and the m68k image: passed; the
   smoke library now has `native/common/triple.c` with the default prefix `esharpsmoke_lib_`, the game calls it, the emit-only C
   has the prototype, and the m68k build compiles the package C.
 
+**Follow-ups from the reviews of #142 and #143 (issue #144), verified 2026-11-23:**
+- ES0119 only when the package has prefixed `[Native]` externs compiled for the target (`PackageTests`: os4 without a `.c` and with
+  an extern is ES0119; the same C-for-m68k-only package with its extern under `#if M68K` builds for os4; a package without externs
+  builds). ES0123 (new): a `[Native]` extern in the program, or in another package, whose C name starts with a package's prefix is
+  refused (it would be an implicit declaration in the program's C): by name given and by method name, and from another package.
+  File names that differ only in case across `native/` folders are refused: `PathProblem`, the ES0118 reading of a DLL, the manifest
+  list and the SDK library task (ESL006, a real `dotnet build` of `Checksum` with `native/os4/Cksum_Tune.h`, a folder of its own so it is a different file on Windows too).
+- `-fno-common` on the other compilers, two files that both define `int shared_count;` plus a `main`, linked with the compiler of
+  the `esharp-amiga-toolchain` and `esharp-aros-i386` images: m68k (gcc 6.5.0), AROS x86-64 (gcc 9.1.0), AROS i386 (gcc 6.5.0) and
+  MorphOS (gcc 15.2.0) merge the variables silently by default (no "multiple definition") and report "multiple definition of
+  `shared_count'" with `-fno-common`; AmigaOS 4 (gcc 11.5.0) reports it by default and with the flag. The flag is accepted by all of
+  them, so nothing needed another flag. (The AROS links also stop for missing start files and libraries outside a real build; the
+  duplicate-symbol line is the one counted. Only the compilers were run, not an esharp build for each target.)
+- `tools/local-toolchain/compare.sh` on `packages/TweenDemo` (a sample in a sub-folder now works; Sdk, Tween and Checksum packed from
+  this checkout, empty package cache), after `-fno-common`: executable (25,316 bytes), `.info` (3,549 bytes) and generated C (115,309 bytes)
+  identical between `--toolchain` and `--docker`. Nothing in the generated code changed in this work, so TweenDemo was not run again on
+  Kickstart 3.1.
+- Host test state: `Cast_host_tables_survive_parallel_use` moved to `PlatformHostTests` and extended with `ObjectToPtr`/`PtrToObject`
+  round trips (16 threads, 16,000 objects: same object same address, no two objects one address). Audit of the test classes that run
+  samples in process: `Args`, `Dos.Out` and `Trace.Out` are per execution flow already; `HostTargetTests` reset the process-wide `Mem`
+  tables (`HostMem.Capture`), set `GtWindow.HostCanOpen` and share its one fake queue, while the `BoopsiHost` classes use the same
+  state, so `HostTargetTests` joined that collection. `HeapClosureTests`, `TraceAddrTests` and `MainArgsTests` run samples that
+  use only per-flow or managed state and stay out.
+
 **Not done / not verified:** os4, morphos and aros-i386 runs of the sample with package C (the os4 VM was not run for this; the
-C is plain and target-neutral, but that is not a run); real hardware; the linker backstop on targets other than m68k
-and the host gcc (the flag is the same on each, but only those two were tried); package C in
+C is plain and target-neutral, but that is not a run); real hardware; the linker backstop through an `esharp build` on targets other than m68k
+and the host gcc (the compilers of the images were run directly, see the follow-ups above); package C in
 `esharp addr` (its line table is the program's only); passing E# structs to a package's C (refused, ES0121); per-package C
 flags or defines (none: the target's flags apply, plus `-fno-common`); the morphos and aros-i386 builds of the sample; Windows CI runs the new
 tests (not run locally). Deriving from package classes (ES0117): done since, see part 4.

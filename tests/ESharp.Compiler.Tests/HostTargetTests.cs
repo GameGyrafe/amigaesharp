@@ -3,6 +3,10 @@ using ESharp.Target.Host;
 namespace ESharp.Compiler.Tests;
 
 /// <summary>Runs the hello sample under plain dotnet: the same source the Amiga build compiles.</summary>
+// In the BoopsiHost collection with the other classes that run samples in process: these tests reset the process-wide Mem tables
+// (HostMem.Capture frees every live block, so another test's sample would lose its memory and its leak counts), and share GtWindow's
+// one fake queue and HostCanOpen with the guiclass sample. Args, Dos.Out and Trace.Out are per execution flow already.
+[Collection("BoopsiHost")]
 public class HostTargetTests
 {
     [Fact]

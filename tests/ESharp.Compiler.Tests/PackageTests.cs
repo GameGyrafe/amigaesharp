@@ -736,15 +736,64 @@ public static unsafe class P
     }
 
     [Fact]
-    public void A_target_without_C_files_of_a_package_that_has_them_is_an_error()
+    public void A_target_without_C_files_is_an_error_only_when_the_package_declares_externs_for_its_C()
     {
-        var onlyM68k = NativePackage("Sample.Fx", "fx_", new Dictionary<string, string> { ["m68k/fx.c"] = "int fx_one(void) { return 1; }\n" },
-            "namespace Fx; public static class N { }");
-        Assert.True(Build(Prelude + "public static class P { [EntryPoint] public static void Main() { } }", M68k(onlyM68k)).Success);
-        var r = Build(Prelude + "public static class P { [EntryPoint] public static void Main() { } }",
-            Targets.Os4.ToOptions(packages: new[] { onlyM68k }, sdkVersion: "0.1.5"));
+        const string main = Prelude + "public static class P { [EntryPoint] public static void Main() { } }";
+        // With an extern for its own C (a name with the prefix): no .c file for os4 is ES0119.
+        var withExtern = NativePackage("Sample.Fx", "fx_", new Dictionary<string, string> { ["m68k/fx.c"] = "int fx_one(void) { return 1; }\n" },
+            "using ESharp;\nnamespace Fx; public static class N { [Native(\"fx_one\")] public static extern int One(); }");
+        Assert.True(Build(main, M68k(withExtern)).Success);
+        var r = Build(main, Targets.Os4.ToOptions(packages: new[] { withExtern }, sdkVersion: "0.1.5"));
         var d = Assert.Single(r.Diagnostics, x => x.Id == "ES0119");
         Assert.Equal("Package 'Sample.Fx' 1.0.0 has native C, but none for target 'os4' (no .c file in its native/common or native/os4 folder); it has: m68k/fx.c", d.GetMessage());
+        // C for m68k only, C# for the other targets (the extern is under #if M68K, as a library written so would have it): no error there.
+        var m68kOnly = NativePackage("Sample.Fx", "fx_", new Dictionary<string, string> { ["m68k/fx.c"] = "int fx_one(void) { return 1; }\n" },
+            "using ESharp;\nnamespace Fx; public static class N {\n#if M68K\n [Native(\"fx_one\")] public static extern int One();\n#else\n public static int One() => 1;\n#endif\n}");
+        Assert.True(Build(main, M68k(m68kOnly)).Success);
+        var os4 = Build(main, Targets.Os4.ToOptions(packages: new[] { m68kOnly }, sdkVersion: "0.1.5"));
+        Assert.True(os4.Success, string.Join("\n", os4.Diagnostics));
+        Assert.Empty(os4.Native.Where(n => n.Compile));
+        // No extern at all: nothing needs the C either.
+        var noExtern = NativePackage("Sample.Fx", "fx_", new Dictionary<string, string> { ["m68k/fx.c"] = "int fx_one(void) { return 1; }\n" },
+            "namespace Fx; public static class N { }");
+        Assert.DoesNotContain(Build(main, Targets.Os4.ToOptions(packages: new[] { noExtern }, sdkVersion: "0.1.5")).Diagnostics, x => x.Id == "ES0119");
+    }
+
+    [Fact]
+    public void A_program_extern_for_a_package_C_function_is_refused()
+    {
+        var package = NativePackage("Sample.Fx", "fx_", FixC, FixLib);
+        // The program's own declaration would get no prototype: an implicit declaration in the C. Refused, also for a name given by the method.
+        const string own = Prelude + "public static unsafe class P {\n [Native(\"fx_mul\")] static extern int Mul(int a, int b);\n" +
+                           " [Native] static extern void fx_hello(string s);\n [Native(\"es_fixdiv\")] static extern int Other(int a, int b);\n" +
+                           " [EntryPoint] public static void Main() { } }";
+        var r = Build(own, M68k(package));
+        var refused = r.Diagnostics.Where(x => x.Id == "ES0123").Select(x => x.GetMessage()).ToList();
+        Assert.Equal(2, refused.Count);
+        Assert.Contains("The [Native] extern 'P.Mul' names 'fx_mul', a C function of package 'Sample.Fx' (native prefix 'fx_'); only the package declares its own C functions: call its C# method instead", refused);
+        Assert.Contains(refused, m => m.Contains("'P.fx_hello' names 'fx_hello'"));
+        Assert.False(r.Success);
+        // Another package's extern for it is refused too; the package's own externs, and the program calling them, are fine.
+        var other = NativePackage("Sample.Other", "ot_", new Dictionary<string, string> { ["common/o.c"] = "int ot_x(void) { return 0; }\n" },
+            "using ESharp;\nnamespace Ot; public static class O { [Native(\"fx_mul\")] public static extern int Mul(int a, int b); }");
+        Assert.Contains(Build(FixGame, M68k(package, other)).Diagnostics, x => x.Id == "ES0123" && x.GetMessage().Contains("'O.Mul'") && x.GetMessage().Contains("'Sample.Fx'"));
+        Assert.DoesNotContain(Build(FixGame, M68k(package)).Diagnostics, x => x.Id == "ES0123");
+    }
+
+    [Fact]
+    public void Native_file_names_that_differ_only_in_case_are_refused()
+    {
+        Assert.Null(PackageNatives.PathProblem("common/Tune.h"));
+        Assert.Null(PackageNatives.PathProblem("common/tune.h", new[] { "common/tune.h", "m68k/other.h" }));
+        Assert.Null(PackageNatives.PathProblem("m68k/tune.h", new[] { "common/tune.h", "m68k/tune.h" }));   // the same name: a target's file replaces the common one
+        var problem = PackageNatives.PathProblem("m68k/tune.h", new[] { "common/Tune.h", "m68k/tune.h" });
+        Assert.Equal("its name differs from 'common/Tune.h' only in case (one file on Windows and macOS)", problem);
+        var csharp = "namespace Fx; public static class N { }";
+        var c = new Dictionary<string, string> { ["common/fx.c"] = "int fx_a;\n", ["common/Tune.h"] = "#define A 1\n", ["m68k/tune.h"] = "#define A 2\n" };
+        var carried = NativePackage("S", "fx_", c, csharp);
+        Assert.Contains(carried.Problems, x => x.Contains("it carries 'esharp/native/") && x.Contains("only in case"));
+        var listed = NativePackage("S", "fx_", new Dictionary<string, string> { ["common/fx.c"] = "int fx_a;\n" }, csharp, listed: new[] { "common/fx.c", "common/Tune.h", "m68k/tune.h" });
+        Assert.Contains(listed.Problems, x => x.Contains("its manifest lists the C file") && x.Contains("only in case"));
     }
 
     [Fact]
