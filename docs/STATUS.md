@@ -10,6 +10,82 @@ The minimum system is now an **Amiga 1200: 68020, AGA, 2 MB chip RAM, Kickstart 
 - **Kept on purpose:** `HasAga()` and `HasRtg()` with their fallbacks. A classic A1200 always has AGA, but PowerPC, RTG-only and AROS targets may not, so the checks stay as the portable way to ask. **Not yet done:** using 68020 instructions deliberately and AROS (a new target, untested).
 - Verified after the change: all 17 samples built with `-m68020` and run on Kickstart 3.1 (A1200) in FS-UAE: 300 `ok` lines, no `FAIL` (the script shows only the last 25 lines of each sample, so long ones are truncated), 136 unit tests pass. Not verified: PowerPC, real hardware, a 68000/Kickstart 2.04 run (no longer supported).
 
+## E# library packages, part 3: C files and headers in packages (issue #31)
+
+Item 2 of the maintainer's decision of 2026-11-21 ("C files and headers in packages come later"), and the "Assets in packages
+(#140)" items of issue #141. Programs have no C files of their own (their C is the generated file, plus the C runtime the emitter
+pastes in for `es_std_*`/`es_sdl_*` [Native] calls), so packages get one way of their own. How to use it: docs/GUIDE.md,
+"Libraries", "C in a library".
+
+- **Layout.** A library with feature `NativeC` keeps C source in `native/common/` (every target) and `native/<target>/` (m68k,
+  os4, morphos, aros, aros-i386, sdl), one level deep, `.c` and `.h` only; a target's file replaces the common file of the same
+  name. The Sdk step (`EsLibraryNativeFiles`) embeds them as `esharp/native/<folder>/<name>` and writes `"native": { "prefix",
+  "files" }` into the manifest (still format 1: an older esharp refuses a manifest with `native`, and an `esharp/native/`
+  resource, with its "not supported yet" / "not known" messages). ESL006 now fires only for C files outside that layout, any
+  other file in `native/`, and prebuilt code anywhere in the project (`.o`, `.obj`, `.a`, `.lib`, `.so`, `.dylib`); ESL014: a
+  bad native prefix; ESL015: NativeC without C files or C files without NativeC. ES0118 at the game's build: the same rules for
+  what the DLL carries (a C file in `esharp/src/`, a bad folder or name, prebuilt code), files the manifest lists that the DLL
+  lacks or the other way round, NativeC and `native` not going together, a bad prefix, and asset inputs (`esharp/assets/*`,
+  the specific message is back).
+- **Build.** For the chosen target the game's build takes the common files plus the target's (none with a `.c`: ES0119), writes
+  them to `obj/<target>/esharp-native/<package id>/` and compiles each `.c` as a translation unit of its own in the same compiler
+  command as the program's C (Docker or `--toolchain`; not in the `-c` object that `esharp addr` reads). The build prints them:
+  `native C (prefix cksum_; compiled into the program, runs with its privileges): native/common/adler32.c, native/m68k/cksum_tune.h`.
+- **Headers and prototypes.** No include path is added: `#include "x.h"` in a package's C finds its own folder, and the
+  program's C never includes a package header. The program gets a prototype per `[Native]` extern whose C name has the
+  package's prefix, made from the C# declaration (numbers, bool, string, pointers to those or void; others ES0121); each
+  package `.c` includes the same prototypes (`esharp_natives.h`) first, so a C definition that does not match its C#
+  declaration does not compile (tested with the host gcc: "conflicting types", named at the package file through a `#line`).
+- **Symbol clashes.** Every function and variable a package's C exports must start with its native prefix (`EsNativePrefix`,
+  default from the package id; not `es_`, which is E#'s own): ES0120, from a light reading of the C source (comments, strings and
+  preprocessor lines left out; file-level definitions that are not `static`). Two packages with overlapping prefixes: ES0122.
+  Names made by macros escape the reading; then the linker's duplicate-symbol error stops the build (not tried).
+- **Security and licence.** The GUIDE says plainly that a package's C runs with the game's privileges (on AmigaOS 3: the whole
+  machine) and that the build prints every C file it compiles; the copyleft check covers the package as a whole.
+- **#141 (assets in packages):** the manifest's assets namespace and class now come from the `Assets.g.cs` the package carries
+  (its `namespace X;` and `public static class Y` lines; `assets.json`'s only when the file has neither), so a stale
+  `Assets.g.cs` (ESL011 is a warning) no longer gives a manifest that names a class the package lacks; the regex reading of
+  `assets.json` has a comment on why the first `"namespace"`/`"class"` keys are the top-level ones; `Ball.cs` notes that the
+  pointer handed to `Sound.Play` outlives the `fixed` block (fine: static C data on every E# target; the host fake keeps
+  nothing); `esharp/assets/*` resources have their specific ES0118 message again.
+- **Sample:** `samples/packages/Checksum` (`ESharpSample.Checksum`, prefix `cksum_`): `Adler32.cs` with `[Native("cksum_adler32")]`
+  and a C# version under `#if HOST`, `native/common/adler32.c` (Adler-32, written for this sample, with a `static` helper),
+  `native/common/cksum_tune.h` (1 byte per pass) and `native/m68k/cksum_tune.h` (8, replaces it on m68k). `TweenDemo` now uses
+  both packages: 2 new checks ("Wikipedia" is 0x11E60398; the blip sample's checksum whole, in two slices and by the game's own
+  C# loop agree), 20 checks in all.
+
+**Verified (2026-11-23):**
+- `dotnet test`: 754 passed, 2 skipped (the OS4 VM and SDK-backed BindGen tests), 0 failed. New in `PackageTests`: a package
+  with `common/fx.c`, `common/fx_tune.h` and `m68k/fx_tune.h` built for m68k, its C compiled with the program's C under the host
+  gcc and run (4 lines: a string to C, a 16.16 multiply, a sum through a pointer, the m68k header in use), the prototypes in the
+  program's C and no package header there, the output files and the `#line`; a C definition that does not match its C#
+  declaration fails to compile ("conflicting types" at `<package Sample.Fx 1.0.0>/native/common/fx.c`); ES0119 (m68k-only C
+  built for os4), ES0120 (3 unprefixed names among static, extern, prototype, typedef and struct declarations), ES0122, ES0121
+  (`ref`, struct, struct pointer; an `es_` extern is left alone), the ES0118 manifest/resource cases, the C reading on a file
+  of awkward declarations, the default prefix, the printed file list per target. `PackageRoundTripTests`: real `dotnet build`s
+  of `Checksum` with `stray.c`, `native/m68k/fast.o`, `native/amigaos/x.c`, `libfast.a` (ESL006), without NativeC (ESL015), with
+  prefix `es_cksum_` (ESL014); a warning-free pack whose DLL carries the three C files and the manifest's `native` and whose
+  .nupkg has no C, object or archive files beside the DLL; the game restored with both packages, host 20 ok, the m68k Docker
+  build with the m68k header and the prototypes; a stale `assets.json` class rename gives ESL011 and a manifest that still names
+  `Tween.Art`.
+- `TweenDemo` from a local feed (Sdk, Tween and Checksum packed from this checkout, empty `NUGET_PACKAGES`), `esharp test
+  --target m68k --docker <m68k image> --model A1200 --kickstart <Kickstart 3.1 rom>`: host 20 ok, Amiga 20 ok, 0 FAIL, return
+  code 0, "Host and Amiga agree on every check". `esharp run ... --headless --screenshot`: the same picture as in part 2 (five
+  blue shaded balls on an orange dotted in-out path, the grey "TWEEN + PACKAGE ART" bar).
+- The same game with `--target sdl --docker esharp-sdl`: 20 ok both sides, agree (the common header used); `--target aros
+  --docker esharp-amiga-toolchain` (hosted AROS x86-64): 20 ok, return code 0, 0 traps, agree.
+- `--toolchain` (the m68k toolchain copied out of the pinned image) against `--docker`: the TweenDemo executable (25,316 bytes),
+  its C and its .info are byte-identical.
+- `tools/package-smoke.sh` with `dotnet pack ESharp.sln -c Release -p:Version=0.1.0-local.311` and the m68k image: passed; the
+  smoke library now has `native/common/triple.c` with the default prefix `esharpsmoke_lib_`, the game calls it, the emit-only C
+  has the prototype, and the m68k build compiles the package C.
+
+**Not done / not verified:** os4, morphos and aros-i386 runs of the sample with package C (the os4 VM was not run for this; the
+C is plain and target-neutral, but that is not a run); real hardware; the linker backstop for macro-made names; package C in
+`esharp addr` (its line table is the program's only); passing E# structs to a package's C (refused, ES0121); per-package C
+flags or defines (none: the target's flags apply); the morphos and aros-i386 builds of the sample; Windows CI runs the new
+tests (not run locally). Deriving from package classes (ES0117) stays open.
+
 ## E# library packages, part 2: assets in packages (issue #31)
 
 Item 3 of the maintainer's decision of 2026-11-21 ("assets in packages come later"): a library can now ship images and sounds.
@@ -322,7 +398,7 @@ Not verified:
 - Checked after the 0.1.1 release (Linux x86-64, 2026-11-14): `dotnet tool install AmigaESharp.Tool --version 0.1.1` from nuget.org into a tool path, `esharp new demo` (PackageReference AmigaESharp.Sdk 0.1.1), `dotnet run` (Hello from E#!) and `esharp test` (1 ok). The `packages` CI job runs on every PR. Not verified from nuget.org: an m68k build or emulator run with the installed tool, Windows and macOS installs, and how the nuget.org README page renders.
 - `esharp os4vm install-hook`/`start` from the installed tool (only `--help`); `--target os4`, `sdl` and `aros` runs from the installed tool; Windows and macOS installs; VS Code with the package csproj.
 - Still needs a checkout: the toolchain images `esharp-amiga-toolchain` (all four Amiga targets) and `esharp-sdl` (`docker build` from `docker/` and `docker/sdl`; the m68k-only pinned image works without one), `tools/aros-hosted/aros-hosted.sh` (expects `samples/<name>/obj/aros`), `tools/hwpack` (builds the repository's samples), BindGen, CardArt and AssetSamples.
-- Library packages as in issue #31 (E# source packages that `esharp build` reads from `project.assets.json`) are not started; the Sdk package ships compiled host assemblies only, and the Amiga build still uses the sources embedded in the tool, so the Sdk package version must match the tool's (the template writes the tool's version).
+- (Historical, 0.1.1:) library packages as in issue #31 were not started then; they are now, see "E# library packages" parts 1 to 3. The Amiga build still uses the Runtime and Platform sources embedded in the tool, so the Sdk package version must match the tool's (the template writes the tool's version).
 
 ## Double buffer: `Video.EnableDoubleBuffer` and `Video.Flip` (samples/dbuffer, issue #66 part 1)
 
@@ -1487,7 +1563,7 @@ Open work as of 2026-11-14 (the GitHub issues are the live list; the v1 tracker 
 - **Windows (#11):** CI now runs a `windows` job (windows-latest, PR head): `dotnet test` (439 passed, 2 skipped, 0 failed; the runner has a MinGW gcc, so the generated-C tests run there and only the Docker/VM/SDK-dependent tests skip), emit-only builds of `samples/hello` and `samples/cards`, `esharp test samples/linq`, a clean `git status` afterwards, and a package round trip against the PR's own packages (`dotnet pack`, install the tool from the folder into a tool path, a nuget.config with the local feed, version and PackageReference checked, NU1603 fails the step, `esharp new`, `dotnet run`, `esharp test`, `esharp build --emit-only`). A `.gitattributes` keeps the working tree LF (the runner has `core.autocrlf=true`), and the native test output is read CRLF-tolerant. Still needs a person on a real Windows machine: Docker Desktop with `--docker` builds, FS-UAE for Windows, VS Code, and Windows with a different (or no) C compiler. `tools/aros-hosted` is Linux-only. macOS was checked, see "VS Code support".
 - **Bindings (#19, #40):** GadTools wrappers (v1), the BOOPSI core with hooks (#40 part 1, see "BOOPSI core and hooks") and the MUI wrappers on it (#40 part 2, see "MUI wrappers") are done. MUI custom classes (#93, see "MUI custom classes") are done too. Open: ReAction (last, if at all).
 - **Display design (not implemented):** [design/DISPLAY.md](design/DISPLAY.md) proposes logical coordinates with an integer scale, mode choice that follows the Workbench's monitor family (MODE option, asl screen-mode requester), 256 colours with a shared palette, a gradient pen (copper on AGA), window mode on the Workbench and multi-scale art. Nothing in it is built or verified yet; it waits for the maintainer's approval.
-- **v2:** AROS i386 (#4: toolchain, target and hosted runs done, see "AROS i386"; the MUI crashes on hosted i386 were an AROS bug, worked around (#105); open: native pc-i386), E# library source packages on NuGet (#31: parts 1 and 2 done, see "E# library packages, part 1" and "part 2: assets in packages"; open: C files in packages, deriving from package classes), user classes deriving from platform classes (#42: done for `GtWindow`, see "Classes derived from platform classes"). Capturing lambdas stored in fields and events (#41): done (PR #83), see "Heap closures and events".
+- **v2:** AROS i386 (#4: toolchain, target and hosted runs done, see "AROS i386"; the MUI crashes on hosted i386 were an AROS bug, worked around (#105); open: native pc-i386), E# library source packages on NuGet (#31: parts 1, 2 and 3 done, see "E# library packages, part 1", "part 2: assets in packages" and "part 3: C files and headers in packages"; open: deriving from package classes), user classes deriving from platform classes (#42: done for `GtWindow`, see "Classes derived from platform classes"). Capturing lambdas stored in fields and events (#41): done (PR #83), see "Heap closures and events".
 - **Local toolchains (#122):** part 1 done (configuration, `esharp doctor`, VS Code tasks, a local m68k build in CI; see
   "Local toolchains, part 1"). Open: macOS and Windows by hand, and whether os4, morphos and AROS get a local route
   ([design/TOOLCHAINS.md](design/TOOLCHAINS.md) has the options; the maintainer picks).

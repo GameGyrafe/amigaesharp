@@ -64,8 +64,11 @@ public static class PackageStep
             .Select(p => Microsoft.CodeAnalysis.Diagnostic.Create(ESharp.Analyzers.Descriptors.PackageSdk, Microsoft.CodeAnalysis.Location.None,
                 p.Id, p.Version, p.Manifest!.MinSdk, toolVersion).ToString()).ToList();
 
-    /// <summary>The lines the build prints for the packages: id, version, licence, files, the platform-level features each one declares and its assets.</summary>
-    public static IEnumerable<string> Describe(IEnumerable<EsPackage> packages)
+    /// <summary>
+    /// The lines the build prints for the packages: id, version, licence, files, the platform-level features each one declares, its
+    /// assets, and its C files for <paramref name="target"/> (package C runs with the program's privileges, so the build names every file).
+    /// </summary>
+    public static IEnumerable<string> Describe(IEnumerable<EsPackage> packages, string? target = null)
     {
         foreach (var p in packages)
         {
@@ -77,6 +80,12 @@ public static class PackageStep
                 yield return $"  assets: {a.FullName} ({a.Source}; images and samples converted when the library was built)";
             if (p.Manifest is { Symbols.Count: > 0 } d)
                 yield return $"  its own symbols: {string.Join(", ", d.Symbols)}";
+            if (p.Manifest?.Native is { } native)
+            {
+                var files = PackageNatives.Select(p, target);
+                yield return $"  native C (prefix {native.Prefix}; compiled into the program, runs with its privileges): " +
+                             (files.Count == 0 ? "none for " + target : string.Join(", ", files.Select(f => "native/" + f.Path)));
+            }
         }
     }
 }

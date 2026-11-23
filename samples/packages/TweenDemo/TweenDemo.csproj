@@ -1,7 +1,7 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
   <!--
-    A game that uses the E# library ESharpSample.Tween (../Tween) from a NuGet feed. dotnet restore writes
+    A game that uses the E# libraries ESharpSample.Tween (../Tween) and ESharpSample.Checksum (../Checksum, with C files) from a NuGet feed. dotnet restore writes
     obj/project.assets.json, where esharp build finds the package; see samples/packages/README.md.
   -->
   <PropertyGroup>
@@ -17,6 +17,7 @@
   <ItemGroup>
     <PackageReference Include="AmigaESharp.Sdk" Version="$(ESharpSdkVersion)" />
     <PackageReference Include="ESharpSample.Tween" Version="1.0.0" />
+    <PackageReference Include="ESharpSample.Checksum" Version="1.0.0" />
   </ItemGroup>
 
 </Project>

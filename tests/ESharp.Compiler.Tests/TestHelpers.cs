@@ -1,3 +1,4 @@
+using System.Collections.Generic;
 using System.Diagnostics;
 using ESharp.Compiler;
 using Microsoft.CodeAnalysis;
@@ -87,7 +88,18 @@ public static class P
     public static (int exitCode, string output) RunSanitized(string c, System.Collections.Generic.IReadOnlyDictionary<string, string> extraHeaders, params string[] programArgs) =>
         RunWithHostGccFlags(c, "-fsanitize=address,undefined -fno-sanitize-recover=all -g", extraHeaders, programArgs);
 
-    private static (int exitCode, string output) RunWithHostGccFlags(string c, string flags, System.Collections.Generic.IReadOnlyDictionary<string, string>? extraHeaders, params string[] programArgs)
+    /// <summary>
+    /// <see cref="RunWithHostGcc"/> with the packages' C of a build (<see cref="CompileResult.Native"/>): each file is written at its
+    /// path next to the program's C, as esharp build writes it, and the .c files are compiled and linked with it.
+    /// </summary>
+    public static (int exitCode, string output) RunWithHostGccAndNative(string c, IEnumerable<NativeOutput> native, params string[] programArgs)
+    {
+        var files = native.ToList();
+        return RunWithHostGccFlags(c, "", files.ToDictionary(n => n.Path, n => n.Text), programArgs, files.Where(n => n.Compile).Select(n => n.Path).ToList());
+    }
+
+    private static (int exitCode, string output) RunWithHostGccFlags(string c, string flags, System.Collections.Generic.IReadOnlyDictionary<string, string>? extraHeaders, string[]? programArgs = null,
+        IReadOnlyList<string>? extraSources = null)
     {
         var dir = Path.Combine(Path.GetTempPath(), "esharp-test-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(Path.Combine(dir, "proto"));
@@ -116,14 +128,15 @@ public static class P
         File.WriteAllText(cFile, c);
         var exe = Path.Combine(dir, "prog");
 
-        var cc = Process.Start(new ProcessStartInfo(Cc, $"-std=gnu11 -fwrapv -Wall -Werror {flags} -I\"{dir}\" -o \"{exe}\" \"{cFile}\"")
+        var more = string.Concat((extraSources ?? Array.Empty<string>()).Select(f => $" \"{Path.Combine(dir, f)}\""));
+        var cc = Process.Start(new ProcessStartInfo(Cc, $"-std=gnu11 -fwrapv -Wall -Werror {flags} -I\"{dir}\" -o \"{exe}\" \"{cFile}\"{more}")
         { RedirectStandardError = true })!;
         var err = cc.StandardError.ReadToEnd();
         cc.WaitForExit();
         Assert.True(cc.ExitCode == 0, Cc + " failed:\n" + err + "\n" + c);
 
         var psi = new ProcessStartInfo(exe) { RedirectStandardOutput = true, RedirectStandardError = flags.Length > 0 };
-        foreach (var a in programArgs) psi.ArgumentList.Add(a);
+        foreach (var a in programArgs ?? Array.Empty<string>()) psi.ArgumentList.Add(a);
         var run = Process.Start(psi)!;
         var stderrTask = flags.Length > 0 ? run.StandardError.ReadToEndAsync() : null;
         var output = run.StandardOutput.ReadToEnd();

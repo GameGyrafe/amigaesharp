@@ -3,8 +3,9 @@
 #   install AmigaESharp.Tool into a tool path, `esharp new` a project (PackageReference to AmigaESharp.Sdk),
 #   dotnet build and run it, check that the subset analyzer from the package reports ES0001, `esharp test` it on the
 #   host, `esharp build --emit-only`, and with an image also an m68k build in Docker. Then an E# library package (issue #31):
-#   a class library with EsLibrary=true and an assets.json (a short sound) packed against the packed AmigaESharp.Sdk into a second local feed, a new game that
-#   references it (esharp build, esharp test, the target and GPL checks), and with an image its m68k build.
+#   a class library with EsLibrary=true, an assets.json (a short sound) and a C file of its own (native/common/, feature NativeC)
+#   packed against the packed AmigaESharp.Sdk into a second local feed, a new game that references it (esharp build, esharp test,
+#   the target and GPL checks), and with an image its m68k build (the library's C compiled and linked with the game).
 #
 #   tools/package-smoke.sh <feed dir> <version> [m68k docker image]
 #
@@ -79,6 +80,7 @@ cat > smokelib/smokelib.csproj <<EOF
     <ImplicitUsings>disable</ImplicitUsings>
     <EsLibrary>true</EsLibrary>
     <EsTargets>m68k;sdl</EsTargets>
+    <EsFeatures>Native;NativeC</EsFeatures>
     <PackageId>ESharpSmoke.Lib</PackageId>
     <Version>1.0.0</Version>
     <PackageLicenseExpression>MIT</PackageLicenseExpression>
@@ -97,6 +99,24 @@ public static class Twice
     public static int Of(int x) => Pick(true, x * 2, 0);
 }
 EOF
+# C in the library (#31): native/common/triple.c, called through a [Native] extern (C# on the dotnet host). No EsNativePrefix,
+# so the prefix comes from the package id: esharpsmoke_lib_.
+mkdir -p smokelib/native/common
+echo 'int32_t esharpsmoke_lib_triple(int32_t x) { return x * 3; }' > smokelib/native/common/triple.c
+cat > smokelib/Triple.cs <<'EOF'
+using ESharp;
+
+namespace SmokeLib;
+
+public static class Triple
+{
+#if HOST
+    public static int Of(int x) => x * 3;
+#else
+    [Native("esharpsmoke_lib_triple")] public static extern int Of(int x);
+#endif
+}
+EOF
 # Assets in the library (#31): a short sound, converted by esharp assets into Assets.g.cs, which the package carries.
 printf 'RIFF\x28\x00\x00\x00WAVEfmt \x10\x00\x00\x00\x01\x00\x01\x00\x40\x1f\x00\x00\x40\x1f\x00\x00\x01\x00\x08\x00data\x04\x00\x00\x00\x80\xe4\x1c\x80' > smokelib/tick.wav
 cat > smokelib/assets.json <<'EOF2'
@@ -109,13 +129,16 @@ dotnet pack smokelib -o libfeed -nologo -p:Version=1.0.1 -p:PackageLicenseExpres
 "$esharp" new uselib
 sed -i.orig "s|<PackageReference Include=\"AmigaESharp.Sdk\" Version=\"$version\" />|&<PackageReference Include=\"ESharpSmoke.Lib\" Version=\"1.0.0\" />|" uselib/uselib.csproj
 grep -q 'Include="ESharpSmoke.Lib"' uselib/uselib.csproj
-sed -i.orig 's|sum == 55 ?|sum == 55 \&\& SmokeLib.Twice.Of(21) == 42 \&\& SmokeLib.Sounds.TickData[1] == 100 ?|' uselib/Program.cs
+sed -i.orig 's|sum == 55 ?|sum == 55 \&\& SmokeLib.Twice.Of(21) == 42 \&\& SmokeLib.Triple.Of(14) == 42 \&\& SmokeLib.Sounds.TickData[1] == 100 ?|' uselib/Program.cs
 grep -q 'SmokeLib.Twice.Of' uselib/Program.cs
 if "$esharp" build uselib --emit-only > nolib.log 2>&1; then echo "expected an error before dotnet restore"; exit 1; fi
 grep -q 'dotnet restore' nolib.log
 dotnet restore uselib
 "$esharp" build uselib --emit-only | tee lib.log
-grep -q 'Package ESharpSmoke.Lib 1.0.0 (MIT): 2 C# file(s)' lib.log
+grep -q 'Package ESharpSmoke.Lib 1.0.0 (MIT): 3 C# file(s)' lib.log
+grep -q 'native C (prefix esharpsmoke_lib_; compiled into the program, runs with its privileges): native/common/triple.c' lib.log
+grep -q '^extern int32_t esharpsmoke_lib_triple(int32_t);' uselib/obj/m68k/uselib.c
+grep -q 'esharpsmoke_lib_triple' uselib/obj/m68k/esharp-native/ESharpSmoke.Lib/triple.c
 grep -q 'assets: SmokeLib.Sounds (Assets.g.cs' lib.log
 grep -q '<package ESharpSmoke.Lib 1.0.0>/Twice.cs' uselib/obj/m68k/uselib.c
 grep -q '^static __chip uint8_t Es_SmokeLib_Sounds_TickData\[4\] = { 0, 100, 156, 0 };' uselib/obj/m68k/uselib.c
@@ -132,7 +155,8 @@ sed -i.orig 's|<OutputType>Exe</OutputType>|&<EsAllowCopyleft>true</EsAllowCopyl
 "$esharp" build uselib --emit-only 2>&1 | tee gplok.log
 grep -q 'allowed by EsAllowCopyleft' gplok.log
 if [ -n "$image" ]; then
-  "$esharp" build uselib --target m68k --docker "$image"
+  "$esharp" build uselib --target m68k --docker "$image" | tee libm68k.log
+  grep -q 'compiled with the program' libm68k.log
   test -s uselib/obj/m68k/uselib
 fi
 echo "package smoke test passed ($version)"

@@ -336,22 +336,273 @@ public static class P
     }
 
     [Fact]
-    public void C_files_unknown_resources_and_unknown_manifests_are_refused()
+    public void Misplaced_C_files_unknown_resources_and_unknown_manifests_are_refused()
     {
         var unknown = Package("Sample.Art", new Dictionary<string, string> { ["A.cs"] = "namespace A; public static class X { }" },
-            extraResources: new Dictionary<string, byte[]> { ["esharp/assets/cards.png"] = new byte[] { 1 } });
+            extraResources: new Dictionary<string, byte[]> { ["esharp/assets/cards.png"] = new byte[] { 1 }, ["esharp/other/x"] = new byte[] { 1 } });
         var cfile = Package("Sample.C", new Dictionary<string, string> { ["A.cs"] = "namespace C; public static class X { }", ["fast.c"] = "int f;" });
-        var native = Package("Sample.Native", new Dictionary<string, string>(), extraManifest: ", \"native\": [\"fast.c\"]");
+        var oldForm = Package("Sample.Native", new Dictionary<string, string>(), extraManifest: ", \"native\": [\"fast.c\"]");
         var newer = PackageReader.FromResources(new Dictionary<string, byte[]>(), Encoding.UTF8.GetBytes("{ \"format\": 2, \"id\": \"Sample.N\" }"), "Sample.N", "1.0.0");
         var program = Prelude + "public static class P { [EntryPoint] public static void Main() { } }";
-        var r = Build(program, M68k(unknown, cfile, native, newer));
+        var r = Build(program, M68k(unknown, cfile, oldForm, newer));
         var messages = r.Diagnostics.Where(d => d.Id == "ES0118").Select(d => d.GetMessage()).ToList();
-        Assert.Contains(messages, m => m.StartsWith("Package 'Sample.Art' 1.0.0: it carries 'esharp/assets/cards.png', which this E# does not know"));
-        Assert.Contains(messages, m => m.Contains("'Sample.C'") && m.Contains("C files and headers in packages are not supported yet"));
-        Assert.Contains(messages, m => m.Contains("'Sample.Native'") && m.Contains("declares native C code"));
+        Assert.Contains(messages, m => m.StartsWith("Package 'Sample.Art' 1.0.0: it carries the asset input 'esharp/assets/cards.png'; a package's assets are the Assets.g.cs"));
+        Assert.Contains(messages, m => m.StartsWith("Package 'Sample.Art' 1.0.0: it carries 'esharp/other/x', which this E# does not know"));
+        Assert.Contains(messages, m => m.Contains("'Sample.C'") && m.Contains("the C file 'fast.c' with its C# sources; a package's C goes in native/common/ or native/<target>/"));
+        Assert.Contains(messages, m => m.Contains("'Sample.Native'") && m.Contains("declares native C in a form this E# does not know"));
         Assert.Contains(messages, m => m.Contains("'Sample.N'") && m.Contains("format 2"));
         var mismatch = PackageReader.FromResources(new Dictionary<string, byte[]>(), Encoding.UTF8.GetBytes("{ \"format\": 1, \"id\": \"A\", \"targets\": [\"m68k\"] }"), "B", "1.0.0");
         Assert.Contains(mismatch.Problems, p => p.Contains("names the library 'A', not 'B'"));
+    }
+
+    // ------------------------------------------------------------------ C files and headers in packages (native/, feature NativeC)
+
+    /// <summary>A package with C files: <paramref name="native"/> maps "folder/name" to the text, embedded as esharp/native/folder/name.</summary>
+    private static EsPackage NativePackage(string id, string prefix, IReadOnlyDictionary<string, string> native, string csharp,
+        string features = "\"Native\", \"NativeC\"", string targets = "\"m68k\", \"os4\", \"sdl\"", IEnumerable<string>? listed = null)
+    {
+        var files = string.Join(", ", (listed ?? native.Keys).Select(f => "\"" + f + "\""));
+        return Package(id, new Dictionary<string, string> { ["Lib.cs"] = csharp }, targets, features,
+            extraManifest: $", \"native\": {{ \"prefix\": \"{prefix}\", \"files\": [{files}] }}",
+            extraResources: native.ToDictionary(kv => PackageReader.NativePrefix + kv.Key, kv => Encoding.UTF8.GetBytes(kv.Value)));
+    }
+
+    private const string FixLib = @"using ESharp;
+
+namespace Fx;
+
+public static unsafe class M
+{
+    /// <summary>16.16 fixed-point multiply, in the package's C.</summary>
+    [Native(""fx_mul"")] public static extern int Mul(int a, int b);
+    [Native(""fx_sum"")] public static extern uint Sum(byte* data, int length);
+    [Native(""fx_tuned"")] public static extern int Tuned();
+    [Native] public static extern void fx_hello(string text);
+}
+";
+
+    private static readonly Dictionary<string, string> FixC = new()
+    {
+        ["common/fx.c"] = "#include \"fx_tune.h\"\n#include <stdio.h>\n" +
+                          "static int32_t fx_helper(int64_t v) { return (int32_t)(v >> 16); }\n" +
+                          "static int unprefixed_but_static;\n" +
+                          "int32_t fx_calls;\n" +
+                          "int32_t fx_mul(int32_t a, int32_t b) { fx_calls++; (void)unprefixed_but_static; return fx_helper((int64_t)a * b); }\n" +
+                          "uint32_t fx_sum(uint8_t *data, int32_t length) { uint32_t s = 0; while (length-- > 0) s += *data++; return s; }\n" +
+                          "int32_t fx_tuned(void) { return FX_TUNE; }\n" +
+                          "void fx_hello(const char *text) { fputs(text, stdout); }\n",
+        ["common/fx_tune.h"] = "#define FX_TUNE 1\n",
+        ["m68k/fx_tune.h"] = "#define FX_TUNE 68\n",
+    };
+
+    private const string FixGame = Prelude + @"using Fx;
+
+public static unsafe class P
+{
+    static byte[] Data = { 1, 2, 3, 250 };
+
+    [EntryPoint]
+    public static void Main()
+    {
+        M.fx_hello(""from the package's C\n"");
+        Dos.PutStr(M.Mul(3 << 16, 1 << 15) == 3 << 15 ? ""ok mul\n"" : ""FAIL mul\n"");
+        fixed (byte* p = Data) Dos.PutStr(M.Sum(p, 4) == 256u ? ""ok sum\n"" : ""FAIL sum\n"");
+        Dos.PutStr(M.Tuned() == 68 ? ""ok m68k header\n"" : ""FAIL m68k header\n"");
+    }
+}
+";
+
+    [Fact]
+    public void Package_C_compiles_with_the_program_and_runs()
+    {
+        var lib = NativePackage("Sample.Fx", "fx_", FixC, FixLib);
+        Assert.Empty(lib.Problems);
+        var r = Build(FixGame, M68k(lib));
+        Assert.True(r.Success, string.Join("\n", r.Diagnostics));
+        // The program's C has the prototypes made from the C# declarations, and never includes a package header.
+        Assert.Contains("extern int32_t fx_mul(int32_t, int32_t);\n", r.C!);
+        Assert.Contains("extern uint32_t fx_sum(uint8_t *, int32_t);\n", r.C!);
+        Assert.Contains("extern void fx_hello(const char *);\n", r.C!);
+        Assert.Contains("extern int32_t fx_tuned(void);\n", r.C!);
+        Assert.DoesNotContain("fx_tune.h", r.C!);
+        Assert.DoesNotContain(PackageNatives.PrototypeHeader, r.C!);
+        // m68k: the common C file, the m68k header in place of the common one, and the prototype header.
+        Assert.Equal(new[] { "esharp-native/Sample.Fx/esharp_natives.h", "esharp-native/Sample.Fx/fx.c", "esharp-native/Sample.Fx/fx_tune.h" },
+            r.Native.Select(n => n.Path).OrderBy(p => p, StringComparer.Ordinal).ToArray());
+        Assert.Equal(new[] { "esharp-native/Sample.Fx/fx.c" }, r.Native.Where(n => n.Compile).Select(n => n.Path).ToArray());
+        Assert.Equal("#define FX_TUNE 68\n", r.Native.Single(n => n.Path.EndsWith("fx_tune.h")).Text);
+        var fx = r.Native.Single(n => n.Path.EndsWith("fx.c")).Text;
+        Assert.StartsWith("#include \"esharp_natives.h\"\n#line 1 \"<package Sample.Fx 1.0.0>/native/common/fx.c\"\n#include \"fx_tune.h\"", fx);
+        // Another target takes the common header.
+        Assert.Equal("common", PackageNatives.Select(lib, "os4").Single(f => f.Name == "fx_tune.h").Folder);
+        if (!HasGcc) return;
+        var (code, output) = RunWithHostGccAndNative(r.C!, r.Native);
+        Assert.Equal(0, code);
+        Assert.Equal("from the package's C\nok mul\nok sum\nok m68k header\n", output);
+    }
+
+    [Fact]
+    public void A_C_definition_that_does_not_match_its_CSharp_declaration_does_not_compile()
+    {
+        var wrong = new Dictionary<string, string>(FixC) { ["common/fx.c"] = FixC["common/fx.c"].Replace("int32_t fx_mul(int32_t a, int32_t b)", "int32_t fx_mul(int32_t a, int16_t b)") };
+        var r = Build(FixGame, M68k(NativePackage("Sample.Fx", "fx_", wrong, FixLib)));
+        Assert.True(r.Success, string.Join("\n", r.Diagnostics));
+        if (!HasGcc) return;
+        var dir = Path.Combine(Path.GetTempPath(), "esharp-native-" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            foreach (var n in r.Native)
+            {
+                var path = Path.Combine(dir, n.Path.Replace('/', Path.DirectorySeparatorChar));
+                Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+                File.WriteAllText(path, n.Text);
+            }
+            var psi = new System.Diagnostics.ProcessStartInfo(Cc) { RedirectStandardError = true, RedirectStandardOutput = true, WorkingDirectory = dir };
+            foreach (var a in new[] { "-std=gnu11", "-c", "-o", "fx.o", Path.Combine("esharp-native", "Sample.Fx", "fx.c") }) psi.ArgumentList.Add(a);
+            using var cc = System.Diagnostics.Process.Start(psi)!;
+            var err = cc.StandardError.ReadToEnd();
+            cc.WaitForExit();
+            Assert.NotEqual(0, cc.ExitCode);
+            // gcc says "conflicting types", clang "conflicting types" too; both name the package file through the #line.
+            Assert.Contains("conflicting types", err);
+            Assert.Contains("<package Sample.Fx 1.0.0>/native/common/fx.c", err);
+        }
+        finally { try { Directory.Delete(dir, true); } catch (IOException) { } catch (UnauthorizedAccessException) { } }
+    }
+
+    [Fact]
+    public void A_target_without_C_files_of_a_package_that_has_them_is_an_error()
+    {
+        var onlyM68k = NativePackage("Sample.Fx", "fx_", new Dictionary<string, string> { ["m68k/fx.c"] = "int fx_one(void) { return 1; }\n" },
+            "namespace Fx; public static class N { }");
+        Assert.True(Build(Prelude + "public static class P { [EntryPoint] public static void Main() { } }", M68k(onlyM68k)).Success);
+        var r = Build(Prelude + "public static class P { [EntryPoint] public static void Main() { } }",
+            Targets.Os4.ToOptions(packages: new[] { onlyM68k }, sdkVersion: "0.1.5"));
+        var d = Assert.Single(r.Diagnostics, x => x.Id == "ES0119");
+        Assert.Equal("Package 'Sample.Fx' 1.0.0 has native C, but none for target 'os4' (no .c file in its native/common or native/os4 folder); it has: m68k/fx.c", d.GetMessage());
+    }
+
+    [Fact]
+    public void Exported_C_names_need_the_package_prefix_and_prefixes_may_not_overlap()
+    {
+        var c = "int fx_ok(void) { return 0; }\nstatic int helper(void) { return 1; }\nint counter = 0, fx_also;\nvoid set_up(void) { }\n" +
+                "extern int elsewhere;\nint prototype_only(int);\ntypedef struct thing { int x; } thing_t;\nstruct thing global_thing;\n";
+        var bad = NativePackage("Sample.Fx", "fx_", new Dictionary<string, string> { ["common/fx.c"] = c }, "namespace Fx; public static class N { }");
+        var program = Prelude + "public static class P { [EntryPoint] public static void Main() { } }";
+        var names = Build(program, M68k(bad)).Diagnostics.Where(d => d.Id == "ES0120").Select(d => d.GetMessage()).ToList();
+        Assert.Equal(3, names.Count);
+        Assert.Contains("Package 'Sample.Fx' 1.0.0: native/common/fx.c:3 defines 'counter', which does not start with the package's native prefix 'fx_'", names[0]);
+        Assert.Contains(names, m => m.Contains("native/common/fx.c:4 defines 'set_up'"));
+        Assert.Contains(names, m => m.Contains("native/common/fx.c:8 defines 'global_thing'"));
+
+        var good = "int fx_x(void) { return 0; }\n";
+        var a = NativePackage("Sample.A", "pk_", new Dictionary<string, string> { ["common/a.c"] = good.Replace("fx_", "pk_") }, "namespace PA; public static class N { }");
+        var b = NativePackage("Sample.B", "pk_b_", new Dictionary<string, string> { ["common/b.c"] = good.Replace("fx_", "pk_b_") }, "namespace PB; public static class N { }");
+        var other = NativePackage("Sample.C", "pkc_", new Dictionary<string, string> { ["common/c.c"] = good.Replace("fx_", "pkc_") }, "namespace PC; public static class N { }");
+        var clash = Assert.Single(Build(program, M68k(a, b, other)).Diagnostics, d => d.Id == "ES0122");
+        Assert.Equal("Packages 'Sample.A' (native prefix 'pk_') and 'Sample.B' (native prefix 'pk_b_') could export the same C names; give one of them another EsNativePrefix", clash.GetMessage());
+        Assert.True(Build(program, M68k(a, other)).Success);
+    }
+
+    [Fact]
+    public void Package_native_externs_take_numbers_strings_and_pointers_only()
+    {
+        const string lib = "using ESharp;\nnamespace Fx;\npublic struct V { public int X; }\npublic static unsafe class M {\n" +
+                           "  [Native(\"fx_ref\")] public static extern int ByRef(ref int a);\n" +
+                           "  [Native(\"fx_struct\")] public static extern int ByValue(V v);\n" +
+                           "  [Native(\"fx_ok\")] public static extern void* Ok(V* v, nint n, bool b);\n" +
+                           "  [Native(\"fx_fine\")] public static extern void* Fine(void* v, nint n, bool b, string s);\n" +
+                           "  [Native(\"es_fixdiv\")] public static extern int EmitterOwn(int a, int b);\n}\n";
+        var package = NativePackage("Sample.Fx", "fx_", new Dictionary<string, string> { ["common/fx.c"] = "int fx_dummy;\n" }, lib);
+        var r = Build(Prelude + "public static class P { [EntryPoint] public static void Main() { } }", M68k(package));
+        var messages = r.Diagnostics.Where(d => d.Id == "ES0121").Select(d => d.GetMessage()).ToList();
+        Assert.Equal(3, messages.Count);
+        Assert.Contains(messages, m => m.StartsWith("Package 'Sample.Fx': the [Native] extern 'M.ByRef' (fx_ref) has the parameter 'ref int a'"));
+        Assert.Contains(messages, m => m.StartsWith("Package 'Sample.Fx': the [Native] extern 'M.ByValue' (fx_struct) has the parameter 'Fx.V v'"));
+        // A pointer to an E# struct has no C type the package's C could share either (pass void* and the fields it needs).
+        Assert.Contains(messages, m => m.StartsWith("Package 'Sample.Fx': the [Native] extern 'M.Ok' (fx_ok) has the parameter 'Fx.V* v'"));
+        // es_fixdiv does not start with the package's prefix: a C function of the emitter, as in program code, not checked here.
+        Assert.DoesNotContain(messages, m => m.Contains("EmitterOwn"));
+    }
+
+    [Fact]
+    public void Native_manifests_and_files_must_agree()
+    {
+        var csharp = "namespace Fx; public static class N { }";
+        var c = new Dictionary<string, string> { ["common/fx.c"] = "int fx_a;\n" };
+        Problems(NativePackage("S", "fx_", c, csharp, features: "\"Native\""), "declares native C but not the NativeC feature");
+        Problems(Package("S", new Dictionary<string, string> { ["Lib.cs"] = csharp }, features: "\"NativeC\""), "declares the NativeC feature but no C files");
+        Problems(NativePackage("S", "es_", c, csharp), "native prefix 'es_': es_ is E#'s own");
+        Problems(NativePackage("S", "fx", c, csharp), "native prefix 'fx': a native prefix is a C name of at least 3 characters");
+        Problems(NativePackage("S", "fx_", c, csharp, listed: new[] { "common/fx.c", "common/gone.c" }), "lists the C file 'common/gone.c', which the package does not carry");
+        Problems(NativePackage("S", "fx_", c, csharp, listed: Array.Empty<string>()), "declares native C without any file");
+        Problems(NativePackage("S", "fx_", new Dictionary<string, string>(c) { ["m68k/extra.c"] = "" }, csharp, listed: new[] { "common/fx.c" }),
+            "carries the C file 'm68k/extra.c', which its manifest does not list");
+        foreach (var (path, says) in new[]
+                 {
+                     ("m68k/libfx.a", "prebuilt code (object files, archives, libraries) is refused"),
+                     ("common/fx.o", "prebuilt code"),
+                     ("common/sub/fx.c", "one level deep"),
+                     ("amigaos/fx.c", "C files go in native/common/ or native/<target>/"),
+                     ("common/esharp_natives.h", "file names starting with esharp_ are the build's own"),
+                 })
+            Problems(NativePackage("S", "fx_", new Dictionary<string, string>(c) { [path] = "x" }, csharp, listed: new[] { "common/fx.c" }), says);
+        Assert.Empty(NativePackage("S", "fx_", c, csharp).Problems);
+
+        static void Problems(EsPackage p, string expected) =>
+            Assert.True(p.Problems.Any(x => x.Contains(expected)), $"expected a problem with '{expected}', got: {string.Join(" | ", p.Problems)}");
+    }
+
+    [Fact]
+    public void The_C_reading_finds_exported_definitions_only()
+    {
+        const string c = @"#include <stdint.h>
+#define MACRO(x) int x;
+/* int in_comment; */ // int in_line_comment;
+static int s1 = 1;
+static void s2(void) { int local; (void)local; }
+int f1(int a, int b) { return a + b; }
+unsigned long v1, v2 = 3, *v3;
+int arr[4] = { 1, 2, 3, 4 };
+const char *text = ""int not_a_name;"";
+extern int declared;
+int proto(int);
+void (*callback_setter(void))(int) { return 0; }
+typedef int myint;
+struct tag { int field; };
+enum { E1, E2 };
+struct tag instance = { 1 };
+__attribute__((unused)) int with_attr(void) { return 0; }
+inline int inl(void) { return 0; }
+int
+multi_line
+(void)
+{
+    return 0;
+}
+";
+        var names = PackageNatives.ExportedSymbols(c).Select(s => $"{s.Name}:{s.Line}").ToList();
+        Assert.Equal(new[] { "f1:6", "v1:7", "v2:7", "v3:7", "arr:8", "text:9", "callback_setter:12", "instance:16", "with_attr:17", "inl:18", "multi_line:20" }, names);
+    }
+
+    [Fact]
+    public void The_default_native_prefix_comes_from_the_package_id()
+    {
+        Assert.Equal("esharpsample_checksum_", PackageNatives.DefaultPrefix("ESharpSample.Checksum"));
+        Assert.Equal("my_lib_x_", PackageNatives.DefaultPrefix("My..Lib-X"));
+        Assert.Equal("lib_3d_", PackageNatives.DefaultPrefix("3D"));
+        Assert.Null(PackageNatives.PrefixProblem(PackageNatives.DefaultPrefix("ESharpSample.Checksum")));
+    }
+
+    [Fact]
+    public void The_build_prints_the_package_C_files_for_the_target()
+    {
+        var lib = NativePackage("Sample.Fx", "fx_", FixC, FixLib);
+        var lines = ESharp.Cli.PackageStep.Describe(new[] { lib }, "m68k").ToList();
+        Assert.Contains("  platform-level features: Native, NativeC", lines);
+        Assert.Contains("  native C (prefix fx_; compiled into the program, runs with its privileges): native/common/fx.c, native/m68k/fx_tune.h", lines);
+        Assert.Contains("  native C (prefix fx_; compiled into the program, runs with its privileges): native/common/fx.c, native/common/fx_tune.h",
+            ESharp.Cli.PackageStep.Describe(new[] { lib }, "sdl"));
     }
 
     /// <summary>The Assets.g.cs that esharp assets writes for an assets.json with a 16x2 four-colour image (masked) and a short sound.</summary>

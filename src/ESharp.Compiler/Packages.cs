@@ -22,7 +22,8 @@ public sealed record LibraryManifest(
     IReadOnlyList<string> Features,
     string License,
     IReadOnlyList<string>? Defines = null,
-    PackageAssets? Assets = null)
+    PackageAssets? Assets = null,
+    PackageNative? Native = null)
 {
     /// <summary>
     /// The library's own preprocessor symbols (its <c>DefineConstants</c> without DEBUG, TRACE, RELEASE and HOST): defined for the
@@ -39,8 +40,11 @@ public sealed record LibraryManifest(
     /// <summary>The manifest format this E# reads; a library made for a newer one is refused.</summary>
     public const int CurrentFormat = 1;
 
-    /// <summary>The platform-level features a library can declare (<c>EsFeatures</c>): raw library bindings, C functions of the emitter, inline assembly, interrupt servers and system hook entries.</summary>
-    public static readonly IReadOnlyList<string> KnownFeatures = new[] { "AmigaLib", "Native", "InlineAsm", "Interrupt", "HookEntry" };
+    /// <summary>
+    /// The platform-level features a library can declare (<c>EsFeatures</c>): raw library bindings, [Native] externs, inline assembly,
+    /// interrupt servers, system hook entries, and C files of its own (NativeC: the native/ folder, see <see cref="PackageNative"/>).
+    /// </summary>
+    public static readonly IReadOnlyList<string> KnownFeatures = new[] { "AmigaLib", "Native", "InlineAsm", "Interrupt", "HookEntry", "NativeC" };
 
     public bool Declares(string feature) => Features.Any(f => string.Equals(f, feature, StringComparison.OrdinalIgnoreCase));
 }
@@ -55,6 +59,22 @@ public sealed record PackageAssets(string Source, string Namespace, string Class
 {
     /// <summary>The asset class with its namespace, as programs name it.</summary>
     public string FullName => Namespace.Length > 0 ? Namespace + "." + Class : Class;
+}
+
+/// <summary>
+/// The C of an E# library (the manifest's <c>"native"</c>; feature NativeC): the files of the library project's <c>native/common/</c>
+/// and <c>native/&lt;target&gt;/</c> folders (<see cref="Files"/>, as "folder/name"), embedded as <c>esharp/native/folder/name</c>.
+/// Every function and variable they export, and the C name of each [Native] extern meant for them, starts with <see cref="Prefix"/>.
+/// The game's build compiles the common files and those of the chosen target (a target file replaces a common one of the same
+/// name) with the program, as C source: prebuilt code is refused (see <see cref="PackageNatives"/>).
+/// </summary>
+public sealed record PackageNative(string Prefix, IReadOnlyList<string> Files);
+
+/// <summary>One C file or header of a package: <see cref="Folder"/> is <c>common</c> or a target name.</summary>
+public sealed record NativeFile(string Folder, string Name, string Text)
+{
+    public string Path => Folder + "/" + Name;
+    public bool IsSource => Name.EndsWith(".c", StringComparison.Ordinal);
 }
 
 /// <summary>An E# library package: its manifest and C# sources, read from the package DLL.</summary>
@@ -86,6 +106,9 @@ public sealed class EsPackage
     /// <summary>What is wrong with the package (each one is an ES0118 error in the build).</summary>
     public IReadOnlyList<string> Problems { get; }
 
+    /// <summary>The C files and headers the package carries (all folders; <see cref="PackageNatives.Select"/> picks a target's).</summary>
+    public IReadOnlyList<NativeFile> Native { get; init; } = Array.Empty<NativeFile>();
+
     /// <summary>The licence expression: the manifest's, else the one of the package's nuspec (set by the loader).</summary>
     public string License { get; init; } = "";
 
@@ -100,6 +123,7 @@ public static class PackageReader
 {
     public const string ManifestResource = "esharp/library.json";
     public const string SourcePrefix = "esharp/src/";
+    public const string NativePrefix = "esharp/native/";
 
     /// <summary>
     /// The E# library in <paramref name="dllPath"/>, or null when the DLL carries no E# manifest (an ordinary .NET assembly, such as
@@ -138,9 +162,27 @@ public static class PackageReader
             problems.Add($"its manifest names the library '{manifest.Id}', not '{packageId}'");
 
         var sources = new List<SourceFile>();
+        var native = new List<NativeFile>();
         foreach (var (name, bytes) in resources.OrderBy(r => r.Key, StringComparer.Ordinal))
         {
             if (name == ManifestResource || !name.StartsWith("esharp/", StringComparison.Ordinal)) continue;
+            if (name.StartsWith(NativePrefix, StringComparison.Ordinal))
+            {
+                var nativePath = name.Substring(NativePrefix.Length);
+                if (PackageNatives.PathProblem(nativePath) is { } bad) problems.Add($"it carries '{name}': {bad}");
+                else
+                {
+                    var slash = nativePath.IndexOf('/');
+                    native.Add(new NativeFile(nativePath.Substring(0, slash), nativePath.Substring(slash + 1), Text(bytes)));
+                }
+                continue;
+            }
+            if (name.StartsWith("esharp/assets/", StringComparison.Ordinal))
+            {
+                problems.Add($"it carries the asset input '{name}'; a package's assets are the Assets.g.cs that esharp assets wrote, " +
+                             "named in its manifest (images and sounds are not packed; a library made by another tool?)");
+                continue;
+            }
             if (!name.StartsWith(SourcePrefix, StringComparison.Ordinal))
             {
                 problems.Add($"it carries '{name}', which this E# does not know (a library made for a newer E#?)");
@@ -155,15 +197,22 @@ public static class PackageReader
             if (!rel.EndsWith(".cs", StringComparison.OrdinalIgnoreCase))
             {
                 problems.Add(rel.EndsWith(".c", StringComparison.OrdinalIgnoreCase) || rel.EndsWith(".h", StringComparison.OrdinalIgnoreCase)
-                    ? $"it carries the C file '{rel}'; C files and headers in packages are not supported yet (C# only for now)"
-                    : $"it carries '{rel}', which is not a C# source; only C# sources are supported in packages for now");
+                    ? $"it carries the C file '{rel}' with its C# sources; a package's C goes in native/common/ or native/<target>/ (esharp/native/ in the DLL)"
+                    : $"it carries '{rel}', which is not a C# source");
                 continue;
             }
             sources.Add(new SourceFile(rel, Text(bytes)));
         }
         if (manifest?.Assets is { } assets && !sources.Any(src => src.Path == assets.Source))
             problems.Add($"its manifest names the asset source '{assets.Source}', which the package does not carry");
-        return new EsPackage(packageId, packageVersion, manifest, sources, dllPath, problems) { License = manifest?.License ?? "" };
+        // The C files the manifest lists and those the DLL carries must be the same set: the build prints the list, and a file
+        // the manifest does not name would be compiled into the game unannounced.
+        var listed = manifest?.Native?.Files ?? Array.Empty<string>();
+        foreach (var missing in listed.Where(f => !native.Any(n => n.Path == f)))
+            problems.Add($"its manifest lists the C file '{missing}', which the package does not carry");
+        foreach (var extra in native.Where(n => !listed.Contains(n.Path)))
+            problems.Add($"it carries the C file '{extra.Path}', which its manifest does not list");
+        return new EsPackage(packageId, packageVersion, manifest, sources, dllPath, problems) { License = manifest?.License ?? "", Native = native };
     }
 
     /// <summary>Parses the manifest JSON; what is wrong with it goes to <paramref name="problems"/> (a missing field, an unknown format).</summary>
@@ -196,9 +245,28 @@ public static class PackageReader
         if (manifest.Targets.Count == 0) problems.Add("its manifest lists no targets (EsTargets)");
         foreach (var feature in manifest.Features.Where(x => !LibraryManifest.KnownFeatures.Contains(x, StringComparer.OrdinalIgnoreCase)))
             problems.Add($"its manifest declares the unknown feature '{feature}' (known: {string.Join(", ", LibraryManifest.KnownFeatures)})");
-        if (root.TryGetProperty("native", out var native) && !(native.ValueKind is JsonValueKind.Null or JsonValueKind.False ||
-                                                              native.ValueKind == JsonValueKind.Array && native.GetArrayLength() == 0))
-            problems.Add("it declares native C code; C files and headers in packages are not supported yet (C# only for now)");
+        var nativeDeclared = root.TryGetProperty("native", out var native) && native.ValueKind is not (JsonValueKind.Null or JsonValueKind.False);
+        if (nativeDeclared)
+        {
+            string NativeStr(string name) => native.ValueKind == JsonValueKind.Object && native.TryGetProperty(name, out var v) && v.ValueKind == JsonValueKind.String ? v.GetString()!.Trim() : "";
+            var files = native.ValueKind == JsonValueKind.Object && native.TryGetProperty("files", out var fv) && fv.ValueKind == JsonValueKind.Array
+                ? fv.EnumerateArray().Where(e => e.ValueKind == JsonValueKind.String).Select(e => e.GetString()!.Trim().Replace('\\', '/')).ToList() : null;
+            var prefix = NativeStr("prefix");
+            if (native.ValueKind != JsonValueKind.Object || files == null)
+                problems.Add("its manifest declares native C in a form this E# does not know (a library made for a newer E#?)");
+            else if (PackageNatives.PrefixProblem(prefix) is { } bad)
+                problems.Add($"its manifest gives the native prefix '{prefix}': {bad}");
+            else if (files.Count == 0)
+                problems.Add("its manifest declares native C without any file");
+            else if (files.Select(PackageNatives.PathProblem).FirstOrDefault(x => x != null) is { } badPath)
+                problems.Add($"its manifest lists the C file '{files.First(x => PackageNatives.PathProblem(x) != null)}': {badPath}");
+            else
+                manifest = manifest with { Native = new PackageNative(prefix, files.Distinct(StringComparer.Ordinal).ToList()) };
+        }
+        if (manifest.Native != null && !manifest.Declares("NativeC"))
+            problems.Add("its manifest declares native C but not the NativeC feature (EsFeatures)");
+        else if (!nativeDeclared && manifest.Declares("NativeC"))
+            problems.Add("its manifest declares the NativeC feature but no C files (a native/ folder)");
         if (root.TryGetProperty("assets", out var assets) && assets.ValueKind is not (JsonValueKind.Null or JsonValueKind.False))
         {
             string AssetStr(string name) => assets.ValueKind == JsonValueKind.Object && assets.TryGetProperty(name, out var v) && v.ValueKind == JsonValueKind.String ? v.GetString()!.Trim() : "";
@@ -310,7 +378,7 @@ public static class PackageLoader
                     var package = PackageReader.ReadDll(dll, id, version);
                     if (package == null) continue;
                     if (package.License.Length == 0 && NuspecLicense(packageDir, id) is { } nuspecLicense)
-                        package = new EsPackage(package.Id, package.Version, package.Manifest, package.Sources, package.DllPath, package.Problems) { License = nuspecLicense };
+                        package = new EsPackage(package.Id, package.Version, package.Manifest, package.Sources, package.DllPath, package.Problems) { License = nuspecLicense, Native = package.Native };
                     result.Add(package);
                     break;   // the first DLL with a manifest is the package
                 }

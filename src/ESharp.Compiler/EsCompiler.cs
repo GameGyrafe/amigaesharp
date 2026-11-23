@@ -68,6 +68,8 @@ public static class EsCompiler
         // 3. Entry point rules (the program's files; an entry point in a package is an error of its own), and the package checks.
         CheckEntryPoint(compilation, new HashSet<SyntaxTree>(userTrees), diagnostics);
         PackageChecks.Sources(compilation, userTrees, packageOf, diagnostics);
+        // The C prototypes of the packages' own C functions (their [Native] externs), for the program's C and esharp_natives.h.
+        var prototypes = PackageNatives.Prototypes(compilation, packageOf, diagnostics);
 
         // Chip RAM budget (constant sizes only).
         var chip = ChipBudget.Analyze(compilation, userSet, options.Defines.Contains("M68K"));
@@ -91,11 +93,14 @@ public static class EsCompiler
         (compilation, userSet) = CKeywords.Apply(compilation, userSet);
 
         // 5. Emit C.
-        var emitter = new CEmitter(compilation, userSet, diagnostics, options.BoundsChecks, options.CFileName);
+        var emitter = new CEmitter(compilation, userSet, diagnostics, options.BoundsChecks, options.CFileName)
+        {
+            PackagePrototypes = options.Packages.Where(prototypes.ContainsKey).SelectMany(p => prototypes[p]).Distinct().ToList(),
+        };
         var c = emitter.Emit();
         return new CompileResult(
             diagnostics.Any(d => d.Severity == DiagnosticSeverity.Error) ? null : c,
-            Sorted(diagnostics)) { Chip = chip };
+            Sorted(diagnostics)) { Chip = chip, Native = PackageNatives.Outputs(options.Packages, options.TargetName, prototypes) };
     }
 
     /// <summary>

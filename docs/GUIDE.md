@@ -68,8 +68,9 @@ An E# library is an ordinary .NET class library on NuGet whose DLL also carries 
 embedded resources (issue #31). The IDE, `dotnet build`, `dotnet run` and the host side of `esharp test` use the
 compiled DLL (the library built with `HOST`). `esharp build`, `run` and `test --target` read the sources back out of the
 restored package and compile them with your program for the chosen target, so every `#if AMIGA` / `#elif SDL` branch is
-there. `samples/packages` has a library (`Tween`: easing curves, a generic tween struct, and a ball sprite and a blip sound
-from its own `assets.json`) and a game that uses it (`TweenDemo`), with the steps in its README.
+there. `samples/packages` has two libraries (`Tween`: easing curves, a generic tween struct, and a ball sprite and a blip sound
+from its own `assets.json`; `Checksum`: an Adler-32 checksum in C of its own) and a game that uses both (`TweenDemo`), with the
+steps in its README.
 
 **Writing a library.** Reference AmigaESharp.Sdk and set `EsLibrary`; the Sdk's MSBuild step (in the package's
 `buildTransitive/`) embeds every C# file of the project and writes the manifest when the library is built:
@@ -80,7 +81,7 @@ from its own `assets.json`) and a game that uses it (`TweenDemo`), with the step
   <ImplicitUsings>disable</ImplicitUsings>       <!-- required: the Amiga build sees only the embedded files -->
   <EsLibrary>true</EsLibrary>
   <EsTargets>m68k;os4;morphos;aros;aros-i386;sdl</EsTargets>   <!-- required: the targets it supports -->
-  <EsFeatures></EsFeatures>                      <!-- AmigaLib, Native, InlineAsm, Interrupt, HookEntry: platform-level features it uses -->
+  <EsFeatures></EsFeatures>                      <!-- AmigaLib, Native, InlineAsm, Interrupt, HookEntry, NativeC: platform-level features it uses -->
   <PackageId>MyName.Easing</PackageId>
   <Version>1.0.0</Version>
   <PackageLicenseExpression>MIT</PackageLicenseExpression>
@@ -102,8 +103,8 @@ them (`Video`, `Gfx`, `Files`, `Font`, ...) needs nothing. Every file needs its 
 `<Using>` items stop the library build (ESL004, ESL008), since their generated file is not part of the embedded sources. The
 library's own `DefineConstants` symbols (other than DEBUG, TRACE, RELEASE and HOST) go into the manifest and `esharp build`
 defines them for the library's files only, next to the target's; an E# target symbol there (`AMIGA`, `M68K`, `SDL`, ...)
-stops the library build (ESL009). C files in the project stop the library build (ESL006), and `esharp build` refuses a
-package that carries them (planned). Community packages use any id plus the `esharp` tag (the step adds it); `AmigaESharp.*`
+stops the library build (ESL009). C files go in `native/` ("C in a library" below); anywhere else in the project they
+stop the library build (ESL006), as does prebuilt code. Community packages use any id plus the `esharp` tag (the step adds it); `AmigaESharp.*`
 ids are meant for the official packages. A `Compile` item from outside the project folder without a `Link` (source-only
 package contentFiles, for one) is not part of the library and is skipped, with warning ESL010 naming the file (the HOST DLL
 still has it, so the Amiga build would miss it); give it a `Link` to embed it. A file on another drive (Windows) counts as
@@ -116,7 +117,7 @@ then its compile assets).
 in the library's project folder, and the `Assets.g.cs` that `esharp assets <library dir>` writes next to it (commit it, as for
 a program). That generated file is an ordinary source of the library: it is compiled into the HOST DLL (so the IDE, `dotnet
 test` and the host side of `esharp test` see the same data) and embedded with the other sources, and the manifest names it
-(`"assets": { "source": "Assets.g.cs", "namespace": ..., "class": ... }`). A game that references the package gets the
+(`"assets": { "source": "Assets.g.cs", "namespace": ..., "class": ... }`, the namespace and class as `Assets.g.cs` has them). A game that references the package gets the
 library's planar images, masks, palettes and samples as `[ChipRam]` static data, compiled with the program exactly as the
 game's own `Assets.g.cs` is: in chip RAM on m68k (`__chip`, counted by the chip report and `--chip-budget`), and as plain
 static data on the other targets (where `[ChipRam]` is a no-op, as for program assets), on every target the library lists. The build prints them (`assets: Tween.Art (Assets.g.cs; ...)`).
@@ -145,6 +146,50 @@ static data on the other targets (where `[ChipRam]` is a no-op, as for program a
   again so the package carries the current art); a project that removes `Assets.g.cs` from `Compile` stops it (ESL013). Only
   the `assets.json` in the project folder counts as the library's assets.
 
+**C in a library.** A library can bring C source of its own, compiled into the game with the program's C (feature
+`NativeC`). The C# side declares each C function as a `[Native]` extern (feature `Native`), with a C# version under `#if HOST`
+for the IDE, `dotnet test` and the host side of `esharp test`, which have no C:
+
+```
+MyLib/
+  MyLib.csproj            EsFeatures Native;NativeC, optional EsNativePrefix
+  Checksum.cs             [Native("cksum_adler32")] static extern uint Run(uint sum, byte* data, int length);  (#if HOST: C#)
+  native/common/          every target: adler32.c, cksum_tune.h
+  native/m68k/            m68k only: cksum_tune.h (replaces the common file of the same name)
+```
+
+- **Layout and targets.** `native/common/` holds the files for every target, `native/<target>/` (`m68k`, `os4`, `morphos`,
+  `aros`, `aros-i386`, `sdl`) those for one; a target's file replaces the common file of the same name. One level deep, `.c` and
+  `.h` only. The game's build takes the common files plus its target's; when that set has no `.c` file the build stops
+  (ES0119), so a library that has C for some targets only should list only those in `EsTargets`. The library build refuses
+  (ESL006) a `.c` or `.h` anywhere else in the project, any other file in `native/`, and prebuilt code anywhere (`.o`, `.obj`,
+  `.a`, `.lib`, `.so`, `.dylib`): a package carries C source only, which the game's own compiler builds for its target with its
+  flags. `NativeC` without a `native/` folder, or the other way round, stops it too (ESL015). The files are embedded in the DLL
+  (`esharp/native/<folder>/<name>`) and listed in the manifest (`"native": { "prefix": ..., "files": [...] }`); the package
+  carries them nowhere else.
+- **How it is built.** `esharp build` (also `run` and `test --target`, with `--docker` or `--toolchain`) writes the chosen set to
+  `obj/<target>/esharp-native/<package id>/` next to the program's C and passes each `.c` to the same compiler command as the
+  program's C, as a translation unit of its own (`--emit-only` writes them and stops). The program's C does not include the
+  package's headers: it gets a prototype of each `[Native]` extern of the package, made from the C# declaration. The same
+  prototypes are in `esharp_natives.h`, which every `.c` of the package includes first, so a C definition that does not match its
+  C# declaration is a compile error (conflicting types). `#include "x.h"` in the package's C finds its own headers (no include
+  path is added for them, so the game and other packages do not see them); compiler messages name
+  `<package Id Version>/native/common/x.c`. `esharp addr` does not map addresses in package C (its line table is the program's).
+- **Types.** A package's own C function takes and returns numbers (`int` is `int32_t`, `byte` `uint8_t`, `nint` `intptr_t`, ...),
+  `bool`, `string` (`const char *`) and pointers to those or `void`: no `ref`/`out`/`in`, structs or generic methods (ES0121).
+  Pass an array or span as a pointer taken in `fixed` and its length.
+- **Names.** Every function and variable the package's C exports (not `static`) starts with its native prefix (ES0120):
+  `EsNativePrefix`, by default the package id in lower case with other characters as `_` (`ESharpSample.Checksum` gives
+  `esharpsample_checksum_`). It must start with a letter, end in `_`, and not start with `es_` (E#'s own C names are `es_*`,
+  `Es_*` and `ES_*`; ESL014). Two packages whose prefixes overlap (one starts with the other) stop the game's build (ES0122). So
+  no two packages, and no package and the program, define the same C name. The check reads the C source; a name made by a macro
+  escapes it, and then the linker's duplicate-symbol error stops the build. `static` helpers need no prefix.
+- **Security.** A package's C is compiled into your game and runs with the game's privileges, as the game's own code does: on
+  the Amiga that is the whole machine (no memory protection on AmigaOS 3). Read it before you use the package, as you would read
+  its C#. The build prints every C file it compiles for the target:
+  `native C (prefix cksum_; compiled into the program, runs with its privileges): native/common/adler32.c, native/m68k/cksum_tune.h`.
+  The licence check (ES0111) covers the package as a whole, C included.
+
 **Using a library.** Add a `PackageReference` to the game's csproj, run `dotnet restore` (or `dotnet build`), then build as
 usual. `esharp build` reads `obj/project.assets.json`, takes every package of the restore (direct and transitive) whose DLL
 has an E# manifest, and prints each one (`Package MyName.Easing 1.0.0 (MIT): 2 C# file(s)`, plus the platform-level features
@@ -158,11 +203,15 @@ warns. The checks on package code:
 | A GPL, LGPL or AGPL licence (every choice of the SPDX expression; `MIT OR GPL-3.0-only` is fine), in any E# package of the restore; allowed with `<EsAllowCopyleft>true</EsAllowCopyleft>` in the game's csproj (a literal value), and then printed as a warning | ES0111 |
 | The package needs a newer esharp (`minSdk`; not checked by a `-dev` build from a checkout; `esharp test` reports it from the manifest before the host run loads the package DLL) | ES0112 |
 | `[AmigaLib]`, `[Native]`, `[InlineAsm]`, `[Interrupt]` or `[HookEntry]` declared in the package, or an `[AmigaLib]`/`[Native]` extern of the platform called from it, without the matching `EsFeatures` entry | ES0113 |
+| Package C with no `.c` file for the chosen target (`native/common/` and `native/<target>/`) | ES0119 |
+| A function or variable of a package's C (not `static`) whose name does not start with the package's native prefix | ES0120 |
+| A `[Native]` extern for the package's own C with a type C cannot be given (`ref`, a struct, a generic method) | ES0121 |
+| Two packages whose native prefixes overlap | ES0122 |
 | An `[EntryPoint]` in a package | ES0114 |
 | The same type (namespace, name, arity; also a `partial` one) in a package and the program, or in two packages (also an asset class: the message names the `assets.json`) | ES0115 |
 | An `internal` member of a package used from the program or another package | ES0116 |
 | A program class derived from a package class (not supported yet) | ES0117 |
-| A package that cannot be used: an unknown manifest format or resource, C files, a bad path, a reserved or invalid symbol in its `defines`, an asset declaration it cannot read or whose generated source it does not carry | ES0118 |
+| A package that cannot be used: an unknown manifest format or resource, asset inputs (images, sounds) in it, a bad path, a reserved or invalid symbol in its `defines`, an asset declaration it cannot read or whose generated source it does not carry, a C file outside `esharp/native/common` or `esharp/native/<target>`, prebuilt code, C files the manifest does not list (or listed files it does not carry), native C without the `NativeC` feature or the other way round, a bad native prefix | ES0118 |
 
 Types with the same name in different namespaces (the program's `Game.Ease` and the package's `Tween.Ease`) are fine: their C
 names carry the namespace, as for any two namespaces. Package code is emitted in full, like program code (unused package

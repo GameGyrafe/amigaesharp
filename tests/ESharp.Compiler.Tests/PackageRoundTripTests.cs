@@ -33,7 +33,7 @@ public class PackageRoundTripTests
                 "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n<configuration>\n  <packageSources>\n    <clear />\n" +
                 $"    <add key=\"local\" value=\"{System.Security.SecurityElement.Escape(feed)}\" />\n  </packageSources>\n</configuration>\n");
             FakeSdkPackage(feed);
-            foreach (var project in new[] { "Tween", "TweenDemo" })
+            foreach (var project in new[] { "Tween", "Checksum", "TweenDemo" })
                 CopyProject(Path.Combine(RepoRoot, "samples", "packages", project), Path.Combine(work, project));
 
             var packages = Path.Combine(work, "packages");
@@ -98,6 +98,57 @@ public class PackageRoundTripTests
             foreach (var dir in new[] { "bin", "obj" })
                 if (Directory.Exists(Path.Combine(work, "Tween", dir))) Directory.Delete(Path.Combine(work, "Tween", dir), true);
 
+            // The C library (ESharpSample.Checksum): C files outside native/common or native/<target>, other files in native/ and prebuilt
+            // code anywhere stop the build (ESL006); C files without NativeC in EsFeatures, or NativeC without C files, too (ESL015);
+            // so does a native prefix that is E#'s own (ESL014).
+            var cks = Path.Combine(work, "Checksum");
+            var cksProj = Path.Combine(cks, "Checksum.csproj");
+            var cksText = File.ReadAllText(cksProj);
+            foreach (var (code, file, says) in new[]
+                     {
+                         ("ESL006", "stray.c", "stray.c (C files and headers go in native/common/ or native/<target>/)"),
+                         ("ESL006", Path.Combine("native", "m68k", "fast.o"), "native/m68k/fast.o (prebuilt code: a package carries C source only)"),
+                         ("ESL006", Path.Combine("native", "amigaos", "x.c"), "native/amigaos/x.c (C files go in native/common/ or native/<target>/"),
+                         ("ESL006", "libfast.a", "libfast.a (prebuilt code: a package carries C source only)"),
+                     })
+            {
+                var path = Path.Combine(cks, file);
+                Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+                File.WriteAllText(path, "int x;\n");
+                var (exitC, logC) = DotnetResult(work, packages, "build", "Checksum", "-p:ESharpSdkVersion=" + SdkVersion);
+                Assert.True(exitC != 0 && logC.Contains(code) && logC.Contains(says), $"dotnet build with {file} expected to fail with {code}:\n{logC}");
+                File.Delete(path);
+            }
+            foreach (var (code, from, to) in new[]
+                     {
+                         ("ESL015", "<EsFeatures>Native;NativeC</EsFeatures>", "<EsFeatures>Native</EsFeatures>"),
+                         ("ESL014", "<EsNativePrefix>cksum_</EsNativePrefix>", "<EsNativePrefix>es_cksum_</EsNativePrefix>"),
+                     })
+            {
+                File.WriteAllText(cksProj, cksText.Replace(from, to));
+                var (exitC, logC) = DotnetResult(work, packages, "build", "Checksum", "-p:ESharpSdkVersion=" + SdkVersion);
+                Assert.True(exitC != 0 && logC.Contains(code), $"dotnet build with {to} expected to fail with {code}:\n{logC}");
+            }
+            File.WriteAllText(cksProj, cksText);
+            foreach (var dir in new[] { "bin", "obj" })
+                if (Directory.Exists(Path.Combine(cks, dir))) Directory.Delete(Path.Combine(cks, dir), true);
+            var (cksExit, cksLog) = DotnetResult(work, packages, "pack", "Checksum", "-o", feed, "-p:ESharpSdkVersion=" + SdkVersion);
+            Assert.True(cksExit == 0 && !cksLog.Contains("ESL0"), $"dotnet pack of the C library failed or warned:\n{cksLog}");
+            var cksDll = Path.Combine(work, "Checksum.dll");
+            using (var zip = ZipFile.OpenRead(Path.Combine(feed, "ESharpSample.Checksum.1.0.0.nupkg")))
+            {
+                zip.GetEntry("lib/net10.0/Checksum.dll")!.ExtractToFile(cksDll);
+                // The C is in the DLL only, as source: no C file, object or archive beside it in the package.
+                Assert.DoesNotContain(zip.Entries, e => e.FullName.EndsWith(".c") || e.FullName.EndsWith(".h") || e.FullName.EndsWith(".o") || e.FullName.EndsWith(".a"));
+            }
+            var cksLib = PackageReader.ReadDll(cksDll, "ESharpSample.Checksum", "1.0.0");
+            Assert.NotNull(cksLib);
+            Assert.Empty(cksLib!.Problems);
+            Assert.Equal(new[] { "Native", "NativeC" }, cksLib.Manifest!.Features);
+            Assert.Equal("cksum_", cksLib.Manifest.Native!.Prefix);
+            Assert.Equal(new[] { "common/adler32.c", "common/cksum_tune.h", "m68k/cksum_tune.h" }, cksLib.Manifest.Native.Files.ToArray());
+            Assert.Equal(new[] { "common/adler32.c", "common/cksum_tune.h", "m68k/cksum_tune.h" }, cksLib.Native.Select(n => n.Path).ToArray());
+
             var (packExit, packLog) = DotnetResult(work, packages, "pack", "Tween", "-o", feed, "-p:ESharpSdkVersion=" + SdkVersion);
             Assert.True(packExit == 0 && !packLog.Contains("ESL0"), $"dotnet pack failed or warned:\n{packLog}");
             var nupkg = Path.Combine(feed, "ESharpSample.Tween.1.0.0.nupkg");
@@ -125,8 +176,7 @@ public class PackageRoundTripTests
             Assert.NotNull(ESharp.Cli.PackageStep.Load(game, out _));   // not restored yet: says to run dotnet restore
             Dotnet(work, packages, "restore", "TweenDemo", "-p:ESharpSdkVersion=" + SdkVersion);
             Assert.Null(ESharp.Cli.PackageStep.Load(game, out var found));
-            var package = Assert.Single(found.Packages);
-            Assert.Equal("ESharpSample.Tween", package.Id);
+            Assert.Equal(new[] { "ESharpSample.Checksum", "ESharpSample.Tween" }, found.Packages.Select(p => p.Id).ToArray());
             Assert.False(found.AllowCopyleft);
 
             var m68k = HasImage(M68kImage);
@@ -154,10 +204,17 @@ public class PackageRoundTripTests
             Assert.Matches(@"static +Art\.BallMask +32 bytes", text);
             Assert.Matches(@"static +Art\.BlipData +480 bytes", text);
             Assert.Contains("  its own symbols: TWEEN_OWN", text);
-            Assert.Contains("Host: 18 ok, 0 FAIL", text);
+            Assert.Contains("Host: 20 ok, 0 FAIL", text);
+            Assert.Contains("Package ESharpSample.Checksum 1.0.0 (MIT): 1 C# file(s)", text);
+            Assert.Contains("  native C (prefix cksum_; compiled into the program, runs with its privileges): native/common/adler32.c, native/m68k/cksum_tune.h", text);
+            var nativeDir = Path.Combine(game, "obj", "m68k", "esharp-native", "ESharpSample.Checksum");
+            Assert.Equal("#define CKSUM_UNROLL 8", File.ReadAllLines(Path.Combine(nativeDir, "cksum_tune.h")).Single(l => l.StartsWith("#define CKSUM_UNROLL")));
+            Assert.Contains("extern uint32_t cksum_adler32(uint32_t, uint8_t *, int32_t);", File.ReadAllText(Path.Combine(nativeDir, "esharp_natives.h")));
             Assert.Contains("TEST PASSED", text);
             if (m68k) Assert.Contains("Built " + Path.Combine(game, "obj", "m68k", "TweenDemo"), text);
             var gameC = File.ReadAllText(Path.Combine(game, "obj", "m68k", "TweenDemo.c")).Replace("\r\n", "\n");
+            Assert.Contains("\nextern uint32_t cksum_adler32(uint32_t, uint8_t *, int32_t);\n", gameC);
+            Assert.DoesNotContain("cksum_tune.h", gameC);
             Assert.Contains("\"<package ESharpSample.Tween 1.0.0>/Tween.cs\"", gameC);
             Assert.Contains("\"<package ESharpSample.Tween 1.0.0>/Ball.cs\"", gameC);
             // The ball's planes as the library's Assets.g.cs has them, in chip RAM.
@@ -222,6 +279,15 @@ public class PackageRoundTripTests
             Assert.True(exit == 0 && !log.Contains("ESL010"), log);
             lib = PackageReader.ReadDll(dll, id, "1.0.0");
             Assert.Equal(new[] { "Assets.g.cs", "Ball.cs", "Ease.cs", "Linked/Extra.cs", "Outside.cs", "Tween.cs" }, lib!.Sources.Select(s => s.Path).ToArray());
+
+            // assets.json renames the class but esharp assets has not run again: a warning (ESL011), and the manifest names the class
+            // the package really has, the one in Assets.g.cs (Tween.Art), not the one assets.json asks for.
+            var assetsJson = Path.Combine(work, "Tween", "assets.json");
+            File.WriteAllText(assetsJson, File.ReadAllText(assetsJson).Replace("\"class\": \"Art\"", "\"class\": \"Pictures\""));
+            (exit, log) = DotnetResult(work, packages, "build", "Tween", "-p:ESharpSdkVersion=" + SdkVersion);
+            Assert.True(exit == 0 && log.Contains("ESL011"), log);
+            lib = PackageReader.ReadDll(dll, id, "1.0.0");
+            Assert.Equal(new PackageAssets("Assets.g.cs", "Tween", "Art"), lib!.Manifest!.Assets);
         }
         finally
         {
@@ -253,6 +319,8 @@ public class PackageRoundTripTests
         Directory.CreateDirectory(to);
         foreach (var file in Directory.GetFiles(from))   // the project's own files (no bin/ or obj/ of a local build)
             File.Copy(file, Path.Combine(to, Path.GetFileName(file)));
+        foreach (var dir in Directory.GetDirectories(from).Where(d => Path.GetFileName(d) is not ("bin" or "obj")))
+            CopyProject(dir, Path.Combine(to, Path.GetFileName(dir)));
     }
 
     private static void Dotnet(string dir, string packages, params string[] args)

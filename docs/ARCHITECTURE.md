@@ -146,17 +146,20 @@ CI runs the unit tests on Linux and Windows, a package round trip, the toolchain
 ## Library packages
 
 An E# library (issue #31) is a .NET class library whose DLL carries its C# sources (`esharp/src/<path>`) and a manifest
-(`esharp/library.json`: format, id, version, targets, minSdk, features, defines, licence, and `assets` when it has them) as embedded resources, the same idea as the
+(`esharp/library.json`: format, id, version, targets, minSdk, features, defines, licence, and `assets` and `native` when it has them) as embedded resources, plus its C files and headers (`esharp/native/<common|target>/<name>`), the same idea as the
 compiler embedding Runtime and Platform (`LibrarySources.cs`). The pieces:
 
 - **Embedding**: `src/ESharp.Sdk/buildTransitive/AmigaESharp.Sdk.targets`, imported into every project that references
   AmigaESharp.Sdk. With `EsLibrary=true` it defines `HOST`, checks `EsTargets`/`EsFeatures`/`ImplicitUsings`/`<Using>` items and refuses
-  C files and E# target symbols in `DefineConstants` (codes ESL001-ESL013; ESL010 and ESL011 are warnings), writes the manifest (with the
+  misplaced C files, prebuilt code and E# target symbols in `DefineConstants` (codes ESL001-ESL015; ESL010 and ESL011 are warnings), writes the manifest (with the
   library's own symbols as `defines`) and adds the resources before the build. A library with an `assets.json` ships the
   `Assets.g.cs` that `esharp assets` wrote: an inline task reads the namespace, class and input files of `assets.json`
   (missing file ESL005, no namespace ESL012, an input whose content differs from the SHA-256 that `Assets.g.cs` records
   for it ESL011; a file without those lines, from an older `esharp assets`, by file time), and the manifest's `assets` names the file and
-  class. The converted data is shipped rather than the inputs because the conversion is the same for every target (one
+  the namespace and class that `Assets.g.cs` declares. A second inline task (`EsLibraryNativeFiles`) takes the project's `None`/`Content` items:
+  `native/common/*.c|h` and `native/<target>/*.c|h` are embedded and listed in the manifest's `native` with the prefix
+  (`EsNativePrefix`, default from the id); anything else in `native/`, a `.c`/`.h` elsewhere and `.o`/`.obj`/`.a`/`.lib`/`.so`/`.dylib`
+  anywhere are ESL006; NativeC and the files must go together (ESL015); a bad prefix is ESL014. The converted data is shipped rather than the inputs because the conversion is the same for every target (one
   `Assets.g.cs` serves all of them for a program too) and the package then carries exactly what its author built and tested;
   the game's build parses it as any package source, so `[ChipRam]`, the chip report and the C names (`Es_<Namespace>_<Class>_<Field>`)
   work as for program assets. `EsCompiler` parses each package's files with
@@ -167,13 +170,26 @@ compiler embedding Runtime and Platform (`LibrarySources.cs`). The pieces:
   (ES0118; also an `assets` entry it cannot read, or one whose source the package does not carry: `PackageAssets`). `Licenses` evaluates SPDX expressions (copyleft when every OR choice has a GPL-family id), `SdkVersions` the
   minimum version. The CLI side is `src/ESharp.Cli/PackageStep.cs` (finds the csproj and the restore, reads `EsAllowCopyleft`,
   prints the packages); `HostRun` references the package DLLs for the host run.
-- **Checks**: `src/ESharp.Compiler/PackageChecks.cs`, ES0110-ES0118 (descriptors in `Descriptors.cs`; compiler-only, the IDE
+- **Checks**: `src/ESharp.Compiler/PackageChecks.cs`, ES0110-ES0122 (descriptors in `Descriptors.cs`; compiler-only, the IDE
   sees a package as metadata). ES0115 names an `assets.json` when the clashing type is a generated asset class. The analyzer needs no change: package trees are in the user set.
+- **Package C**: `src/ESharp.Compiler/PackageNatives.cs`. `Select` picks a target's files (common, a target file in place of a
+  common one of the same name); `Check` gives ES0119 (no `.c` for the target), ES0120 (an exported name without the prefix:
+  `ExportedSymbols` is a light reading of the C source, comments, strings and preprocessor lines left out, file-level definitions
+  that are not `static`) and ES0122 (overlapping prefixes); `Prototypes` makes the C prototype of each `[Native]` extern whose
+  name has the package's prefix from its C# signature (numbers, bool, string, pointers to those or void; else ES0121). The
+  emitter puts them after the includes (`CEmitter.PackagePrototypes`), so the program's C never includes a package header, and
+  `Outputs` gives `CompileResult.Native`: `esharp-native/<id>/` with the chosen files, each `.c` starting with
+  `#include "esharp_natives.h"` (the same prototypes: a definition that does not match is a compile error) and a `#line` to
+  `<package Id Version>/native/<folder>/<name>`. `Program.Build` writes them under `obj/<target>/` (cleared first) and adds the
+  `.c` files to the compiler command after the program's C (Docker or local toolchain alike; not to the `-c` object for
+  `esharp addr`). No include path is added, so `#include "x.h"` reaches only the package's own folder.
 
 Tests: `PackageTests.cs` (in-memory packages, generated C built and run with the host gcc, every check; a package whose
 `Assets.g.cs` comes from `AssetBuilder`, its chip data checked in the C and the chip report and read back by the program) and
 `PackageRoundTripTests.cs` (the samples/packages projects: dotnet pack, restore from a local feed, build, host run, m68k
-build with the image; the library's asset checks ESL005, ESL011, ESL012 and the outside-file warning ESL010); `tools/package-smoke.sh` repeats it with the packed AmigaESharp.Sdk.
+build with the image; the library's asset checks ESL005, ESL011, ESL012 and the outside-file warning ESL010; the C library
+`Checksum`: ESL006, ESL014, ESL015, the embedded C and the package C in the m68k build); `PackageTests.cs` also builds a package's
+C with the program's C under the host gcc and runs it, and checks a mismatched C definition fails to compile; `tools/package-smoke.sh` repeats it with the packed AmigaESharp.Sdk.
 
 ## Packaging
 

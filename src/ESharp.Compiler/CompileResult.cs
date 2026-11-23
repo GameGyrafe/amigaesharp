@@ -20,5 +20,11 @@ public sealed class CompileResult
     /// <summary>Chip RAM the program reserves where the sizes are constants (68k only).</summary>
     public System.Collections.Generic.IReadOnlyList<ChipEntry> Chip { get; init; } = System.Array.Empty<ChipEntry>();
 
+    /// <summary>
+    /// The packages' C files and headers for this target (<see cref="PackageNatives.Outputs"/>): the build writes each one at its
+    /// path under the output folder and compiles those marked <see cref="NativeOutput.Compile"/> with the program's C.
+    /// </summary>
+    public System.Collections.Generic.IReadOnlyList<NativeOutput> Native { get; init; } = System.Array.Empty<NativeOutput>();
+
     public bool Success => C != null && !Diagnostics.Any(d => d.Severity == DiagnosticSeverity.Error);
 }

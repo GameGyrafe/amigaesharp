@@ -474,7 +474,7 @@ Targets:
         // E# library packages from the project's restore (obj/project.assets.json), compiled with the program.
         if (PackageStep.Load(path, out var packages) is { } packageError) return Fail(packageError);
         foreach (var w in packages.Warnings) Console.Error.WriteLine($"esharp: warning: {w}");
-        foreach (var line in PackageStep.Describe(packages.Packages)) Console.WriteLine(line);
+        foreach (var line in PackageStep.Describe(packages.Packages, target.Name)) Console.WriteLine(line);
         if (packages.AllowCopyleft)
             foreach (var p in packages.Packages.Where(p => Licenses.IsCopyleft(p.License)))
                 Console.Error.WriteLine($"esharp: warning: package {p.Id} {p.Version} is under {p.License}, compiled into the program (allowed by EsAllowCopyleft)");
@@ -504,6 +504,22 @@ Targets:
         var cFile = Path.Combine(outDir, name + ".c");
         File.WriteAllText(cFile, result.C!);
         Console.WriteLine($"Wrote {cFile}");
+        // The packages' C (esharp-native/<id>/), written fresh each build so a file a package no longer has is not compiled.
+        var nativeSources = new List<string>();
+        try
+        {
+            var nativeDir = Path.Combine(outDir, PackageNatives.OutputFolder);
+            if (Directory.Exists(nativeDir)) Directory.Delete(nativeDir, true);
+            foreach (var n in result.Native)
+            {
+                var file = Path.Combine(outDir, n.Path.Replace('/', Path.DirectorySeparatorChar));
+                Directory.CreateDirectory(Path.GetDirectoryName(file)!);
+                File.WriteAllText(file, n.Text);
+                if (n.Compile) nativeSources.Add(n.Path);   // relative, with '/': the same in the container and here
+            }
+        }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException) { return Fail("package C: " + e.Message); }
+        if (nativeSources.Count > 0) Console.WriteLine($"Wrote the packages' C into {Path.Combine(outDir, PackageNatives.OutputFolder)} ({nativeSources.Count} C file(s), compiled with the program)");
         if (emitOnly) return 0;
 
         var userCc = cc != null;
@@ -533,13 +549,16 @@ Targets:
 
         // The compiler runs in the output directory with relative file names, inside the container (mounted at /work) or here,
         // so a local build passes the compiler the same command line as a Docker build (and gives the same bytes).
-        int Compile(string[] flags, string outFile, bool link)
+        // withNative: the packages' C files are compiled and linked with the program's (each its own translation unit). Not for the
+        // -c object that esharp addr reads (one source file per -c -o): package C lines are not in its line table.
+        int Compile(string[] flags, string outFile, bool link, bool withNative = true)
         {
             var compilerArgs = new List<string>();
             if (sysroot != null) compilerArgs.Add("--sysroot=" + sysroot);
             compilerArgs.AddRange(cflags.Split(' ', StringSplitOptions.RemoveEmptyEntries));
             compilerArgs.AddRange(flags);
             compilerArgs.AddRange(new[] { "-o", outFile, name + ".c" });
+            if (withNative) compilerArgs.AddRange(nativeSources);
             if (link) compilerArgs.AddRange(target.Libs.Split(' ', StringSplitOptions.RemoveEmptyEntries));
 
             ProcessStartInfo psi;
@@ -592,7 +611,7 @@ Targets:
         // The map has a fixed name while linking (a comma in the project name would split the -Wl option), then takes the exe's.
         if (Compile(target.IsM68k ? addrFlags.Append("-Wl,-Map,esharp-link.map").ToArray() : addrFlags, name, link: true) != 0) return 1;
         if (target.IsM68k && MoveLinkMap(outDir, exe) != 0) return 1;
-        if (target.IsM68k && Compile(addrFlags.Concat(new[] { "-g", "-c" }).ToArray(), name + ".o", link: false) != 0) return 1;
+        if (target.IsM68k && Compile(addrFlags.Concat(new[] { "-g", "-c" }).ToArray(), name + ".o", link: false, withNative: false) != 0) return 1;
         if (target.IsAmiga && !target.IsM68k && Compile(new[] { "-g", "-gdwarf-4" }, name + ".debug", link: true) != 0) return 1;   // DWARF 4: the os4 binutils read no 5
 
         Console.WriteLine($"Built {exe}");
