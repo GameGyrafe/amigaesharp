@@ -50,8 +50,12 @@ public static class PackageNatives
     private static readonly Regex FileName = new(@"^[A-Za-z0-9_][A-Za-z0-9_.-]*\.[ch]$", RegexOptions.CultureInvariant);
     private static readonly Regex PrefixForm = new(@"^[A-Za-z][A-Za-z0-9_]*_$", RegexOptions.CultureInvariant);
 
-    /// <summary>What is wrong with a native path "folder/name" (as in the manifest and under esharp/native/), or null.</summary>
-    public static string? PathProblem(string path)
+    /// <summary>
+    /// What is wrong with a native path "folder/name" (as in the manifest and under esharp/native/), or null. With
+    /// <paramref name="all"/>, the package's paths: a file name that another path has in different case is refused too (the two are one
+    /// file on Windows and macOS, and a target's header would silently replace the common one there).
+    /// </summary>
+    public static string? PathProblem(string path, IEnumerable<string>? all = null)
     {
         var parts = path.Split('/');
         if (parts.Length != 2 || !Folders.Contains(parts[0], StringComparer.Ordinal))
@@ -60,6 +64,8 @@ public static class PackageNatives
             return "only C source (.c) and headers (.h) with plain file names are accepted; prebuilt code (object files, archives, libraries) is refused";
         if (parts[1].StartsWith("esharp_", StringComparison.OrdinalIgnoreCase))
             return "file names starting with esharp_ are the build's own (it writes " + PrototypeHeader + ")";
+        if (all != null && all.FirstOrDefault(o => o.Split('/') is [_, var other] && other != parts[1] && string.Equals(other, parts[1], StringComparison.OrdinalIgnoreCase)) is { } clash)
+            return $"its name differs from '{clash}' only in case (one file on Windows and macOS)";
         return null;
     }
 
@@ -94,18 +100,14 @@ public static class PackageNatives
         return chosen.Values.ToList();
     }
 
-    /// <summary>Checks on the native C of the packages for the target being built (ES0119, ES0120, ES0122).</summary>
+    /// <summary>Checks on the native C of the packages for the target being built (ES0120, ES0122).</summary>
     public static void Check(CompileOptions options, List<Diagnostic> diagnostics)
     {
         var withNative = options.Packages.Where(p => p.Manifest?.Native != null && p.Problems.Count == 0).ToList();
         foreach (var p in withNative)
         {
             var prefix = p.Manifest!.Native!.Prefix;
-            var files = Select(p, options.TargetName);
-            if (!files.Any(f => f.IsSource))
-                diagnostics.Add(Diagnostic.Create(Descriptors.PackageNativeTarget, Location.None, p.Id, p.Version, options.TargetName ?? "?",
-                    string.Join(", ", p.Manifest.Native.Files)));
-            foreach (var f in files)
+            foreach (var f in Select(p, options.TargetName))
                 foreach (var (name, line) in ExportedSymbols(f.Text).Where(s => !s.Name.StartsWith(prefix, StringComparison.Ordinal)))
                     diagnostics.Add(Diagnostic.Create(Descriptors.PackageNativeName, Location.None, p.Id, p.Version, $"native/{f.Path}:{line}", name, prefix));
         }
@@ -116,6 +118,48 @@ public static class PackageNatives
                 if (a.StartsWith(b, StringComparison.Ordinal) || b.StartsWith(a, StringComparison.Ordinal))
                     diagnostics.Add(Diagnostic.Create(Descriptors.PackageNativePrefix, Location.None, withNative[i].Id, a, withNative[j].Id, b));
             }
+    }
+
+    /// <summary>
+    /// ES0119: a package that declares [Native] externs for its own C (names with its prefix, in the C# compiled for this target)
+    /// but has no .c file for the target. A package with C for some targets only and C# for the others has no such externs on the
+    /// others (they are in <c>#if M68K</c>), and the build goes on.
+    /// </summary>
+    public static void CheckTargetHasC(CompileOptions options, IReadOnlyDictionary<EsPackage, List<string>> prototypes, List<Diagnostic> diagnostics)
+    {
+        foreach (var p in options.Packages.Where(p => p.Manifest?.Native != null && p.Problems.Count == 0 && prototypes.ContainsKey(p)))
+            if (!Select(p, options.TargetName).Any(f => f.IsSource))
+                diagnostics.Add(Diagnostic.Create(Descriptors.PackageNativeTarget, Location.None, p.Id, p.Version, options.TargetName ?? "?",
+                    string.Join(", ", p.Manifest!.Native!.Files)));
+    }
+
+    /// <summary>
+    /// ES0123: a [Native] extern, in the program or in another package, whose C name starts with a package's native prefix. The
+    /// prototype of a package's C function comes from the declaration in the package itself, so another declaration of it would be
+    /// an implicit declaration in the program's C (and a second, possibly different, signature): it is refused, and the program calls
+    /// the package's C# method instead.
+    /// </summary>
+    public static void CheckForeignExterns(Microsoft.CodeAnalysis.CSharp.CSharpCompilation compilation, IEnumerable<SyntaxTree> programTrees,
+        IReadOnlyDictionary<SyntaxTree, EsPackage> packageOf, List<Diagnostic> diagnostics)
+    {
+        var owners = packageOf.Values.Distinct().Where(p => p.Manifest?.Native != null && p.Problems.Count == 0).ToList();
+        if (owners.Count == 0) return;
+        foreach (var tree in programTrees.Concat(packageOf.Keys.OrderBy(t => t.FilePath, StringComparer.Ordinal)))
+        {
+            packageOf.TryGetValue(tree, out var here);
+            var model = compilation.GetSemanticModel(tree);
+            foreach (var decl in tree.GetRoot().DescendantNodes().OfType<MethodDeclarationSyntax>())
+            {
+                if (model.GetDeclaredSymbol(decl) is not IMethodSymbol m || !m.IsExtern) continue;
+                var attr = m.GetAttributes().FirstOrDefault(a => a.AttributeClass?.Name == "NativeAttribute");
+                if (attr == null) continue;
+                var cName = attr.ConstructorArguments is [{ Value: string n }] && n.Length > 0 ? n : m.Name;
+                var owner = owners.FirstOrDefault(o => o != here && cName.StartsWith(o.Manifest!.Native!.Prefix, StringComparison.Ordinal));
+                if (owner != null)
+                    diagnostics.Add(Diagnostic.Create(Descriptors.PackageNativeForeign, decl.Identifier.GetLocation(),
+                        m.ContainingType.Name + "." + m.Name, cName, owner.Id, owner.Manifest!.Native!.Prefix));
+            }
+        }
     }
 
     /// <summary>

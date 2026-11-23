@@ -160,8 +160,11 @@ MyLib/
 
 - **Layout and targets.** `native/common/` holds the files for every target, `native/<target>/` (`m68k`, `os4`, `morphos`,
   `aros`, `aros-i386`, `sdl`) those for one; a target's file replaces the common file of the same name. One level deep, `.c` and
-  `.h` only. The game's build takes the common files plus its target's; when that set has no `.c` file the build stops
-  (ES0119), so a library that has C for some targets only should list only those in `EsTargets`. The library build refuses
+  `.h` only. The game's build takes the common files plus its target's; when that set has no `.c` file and the package declares
+  `[Native]` externs for its C (a C name with its prefix) in the C# compiled for the target, the build stops (ES0119). A library
+  with C for m68k only and C# for the other targets puts the externs under `#if M68K` and builds elsewhere without error. File
+  names that differ only in case (`common/Tune.h` and `m68k/tune.h`) are one file on Windows and macOS: the library build
+  refuses them (ESL006), and so does the game's build for a package that carries them (ES0118). The library build refuses
   (ESL006) a `.c` or `.h` anywhere else in the project, any other file in `native/`, and prebuilt code anywhere (`.o`, `.obj`,
   `.a`, `.lib`, `.so`, `.dylib`): a package carries C source only, which the game's own compiler builds for its target with its
   flags. `NativeC` without a `native/` folder, or the other way round, stops it too (ESL015). The files are embedded in the DLL
@@ -185,7 +188,12 @@ MyLib/
   no two packages, and no package and the program, define the same C name. The check reads the C source; a name made by a macro
   escapes it, and then the linker's duplicate-symbol error stops the build (a build with package C passes `-fno-common`, so
   this holds for uninitialised variables too: gcc before 10, the m68k one among them, would otherwise merge `int x;` in two
-  files into one variable). `static` helpers need no prefix.
+  files into one variable). `static` helpers need no prefix. A file-level macro that defines a function, such as
+  `DEFINE_FN(x) { }` with `#define DEFINE_FN(n) void n(void)`, is reported by ES0120 under the macro's name (`DEFINE_FN`), the
+  only name the reading sees; the C it expands to is not read (a name the macro makes is not checked, as above). Only the package
+  declares its own C functions: a `[Native]` extern in the program (or in another package) whose C name starts with a package's
+  prefix is refused (ES0123), because the program's C gets the prototype from the package's own declaration; call the package's
+  C# method instead.
 - **Security.** A package's C is compiled into your game and runs with the game's privileges, as the game's own code does: on
   the Amiga that is the whole machine (no memory protection on AmigaOS 3). Read it before you use the package, as you would read
   its C#. The build prints every C file it compiles for the target:
@@ -205,8 +213,9 @@ warns. The checks on package code:
 | A GPL, LGPL or AGPL licence (every choice of the SPDX expression; `MIT OR GPL-3.0-only` is fine), in any E# package of the restore; allowed with `<EsAllowCopyleft>true</EsAllowCopyleft>` in the game's csproj (a literal value), and then printed as a warning | ES0111 |
 | The package needs a newer esharp (`minSdk`; not checked by a `-dev` build from a checkout; `esharp test` reports it from the manifest before the host run loads the package DLL) | ES0112 |
 | `[AmigaLib]`, `[Native]`, `[InlineAsm]`, `[Interrupt]` or `[HookEntry]` declared in the package, or an `[AmigaLib]`/`[Native]` extern of the platform called from it, without the matching `EsFeatures` entry | ES0113 |
-| Package C with no `.c` file for the chosen target (`native/common/` and `native/<target>/`) | ES0119 |
+| A package with `[Native]` externs for its own C but no `.c` file for the chosen target (`native/common/` and `native/<target>/`) | ES0119 |
 | A function or variable of a package's C (not `static`) whose name does not start with the package's native prefix | ES0120 |
+| A `[Native]` extern outside the package whose C name starts with that package's native prefix | ES0123 |
 | A `[Native]` extern for the package's own C with a type C cannot be given (`ref`, a struct, a generic method) | ES0121 |
 | Two packages whose native prefixes overlap | ES0122 |
 | An `[EntryPoint]` in a package | ES0114 |

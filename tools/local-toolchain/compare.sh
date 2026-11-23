@@ -3,7 +3,8 @@
 # and docker cp, so the versions match by construction), builds samples with --toolchain <folder> instead of --docker, builds
 # the same samples with --docker <image>, and compares the outputs byte for byte.
 #
-#   tools/local-toolchain/compare.sh [work dir] [sample...]      (default: a temporary folder; hello and cards)
+#   tools/local-toolchain/compare.sh [work dir] [sample...]      (default: a temporary folder; hello and cards; a sample in a
+#   sub-folder such as packages/TweenDemo needs its packages restored first, samples/packages/README.md)
 #
 # The executable, its .info icon and the generated C must be identical. The <name>.o that every m68k build also writes (with
 # -g, for esharp addr) is not compared: its debug info holds the build folder (/work in the container), so it differs.
@@ -32,7 +33,8 @@ status=0
 for s in "${samples[@]}"; do
   "${esharp[@]}" build "samples/$s" --toolchain "$tc" -o "$work/local/$s"
   "${esharp[@]}" build "samples/$s" --docker "$image" -o "$work/docker/$s"
-  for f in "$s" "$s.info" "$s.c"; do
+  b=$(basename "$s")   # a sample in a sub-folder (packages/TweenDemo) is named by its last part
+  for f in "$b" "$b.info" "$b.c"; do
     if [ ! -e "$work/docker/$s/$f" ] && [ ! -e "$work/local/$s/$f" ]; then continue; fi
     if cmp -s "$work/local/$s/$f" "$work/docker/$s/$f"; then
       echo "same   $s/$f ($(wc -c < "$work/local/$s/$f") bytes, sha256 $(sha256sum "$work/local/$s/$f" | cut -c1-16))"

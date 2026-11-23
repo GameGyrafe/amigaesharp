@@ -170,10 +170,10 @@ compiler embedding Runtime and Platform (`LibrarySources.cs`). The pieces:
   (ES0118; also an `assets` entry it cannot read, or one whose source the package does not carry: `PackageAssets`). `Licenses` evaluates SPDX expressions (copyleft when every OR choice has a GPL-family id), `SdkVersions` the
   minimum version. The CLI side is `src/ESharp.Cli/PackageStep.cs` (finds the csproj and the restore, reads `EsAllowCopyleft`,
   prints the packages); `HostRun` references the package DLLs for the host run.
-- **Checks**: `src/ESharp.Compiler/PackageChecks.cs`, ES0110-ES0122 (descriptors in `Descriptors.cs`; compiler-only, the IDE
+- **Checks**: `src/ESharp.Compiler/PackageChecks.cs`, ES0110-ES0123 (descriptors in `Descriptors.cs`; compiler-only, the IDE
   sees a package as metadata). ES0115 names an `assets.json` when the clashing type is a generated asset class. The analyzer needs no change: package trees are in the user set.
 - **Package C**: `src/ESharp.Compiler/PackageNatives.cs`. `Select` picks a target's files (common, a target file in place of a
-  common one of the same name); `Check` gives ES0119 (no `.c` for the target), ES0120 (an exported name without the prefix:
+  common one of the same name); `CheckTargetHasC` gives ES0119 (the package has prefixed `[Native]` externs in the C# compiled for the target, from `Prototypes`, and no `.c` for it), `CheckForeignExterns` ES0123 (a `[Native]` extern outside the package with its prefix), `PathProblem(path, all)` refuses file names that differ only in case (also in the SDK's `EsLibraryNativeFiles` task), `Check` gives ES0120 (an exported name without the prefix:
   `ExportedSymbols` is a light reading of the C source, comments, strings and preprocessor lines left out, file-level definitions
   that are not `static`, K&R definitions and `extern` with an initializer included, the name taken from inside a parenthesised
   declarator such as `(*hook)`) and ES0122 (overlapping prefixes); `CFlags` (`-fno-common`) goes on the compiler line of a build with package C, so
