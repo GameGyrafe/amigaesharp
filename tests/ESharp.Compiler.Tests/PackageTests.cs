@@ -459,6 +459,55 @@ public static class P
         Assert.StartsWith("'Dog' derives from 'Zoo.Animal' of package 'Sample.Zoo'", e.GetMessage());
     }
 
+    [Fact]
+    public void Internal_package_members_cannot_be_reached_through_inheritance()
+    {
+        // An [Extensible] class with internal constructors and internal (or private protected) virtual members: the dotnet host build
+        // rejects a base call to them and an override of them from another assembly (CS0122, CS0115), so esharp build must too.
+        const string lib = @"using ESharp;
+namespace Shape;
+[Extensible]
+public class Base
+{
+    public int Size;
+    internal Base(int size) { Size = size; }
+    internal Base() { Size = 1; }
+    public Base(string name) { Size = 2; }
+    internal virtual int Area() => Size;
+    private protected virtual int Edge() => 1;
+    internal virtual int Corners => 4;
+    public virtual int Sides() => 4;
+    public int Measure() => Area() + Edge() + Corners + Sides();
+}
+[Extensible]
+public class Open
+{
+    public Open() { }
+    internal Open(int size) { }
+}
+";
+        var package = Package("Sample.Shape", new Dictionary<string, string> { ["Shape.cs"] = lib });
+        string Program(string classes) => Prelude + classes + "\npublic static class P { [EntryPoint] public static void Main() { } }";
+        IEnumerable<string> Errors(string classes) =>
+            Build(Program(classes), M68k(package)).Diagnostics.Where(d => d.Id == "ES0116").Select(d => d.GetMessage().Split('\'')[1]);
+
+        Assert.Equal(new[] { "Shape.Base.Base(int)" }, Errors("public class A : Shape.Base { public A() : base(5) { } }"));
+        Assert.Equal(new[] { "Shape.Base.Base()" }, Errors("public class A : Shape.Base { public A(int x) { } }"));
+        Assert.Equal(new[] { "Shape.Base.Base()" }, Errors("public class A : Shape.Base { }"));
+        Assert.Equal(new[] { "Shape.Base.Area()" }, Errors("public class A : Shape.Base { public A() : base(\"a\") { } internal override int Area() => 5; }"));
+        Assert.Equal(new[] { "Shape.Base.Edge()" }, Errors("public class A : Shape.Base { public A() : base(\"a\") { } private protected override int Edge() => 5; }"));
+        Assert.Equal(new[] { "Shape.Base.Corners" }, Errors("public class A : Shape.Base { public A() : base(\"a\") { } internal override int Corners => 3; }"));
+
+        // Public constructors and public virtual members are fine, implicit base() included; so is a constructor chained with this().
+        Assert.Empty(Errors("public class A : Shape.Base { public A() : base(\"a\") { } public A(int x) : this() { } public override int Sides() => 3; }\n" +
+                            "public class B : Shape.Open { }\npublic class C : Shape.Open { public C(int x) { } }"));
+        Assert.True(Build(Program("public class A : Shape.Base { public A() : base(\"a\") { } public override int Sides() => 3; }\npublic class B : Shape.Open { }"), M68k(package)).Success);
+
+        // Within the package the internal members are its own.
+        var inside = Package("Sample.Shape", new Dictionary<string, string> { ["Shape.cs"] = lib + "public class Square : Base { public Square() : base(3) { } internal override int Area() => Size * Size; }\n" });
+        Assert.True(Build(Program(""), M68k(inside)).Success);
+    }
+
     /// <summary>
     /// The IDE and the dotnet host build see a package as a referenced assembly: its HOST build, with [Extensible] and the
     /// [assembly: EsLibrary(id)] that AmigaESharp.Sdk adds in metadata. The analyzer must agree with esharp build there.

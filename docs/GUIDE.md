@@ -246,7 +246,7 @@ warns. The checks on package code:
 | Two packages whose native prefixes overlap | ES0122 |
 | An `[EntryPoint]` in a package | ES0114 |
 | The same type (namespace, name, arity; also a `partial` one) in a package and the program, or in two packages (also an asset class: the message names the `assets.json`) | ES0115 |
-| An `internal` member of a package used from the program or another package | ES0116 |
+| An `internal` member of a package used from the program or another package, also through a derived class (`base(...)` or the implicit `base()` to an internal constructor, an override of an internal or `private protected` member) | ES0116 |
 | A class of the program or of another package derived from a package class that is not marked `[Extensible]` (also in the IDE and `dotnet build`, from the package's DLL) | ES0117 |
 | A package that cannot be used: an unknown manifest format or resource, asset inputs (images, sounds) in it, a bad path, a reserved or invalid symbol in its `defines`, an asset declaration it cannot read or whose generated source it does not carry, a C file outside `esharp/native/common` or `esharp/native/<target>`, prebuilt code, C files the manifest does not list (or listed files it does not carry), native C without the `NativeC` feature or the other way round, a bad native prefix | ES0118 |
 

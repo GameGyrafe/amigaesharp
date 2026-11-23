@@ -248,7 +248,7 @@ and a manifest as embedded resources; `esharp build`, `run` and `test` find the 
   `[AmigaLib]`/`[Native]`/`[InlineAsm]`/`[Interrupt]`/`[HookEntry]` declared in the package, or a platform `[AmigaLib]`/`[Native]` extern called from it
   (`Exec.AllocVec`, `Dos.PutStr` on the Amiga targets; per target, so `Dos.PutStr` is fine on sdl), without `EsFeatures`, ES0114 entry point in a package, ES0115
   the same type in a package and the program or two packages (also `partial`), ES0116 `internal` package member used from
-  outside, ES0117 class derived from a package class (not supported then; since part 4 only from one not marked `[Extensible]`), ES0118 unusable package (assets, C files, newer
+  outside (also through inheritance: a `base(...)` call or the implicit `base()` to an internal constructor, an override of an internal or `private protected` member), ES0117 class derived from a package class (not supported then; since part 4 only from one not marked `[Extensible]`), ES0118 unusable package (assets, C files, newer
   manifest format, bad path, a reserved or invalid symbol in `defines`). Same simple type names in different namespaces get prefixed C names as before.
 - **Sample** `samples/packages`: the library `Tween` (`ESharpSample.Tween`: easing curves, a generic `Tween<T>` struct, a generic
   method, fixed point, an internal helper) and the game `TweenDemo` (12 checks, including its own `Ease` class next to the
