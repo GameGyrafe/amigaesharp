@@ -420,12 +420,13 @@ public static unsafe class P
         var r = Build(FixGame, M68k(lib));
         Assert.True(r.Success, string.Join("\n", r.Diagnostics));
         // The program's C has the prototypes made from the C# declarations, and never includes a package header.
-        Assert.Contains("extern int32_t fx_mul(int32_t, int32_t);\n", r.C!);
-        Assert.Contains("extern uint32_t fx_sum(uint8_t *, int32_t);\n", r.C!);
-        Assert.Contains("extern void fx_hello(const char *);\n", r.C!);
-        Assert.Contains("extern int32_t fx_tuned(void);\n", r.C!);
-        Assert.DoesNotContain("fx_tune.h", r.C!);
-        Assert.DoesNotContain(PackageNatives.PrototypeHeader, r.C!);
+        var c = r.C!.Replace("\r\n", "\n");   // the prelude's lines end in the host's newline
+        Assert.Contains("\nextern int32_t fx_mul(int32_t, int32_t);\n", c);
+        Assert.Contains("\nextern uint32_t fx_sum(uint8_t *, int32_t);\n", c);
+        Assert.Contains("\nextern void fx_hello(const char *);\n", c);
+        Assert.Contains("\nextern int32_t fx_tuned(void);\n", c);
+        Assert.DoesNotContain("fx_tune.h", c);
+        Assert.DoesNotContain(PackageNatives.PrototypeHeader, c);
         // m68k: the common C file, the m68k header in place of the common one, and the prototype header.
         Assert.Equal(new[] { "esharp-native/Sample.Fx/esharp_natives.h", "esharp-native/Sample.Fx/fx.c", "esharp-native/Sample.Fx/fx_tune.h" },
             r.Native.Select(n => n.Path).OrderBy(p => p, StringComparer.Ordinal).ToArray());
