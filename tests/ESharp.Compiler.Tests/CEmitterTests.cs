@@ -1259,6 +1259,18 @@ public static unsafe class P
     }
 
     [Fact]
+    public void Chipcheck_sample_compiles_and_runs_natively_without_a_failed_check()
+    {
+        if (!HasGcc) return;
+        var path = Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "..", "samples", "chipcheck", "ChipCheck.cs");
+        var options = new CompileOptions { Defines = new[] { "AMIGA", "ESHARP_HOSTC" } };
+        var (code, output) = RunWithHostGcc(CompileOk(File.ReadAllText(path), options));
+        Assert.Equal(0, code);
+        Assert.DoesNotContain("FAIL", output);
+        Assert.Equal(6, output.Split('\n').Count(l => l.StartsWith("ok ")));
+    }
+
+    [Fact]
     public void Arrays_become_c_arrays_and_spans_become_pointer_and_length()
     {
         var c = CompileOk(Program(
