@@ -512,12 +512,12 @@ public class Open
     /// The IDE and the dotnet host build see a package as a referenced assembly: its HOST build, with [Extensible] and the
     /// [assembly: EsLibrary(id)] that AmigaESharp.Sdk adds in metadata. The analyzer must agree with esharp build there.
     /// </summary>
-    private static ImmutableArray<Diagnostic> AnalyzeAgainstPackageAssembly(string program, string library, string assemblyInfo)
+    private static ImmutableArray<Diagnostic> AnalyzeAgainstPackageAssembly(string program, string library, string assemblyInfo, string assemblyName = "Anim")
     {
         var refs = PlatformSubclassTests.HostReferences().ToList();
         var options = new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary, allowUnsafe: true);
         var parse = new CSharpParseOptions(preprocessorSymbols: new[] { "HOST" });
-        var lib = CSharpCompilation.Create("Anim", new[] { CSharpSyntaxTree.ParseText(library, parse), CSharpSyntaxTree.ParseText(assemblyInfo, parse) }, refs, options);
+        var lib = CSharpCompilation.Create(assemblyName, new[] { CSharpSyntaxTree.ParseText(library, parse), CSharpSyntaxTree.ParseText(assemblyInfo, parse) }, refs, options);
         Assert.Empty(lib.GetDiagnostics().Where(d => d.Severity == DiagnosticSeverity.Error));
         using var image = new System.IO.MemoryStream();
         Assert.True(lib.Emit(image).Success);
@@ -555,6 +555,95 @@ public class Open
 
         // A .NET class is still ES0007.
         Assert.Contains(AnalyzeAgainstPackageAssembly(Prelude + "public class R : System.Random { }\n", ActorLib, withId), d => d.Id == "ES0007");
+    }
+
+    [Fact]
+    public void The_host_fakes_assembly_is_not_taken_for_a_package_by_the_analyzer_fallback()
+    {
+        // Without the assembly attribute, an assembly that references ESharp.Runtime or ESharp.Platform counts as a package (its name is
+        // the id): ESharp.Target.Host does, and is not one, so deriving from its class is the plain ES0007, not ES0117 of a package.
+        var dog = Prelude + "public class Dog : Anim.Plain { }\n";
+        var host = AnalyzeAgainstPackageAssembly(dog, ActorLib, "// no assembly info", "ESharp.Target.Host");
+        Assert.Contains(host, d => d.Id == "ES0007");
+        Assert.DoesNotContain(host, d => d.Id == "ES0117");
+        // The same library under another name is a package (ES0117).
+        Assert.Contains(AnalyzeAgainstPackageAssembly(dog, ActorLib, "// no assembly info"), d => d.Id == "ES0117");
+    }
+
+    [Fact]
+    public void A_package_with_only_C_still_owns_its_prefix()
+    {
+        var cOnly = Package("Sample.Fx", new Dictionary<string, string>(), features: "\"Native\", \"NativeC\"",
+            extraManifest: ", \"native\": { \"prefix\": \"fx_\", \"files\": [\"common/fx.c\"] }",
+            extraResources: new Dictionary<string, byte[]> { [PackageReader.NativePrefix + "common/fx.c"] = Encoding.UTF8.GetBytes("int fx_mul(int a, int b) { return a * b; }\n") });
+        const string own = Prelude + "public static unsafe class P {\n [Native(\"fx_mul\")] static extern int Mul(int a, int b);\n [EntryPoint] public static void Main() { } }";
+        var r = Build(own, M68k(cOnly));
+        Assert.Contains(r.Diagnostics, x => x.Id == "ES0123" && x.GetMessage().Contains("'P.Mul'") && x.GetMessage().Contains("'Sample.Fx'"));
+    }
+
+    // A package class derived from a platform [Extensible] class (GtWindow), and the game's class derived from that in turn.
+    private const string PanelLib = @"using ESharp;
+using ESharp.Platform;
+
+namespace Ui;
+
+[Extensible]
+public class Panel : GtWindow
+{
+    public int Clicks;
+    public int Closes;
+    public GtButton Go;
+    public Panel() : base() { Title = ""Panel""; Go = new GtButton { Label = ""Go"" }; Add(Go); }
+    protected override void OnClicked(GtGadget gadget) { Clicks++; OnGo(); }
+    protected virtual void OnGo() { }
+    protected override bool OnCloseRequest() { Closes++; return true; }
+}
+";
+
+    private const string PanelGame = Prelude + @"using Ui;
+
+namespace Game;
+
+public sealed class Main2 : Panel
+{
+    public int Gos;
+    protected override void OnGo() { Gos++; }
+    protected override bool OnCloseRequest() { return base.OnCloseRequest() && Closes >= 1; }
+}
+
+public static class P
+{
+    static void Check(bool ok, string name) { Dos.PutStr(ok ? ""ok "" : ""FAIL ""); Dos.PutStr(name); Dos.PutStr(""\n""); }
+
+    [EntryPoint]
+    public static void Main()
+    {
+        var m = new Main2();
+        Check(m.Width == 260 && m.Title == ""Panel"", ""platform and package constructors ran"");
+        Check(m.Dispatch(new GuiEvent(GuiEventKind.Clicked, m.Go)) && m.Clicks == 1 && m.Gos == 1, ""click: platform hook, package override, game override"");
+        Check(!m.Dispatch(new GuiEvent(GuiEventKind.Close, null)) && m.Closes == 1, ""close through three levels"");
+        GtWindow w = m;
+        Check(w is Panel && w is Main2 && (w as Panel) != null, ""is and as along the chain"");
+        Heap.Free(ref m.Go);
+        Heap.Free(ref w);
+    }
+}
+";
+
+    [Fact]
+    public void A_package_class_derived_from_a_platform_Extensible_class_has_a_game_class_derived_from_it()
+    {
+        var lib = Package("Sample.Ui", new Dictionary<string, string> { ["Panel.cs"] = PanelLib });
+        var r = Build(PanelGame, Targets.M68k.ToOptions(packages: new[] { lib }, sdkVersion: "0.1.5"));
+        Assert.True(r.Success, string.Join("\n", r.Diagnostics));
+        if (!HasGcc) return;
+        var (code, output) = RunWithHostGcc(r.C!);
+        Assert.Equal(0, code);
+        Assert.Equal("ok platform and package constructors ran\nok click: platform hook, package override, game override\n" +
+                     "ok close through three levels\nok is and as along the chain\n", output);
+        // Not [Extensible] in the package: the game cannot derive from it (ES0117), though the package derives from GtWindow.
+        var closed = Package("Sample.Ui", new Dictionary<string, string> { ["Panel.cs"] = PanelLib.Replace("[Extensible]\n", "") });
+        Assert.Contains(Build(PanelGame, M68k(closed)).Diagnostics, d => d.Id == "ES0117");
     }
 
     [Fact]

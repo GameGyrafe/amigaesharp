@@ -250,7 +250,6 @@
             }
             else byName[fileName] = esPath;
         }
-        native.Sort((a, b) => string.CompareOrdinal(a.GetMetadata("EsPath"), b.GetMetadata("EsPath")));
         Native = native.ToArray();
         refused.Sort(StringComparer.Ordinal);
         Refused = string.Join("; ", refused);

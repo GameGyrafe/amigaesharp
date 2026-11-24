@@ -139,10 +139,11 @@ public static class PackageNatives
     /// an implicit declaration in the program's C (and a second, possibly different, signature): it is refused, and the program calls
     /// the package's C# method instead.
     /// </summary>
-    public static void CheckForeignExterns(Microsoft.CodeAnalysis.CSharp.CSharpCompilation compilation, IEnumerable<SyntaxTree> programTrees,
+    public static void CheckForeignExterns(CompileOptions options, Microsoft.CodeAnalysis.CSharp.CSharpCompilation compilation, IEnumerable<SyntaxTree> programTrees,
         IReadOnlyDictionary<SyntaxTree, EsPackage> packageOf, List<Diagnostic> diagnostics)
     {
-        var owners = packageOf.Values.Distinct().Where(p => p.Manifest?.Native != null && p.Problems.Count == 0).ToList();
+        // Every package with native C owns its prefix, also one with no C# tree (only C).
+        var owners = options.Packages.Where(p => p.Manifest?.Native != null && p.Problems.Count == 0).ToList();
         if (owners.Count == 0) return;
         foreach (var tree in programTrees.Concat(packageOf.Keys.OrderBy(t => t.FilePath, StringComparer.Ordinal)))
         {
