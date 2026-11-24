@@ -104,9 +104,11 @@ them (`Video`, `Gfx`, `Files`, `Font`, ...) needs nothing. Every file needs its 
 library's own `DefineConstants` symbols (other than DEBUG, TRACE, RELEASE and HOST) go into the manifest and `esharp build`
 defines them for the library's files only, next to the target's; an E# target symbol there (`AMIGA`, `M68K`, `SDL`, ...)
 stops the library build (ESL009). C files go in `native/` ("C in a library" below); anywhere else in the project they
-stop the library build (ESL006), as does prebuilt code. Community packages use any id plus the `esharp` tag (the step adds it); `AmigaESharp.*`
-ids are meant for the official packages. A `Compile` item from outside the project folder without a `Link` (source-only
-package contentFiles, for one) is not part of the library and is skipped, with warning ESL010 naming the file (the HOST DLL
+stop the library build (ESL006), as does prebuilt code. Community packages use any id plus the `esharp` tag (the step adds it).
+The `AmigaESharp` id prefix is reserved on nuget.org for the official packages (since 2026-11-24): nuget.org refuses a
+new package id that starts with it (in any letter case) from any other account, and marks the official packages with
+its reserved-prefix check mark, so pick your own id for a community package. A `Compile` item from outside the project
+folder without a `Link` (source-only package contentFiles, for one) is not part of the library and is skipped, with warning ESL010 naming the file (the HOST DLL
 still has it, so the Amiga build would miss it); give it a `Link` to embed it. A file on another drive (Windows) counts as
 outside too. The step sets `SetLinkMetadataAutomatically` to false only when the project does not set it; set it to true and
 the SDK links such files by their file name, and they are embedded. A package whose compile assets list several DLLs that
