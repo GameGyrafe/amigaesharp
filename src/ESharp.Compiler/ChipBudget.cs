@@ -36,18 +36,18 @@ internal static class ChipBudget
 
                     case ObjectCreationExpressionSyntax oc when model.GetTypeInfo(oc).Type is INamedTypeSymbol t:
                         if (t.Name == "Arena" && t.ContainingNamespace?.ToDisplayString() == "ESharp.Platform")
-                            Reservation(result, "arena", "new Arena", oc, model, 0, 1, _ => 1);
+                            Reservation(result, "arena", "new Arena", oc, model, 0, 1, n => n);
                         else if (t.Name == "Pool" && t.TypeArguments.Length == 1 && t.ContainingNamespace?.ToDisplayString() == "ESharp.Platform")
                         {
                             var item = SizeOf(t.TypeArguments[0]);
-                            // Must match the layout in Pool.cs: free list (4) + item + in-use flag (1) per slot.
-                            Reservation(result, "pool", $"new Pool<{t.TypeArguments[0].Name}>", oc, model, 0, 1, _ => item < 0 ? -1 : 4 + item + 1);
+                            // Must match the layout in Pool.cs: free list (4 per slot, padded up to a multiple of 8) + items + in-use flags (1 per slot).
+                            Reservation(result, "pool", $"new Pool<{t.TypeArguments[0].Name}>", oc, model, 0, 1, n => item < 0 ? -1 : ((n * 4 + 7) & ~7L) + n * item + n);
                         }
                         else if (t.Name == "Vec" && t.TypeArguments.Length == 1 && t.ContainingNamespace?.ToDisplayString() == "ESharp.Platform")
                         {
                             // Initial capacity only: a list that grows in chip RAM allocates more at run time.
                             var item = SizeOf(t.TypeArguments[0]);
-                            Reservation(result, "vec", $"new Vec<{t.TypeArguments[0].Name}> (initial)", oc, model, 0, 1, _ => item);
+                            Reservation(result, "vec", $"new Vec<{t.TypeArguments[0].Name}> (initial)", oc, model, 0, 1, n => item < 0 ? -1 : n * item);
                         }
                         break;
 
@@ -67,15 +67,15 @@ internal static class ChipBudget
     public static long Total(IEnumerable<ChipEntry> entries) => entries.Where(e => e.Bytes >= 0).Sum(e => e.Bytes);
 
     private static void Reservation(List<ChipEntry> result, string kind, string what, ObjectCreationExpressionSyntax oc,
-        SemanticModel model, int sizeArg, int chipArg, System.Func<long, long> perUnit)
+        SemanticModel model, int sizeArg, int chipArg, System.Func<long, long> bytesFor)
     {
         var args = oc.ArgumentList?.Arguments;
         if (args is not { Count: 2 }) return;
         var chip = model.GetConstantValue(args.Value[chipArg].Expression);
         if (chip.HasValue && chip.Value is false) return; // fast RAM
         var count = Const(args.Value[sizeArg].Expression, model);
-        var unit = perUnit(1);
-        result.Add(new ChipEntry(kind, what, count == null || unit < 0 ? -1 : count.Value * unit, Where(oc)));
+        var bytes = count == null ? -1 : bytesFor(count.Value);
+        result.Add(new ChipEntry(kind, what, bytes < 0 ? -1 : bytes, Where(oc)));
     }
 
     private static long? Const(ExpressionSyntax e, SemanticModel model)

@@ -77,7 +77,7 @@ Each links to a sample that shows it (every sample prints `ok` lines that `eshar
 - **Lambdas, closures, events and LINQ over arrays**, turned into loops ([lambdas](samples/lambdas), [closures](samples/closures),
   [linq](samples/linq)).
 - **Collections and memory:** `Vec<T>`, `Pool<T>`, arenas, hash collections, chip RAM and a budget check
-  ([collections](samples/collections), [memory](samples/memory)).
+  ([collections](samples/collections), [memory](samples/memory), [chipcheck](samples/chipcheck)).
 - **Graphics:** custom screens, blitter and masked blits, double buffering, AGA 256 colours and 24-bit palettes, RTG
   detection ([screen](samples/screen), [dbuffer](samples/dbuffer), [aga](samples/aga), [rtg](samples/rtg)).
 - **Assets:** PNG and IFF ILBM images with dithering, WAV and 8SVX samples, converted by `esharp assets`

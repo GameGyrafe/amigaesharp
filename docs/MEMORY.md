@@ -120,6 +120,7 @@ items, one in-use byte per slot. With `--debug` freed slots are filled with 0xDD
   boot").
 - Arena and pool sizes that are constants can be added to the same report. Sizes computed at run
   time cannot, and the report will say so.
+- Checked against `AvailMem(MEMF_CHIP)` on Kickstart 3.1 (`samples/chipcheck`, #148). The report gives the size asked for; the free-RAM drop on m68k is `(size + 4 + 7) & ~7` (AllocVec's size word, 8-byte granularity), so expect up to 12 bytes more per dynamic reservation. A pool is `((4n + 7) & ~7) + n * sizeof(T) + n`. Static chip data matches the hunk sizes in the `.map` exactly, and costs a hunk header and rounding more when loaded. Details in STATUS.md.
 
 ## Heap classes
 

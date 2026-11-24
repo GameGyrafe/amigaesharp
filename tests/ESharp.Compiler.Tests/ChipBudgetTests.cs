@@ -49,6 +49,15 @@ a.Destroy(); fast.Destroy(); p.Destroy(); Mem.Free(raw); dyn.Destroy();");
         Assert.Equal(8192 + 80 + 6 + 1000 + 130 + 64, ChipBudgetTotal(r));
     }
 
+    [Fact]
+    public void Pool_size_includes_the_padding_of_the_free_list()
+    {
+        // Pool.cs pads the free list (4 bytes per slot) to a multiple of 8: 3 slots of 8 bytes are 16 + 24 + 3 = 43, not 3 * 13 = 39.
+        var r = Run("Pool<Sprite> p = new Pool<Sprite>(3, true); Pool<Sprite> q = new Pool<Sprite>(2, true); p.Destroy(); q.Destroy();");
+        Assert.True(r.Success, string.Join("\n", r.Diagnostics));
+        Assert.Equal(new long[] { 43, 8 + 16 + 2 }, r.Chip.Where(e => e.Kind == "pool").Select(e => e.Bytes).ToArray());
+    }
+
     private static long ChipBudgetTotal(CompileResult r) => r.Chip.Where(e => e.Bytes >= 0).Sum(e => e.Bytes);
 
     [Fact]
