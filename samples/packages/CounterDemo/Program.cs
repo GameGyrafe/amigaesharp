@@ -45,6 +45,9 @@ public static class Program
         {
             // No gadtools.library or no Workbench screen: nothing more to run, and not a pass either.
             Check(false, "the window opens");
+            win.Close();                                        // frees the two gadgets the constructors added: Heap.Free of the window alone would leak them
+            win.Plus = null;
+            win.Reset = null;
             Heap.Free(ref win);
             return 5;
         }

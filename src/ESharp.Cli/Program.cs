@@ -306,13 +306,14 @@ Targets:
 
     private static int New(string[] args)
     {
-        const string usage = "usage: esharp new <name or path> [--source [E# checkout] | --package [version]]   (the last path segment is the project name)";
+        const string usage = "usage: esharp new [--library] <name or path> [--source [E# checkout] | --package [version]]   (the last path segment is the project name; --library writes an E# library with a demo program)";
         string? dir = null, source = null, version = null;
-        bool wantSource = false, wantPackage = false;
+        bool wantSource = false, wantPackage = false, library = false;
         for (var i = 0; i < args.Length; i++)
         {
             switch (args[i])
             {
+                case "--library": library = true; break;
                 case "--source":
                     wantSource = true;
                     if (i + 1 < args.Length && !args[i + 1].StartsWith("-") && dir != null) source = args[++i];
@@ -349,8 +350,18 @@ Targets:
 
         Directory.CreateDirectory(dir);
         version ??= SourceTree.ToolVersion;
-        ProjectTemplate.Write(dir, name, root, Path.Combine(AppContext.BaseDirectory, "esharp.dll"), version);
-        Console.WriteLine($"Created {dir}/ (Program.cs, {name}.csproj, .vscode/). Build it with: esharp build {dir}");
+        var cliDll = Path.Combine(AppContext.BaseDirectory, "esharp.dll");
+        if (library)
+        {
+            ProjectTemplate.WriteLibrary(dir, name, root, cliDll, version);
+            Console.WriteLine($"Created the library {dir}/{name}/ and its demo {dir}/{name}.Demo/ (README.md, nuget.config, feed/, .vscode/). " +
+                              $"Change the PackageId in {name}.csproj, then: dotnet pack {dir}/{name} -o {dir}/feed && dotnet restore {dir}/{name}.Demo && esharp test {dir}/{name}.Demo");
+        }
+        else
+        {
+            ProjectTemplate.Write(dir, name, root, cliDll, version);
+            Console.WriteLine($"Created {dir}/ (Program.cs, {name}.csproj, .vscode/). Build it with: esharp build {dir}");
+        }
         Console.WriteLine(root != null
             ? $"The csproj references the E# checkout at {root} (ESharpRoot)."
             : $"The csproj references the {SourceTree.SdkPackage} package, version {version}.");

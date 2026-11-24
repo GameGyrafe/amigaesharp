@@ -72,6 +72,16 @@ there. `samples/packages` has two libraries (`Tween`: easing curves, a generic t
 from its own `assets.json`; `Checksum`: an Adler-32 checksum in C of its own) and a game that uses both (`TweenDemo`), with the
 steps in its README.
 
+**A new library project.** `esharp new --library <name>` (a path works too; the last segment is the name, a valid C# identifier)
+writes a folder with the library `<name>/` (`<name>.csproj` as below, with all six targets, no features, `ImplicitUsings` disabled, a
+placeholder `PackageId` `MyCompany.<name>` that you must change (ids starting with `AmigaESharp` are reserved), the MIT licence
+expression, and `Counter.cs`, a public sample class in the namespace `<name>`), a demo program `<name>.Demo/` that uses the library
+and prints `ok` lines so `esharp test` works, a `nuget.config` with the local folder feed `feed/`, the same `.vscode/` files as a program
+project (the tasks work on the demo; one more packs the library) and a README with the steps. Like `esharp new`, both csproj files
+reference the AmigaESharp.Sdk package at the tool's version, or with a checkout (`--source`, or a CLI run from one) its projects, and
+the library then imports the Sdk's library step from the checkout (`--package` forces the package; publish only a library made that way).
+Then `dotnet pack <name> -o feed`, `dotnet restore <name>.Demo`, `esharp test <name>.Demo [--target m68k --docker <image> --kickstart <rom>]`.
+
 **Writing a library.** Reference AmigaESharp.Sdk and set `EsLibrary`; the Sdk's MSBuild step (in the package's
 `buildTransitive/`) embeds every C# file of the project and writes the manifest when the library is built:
 
@@ -781,7 +791,7 @@ the Grim Reaper's `Function()+0x…`; every build writes `obj/<target>/<name>.ma
 ## esharp commands
 
 ```
-esharp new <name> [--source [dir] | --package [version]]   new hello-world project (csproj, .vscode)
+esharp new [--library] <name> [--source [dir] | --package [version]]   new hello-world project (csproj, .vscode); --library: an E# library with a demo program and a local feed
 esharp build [path] [options]      check the subset, emit C, run the target C compiler
 esharp run [path] [options]        build and run (m68k in FS-UAE, os4 in the VM, sdl on the desktop)
 esharp test [path] [options]       run on the host; with --target m68k|os4|aros|aros-i386|sdl also on the target, and compare

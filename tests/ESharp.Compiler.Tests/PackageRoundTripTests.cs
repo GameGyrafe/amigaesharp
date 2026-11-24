@@ -328,6 +328,81 @@ public class PackageRoundTripTests
     }
 
     /// <summary>
+    /// The library template (esharp new --library, issue #154): the generated library packs into the folder feed the template made, the
+    /// demo restores it from there, and dotnet build, esharp build and the host run of esharp test work (m68k build with the image).
+    /// </summary>
+    [Fact]
+    public void Library_template_packs_restores_from_its_feed_and_the_demo_builds_and_tests()
+    {
+        var work = Path.Combine(Path.GetTempPath(), "esharp-libtpl-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(work);
+        IsolateFromRepoBuildFiles(work);
+        try
+        {
+            File.Copy(Path.Combine(RepoRoot, "global.json"), Path.Combine(work, "global.json"));
+            var proj = Path.Combine(work, "Easing");
+            ESharp.Cli.ProjectTemplate.WriteLibrary(proj, "Easing", null, "esharp.dll", SdkVersion);
+            var feed = Path.Combine(proj, "feed");
+            // No network: the template's nuget.config keeps nuget.org, the test's clears it (the Sdk is the fake one in the feed).
+            Assert.DoesNotContain("<clear", File.ReadAllText(Path.Combine(proj, "nuget.config")));
+            File.WriteAllText(Path.Combine(proj, "nuget.config"),
+                "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n<configuration>\n  <packageSources>\n    <clear />\n" +
+                "    <add key=\"local-feed\" value=\"feed\" />\n  </packageSources>\n</configuration>\n");
+            FakeSdkPackage(feed);
+            var packages = Path.Combine(work, "packages");
+
+            var (packExit, packLog) = DotnetResult(proj, packages, "pack", "Easing", "-o", "feed");
+            Assert.True(packExit == 0 && !packLog.Contains("ESL0"), $"dotnet pack of the template library failed or warned:\n{packLog}");
+            var nupkg = Path.Combine(feed, "MyCompany.Easing.1.0.0.nupkg");
+            Assert.True(File.Exists(nupkg), "no package from dotnet pack");
+            var dllCopy = Path.Combine(work, "Easing.dll");
+            using (var zip = ZipFile.OpenRead(nupkg))
+            {
+                zip.GetEntry("lib/net10.0/Easing.dll")!.ExtractToFile(dllCopy);
+                Assert.NotNull(zip.GetEntry("README.md"));
+            }
+            var lib = PackageReader.ReadDll(dllCopy, "MyCompany.Easing", "1.0.0");
+            Assert.NotNull(lib);
+            Assert.Empty(lib!.Problems);
+            Assert.Equal(new[] { "m68k", "os4", "morphos", "aros", "aros-i386", "sdl" }, lib.Manifest!.Targets);
+            Assert.Empty(lib.Manifest.Features);
+            Assert.Equal("MIT", lib.License);
+            Assert.Equal(new[] { "Counter.cs" }, lib.Sources.Select(s => s.Path).ToArray());
+
+            var demo = Path.Combine(proj, "Easing.Demo");
+            Dotnet(proj, packages, "restore", "Easing.Demo");
+            var (buildExit, buildLog) = DotnetResult(proj, packages, "build", "Easing.Demo", "--no-restore");
+            Assert.True(buildExit == 0 && !buildLog.Contains("ES0"), $"dotnet build of the demo failed:\n{buildLog}");
+
+            var m68k = HasImage(M68kImage);
+            var output = new StringWriter();
+            var saved = Console.Out;
+            var savedError = Console.Error;
+            Console.SetOut(output);
+            Console.SetError(output);
+            try
+            {
+                Assert.True(ESharp.Cli.Program.Build(new[] { demo, "--emit-only" }, out _) == 0, output.ToString());
+                Assert.True(ESharp.Cli.Program.Test(new[] { demo }) == 0, output.ToString());
+                if (m68k)
+                {
+                    Assert.True(ESharp.Cli.Program.Build(new[] { demo, "--target", "m68k", "--docker", M68kImage }, out var exe) == 0, output.ToString());
+                    Assert.True(File.Exists(exe) && new FileInfo(exe!).Length > 0, "no m68k program");
+                }
+            }
+            finally { Console.SetOut(saved); Console.SetError(savedError); }
+            var text = output.ToString().Replace("\r\n", "\n");
+            Assert.Contains("Package MyCompany.Easing 1.0.0 (MIT): 1 C# file(s)", text);
+            Assert.Contains("Host: 3 ok, 0 FAIL", text);
+            Assert.Contains("TEST PASSED", text);
+        }
+        finally
+        {
+            try { Directory.Delete(work, true); } catch (IOException) { } catch (UnauthorizedAccessException) { }
+        }
+    }
+
+    /// <summary>
     /// An AmigaESharp.Sdk package as src/ESharp.Sdk packs it (lib/net10.0 host assemblies, the analyzer, buildTransitive targets),
     /// from what this test build already has, so the round trip does not rebuild src/ or depend on a published version.
     /// </summary>
