@@ -25,6 +25,7 @@ public class PackageRoundTripTests
         var work = Path.Combine(Path.GetTempPath(), "esharp-pkg-" + Guid.NewGuid().ToString("N"));
         var feed = Path.Combine(work, "feed");
         Directory.CreateDirectory(feed);
+        IsolateFromRepoBuildFiles(work);
         try
         {
             // The SDK this checkout pins (global.json): its bundled targeting packs, so restore needs no download.
@@ -268,6 +269,7 @@ public class PackageRoundTripTests
         var work = Path.Combine(Path.GetTempPath(), "esharp-pkg-" + Guid.NewGuid().ToString("N"));
         var feed = Path.Combine(work, "feed");
         Directory.CreateDirectory(feed);
+        IsolateFromRepoBuildFiles(work);
         try
         {
             File.Copy(Path.Combine(RepoRoot, "global.json"), Path.Combine(work, "global.json"));
@@ -342,6 +344,16 @@ public class PackageRoundTripTests
             zip.CreateEntryFromFile(Path.Combine(AppContext.BaseDirectory, dll), "lib/net10.0/" + dll);
         zip.CreateEntryFromFile(Path.Combine(AppContext.BaseDirectory, "ESharp.Analyzers.dll"), "analyzers/dotnet/cs/ESharp.Analyzers.dll");
         zip.CreateEntryFromFile(Path.Combine(RepoRoot, "src", "ESharp.Sdk", "buildTransitive", "AmigaESharp.Sdk.targets"), "buildTransitive/AmigaESharp.Sdk.targets");
+    }
+
+    /// <summary>
+    /// Empty Directory.Build.props/.targets at the top of a temp project tree: MSBuild looks for them in every parent folder, and
+    /// with TMPDIR inside the checkout it would find the repo's (version, packing rules) and change what the test builds.
+    /// </summary>
+    internal static void IsolateFromRepoBuildFiles(string dir)
+    {
+        foreach (var name in new[] { "Directory.Build.props", "Directory.Build.targets", "Directory.Packages.props" })
+            File.WriteAllText(Path.Combine(dir, name), "<Project />\n");
     }
 
     private static void CopyProject(string from, string to)

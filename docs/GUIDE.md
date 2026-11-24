@@ -233,7 +233,10 @@ within its own package any class may derive from any other. The IDE and `dotnet 
 accept the same `[Extensible]` bases, reading the attribute from the package's DLL: the Sdk step writes the package id into
 that DLL (`[assembly: ESharp.EsLibrary("<PackageId>")]`, in the generated assembly info, not in the embedded sources), so the
 IDE names the package as `esharp build` does. Marking a class `[Extensible]` makes its protected and virtual members part of
-the library's public contract: changing them later breaks the games that derive from it.
+the library's public contract: changing them later breaks the games that derive from it. That holds across versions of the
+package (names, signatures, which members are virtual or abstract, what the library calls and in which order), and for a package class that itself
+derives from a platform `[Extensible]` class such as `GtWindow`: the game's class derives from the package's, which derives from the platform's, so
+the protected and virtual members of both are part of the contract. Nothing checks this for you; treat such a change as a major version.
 
 **Using a library.** Add a `PackageReference` to the game's csproj, run `dotnet restore` (or `dotnet build`), then build as
 usual. `esharp build` reads `obj/project.assets.json`, takes every package of the restore (direct and transitive) whose DLL

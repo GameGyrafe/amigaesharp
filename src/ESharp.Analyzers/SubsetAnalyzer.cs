@@ -358,11 +358,12 @@ public sealed partial class SubsetAnalyzer : DiagnosticAnalyzer
     /// <summary>
     /// The package id of a referenced assembly that is an E# library package: the <c>[assembly: ESharp.EsLibrary(id)]</c> that
     /// AmigaESharp.Sdk writes into every EsLibrary build, or, for a DLL without it (GenerateAssemblyInfo off), the assembly name of
-    /// one that references ESharp.Runtime or ESharp.Platform. Null for any other assembly (.NET's own, for one).
+    /// one that references ESharp.Runtime or ESharp.Platform (except ESharp.Target.Host). Null for any other assembly (.NET's own, for one).
     /// </summary>
     private static string? EsPackageId(IAssemblySymbol? assembly)
     {
-        if (assembly == null || assembly.Name is "ESharp.Platform" or "ESharp.Runtime") return null;
+        // E#'s own assemblies and its host fakes (ESharp.Target.Host, which references them) are never packages.
+        if (assembly == null || assembly.Name is "ESharp.Platform" or "ESharp.Runtime" or "ESharp.Target.Host") return null;
         foreach (var a in assembly.GetAttributes())
             if (a.AttributeClass is { Name: "EsLibraryAttribute", ContainingNamespace: { Name: "ESharp", ContainingNamespace.IsGlobalNamespace: true } } &&
                 a.ConstructorArguments.Length == 1 && a.ConstructorArguments[0].Value is string id && id.Length > 0)

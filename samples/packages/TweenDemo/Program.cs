@@ -128,6 +128,7 @@ public static class Program
         Hopper hopper = hop as Hopper;
         Check(taken == 7 && hop.Arrivals == 2 && hopper != null && hopper.Hops == 1 && hop.At.X == 0 && hop.At.Y == 0,
               "derived package class: override called at the end, hop back");
+        hopper = null;
         Heap.Free(ref hop);
         Heap.Free(ref plain);
 
