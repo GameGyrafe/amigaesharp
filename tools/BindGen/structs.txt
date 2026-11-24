@@ -46,6 +46,13 @@ MsgQualifier = IntuiMessage.Qualifier
 MsgIAddress = IntuiMessage.IAddress
 BitMapSize = sizeof BitMap
 
+# EasyRequestArgs (src/ESharp.Platform/Requester.cs)
+EasyStructSize = sizeof EasyStruct
+EasyFlags = EasyStruct.es_Flags
+EasyTitle = EasyStruct.es_Title
+EasyTextFormat = EasyStruct.es_TextFormat
+EasyGadgetFormat = EasyStruct.es_GadgetFormat
+
 # audio.device (src/ESharp.Platform/Sound.cs)
 IoSize = sizeof IOAudio
 OffType = IOAudio.ioa_Request.io_Message.mn_Node.ln_Type

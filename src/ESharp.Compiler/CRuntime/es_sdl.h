@@ -432,6 +432,25 @@ static void es_sdl_script_step(void)
 
 static void es_sdl_apply_injected(void);
 
+/* The keys the joystick stand-in reads (Joystick.KeyboardStandIn), held down now: bits 0-5 are up, down, left, right, Space, Left Alt. */
+static uint32_t es_sdl_joy_held;
+
+static void es_sdl_joy_key(SDL_Scancode s, bool down)
+{
+    uint32_t bit;
+    switch (s)
+    {
+        case SDL_SCANCODE_UP: bit = 1; break;
+        case SDL_SCANCODE_DOWN: bit = 2; break;
+        case SDL_SCANCODE_LEFT: bit = 4; break;
+        case SDL_SCANCODE_RIGHT: bit = 8; break;
+        case SDL_SCANCODE_SPACE: bit = 16; break;
+        case SDL_SCANCODE_LALT: bit = 32; break;
+        default: return;
+    }
+    if (down) es_sdl_joy_held |= bit; else es_sdl_joy_held &= ~bit;
+}
+
 /* Reads pending events into es_sdl_in (the "since last poll" fields were cleared by the caller's es_sdl_input_clear). */
 static __attribute__((unused)) void es_sdl_poll(void)
 {
@@ -470,8 +489,15 @@ static __attribute__((unused)) void es_sdl_poll(void)
                     es_sdl_in[2] = 0; es_sdl_in[4] = 1;
                 }
                 break;
+            case SDL_EVENT_KEY_UP:
+                es_sdl_joy_key(ev.key.scancode, false);
+                break;
+            case SDL_EVENT_WINDOW_FOCUS_LOST:
+                es_sdl_joy_held = 0;   /* a key let go in another window must not stay held */
+                break;
             case SDL_EVENT_KEY_DOWN:
             {
+                es_sdl_joy_key(ev.key.scancode, true);
                 int32_t raw = es_sdl_rawkey(ev.key.scancode);
                 if (raw < 0) break;
                 es_sdl_in[7] = raw;
@@ -513,6 +539,218 @@ static void es_sdl_apply_injected(void)
 static __attribute__((unused)) void es_sdl_input_clear(void) { es_sdl_in[3] = 0; es_sdl_in[4] = 0; es_sdl_in[7] = 0; es_sdl_in[8] = 0; }
 
 static __attribute__((unused)) int32_t es_sdl_input(int32_t field) { return field >= 0 && field < 9 ? es_sdl_in[field] : 0; }
+
+/* ---- joystick: SDL gamepads on the two Amiga ports (Joystick.cs) ----
+   Port 1 is the first pad connected, port 0 the second. Gamepad events are off: the state is read with SDL_UpdateGamepads at each
+   read, which also notices pads connected or removed since. The bits are Joystick.cs's host/SDL values (lowlevel's bits). */
+
+#define ES_JOY_UP 8u
+#define ES_JOY_DOWN 4u
+#define ES_JOY_LEFT 2u
+#define ES_JOY_RIGHT 1u
+#define ES_JOY_FIRE (1u << 22)
+#define ES_JOY_FIRE2 (1u << 23)
+#define ES_JOY_YELLOW (1u << 21)
+#define ES_JOY_GREEN (1u << 20)
+#define ES_JOY_FORWARD (1u << 19)
+#define ES_JOY_REVERSE (1u << 18)
+#define ES_JOY_PLAY (1u << 17)
+#define ES_JOY_DEAD 8192   /* a quarter of the stick's travel */
+
+static SDL_Gamepad *es_sdl_pad[2];   /* [0] port 0, [1] port 1 */
+static bool es_sdl_joy_on;
+
+static bool es_sdl_joy_start(void)
+{
+    if (!es_sdl_init(SDL_INIT_GAMEPAD)) return false;
+    SDL_SetGamepadEventsEnabled(false);
+    SDL_SetJoystickEventsEnabled(false);
+    return true;
+}
+
+static __attribute__((unused)) bool es_sdl_joy_open(void)
+{
+    if (!es_sdl_joy_start()) return false;
+    es_sdl_joy_on = true;
+    return true;
+}
+
+static __attribute__((unused)) void es_sdl_joy_close(void)
+{
+    for (int i = 0; i < 2; i++) if (es_sdl_pad[i] != NULL) { SDL_CloseGamepad(es_sdl_pad[i]); es_sdl_pad[i] = NULL; }
+    es_sdl_joy_on = false;
+}
+
+/* Reads the pads' state and fills the ports: a pad that went away is let go, the port-0 pad moves to an empty port 1, and an empty
+   port takes the first pad that is not on the other one. */
+static void es_sdl_joy_update(void)
+{
+    SDL_UpdateGamepads();
+    for (int i = 0; i < 2; i++)
+        if (es_sdl_pad[i] != NULL && !SDL_GamepadConnected(es_sdl_pad[i])) { SDL_CloseGamepad(es_sdl_pad[i]); es_sdl_pad[i] = NULL; }
+    if (es_sdl_pad[1] == NULL && es_sdl_pad[0] != NULL) { es_sdl_pad[1] = es_sdl_pad[0]; es_sdl_pad[0] = NULL; }
+    if (es_sdl_pad[0] != NULL && es_sdl_pad[1] != NULL) return;
+    int n = 0;
+    SDL_JoystickID *ids = SDL_GetGamepads(&n);
+    if (ids == NULL) return;
+    for (int port = 1; port >= 0; port--)
+    {
+        if (es_sdl_pad[port] != NULL) continue;
+        SDL_Gamepad *other = es_sdl_pad[1 - port];
+        SDL_JoystickID taken = other != NULL ? SDL_GetGamepadID(other) : 0;
+        for (int i = 0; i < n; i++)
+        {
+            if (ids[i] == taken) continue;
+            es_sdl_pad[port] = SDL_OpenGamepad(ids[i]);
+            if (es_sdl_pad[port] != NULL) break;
+        }
+    }
+    SDL_free(ids);
+}
+
+static __attribute__((unused)) uint32_t es_sdl_joy_read(int32_t port, bool keyboard)
+{
+    if (!es_sdl_joy_on || port < 0 || port > 1) return 0;
+    es_sdl_joy_update();
+    SDL_Gamepad *g = es_sdl_pad[port];
+    uint32_t b = 0;
+    if (g == NULL)
+    {
+        if (port != 1 || !keyboard) return 0;
+        uint32_t k = es_sdl_joy_held;
+        if (k & 1) b |= ES_JOY_UP;
+        if (k & 2) b |= ES_JOY_DOWN;
+        if (k & 4) b |= ES_JOY_LEFT;
+        if (k & 8) b |= ES_JOY_RIGHT;
+        if (k & 16) b |= ES_JOY_FIRE;
+        if (k & 32) b |= ES_JOY_FIRE2;
+    }
+    else
+    {
+        static const struct { SDL_GamepadButton button; uint32_t bit; } map[] =
+        {
+            { SDL_GAMEPAD_BUTTON_SOUTH, ES_JOY_FIRE }, { SDL_GAMEPAD_BUTTON_EAST, ES_JOY_FIRE2 },
+            { SDL_GAMEPAD_BUTTON_WEST, ES_JOY_YELLOW }, { SDL_GAMEPAD_BUTTON_NORTH, ES_JOY_GREEN },
+            { SDL_GAMEPAD_BUTTON_RIGHT_SHOULDER, ES_JOY_FORWARD }, { SDL_GAMEPAD_BUTTON_LEFT_SHOULDER, ES_JOY_REVERSE },
+            { SDL_GAMEPAD_BUTTON_START, ES_JOY_PLAY },
+            { SDL_GAMEPAD_BUTTON_DPAD_UP, ES_JOY_UP }, { SDL_GAMEPAD_BUTTON_DPAD_DOWN, ES_JOY_DOWN },
+            { SDL_GAMEPAD_BUTTON_DPAD_LEFT, ES_JOY_LEFT }, { SDL_GAMEPAD_BUTTON_DPAD_RIGHT, ES_JOY_RIGHT },
+        };
+        for (size_t i = 0; i < sizeof map / sizeof map[0]; i++) if (SDL_GetGamepadButton(g, map[i].button)) b |= map[i].bit;
+        int x = SDL_GetGamepadAxis(g, SDL_GAMEPAD_AXIS_LEFTX), y = SDL_GetGamepadAxis(g, SDL_GAMEPAD_AXIS_LEFTY);
+        if (x < -ES_JOY_DEAD) b |= ES_JOY_LEFT; else if (x > ES_JOY_DEAD) b |= ES_JOY_RIGHT;
+        if (y < -ES_JOY_DEAD) b |= ES_JOY_UP; else if (y > ES_JOY_DEAD) b |= ES_JOY_DOWN;
+    }
+    /* as with a real stick, never both ends of an axis at once */
+    if ((b & (ES_JOY_LEFT | ES_JOY_RIGHT)) == (ES_JOY_LEFT | ES_JOY_RIGHT)) b &= ~(ES_JOY_LEFT | ES_JOY_RIGHT);
+    if ((b & (ES_JOY_UP | ES_JOY_DOWN)) == (ES_JOY_UP | ES_JOY_DOWN)) b &= ~(ES_JOY_UP | ES_JOY_DOWN);
+    return b;
+}
+
+/* Joystick.Kind values: 0 none, 1 gamepad, 2 mouse, 3 joystick. */
+static __attribute__((unused)) int32_t es_sdl_joy_kind(int32_t port, bool keyboard)
+{
+    if (!es_sdl_joy_on || port < 0 || port > 1) return 0;
+    es_sdl_joy_update();
+    if (es_sdl_pad[port] != NULL) return 1;
+    if (port == 0) return 2;
+    return keyboard ? 3 : 0;
+}
+
+/* Test hooks (Joystick.SdlAttachVirtual and the rest): a virtual gamepad with the 15 standard buttons and 6 axes, in SDL's order. */
+static __attribute__((unused)) int32_t es_sdl_joy_virtual_attach(void)
+{
+    if (!es_sdl_joy_start()) return 0;
+    SDL_VirtualJoystickDesc d;
+    SDL_INIT_INTERFACE(&d);
+    d.type = SDL_JOYSTICK_TYPE_GAMEPAD;
+    d.naxes = 6;
+    d.nbuttons = 15;
+    d.button_mask = (1u << 15) - 1;
+    d.axis_mask = (1u << 6) - 1;
+    d.name = "E# virtual pad";
+    SDL_JoystickID id = SDL_AttachVirtualJoystick(&d);
+    if (id == 0) { fprintf(stderr, "SDL: %s\n", SDL_GetError()); return 0; }
+    if (SDL_OpenJoystick(id) == NULL) { SDL_DetachVirtualJoystick(id); return 0; }   /* kept open: virtual input needs an open joystick */
+    return (int32_t)id;
+}
+
+static __attribute__((unused)) void es_sdl_joy_virtual_set(int32_t id, int32_t kind, int32_t index, int32_t value)
+{
+    SDL_Joystick *j = SDL_GetJoystickFromID((SDL_JoystickID)id);
+    if (j == NULL) return;
+    if (kind == 0) SDL_SetJoystickVirtualButton(j, index, value != 0);
+    else SDL_SetJoystickVirtualAxis(j, index, (Sint16)(value < -32768 ? -32768 : (value > 32767 ? 32767 : value)));
+}
+
+static __attribute__((unused)) void es_sdl_joy_virtual_detach(int32_t id)
+{
+    SDL_Joystick *j = SDL_GetJoystickFromID((SDL_JoystickID)id);
+    SDL_DetachVirtualJoystick((SDL_JoystickID)id);
+    if (j != NULL) SDL_CloseJoystick(j);
+}
+
+/* A key event for the stand-in keys, queued as the window would send it (handled by the next es_sdl_poll). */
+static __attribute__((unused)) void es_sdl_joy_virtual_key(int32_t raw, bool down)
+{
+    SDL_Scancode s;
+    switch (raw)
+    {
+        case 0x4C: s = SDL_SCANCODE_UP; break;
+        case 0x4D: s = SDL_SCANCODE_DOWN; break;
+        case 0x4E: s = SDL_SCANCODE_RIGHT; break;
+        case 0x4F: s = SDL_SCANCODE_LEFT; break;
+        case 0x40: s = SDL_SCANCODE_SPACE; break;
+        case 0x64: s = SDL_SCANCODE_LALT; break;
+        default: return;
+    }
+    SDL_Event e;
+    SDL_zero(e);
+    e.type = down ? SDL_EVENT_KEY_DOWN : SDL_EVENT_KEY_UP;
+    e.key.scancode = s;
+    e.key.down = down;
+    SDL_PushEvent(&e);
+}
+
+/* ---- message box (Requester.cs) ----
+   buttons is "Yes|No" (up to 8): the answer is the button's index from the left, or -1 when the box could not be shown
+   (headless: SDL has no message system without a desktop) or was closed without a button. */
+static __attribute__((unused)) int32_t es_sdl_message_box(const char *title, const char *text, const char *buttons)
+{
+    char names[512];
+    SDL_MessageBoxButtonData b[8];
+    int n = 0;
+    SDL_strlcpy(names, buttons != NULL && buttons[0] != 0 ? buttons : "OK", sizeof names);
+    char *p = names;
+    while (n < 8)
+    {
+        char *bar = strchr(p, '|');
+        if (bar != NULL) *bar = 0;
+        SDL_zero(b[n]);
+        b[n].buttonID = n;
+        b[n].text = p;
+        n++;
+        if (bar == NULL) break;
+        p = bar + 1;
+    }
+    b[0].flags |= SDL_MESSAGEBOX_BUTTON_RETURNKEY_DEFAULT;
+    b[n - 1].flags |= SDL_MESSAGEBOX_BUTTON_ESCAPEKEY_DEFAULT;
+    SDL_MessageBoxData m;
+    SDL_zero(m);
+    m.flags = SDL_MESSAGEBOX_INFORMATION | SDL_MESSAGEBOX_BUTTONS_LEFT_TO_RIGHT;
+    m.window = es_sdl_win;
+    m.title = title != NULL ? title : "";
+    m.message = text != NULL ? text : "";
+    m.numbuttons = n;
+    m.buttons = b;
+    int chosen = -1;
+    if (!SDL_ShowMessageBox(&m, &chosen))
+    {
+        fprintf(stderr, "SDL: no message box (%s)\n", SDL_GetError());
+        return -1;
+    }
+    return chosen >= 0 && chosen < n ? chosen : -1;
+}
 
 /* ---- sound: four voices, each an SDL audio stream of signed 8-bit mono at the sample's rate, fed from a callback ---- */
 

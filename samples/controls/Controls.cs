@@ -8,6 +8,7 @@ namespace ControlsSample;
 /// lowlevel.library (<see cref="Joystick"/>). Prints "ok NAME" or "FAIL NAME". lowlevel.library lives in Libs: on
 /// the Workbench disk, so on a system without it the program must still start and every joystick read is 0.
 /// The E clock runs at about 709 kHz on PAL (716 kHz NTSC); hosted AROS reports 200 ticks per second.
+/// On SDL the same checks run against SDL's gamepad support (no pad needed: Force and Kind behave as on the host) and a 1 MHz clock.
 /// </summary>
 public static class Program
 {

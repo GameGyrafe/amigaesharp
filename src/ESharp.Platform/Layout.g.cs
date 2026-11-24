@@ -18,6 +18,11 @@ public static class Layout
     public const int MsgQualifier = 54;
     public const int MsgIAddress = 56;
     public const int BitMapSize = 72;
+    public const int EasyStructSize = 32;
+    public const int EasyFlags = 4;
+    public const int EasyTitle = 8;
+    public const int EasyTextFormat = 16;
+    public const int EasyGadgetFormat = 24;
     public const int IoSize = 152;
     public const int OffType = 16;
     public const int OffReplyPort = 32;
@@ -259,6 +264,11 @@ public static class Layout
     public const int MsgQualifier = 30;
     public const int MsgIAddress = 32;
     public const int BitMapSize = 40;
+    public const int EasyStructSize = 20;
+    public const int EasyFlags = 4;
+    public const int EasyTitle = 8;
+    public const int EasyTextFormat = 12;
+    public const int EasyGadgetFormat = 16;
     public const int IoSize = 80;
     public const int OffType = 8;
     public const int OffReplyPort = 16;
@@ -500,6 +510,11 @@ public static class Layout
     public const int MsgQualifier = 26;
     public const int MsgIAddress = 28;
     public const int BitMapSize = 40;
+    public const int EasyStructSize = 20;
+    public const int EasyFlags = 4;
+    public const int EasyTitle = 8;
+    public const int EasyTextFormat = 12;
+    public const int EasyGadgetFormat = 16;
     public const int IoSize = 68;
     public const int OffType = 8;
     public const int OffReplyPort = 14;

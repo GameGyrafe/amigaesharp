@@ -10,6 +10,92 @@ The minimum system is now an **Amiga 1200: 68020, AGA, 2 MB chip RAM, Kickstart 
 - **Kept on purpose:** `HasAga()` and `HasRtg()` with their fallbacks. A classic A1200 always has AGA, but PowerPC, RTG-only and AROS targets may not, so the checks stay as the portable way to ask. **Not yet done:** using 68020 instructions deliberately and AROS (a new target, untested).
 - Verified after the change: all 17 samples built with `-m68020` and run on Kickstart 3.1 (A1200) in FS-UAE: 300 `ok` lines, no `FAIL` (the script shows only the last 25 lines of each sample, so long ones are truncated), 136 unit tests pass. Not verified: PowerPC, real hardware, a 68000/Kickstart 2.04 run (no longer supported).
 
+## SDL joystick and a portable message box (part of issue #155)
+
+The first step of #155 (SDL versions of the Amiga-only APIs): `Joystick` on SDL game pads, and a new message box,
+`Requester.Show`, on every target. IFF in E#, the file requester and fonts as assets are later steps. How to use both:
+docs/GUIDE.md, "Platform APIs".
+
+- **Joystick on SDL.** `Joystick.cs` is no longer `#if !SDL`; the Amiga branch (lowlevel.library) is unchanged, the host
+  fake is unchanged, and SDL uses the host's bit values (the same bits as lowlevel's), so game code does not change. The C
+  side is in `es_sdl.h` (`es_sdl_joy_*`, SDL's gamepad API with gamepad events off: each `Read`/`Kind` calls
+  `SDL_UpdateGamepads`, which also notices pads plugged in or out). Port 1 is the first pad, port 0 the second; when the
+  port-1 pad goes, the port-0 pad moves to port 1. Fire = south, Fire2 = east, Yellow = west, Green = north, Forward/Reverse =
+  right/left shoulder, Play = Start; directions from the d-pad and the left stick past a dead zone of 8192 (a quarter); both
+  ends of an axis at once read as neither. `Kind`: `KindGamepad` with a pad; without one `KindMouse` on port 0 (decided: the
+  desktop pointer is the mouse port's device, as on the Amiga) and `KindNone` on port 1. `Force` keeps a forced kind per port
+  as lowlevel does (a forced joystick reads only the directions, Fire and Fire2); `Close` clears it. Keyboard stand-in:
+  `Joystick.KeyboardStandIn` (new on every target, default off, only SDL acts on it): with no pad on port 1, the cursor keys,
+  Space (Fire) and Left Alt (Fire2) read as a joystick there (`Kind` 1 = `KindJoystick`); the held keys are tracked from the
+  window's key down/up events in `Input.Poll` (cleared when the window loses focus). SDL-only test hooks plug in virtual pads
+  (`SDL_AttachVirtualJoystick` with a 15-button, 6-axis gamepad description): `Joystick.SdlAttachVirtual`,
+  `SdlVirtualButton`, `SdlVirtualAxis`, `SdlDetachVirtual`, and `SdlVirtualKey` for the stand-in keys. `Joystick` left
+  the ES0102 list (`LowLevel` stays).
+- **Message box.** `src/ESharp.Platform/Requester.cs`: `Requester.Show(title, text, buttons)` with buttons as `"Yes|No"` (up
+  to 8; empty is one `OK`), returning the chosen button's index from the left, and the last button when no box can be shown
+  or it is closed without a button (the Amiga's negative-answer convention). `Requester.Count` counts the buttons.
+  - Amiga targets: intuition.library `EasyRequestArgs`, LVO -588, `[Since(36)]` (from the AROS `intuition_lib.fd`: bias
+    30 + 6 x 93; the neighbours `LockPubScreen` -510 and `OpenWindowTagList` -606 bound already match the same count), on the
+    `Video` window's screen when one is open, else the default public screen. The `struct EasyStruct` offsets are measured
+    into `Layout.g.cs` (`EasyStructSize`, `EasyFlags`, `EasyTitle`, `EasyTextFormat`, `EasyGadgetFormat`; 20 bytes on
+    m68k/i386, 32 on x86-64) by `tools/BindGen/layouts.sh`, from the new lines in `tools/BindGen/structs.txt`. The text and the
+    button list are copied with every `%` doubled (EasyRequest formats both like printf); the title is not a format.
+    EasyRequest's 1, 2, ..., 0 (rightmost) is mapped to 0, 1, ..., n-1.
+  - SDL: `es_sdl_message_box`, `SDL_ShowMessageBox` with `SDL_MESSAGEBOX_BUTTONS_LEFT_TO_RIGHT`, Return on the first button and
+    Esc on the last, over the game's window. Without a desktop SDL answers "No message system available": the call returns
+    the last button and prints `SDL: no message box (...)` to standard error.
+  - Host: `Requester.HostSet(n)` presets the answer (default -1: the last button), `HostShown` counts the calls.
+- **Sample.** `samples/requester`: prints SHOT, shows "Quit the game?" / "100% sure? (% as typed)" with Yes|Maybe|No and checks
+  the answer against `ANSWER=n` (default 2, the last button); `SCREEN` shows it on a 320x256 `Video` screen. On the host the
+  answer is preset from `ANSWER`, so `esharp test` agrees with any target run that picks the same button.
+
+**Verified (2026-11-24, Linux dev host):**
+- `dotnet test`: 775 passed, 2 skipped, 0 failed (777). New: `SdlTargetTests` (Joystick and Requester compile for sdl and pull in the SDL runtime;
+  ES0102 now checked with `LowLevel`; in the esharp-sdl image (SDL 3.4.20) a program built with `-Wall -Werror` and run headless
+  that drives SDL virtual pads: **32 ok, 0 FAIL**: nothing before Open, port 1 none / port 0 mouse without a pad, a pad plugged
+  in after Open appears on port 1, each of south/east/west/north/shoulders/Start on its bit, d-pad up-left and down-right,
+  a stick move of 6000 inside the dead zone, 30000 / -32768 / 32767 outside, a second pad on port 0 with its Fire only there,
+  Force to a joystick (no CD32 buttons) and back, unplugging the first pad moves the second to port 1, Close, the keyboard
+  stand-in off (keys read 0) and on (Up+Space, Left+Left Alt), a pad taking over port 1 from the keys and the keys back when it
+  goes, and the headless message box answering the last button). `RequesterTests` (6): the Amiga build of `Requester` (AROS
+  x86-64 symbols) compiled with the host gcc against a fake `EasyRequestArgs` that prints the EasyStruct it gets: size 32,
+  flags 0, null window/IDCMP/args, the title as given, `%` doubled in the text and the buttons, an empty list sent as `OK`, and
+  1/2/0/5 mapped to 0/1/2 and the last button; the call is emitted on every Amiga target; the sdl build; the host fake; the
+  sample builds for m68k and sdl and runs on dotnet with `ANSWER=1`.
+- `esharp test samples/controls --target sdl --docker esharp-sdl`: host 12 ok, SDL 12 ok, 0 FAIL, return code 0, "Host and SDL
+  agree on every check" (no pad in the image: `Kind(1)` 0 and bits 0, `Force` and the kinds it reads back as on the host). The
+  sample needed no `#if`: everything it uses exists on SDL now.
+- Message box, **A1200 / Kickstart 3.1 (40.069) in FS-UAE**, `esharp run samples/requester ... --headless --model A1200
+  --kickstart <rom>`: the screenshot after SHOT shows the requester at the top left of the Workbench screen, title "E#
+  requester", both text lines (the `%` signs shown as typed) and Yes, Maybe, No left to right. Answered with `--input`: `click
+  400,300;rel -92,-124` puts the pointer on Maybe (seen in a screenshot); `press` there with `ANSWER=1` gives `answer 1`, `rel
+  -110,0;press` with `ANSWER=0` `answer 0`, `rel 115,0;press` with `ANSWER=2` `answer 2` (EasyRequest's 0), 2 ok each. With
+  `--args "SCREEN ANSWER=2"` the requester opens on the 320x256 game screen (dark blue, the green bar visible below it);
+  `click 400,300;rel -92,-124;rel 330,0;press` hits No: `answer 2`, 3 ok. A first, longer text line (47 characters) made the
+  requester wider than the lores screen there, with No off the edge: hence the GUIDE's advice to keep lines short.
+- **Hosted AROS x86-64** (esharp-aros-hosted): the screenshot shows the requester centred on the Workbench screen with the same
+  text and buttons (so the 64-bit EasyStruct offsets are right); clicks at (320,320), (399,320), (480,320) gave answers 0, 1, 2
+  with the matching `ANSWER`, 2 ok each, 0 traps.
+- **AmigaOS 4.1 VM** (QEMU pegasos2): the screenshot shows the requester centred on the Workbench screen; `click 638,557` (Maybe)
+  with `ANSWER=1` gave `answer 1`, `click 733,557` (No) with `ANSWER=2` `answer 2`, 2 ok each.
+- **SDL headless**: `esharp test samples/requester --target sdl --docker esharp-sdl`: host 2 ok, SDL 2 ok (`answer 2`, the
+  documented fallback, with `SDL: no message box (No message system available)` on stderr), agree; with `--args SCREEN` 3 ok
+  both. **SDL under Xvfb** (by hand, not in the suite: the binary built in the image run in it with `SDL_VIDEODRIVER=x11` on an
+  Xvfb display of the dev host, no window manager): SDL's own X11 message box appears centred (info icon, the two lines, Yes
+  Maybe No left to right, captured with `xwd`); XTEST clicks on the buttons gave answers 1, 2 and 0 with the matching
+  `ANSWER`. XTEST keys (Return, Esc) did not reach it there (no window manager, so no focus); not looked into further.
+- Regression of the Amiga `Joystick` branch: `esharp test samples/controls --target m68k --model A1200 --kickstart <rom>` (no
+  `Libs:` in that setup): Amiga 9 ok, the no-lowlevel path as before; `--target aros` on hosted AROS: 9 ok, 0 traps, lowlevel
+  present and refusing a forced port type, as before. `Layout.g.cs` regenerated with `tools/BindGen/layouts.sh` (m68k, AROS
+  x86-64, AROS i386 images): only the five EasyStruct lines are new.
+
+**Not verified:** real game pads (only SDL virtual pads; the mapping relies on SDL's gamepad database for real ones), more than
+two pads, rumble or analogue values (not part of the API), the keyboard stand-in with a real keyboard on a desktop (tested
+with key events pushed into SDL's queue), Windows and macOS (SDL's native message boxes there, gamepads), Wayland message boxes
+(SDL uses zenity there), Return/Esc in SDL's X11 message box, the requester on Kickstart 3.0, MorphOS and AROS i386 (generated C
+only, in `RequesterTests`), real hardware, the lowlevel path of `samples/controls` re-run with `Libs:` on Kickstart 3.1
+(the Amiga code is unchanged), and `samples/requester` in the hardware pack (not added).
+
 ## Library project template: `esharp new --library` (issue #154, part 1)
 
 `esharp new --library <name>` writes an E# library project (`ProjectTemplate.WriteLibrary`): the library `<name>/` (`EsLibrary`,
@@ -742,7 +828,8 @@ sdl3`, run under `sh -c`; `--docker` without a name picks `esharp-sdl` for this 
   close exits; the `Input.Host*` calls feed the C layer too, so the games' input self-checks run on SDL), `Keys` (the host's US layout),
   `Sound` (four SDL audio streams on the default device, signed 8-bit mono at 3546895 / period, gain = volume / 64, fed from a callback for
   cycles and loops), `Trace` (standard error).
-- **Not on SDL (Amiga-only):** `Gui`/GadTools, `Asl`, `Iff`/iffparse, `Fonts`/diskfont, `Joystick`/lowlevel and the raw bindings (`Exec`,
+- **Not on SDL (Amiga-only):** (since issue #155 `Joystick` and the new `Requester` exist on SDL too, see "SDL joystick and a portable message box")
+  `Gui`/GadTools, `Asl`, `Iff`/iffparse, `Fonts`/diskfont, `Joystick`/lowlevel and the raw bindings (`Exec`,
   `Intuition`, `Graphics`, `CyberGfx`, `Utility`, `Keymap`, `TimerDevice`, `Layout`) are not compiled for SDL: using one is the C# unknown-name
   error plus **ES0102** "'Gui' is Amiga-only and does not exist on target 'sdl'; put the code in #if AMIGA". `HasAga()` is true (256
   colours always work), `HasRtg`/`OpenRtg`/`IsRtg` are false (no RTG card: programs take their fallback path). `samples/controls`, `gui`,
