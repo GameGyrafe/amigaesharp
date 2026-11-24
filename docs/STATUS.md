@@ -10,6 +10,33 @@ The minimum system is now an **Amiga 1200: 68020, AGA, 2 MB chip RAM, Kickstart 
 - **Kept on purpose:** `HasAga()` and `HasRtg()` with their fallbacks. A classic A1200 always has AGA, but PowerPC, RTG-only and AROS targets may not, so the checks stay as the portable way to ask. **Not yet done:** using 68020 instructions deliberately and AROS (a new target, untested).
 - Verified after the change: all 17 samples built with `-m68020` and run on Kickstart 3.1 (A1200) in FS-UAE: 300 `ok` lines, no `FAIL` (the script shows only the last 25 lines of each sample, so long ones are truncated), 136 unit tests pass. Not verified: PowerPC, real hardware, a 68000/Kickstart 2.04 run (no longer supported).
 
+## Library project template: `esharp new --library` (issue #154, part 1)
+
+`esharp new --library <name>` writes an E# library project (`ProjectTemplate.WriteLibrary`): the library `<name>/` (`EsLibrary`,
+`EsTargets` all six, `EsFeatures` empty, `ImplicitUsings` disabled, `PackageId` `MyCompany.<name>` as a placeholder to change
+(the `AmigaESharp` prefix is reserved), MIT, README packed, a public sample class `Counter` in the namespace `<name>`), a demo
+program `<name>.Demo/` that references the library from the folder feed and prints three `ok` lines, a `nuget.config` with the
+local feed `feed/`, `.gitignore`, the `.vscode/` files of a program project (tasks work on the demo, one more packs the library;
+launch debugs the demo) and a README with the pack, restore and test steps. Both csproj files reference AmigaESharp.Sdk at the
+tool's version (package), or, from a checkout or with `--source`, the Host and Analyzers projects; the library then imports the Sdk's
+`buildTransitive` targets from the checkout, because a project reference does not bring a package's build files. A library
+packed from a checkout depends on the checkout's `ESharp.Target.Host` project, so the README says to make a library to publish
+with `--package`. The precompiled libraries and `.library` parts of #154 are not done. How to use it: docs/GUIDE.md, "Libraries".
+
+- **Also:** `samples/packages/CounterDemo` now calls `Close()` (frees the two gadgets the constructors added) before `Heap.Free`
+  when `Open` fails, as the #152 review asked; a unit test checks the order in the source. That failure path itself is not run
+  anywhere (the window opens in every verified run).
+- **Verified (Linux x86-64, 2026-11-24):** `dotnet test`: 775 tests, 773 passed, 2 skipped (the SDK-backed BindGen test and the
+  OS4 VM test), including the new `ProjectTemplateTests` (files, csproj properties, checkout variant, the library and demo compiled
+  and run with host gcc, `esharp new --library` through the CLI) and `PackageRoundTripTests.Library_template_packs_restores_from_its_feed_and_the_demo_builds_and_tests`
+  (pack into the template's feed with a test-made Sdk package, restore, `dotnet build`, `esharp build --emit-only`, the host run of
+  `esharp test`: 3 ok, and the m68k build when the pinned image is local). By hand with a real `dotnet pack src/ESharp.Sdk` feed:
+  `esharp new --library x --package 0.1.0-dev`, pack, restore, `esharp test` (host 3 ok), and the same in a checkout-mode project;
+  `esharp test x.Demo --target m68k --docker <pinned m68k image> --model A1200 --kickstart <rom>`: Amiga 3 ok, 0 FAIL, return code 0,
+  host and Amiga agree. CounterDemo on Kickstart 3.1 (`--model A1200`): host 9 ok, Amiga 9 ok, 0 FAIL.
+- **Not verified:** the template on Windows and macOS, in VS Code itself (tasks, launch), the library packed from the template on os4, aros or sdl,
+  restore of the Sdk from nuget.org for the template (the package mode with the released Sdk version), and the optional `dotnet new` template (not added).
+
 ## E# library packages, part 4: classes derived from package classes (issue #31)
 
 The last code item of #31: a class of the program (or of another package) may derive from a package class marked
@@ -1677,7 +1704,7 @@ Open work as of 2026-11-14 (the GitHub issues are the live list; the v1 tracker 
 - **Windows (#11):** CI now runs a `windows` job (windows-latest, PR head): `dotnet test` (439 passed, 2 skipped, 0 failed; the runner has a MinGW gcc, so the generated-C tests run there and only the Docker/VM/SDK-dependent tests skip), emit-only builds of `samples/hello` and `samples/cards`, `esharp test samples/linq`, a clean `git status` afterwards, and a package round trip against the PR's own packages (`dotnet pack`, install the tool from the folder into a tool path, a nuget.config with the local feed, version and PackageReference checked, NU1603 fails the step, `esharp new`, `dotnet run`, `esharp test`, `esharp build --emit-only`). A `.gitattributes` keeps the working tree LF (the runner has `core.autocrlf=true`), and the native test output is read CRLF-tolerant. Still needs a person on a real Windows machine: Docker Desktop with `--docker` builds, FS-UAE for Windows, VS Code, and Windows with a different (or no) C compiler. `tools/aros-hosted` is Linux-only. macOS was checked, see "VS Code support".
 - **Bindings (#19, #40):** GadTools wrappers (v1), the BOOPSI core with hooks (#40 part 1, see "BOOPSI core and hooks") and the MUI wrappers on it (#40 part 2, see "MUI wrappers") are done. MUI custom classes (#93, see "MUI custom classes") are done too. Open: ReAction (last, if at all).
 - **Display design (not implemented):** [design/DISPLAY.md](design/DISPLAY.md) proposes logical coordinates with an integer scale, mode choice that follows the Workbench's monitor family (MODE option, asl screen-mode requester), 256 colours with a shared palette, a gradient pen (copper on AGA), window mode on the Workbench and multi-scale art. Nothing in it is built or verified yet; it waits for the maintainer's approval.
-- **v2:** AROS i386 (#4: toolchain, target and hosted runs done, see "AROS i386"; the MUI crashes on hosted i386 were an AROS bug, worked around (#105); open: native pc-i386), E# library source packages on NuGet (#31: parts 1 to 4 done, see "E# library packages, part 1", "part 2: assets in packages", "part 3: C files and headers in packages" and "part 4: classes derived from package classes"; the `AmigaESharp.*` id prefix is reserved on nuget.org for the maintainer's account since 2026-11-24, so #31 is done; a library project template and the later pieces from its proposal are in #154), user classes deriving from platform classes (#42: done for `GtWindow`, see "Classes derived from platform classes"). Capturing lambdas stored in fields and events (#41): done (PR #83), see "Heap closures and events".
+- **v2:** AROS i386 (#4: toolchain, target and hosted runs done, see "AROS i386"; the MUI crashes on hosted i386 were an AROS bug, worked around (#105); open: native pc-i386), E# library source packages on NuGet (#31: parts 1 to 4 done, see "E# library packages, part 1", "part 2: assets in packages", "part 3: C files and headers in packages" and "part 4: classes derived from package classes"; the `AmigaESharp.*` id prefix is reserved on nuget.org for the maintainer's account since 2026-11-24, so #31 is done; the library project template `esharp new --library` is done, see "Library project template"; the later pieces from its proposal are in #154), user classes deriving from platform classes (#42: done for `GtWindow`, see "Classes derived from platform classes"). Capturing lambdas stored in fields and events (#41): done (PR #83), see "Heap closures and events".
 - **Local toolchains (#122):** part 1 done (configuration, `esharp doctor`, VS Code tasks, a local m68k build in CI; see
   "Local toolchains, part 1"). Open: macOS and Windows by hand, and whether os4, morphos and AROS get a local route
   ([design/TOOLCHAINS.md](design/TOOLCHAINS.md) has the options; the maintainer picks).
