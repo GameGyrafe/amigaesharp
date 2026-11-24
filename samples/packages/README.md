@@ -19,6 +19,11 @@
 checks the Checksum package's C against a known value and against an Adler-32 loop of its own in C#, and derives its own
 `Hopper` from the package's `Mover` (an ease-in curve and one hop back; both overrides are called from the package's `Step`).
 
+- `Counter/` is a small E# library with a window class: `CounterWindow` derives from the platform's `GtWindow` and is `[Extensible]` itself
+  (Amiga targets only, no sdl). `CounterDemo/` derives its `Score` window from it and runs the whole lifecycle (Open, events through
+  `Dispatch`, Close, free the window) on the PC and on the Amiga: `dotnet pack samples/packages/Counter -o /tmp/esfeed --source /tmp/esfeed`,
+  `dotnet restore samples/packages/CounterDemo --source /tmp/esfeed`, then `esharp test samples/packages/CounterDemo [--target m68k ...]` (9 ok).
+
 The projects reference AmigaESharp.Sdk at `0.1.0-dev` (what `dotnet pack` of a checkout makes; pass
 `-p:ESharpSdkVersion=<version>` to use a released one). From the repository root, with a local folder feed (nothing is
 published, and nothing for this sample comes from nuget.org):

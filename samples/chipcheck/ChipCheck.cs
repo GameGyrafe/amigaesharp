@@ -19,7 +19,7 @@ public struct Sprite
 /// drop must be at least the size, because each allocator adds its own header and rounding (hosted AROS x86-64
 /// drops 1024, 64, 4224 and 32 for 1000, 43, 4096 and 13).
 /// Static [ChipRam] data is loaded with the program, before Main: it is compared with the hunk sizes in
-/// obj/m68k/ChipCheck.map instead (docs/STATUS.md). The arrays are used below so they are kept.
+/// obj/m68k/chipcheck.map instead (docs/STATUS.md). The arrays are used below so they are kept.
 /// </summary>
 public static class Program
 {

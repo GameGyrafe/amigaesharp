@@ -624,8 +624,12 @@ public static class P
         Check(!m.Dispatch(new GuiEvent(GuiEventKind.Close, null)) && m.Closes == 1, ""close through three levels"");
         GtWindow w = m;
         Check(w is Panel && w is Main2 && (w as Panel) != null, ""is and as along the chain"");
-        Heap.Free(ref m.Go);
-        Heap.Free(ref w);
+        w = null;                                          // no alias outlives the window
+        // Open and Close need the Amiga libraries, which the host gcc does not have: the whole lifecycle (Open, Close frees the gadgets,
+        // then Heap.Free of the window) runs in samples/packages/CounterDemo on the host, Kickstart 3.1, os4 and AROS. Here the gadget is
+        // left to the window (never freed on its own while linked into it).
+        Heap.Free(ref m);
+        Check(m == null, ""the window is freed"");
     }
 }
 ";
@@ -640,7 +644,7 @@ public static class P
         var (code, output) = RunWithHostGcc(r.C!);
         Assert.Equal(0, code);
         Assert.Equal("ok platform and package constructors ran\nok click: platform hook, package override, game override\n" +
-                     "ok close through three levels\nok is and as along the chain\n", output);
+                     "ok close through three levels\nok is and as along the chain\nok the window is freed\n", output);
         // Not [Extensible] in the package: the game cannot derive from it (ES0117), though the package derives from GtWindow.
         var closed = Package("Sample.Ui", new Dictionary<string, string> { ["Panel.cs"] = PanelLib.Replace("[Extensible]\n", "") });
         Assert.Contains(Build(PanelGame, M68k(closed)).Diagnostics, d => d.Id == "ES0117");
