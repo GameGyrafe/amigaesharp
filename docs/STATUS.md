@@ -62,9 +62,20 @@ The last code item of #31: a class of the program (or of another package) may de
 
 **Not verified:** morphos and aros-i386 runs of the sample; real hardware; Windows CI runs the new tests (not run locally);
 the analyzer in an actual IDE (Visual Studio, VS Code) rather than `dotnet build` and in-memory compilations (the same
-analyzer and metadata); a package class deriving from a platform `[Extensible]` class (`GtWindow`) and a game deriving from
-that in turn (not tried). Changing an `[Extensible]` class's protected or virtual members breaks games derived from it; there
-is no check for that across package versions.
+analyzer and metadata).
+
+**Package class derived from `GtWindow` (follow-up, issue #147):** a package class marked `[Extensible]` that derives from the
+platform `[Extensible]` `GtWindow`, with a game class derived from it, was tried: the test
+`A_package_class_derived_from_a_platform_Extensible_class_has_a_game_class_derived_from_it` (`PackageTests`) compiles it with m68k
+options and builds and runs the generated C with the host gcc (constructors, overrides through three levels, `is`/`as`, `Heap.Free`
+through the base type); without `[Extensible]` on the package class the game gets ES0117. Not run: the emulator (FS-UAE), os4,
+aros, sdl or morphos builds of such a class, the IDE/DLL view of it, and a derived package class on real hardware. After the
+`hopper = null` change in TweenDemo, `esharp test samples/packages/TweenDemo --target m68k --model A1200` with Kickstart 3.1 was
+re-run: host and Amiga agree, 22 ok, 0 FAIL, return code 0 (no screenshot; the other targets were not re-run after that line).
+
+Changing an `[Extensible]` class's protected or virtual members breaks games derived from it, also across package versions and
+through a platform base such as `GtWindow`; there is no check for that, so treat it as a major version (docs/GUIDE.md,
+"Libraries", "Classes to derive from").
 
 ## E# library packages, part 3: C files and headers in packages (issue #31)
 
