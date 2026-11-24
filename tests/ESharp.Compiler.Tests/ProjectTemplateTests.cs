@@ -259,4 +259,95 @@ public class ProjectTemplateTests : IDisposable
         Assert.Contains("my_game", err);
         Assert.False(Directory.Exists(Path.Combine(_dir, "my-game")));
     }
+
+    [Fact]
+    public void Library_template_writes_a_library_a_demo_a_feed_and_the_vscode_files()
+    {
+        ProjectTemplate.WriteLibrary(_dir, "Easing", null, "esharp.dll", "1.2.3");
+        foreach (var f in new[] { "README.md", "nuget.config", ".gitignore", "feed/.gitkeep", "Easing/Easing.csproj", "Easing/Counter.cs",
+                                  "Easing.Demo/Easing.Demo.csproj", "Easing.Demo/Program.cs", ".vscode/tasks.json", ".vscode/launch.json",
+                                  ".vscode/extensions.json", ".vscode/settings.json" })
+            Assert.True(File.Exists(Path.Combine(_dir, f.Replace('/', Path.DirectorySeparatorChar))), f);
+
+        var lib = System.Xml.Linq.XDocument.Parse(File.ReadAllText(Path.Combine(_dir, "Easing", "Easing.csproj")));
+        string Prop(string n) => lib.Descendants(n).Single().Value;
+        Assert.Equal("true", Prop("EsLibrary"));
+        Assert.Equal("m68k;os4;morphos;aros;aros-i386;sdl", Prop("EsTargets"));
+        Assert.Equal("", Prop("EsFeatures"));
+        Assert.Equal("disable", Prop("ImplicitUsings"));
+        Assert.Equal("MyCompany.Easing", Prop("PackageId"));
+        Assert.False(Prop("PackageId").StartsWith("AmigaESharp", StringComparison.OrdinalIgnoreCase));
+        Assert.Equal("MIT", Prop("PackageLicenseExpression"));
+        var sdk = lib.Descendants("PackageReference").Single(r => r.Attribute("Include")!.Value == "AmigaESharp.Sdk");
+        Assert.Equal("1.2.3", sdk.Attribute("Version")!.Value);
+        Assert.Empty(lib.Descendants("ProjectReference"));
+
+        var demo = System.Xml.Linq.XDocument.Parse(File.ReadAllText(Path.Combine(_dir, "Easing.Demo", "Easing.Demo.csproj")));
+        var refs = demo.Descendants("PackageReference").ToDictionary(r => r.Attribute("Include")!.Value, r => r.Attribute("Version")!.Value);
+        Assert.Equal("1.2.3", refs["AmigaESharp.Sdk"]);
+        Assert.Equal("1.0.0", refs["MyCompany.Easing"]);
+        Assert.Equal("Exe", demo.Descendants("OutputType").Single().Value);
+
+        Assert.Contains("value=\"feed\"", File.ReadAllText(Path.Combine(_dir, "nuget.config")));
+        var readme = File.ReadAllText(Path.Combine(_dir, "README.md"));
+        Assert.Contains("dotnet pack Easing -o feed", readme);
+        Assert.Contains("dotnet restore Easing.Demo", readme);
+        Assert.Contains("esharp test Easing.Demo", readme);
+
+        // The tasks work on the demo; one more packs the library into the feed. The launch configuration runs the demo's DLL.
+        var tasks = Json(".vscode/tasks.json").RootElement.GetProperty("tasks").EnumerateArray().ToList();
+        string Args(string label) => string.Join(" ", tasks.Single(t => t.GetProperty("label").GetString() == label)
+            .GetProperty("args").EnumerateArray().Select(a => a.GetString()));
+        Assert.Equal("build ${workspaceFolder}/Easing.Demo --target m68k --docker ${input:dockerImage}", Args("E#: build (m68k)"));
+        Assert.Equal("run --project ${workspaceFolder}/Easing.Demo", Args("E#: run on the host"));
+        Assert.Equal("pack ${workspaceFolder}/Easing -o ${workspaceFolder}/feed", Args("E#: pack the library into ./feed"));
+        var launch = Json(".vscode/launch.json").RootElement.GetProperty("configurations")[0];
+        Assert.Equal("${workspaceFolder}/Easing.Demo/bin/Debug/net10.0/Easing.Demo.dll", launch.GetProperty("program").GetString());
+    }
+
+    [Fact]
+    public void Library_template_against_a_checkout_references_its_projects_and_imports_the_library_step()
+    {
+        ProjectTemplate.WriteLibrary(_dir, "Easing", "/opt/esharp", "/opt/esharp/esharp.dll", "1.2.3");
+        var lib = File.ReadAllText(Path.Combine(_dir, "Easing", "Easing.csproj"));
+        var doc = System.Xml.Linq.XDocument.Parse(lib);
+        Assert.Empty(doc.Descendants("PackageReference").Where(r => r.Attribute("Include")!.Value == "AmigaESharp.Sdk"));
+        Assert.Contains("ESharp.Target.Host.csproj", lib);
+        Assert.Contains("ESharp.Analyzers.csproj\" OutputItemType=\"Analyzer\"", lib);
+        Assert.Contains("buildTransitive/AmigaESharp.Sdk.targets", lib);
+        Assert.Equal("1.2.3", doc.Descendants("EsMinSdkVersion").Single().Value);
+        var demo = File.ReadAllText(Path.Combine(_dir, "Easing.Demo", "Easing.Demo.csproj"));
+        Assert.Contains("ESharp.Target.Host.csproj", demo);
+        Assert.Contains("<PackageReference Include=\"MyCompany.Easing\" Version=\"1.0.0\" />", demo);
+        var tasks = File.ReadAllText(Path.Combine(_dir, ".vscode", "tasks.json"));
+        Assert.Contains("/opt/esharp/esharp.dll", tasks);
+    }
+
+    [Fact]
+    public void Library_template_code_passes_the_subset_check_and_the_demo_runs()
+    {
+        ProjectTemplate.WriteLibrary(_dir, "Easing", null, "esharp.dll");
+        var lib = File.ReadAllText(Path.Combine(_dir, "Easing", "Counter.cs"));
+        var demo = File.ReadAllText(Path.Combine(_dir, "Easing.Demo", "Program.cs"));
+        var r = EsCompiler.Compile(new[] { new SourceFile("Counter.cs", lib), new SourceFile("Program.cs", demo) });
+        Assert.True(r.Success, string.Join("\n", r.Diagnostics.Select(d => d.ToString())));
+        if (!TestHelpers.HasGcc) return;
+        var (code, output) = TestHelpers.RunWithHostGcc(r.C!);
+        Assert.Equal(0, code);
+        Assert.Equal("Demo of the Easing library\nok a new counter is empty\nok three values added\nok the mean is 8\n", output);
+    }
+
+    [Fact]
+    public void Esharp_new_library_writes_the_library_project_and_refuses_a_bad_name_or_an_existing_folder()
+    {
+        var (exit, err) = Cli(_dir, "new", "--library", "sub/Easing", "--package", "9.8.7");
+        Assert.True(exit == 0, err);
+        Assert.True(File.Exists(Path.Combine(_dir, "sub", "Easing", "Easing", "Easing.csproj")));
+        Assert.True(File.Exists(Path.Combine(_dir, "sub", "Easing", "Easing.Demo", "Easing.Demo.csproj")));
+        Assert.Contains("Version=\"9.8.7\"", File.ReadAllText(Path.Combine(_dir, "sub", "Easing", "Easing", "Easing.csproj")));
+        Assert.Equal(1, Cli(_dir, "new", "--library", "sub/Easing").Exit);   // exists
+        var (badExit, badErr) = Cli(_dir, "new", "--library", "my-lib");
+        Assert.Equal(1, badExit);
+        Assert.Contains("not a valid C# identifier", badErr);
+    }
 }

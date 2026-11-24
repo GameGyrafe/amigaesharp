@@ -1262,4 +1262,15 @@ public static class P
         }
         finally { try { Directory.Delete(root, true); } catch (IOException) { } catch (UnauthorizedAccessException) { } }
     }
+
+    [Fact]
+    public void CounterDemo_closes_the_window_before_freeing_it_when_Open_fails()
+    {
+        // Close frees the gadgets the constructors added; Heap.Free of the window alone would leak them (the #152 review).
+        var root = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", ".."));
+        var text = File.ReadAllText(Path.Combine(root, "samples", "packages", "CounterDemo", "Program.cs")).Replace("\r\n", "\n");
+        var failed = text.Substring(text.IndexOf("if (!win.Open())", StringComparison.Ordinal));
+        failed = failed.Substring(0, failed.IndexOf("return 5;", StringComparison.Ordinal));
+        Assert.True(failed.IndexOf("win.Close();", StringComparison.Ordinal) is var close and >= 0 && close < failed.IndexOf("Heap.Free(ref win);", StringComparison.Ordinal), failed);
+    }
 }
