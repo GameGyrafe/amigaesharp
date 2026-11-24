@@ -125,7 +125,7 @@ CPU and OS are separate axes. What is verified, as of [docs/STATUS.md](docs/STAT
 | `aros-i386` | AROS i386 | yes | yes, hosted i386 AROS (the `mui` sample crashes there) | not verified (not run on native PCs or in a PC VM) |
 | `sdl` | Linux x86-64 desktop through SDL 3 | yes | yes, headless and under Xvfb | macOS and Windows not verified |
 
-The Amiga-only APIs (GadTools, BOOPSI, MUI, requesters, IFF, fonts, joystick) do not exist on `sdl` (error ES0102). FS-UAE cannot
+The Amiga-only APIs (GadTools, BOOPSI, MUI, the file requester, IFF, fonts) do not exist on `sdl` (error ES0102); the joystick (SDL game pads) and a simple message box (`Requester`) work on every target. FS-UAE cannot
 run the PowerPC builds. Symbols for conditional code: `AMIGA` for every Amiga-family target, narrowed by `M68K`/`PPC`/`X86_64`/`I386`
 and `AMIGAOS3`/`AMIGAOS4`/`MORPHOS`/`AROS`; `SDL`; and `HOST` for the dotnet test host.
 

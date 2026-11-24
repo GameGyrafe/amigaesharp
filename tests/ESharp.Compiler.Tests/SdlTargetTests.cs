@@ -74,13 +74,13 @@ public static class P
     [Fact]
     public void Amiga_only_APIs_are_a_clear_compile_error_on_sdl()
     {
-        var r = Compile(Program("", "var w = new GtWindow(); Joystick.Open();"), Targets.Sdl.ToOptions());
+        var r = Compile(Program("", "var w = new GtWindow(); LowLevel.ReadJoyPort(1);"), Targets.Sdl.ToOptions());
         Assert.False(r.Success);
         var ids = ErrorIds(r);
         Assert.Contains("ES0102", ids);
         var messages = r.Diagnostics.Where(d => d.Id == "ES0102").Select(d => d.GetMessage()).ToList();
         Assert.Contains(messages, m => m.Contains("'GtWindow'") && m.Contains("'sdl'"));
-        Assert.Contains(messages, m => m.Contains("'Joystick'"));
+        Assert.Contains(messages, m => m.Contains("'LowLevel'"));
         Assert.Equal(DiagnosticSeverityError, Descriptors.AmigaOnly.DefaultSeverity);
     }
 
@@ -167,7 +167,182 @@ Check(Keys.Find('Q').Code == 0x10 && Keys.Find('Q').Qualifier == Keys.LeftShift,
         Assert.Equal(new[] { "b: host ok, SDL FAIL" }, TestReport.Compare(host, sdl, "SDL"));
     }
 
+    [Fact]
+    public void Joystick_and_the_message_box_exist_on_sdl_and_pull_in_the_SDL_runtime()
+    {
+        var c = CompileOk(Program("", "if (Joystick.Open()) { uint b = Joystick.Read(1); Joystick.Close(); } int a = Requester.Show(\"T\", \"Quit?\", \"Yes|No\");"),
+            Targets.Sdl.ToOptions());
+        Assert.Contains("es_sdl_joy_read(", c);
+        Assert.Contains("es_sdl_message_box(", c);
+        Assert.Contains("SDL_GetGamepads", c);
+        Assert.DoesNotContain("proto/", c);
+    }
+
     // ---- in the esharp-sdl image (skipped when it is not built locally) ----
+
+    /// <summary>Builds the program for sdl in the esharp-sdl image (static SDL, -Wall -Werror) and runs it headless; returns the exit code and output.</summary>
+    private static (int, string) BuildAndRunInImage(string src, string? input)
+    {
+        var dir = Path.Combine(Path.GetTempPath(), "esharp-sdl-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(dir);
+        try
+        {
+            File.WriteAllText(Path.Combine(dir, "prog.c"), CompileOk(Prelude + src, Targets.Sdl.ToOptions()));
+            var build = new ProcessStartInfo("docker") { RedirectStandardOutput = true, RedirectStandardError = true };
+            foreach (var a in new[] { "run", "--rm", "-v", $"{dir}:/work", "-w", "/work", "esharp-sdl", "sh", "-c",
+                         "gcc -O2 -fwrapv -Wall -Werror -o prog prog.c $(pkg-config --static --cflags --libs sdl3)" })
+                build.ArgumentList.Add(a);
+            using (var b = Process.Start(build)!)
+            {
+                var err = b.StandardError.ReadToEndAsync();
+                b.StandardOutput.ReadToEnd();
+                b.WaitForExit();
+                Assert.True(b.ExitCode == 0, err.Result);
+            }
+            return SdlRun.Run(Path.Combine(dir, "prog"), true, TimeSpan.FromSeconds(60), "esharp-sdl", null, input, echo: false);
+        }
+        finally
+        {
+            try { Directory.Delete(dir, true); } catch (IOException) { } catch (UnauthorizedAccessException) { }
+        }
+    }
+
+    /// <summary>The test program of <see cref="Joystick_reads_virtual_gamepads_on_both_ports_with_hot_plug_in_the_image"/>: SDL virtual pads pressed and moved.</summary>
+    internal const string JoystickProgram = @"
+public static class P
+{
+    static int _fails;
+    static void Check(bool ok, string name) { if (!ok) _fails++; Dos.PutStr(ok ? ""ok "" : ""FAIL ""); Dos.PutStr(name); Dos.PutStr(""\n""); }
+
+    // SDL_GamepadButton and SDL_GamepadAxis numbers
+    const int South = 0, East = 1, West = 2, North = 3, Start = 6, LeftShoulder = 9, RightShoulder = 10;
+    const int DpadUp = 11, DpadDown = 12, DpadLeft = 13, DpadRight = 14, LeftX = 0, LeftY = 1;
+
+    static void Frames(int n) { for (int i = 0; i < n; i++) { Input.Poll(); Frame.WaitVBlank(); } }
+
+    [EntryPoint]
+    public static void Main()
+    {
+        Check(Joystick.Read(1) == 0 && Joystick.Kind(1) == Joystick.KindNone, ""closed: nothing"");
+        Check(Joystick.Open() && Joystick.IsOpen, ""open"");
+        Check(Joystick.Kind(1) == Joystick.KindNone && Joystick.Kind(0) == Joystick.KindMouse && Joystick.Read(1) == 0, ""no pad: port 1 none, port 0 the mouse"");
+
+        int a = Joystick.SdlAttachVirtual();
+        Check(a != 0, ""a virtual pad connects"");
+        Check(Joystick.Kind(1) == Joystick.KindGamepad && Joystick.Kind(0) == Joystick.KindMouse, ""a pad plugged in later is on port 1"");
+        Joystick.SdlVirtualButton(a, South, true);
+        Check(Joystick.Read(1) == Joystick.Fire, ""south is Fire"");
+        Joystick.SdlVirtualButton(a, South, false);
+        Joystick.SdlVirtualButton(a, East, true);
+        Joystick.SdlVirtualButton(a, West, true);
+        Joystick.SdlVirtualButton(a, North, true);
+        Check(Joystick.Read(1) == (Joystick.Fire2 | Joystick.Yellow | Joystick.Green), ""east, west, north are Fire2, Yellow, Green"");
+        Joystick.SdlVirtualButton(a, East, false);
+        Joystick.SdlVirtualButton(a, West, false);
+        Joystick.SdlVirtualButton(a, North, false);
+        Joystick.SdlVirtualButton(a, RightShoulder, true);
+        Joystick.SdlVirtualButton(a, LeftShoulder, true);
+        Joystick.SdlVirtualButton(a, Start, true);
+        Check(Joystick.Read(1) == (Joystick.Forward | Joystick.Reverse | Joystick.Play), ""shoulders and start are Forward, Reverse, Play"");
+        Joystick.SdlVirtualButton(a, RightShoulder, false);
+        Joystick.SdlVirtualButton(a, LeftShoulder, false);
+        Joystick.SdlVirtualButton(a, Start, false);
+        Check(Joystick.Read(1) == 0, ""all released"");
+
+        Joystick.SdlVirtualButton(a, DpadUp, true);
+        Joystick.SdlVirtualButton(a, DpadLeft, true);
+        var (x, y) = Joystick.Direction(1);
+        Check(Joystick.Read(1) == (Joystick.Up | Joystick.Left) && x == -1 && y == -1, ""d-pad up-left"");
+        Joystick.SdlVirtualButton(a, DpadUp, false);
+        Joystick.SdlVirtualButton(a, DpadLeft, false);
+        Joystick.SdlVirtualButton(a, DpadDown, true);
+        Joystick.SdlVirtualButton(a, DpadRight, true);
+        (x, y) = Joystick.Direction(1);
+        Check(x == 1 && y == 1, ""d-pad down-right"");
+        Joystick.SdlVirtualButton(a, DpadDown, false);
+        Joystick.SdlVirtualButton(a, DpadRight, false);
+
+        Joystick.SdlVirtualAxis(a, LeftX, 6000);
+        Joystick.SdlVirtualAxis(a, LeftY, -6000);
+        Check(Joystick.Read(1) == 0, ""a small stick move is inside the dead zone"");
+        Joystick.SdlVirtualAxis(a, LeftX, 30000);
+        Joystick.SdlVirtualAxis(a, LeftY, -30000);
+        (x, y) = Joystick.Direction(1);
+        Check(x == 1 && y == -1, ""the left stick past the dead zone: right and up"");
+        Joystick.SdlVirtualAxis(a, LeftX, -32768);
+        Joystick.SdlVirtualAxis(a, LeftY, 32767);
+        (x, y) = Joystick.Direction(1);
+        Check(x == -1 && y == 1, ""the left stick: left and down"");
+        Joystick.SdlVirtualAxis(a, LeftX, 0);
+        Joystick.SdlVirtualAxis(a, LeftY, 0);
+
+        int b = Joystick.SdlAttachVirtual();
+        Check(b != 0 && Joystick.Kind(0) == Joystick.KindGamepad && Joystick.Kind(1) == Joystick.KindGamepad, ""a second pad is on port 0"");
+        Joystick.SdlVirtualButton(b, South, true);
+        Check(Joystick.Read(0) == Joystick.Fire && Joystick.Read(1) == 0, ""the second pad's Fire is on port 0 only"");
+        Joystick.SdlVirtualButton(b, South, false);
+
+        Check(Joystick.Force(1, false) && Joystick.Kind(1) == Joystick.KindJoystick, ""port 1 forced to a joystick"");
+        Joystick.SdlVirtualButton(a, South, true);
+        Joystick.SdlVirtualButton(a, North, true);
+        Check(Joystick.Read(1) == Joystick.Fire, ""a forced joystick reads no CD32 buttons"");
+        Joystick.SdlVirtualButton(a, South, false);
+        Joystick.SdlVirtualButton(a, North, false);
+        Check(Joystick.Force(1, true) && Joystick.Kind(1) == Joystick.KindGamepad, ""port 1 forced to a pad"");
+
+        Joystick.SdlDetachVirtual(a);
+        Check(Joystick.Kind(1) == Joystick.KindGamepad && Joystick.Kind(0) == Joystick.KindMouse, ""the first pad unplugged: the second moves to port 1"");
+        Joystick.SdlVirtualButton(b, East, true);
+        Check(Joystick.Read(1) == Joystick.Fire2, ""and reads there"");
+        Joystick.SdlDetachVirtual(b);
+        Joystick.Close();
+        Check(!Joystick.IsOpen && Joystick.Read(1) == 0 && Joystick.Kind(1) == Joystick.KindNone, ""close"");
+
+        // The keyboard stand-in reads keys from the window.
+        Check(Video.Open(64, 32, 2), ""video opens"");
+        Check(Joystick.Open(), ""open again"");
+        Check(Joystick.Kind(1) == Joystick.KindNone && Joystick.Force(1, true) == true, ""nothing forced after Close"");
+        Joystick.Close();
+        Joystick.Open();
+        Joystick.SdlVirtualKey(0x4C, true);
+        Joystick.SdlVirtualKey(0x40, true);
+        Frames(2);
+        Check(Joystick.Read(1) == 0, ""without the stand-in keys are not a joystick"");
+        Joystick.KeyboardStandIn = true;
+        Check(Joystick.Kind(1) == Joystick.KindJoystick && Joystick.Read(1) == (Joystick.Up | Joystick.Fire), ""stand-in: Up and Space"");
+        Joystick.SdlVirtualKey(0x4C, false);
+        Joystick.SdlVirtualKey(0x40, false);
+        Joystick.SdlVirtualKey(0x4F, true);
+        Joystick.SdlVirtualKey(0x64, true);
+        Frames(2);
+        Check(Joystick.Read(1) == (Joystick.Left | Joystick.Fire2), ""stand-in: Left and Left Alt"");
+        int c = Joystick.SdlAttachVirtual();
+        Check(Joystick.Kind(1) == Joystick.KindGamepad && Joystick.Read(1) == 0, ""a pad takes over from the keys"");
+        Joystick.SdlDetachVirtual(c);
+        Check(Joystick.Read(1) == (Joystick.Left | Joystick.Fire2), ""keys again when it goes"");
+        Joystick.Close();
+
+        Check(Requester.Show(""E#"", ""Quit game?"", ""Yes|Maybe|No"") == 2, ""headless: the message box answers the last button"");
+        Check(Requester.Show(""E#"", ""100% done"", """") == 0 && Requester.Count(""A|B|C"") == 3, ""one OK button; Count"");
+        Video.Close();
+        Dos.PutStr(_fails == 0 ? ""joystick: all ok\n"" : ""joystick: failures\n"");
+    }
+}";
+
+    /// <summary>
+    /// Joystick on SDL gamepads, driven by SDL virtual pads (SDL_AttachVirtualJoystick) from the program itself in the esharp-sdl image: the button
+    /// and direction mapping, the stick dead zone, port 1 then port 0, hot-plug, Force, Close, the keyboard stand-in, and the headless message box.
+    /// </summary>
+    [Fact]
+    public void Joystick_reads_virtual_gamepads_on_both_ports_with_hot_plug_in_the_image()
+    {
+        if (!HasSdlImage()) return;
+        var (exit, output) = BuildAndRunInImage(JoystickProgram, null);
+        Assert.True(exit == 0, output);
+        Assert.DoesNotContain("FAIL", output);
+        Assert.Contains("joystick: all ok", output);
+        Assert.Equal(32, output.Split('\n').Count(l => l.StartsWith("ok ")));
+    }
 
     private static bool HasSdlImage()
     {

@@ -314,14 +314,16 @@ classes called `Window` or `List`); see `samples/names`.
 
 `src/ESharp.Platform` is parsed together with your code. The same public signatures exist on every target; the
 implementation is chosen with `#if AMIGA` / `#elif SDL` / `#else` (the dotnet host fake). Amiga-only classes (Gui, Asl, Iff,
-Fonts, Joystick, BOOPSI, MUI and the raw library bindings) do not exist on `sdl`: using them is error `ES0102`.
+Fonts, BOOPSI, MUI and the raw library bindings such as `LowLevel`) do not exist on `sdl`: using them is error `ES0102`.
+`Joystick` and the message box `Requester` exist on every target (below).
 
 | Area | Classes | Sample |
 |---|---|---|
 | Program | `Dos` (output, delays), `Args` (arguments and Workbench tool types), `Trace`, `Files` | `hello`, `mainargs`, `trace` |
 | Memory | `Mem`, `Arena`, `Pool<T>`, `Vec<T>`, `Heap`, `Dictionary`, `HashSet`, `StringMap` | `memory`, `collections` |
 | Graphics | `Video` (screens, blits, palettes, double buffer, AGA 24-bit palettes, RTG), `Font`, `Frame`/`FrameTimer` | `screen`, `aga`, `dbuffer`, `rtg`, `timing` |
-| Input and time | `Input` (mouse, keyboard), `Keys` (keymap), `Joystick` (lowlevel), `Clock` (timer) | `cards`, `keys`, `controls` |
+| Input and time | `Input` (mouse, keyboard), `Keys` (keymap), `Joystick` (lowlevel; SDL gamepads), `Clock` (timer) | `cards`, `keys`, `controls` |
+| Message box | `Requester.Show` (EasyRequest; SDL_ShowMessageBox) | `requester` |
 | Sound | `Sample`, `Sound` (audio.device) | `sound`, `assets` |
 | Utility | `Date`, `Strings` (case-insensitive text, utility.library), `Rng`, `Deck` | `dates`, `cards` |
 | Files and formats | `Iff` (iffparse), `Fonts` (diskfont), `Asl` (file requester) | `iff`, `fonts`, `asl` |
@@ -333,6 +335,39 @@ target into `Layout.g.cs` (`tools/BindGen/layouts.sh`). `tools/BindGen` can also
 headers you provide, and compare them with the hand-written ones (`check`, `gen ... --check`, see
 [ARCHITECTURE.md](ARCHITECTURE.md#adding-a-platform-binding)). Libraries are opened at version 39 or higher (keymap.library at
 37, lowlevel.library v40 optional, muimaster.library 19 optional).
+
+**Joystick on SDL.** The same `Joystick` calls and bit constants read SDL game pads: port 1 is the first pad connected, port 0
+the second, and a pad connected later is picked up by the next `Read` or `Kind` (when the port-1 pad goes, the port-0 one moves
+to port 1). `Fire` is the south face button (A on an Xbox pad), `Fire2` east (B), `Yellow` west (X), `Green` north (Y),
+`Forward`/`Reverse` the right/left shoulder buttons and `Play` Start; the directions come from the d-pad and from the left stick
+past a dead zone of a quarter of its travel. `Kind` is `KindGamepad` for a port with a pad; without one, port 0 is `KindMouse`
+(the desktop pointer, as the Amiga mouse port) and port 1 `KindNone`. `Force` works as on the Amiga (a port forced to a
+joystick reads only the directions, `Fire` and `Fire2`) and `Close` undoes it. With `Joystick.KeyboardStandIn = true` and no pad
+on port 1, the cursor keys, Space (`Fire`) and Left Alt (`Fire2`) read as a joystick there (`Kind` 1 is then `KindJoystick`);
+the keys come through the `Video` window, so call `Input.Poll` each frame as usual. Other targets keep the setting and ignore
+it. Tests can plug in SDL virtual pads from the program itself (`Joystick.SdlAttachVirtual`, `SdlVirtualButton`,
+`SdlVirtualAxis`, `SdlDetachVirtual`, `SdlVirtualKey`; SDL only, like `HostSet` on the host).
+
+```csharp
+Joystick.Open();
+Joystick.KeyboardStandIn = true;          // SDL: play with the keyboard when no pad is plugged in
+var (dx, dy) = Joystick.Direction(1);
+bool fire = (Joystick.Read(1) & Joystick.Fire) != 0;
+```
+
+**Message box.** `Requester.Show(title, text, buttons)` shows `text` (several lines with `\n`) with the buttons listed in
+`buttons` separated by `|` (`"Yes|No"`, up to 8; an empty string is one `OK`), waits, and returns the index of the chosen
+button from the left (0 first). By the Amiga's convention the last button is the negative one ("No", "Cancel"): it is also the
+answer when no box can be shown or it is closed without a button. On the Amiga targets it is intuition.library
+`EasyRequestArgs`, on the screen of the `Video` window when one is open, else on the default public screen (Workbench); `%` in
+the text is shown as typed. Keep lines short on a 320-pixel screen (about 36 characters of topaz 8; a wider requester runs off
+the screen). On SDL it is `SDL_ShowMessageBox` over the game's window; without a desktop (headless, offscreen video) SDL has no
+message box, so the answer is the last button and SDL's reason goes to standard error. On the host, `Requester.HostSet(n)`
+presets the answer (the last button until then). `Requester.Count(buttons)` gives the number of buttons.
+
+```csharp
+if (Requester.Show("Cards", "Quit the game?", "Quit|Play on") == 0) return;
+```
 
 Hardware facts: 2 MB of chip RAM is the baseline; `[ChipRam]` is a no-op on PowerPC (chip memory is allocated at run time
 there); both PowerPC targets are big-endian, so asset formats need no change.

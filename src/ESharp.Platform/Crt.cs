@@ -47,5 +47,14 @@ internal static unsafe class Crt
     [Native] public static extern bool es_sdl_sound_busy(int voice);
     [Native] public static extern void es_sdl_sound_stop(int voice);
     [Native] public static extern void es_sdl_sound_close();
+    [Native] public static extern bool es_sdl_joy_open();
+    [Native] public static extern void es_sdl_joy_close();
+    [Native] public static extern uint es_sdl_joy_read(int port, bool keyboard);
+    [Native] public static extern int es_sdl_joy_kind(int port, bool keyboard);
+    [Native] public static extern int es_sdl_joy_virtual_attach();
+    [Native] public static extern void es_sdl_joy_virtual_set(int id, int kind, int index, int value);
+    [Native] public static extern void es_sdl_joy_virtual_detach(int id);
+    [Native] public static extern void es_sdl_joy_virtual_key(int raw, bool down);
+    [Native] public static extern int es_sdl_message_box(string title, string text, string buttons);
 }
 #endif

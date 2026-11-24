@@ -11,6 +11,9 @@ public static unsafe class Intuition
     /// <summary>Locks a public screen by name (null: the default one, normally Workbench) so it cannot close; release it with <see cref="UnlockPubScreen"/>.</summary>
     [AmigaLib("intuition", -510), Since(36)] public static extern void* LockPubScreen(void* name);
     [AmigaLib("intuition", -516), Since(36)] public static extern void UnlockPubScreen(void* name, void* screen);
+    /// <summary>intuition.library EasyRequestArgs() (v36): a requester built from a struct EasyStruct, waited for until a button is chosen.
+    /// The result is 1, 2, ... for the buttons from the left and 0 for the rightmost one. LVO from the AROS fd (intuition_lib.fd).</summary>
+    [AmigaLib("intuition", -588), Since(36)] public static extern int EasyRequestArgs(void* window, void* easyStruct, void* idcmpPtr, void* argList);
     /// <summary>intuition.library AllocScreenBuffer() (v39): a struct ScreenBuffer for double buffering a screen (SB_SCREEN_BITMAP: the screen's own bitmap; SB_COPY_BITMAP: a new one with a copy of it), or null.</summary>
     [AmigaLib("intuition", -768), Since(39)] public static extern void* AllocScreenBuffer(void* screen, void* bitMap, uint flags);
     /// <summary>intuition.library FreeScreenBuffer() (v39). The buffer must not be on display and its messages must have arrived.</summary>
