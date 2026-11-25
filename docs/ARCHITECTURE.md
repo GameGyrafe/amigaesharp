@@ -74,7 +74,7 @@ The same `.cs` files are parsed with different symbols:
 | `sdl` | `SDL` (not `AMIGA`) | `#elif SDL` branches: SDL 3 through the C runtime header |
 | dotnet (tests, IDE) | `HOST` | the `#else` branches and `ESharp.Target.Host`: managed fakes |
 
-Platform code is written as `#if AMIGA` / `#elif SDL` / `#else`. Amiga-only classes (Gui, Asl, Iff, Fonts, BOOPSI, MUI and the raw
+Platform code is written as `#if AMIGA` / `#elif SDL` / `#else`. Amiga-only classes (Gui, Asl, Fonts, BOOPSI, MUI and the raw
 library bindings such as LowLevel) are left out of the `sdl` build; using them is error ES0102. Nothing in the front end or in the platform
 contracts may assume a single target: CPU and OS are separate axes in `Targets.cs`.
 

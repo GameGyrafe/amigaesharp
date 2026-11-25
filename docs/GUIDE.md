@@ -372,9 +372,9 @@ classes called `Window` or `List`); see `samples/names`.
 ## Platform APIs
 
 `src/ESharp.Platform` is parsed together with your code. The same public signatures exist on every target; the
-implementation is chosen with `#if AMIGA` / `#elif SDL` / `#else` (the dotnet host fake). Amiga-only classes (Gui, Asl, Iff,
+implementation is chosen with `#if AMIGA` / `#elif SDL` / `#else` (the dotnet host fake). Amiga-only classes (Gui, Asl,
 Fonts, BOOPSI, MUI and the raw library bindings such as `LowLevel`) do not exist on `sdl`: using them is error `ES0102`.
-`Joystick` and the message box `Requester` exist on every target (below).
+`Joystick`, the message box `Requester` and `Iff` exist on every target (below).
 
 | Area | Classes | Sample |
 |---|---|---|
@@ -385,9 +385,25 @@ Fonts, BOOPSI, MUI and the raw library bindings such as `LowLevel`) do not exist
 | Message box | `Requester.Show` (EasyRequest; SDL_ShowMessageBox) | `requester` |
 | Sound | `Sample`, `Sound` (audio.device) | `sound`, `assets` |
 | Utility | `Date`, `Strings` (case-insensitive text, utility.library), `Rng`, `Deck` | `dates`, `cards` |
-| Files and formats | `Iff` (iffparse), `Fonts` (diskfont), `Asl` (file requester) | `iff`, `fonts`, `asl` |
+| Files and formats | `Iff` (E# code; iffparse.library when it is there on the Amiga), `Fonts` (diskfont), `Asl` (file requester) | `iff`, `fonts`, `asl` |
 | GUI | `GtWindow` and gadgets (GadTools), `BoopsiObject` and typed attributes, hooks, `Mui*` wrappers | `gui`, `guiclass`, `boopsi`, `mui` |
 | System | `Exec`, `Graphics`, `Intuition`, `CyberGfx` and other `[AmigaLib]` bindings, `Interrupts`, `TagList` | `interrupts`, `hwinfo` |
+
+`Iff` reads and writes IFF files (the format of ILBM pictures and 8SVX sounds) with the same calls on every target:
+`Iff.Create(path, Iff.Id("ESHP"))` (the path is copied, so one built at run time, `$"save{slot}.iff"`, may be reused at once), `BeginChunk`/`Write`/`EndChunk` (or `WriteChunk`), `BeginGroup(Iff.IdList, type)`/`EndGroup()`
+for nested FORM, LIST, CAT and PROP groups, `Finish()`; `Iff.OpenRead(path)`, `Next()`, `Read(buffer, max)`, and `Damaged`
+to tell a cut or corrupt file from the end of the file. The code is E# over `Files` (the file is built or read in memory;
+big endian sizes, a pad byte after an odd size). On the Amiga targets iffparse.library does the work when it can be
+opened and the E# code takes over when it cannot, so no program needs to check; both write the same bytes (checked byte for
+byte, `samples/iff`). `Iff.ForceBuiltIn = true` chooses the E# code even where the library is present. Reading steps into
+groups: `Next()` reports the group (`ChunkId` is FORM, LIST, CAT or PROP, `ChunkType` its type) and then the chunks inside it;
+do not `Read` a group. `ChunkDepth` says how deeply each reported chunk or group is nested (0: directly in the file's FORM), so the end of
+a group shows as a step whose depth is lower than the one before (`FORM{FORM X{A} B}` reads A at depth 1 and B at 0,
+`FORM{FORM X{A B}}` reads both at 1). A group may hold at most `Iff.MaxDepth` (16) groups inside it. An `IffFile` passed by value to a
+helper works on the same file (its state is on the heap); `Next()` sets `ChunkId`, `ChunkSize`, `ChunkType` and `ChunkDepth` in the copy it
+is called on, so pass the file by `ref` to a helper that steps through it, and use none of the copies after `Finish()` or `Close()`. A
+chunk that does not fit in the file stops the reader with `Damaged` on both implementations, and the writer's misuse results are the
+same on both (a group of type 0 is refused by iffparse and accepted by the E# writer; use a real type). `Iff.Open()` only says whether iffparse.library is in use (always false on sdl and the host). The file's own top level is always a FORM (`Create` writes one, `OpenRead` refuses a file that starts with LIST or CAT). The E# code holds the whole file in memory: writing grows the buffer by doubling, so while it grows the peak is up to about three times the file size (old buffer, new buffer, and the caller's own data), and reading holds the file once.
 
 The Amiga library bindings are hand-written `static extern` methods tagged `[AmigaLib]`, with struct offsets measured per
 target into `Layout.g.cs` (`tools/BindGen/layouts.sh`). `tools/BindGen` can also generate bindings from `.fd` files and

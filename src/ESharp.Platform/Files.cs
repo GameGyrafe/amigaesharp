@@ -80,8 +80,10 @@ public static unsafe class Files
 #elif SDL
         fixed (byte* p = data) return Crt.es_std_file_write(path, p, data.Length);
 #else
-        File.WriteAllBytes(path, data.ToArray());
-        return true;
+        try { File.WriteAllBytes(path, data.ToArray()); return true; }
+        catch (IOException) { return false; }
+        catch (UnauthorizedAccessException) { return false; }
+        catch (ArgumentException) { return false; }          // "" or a character the host file system refuses: false, as on sdl and the Amiga
 #endif
     }
 
