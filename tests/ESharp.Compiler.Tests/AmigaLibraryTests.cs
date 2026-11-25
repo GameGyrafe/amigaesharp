@@ -166,6 +166,15 @@ public static unsafe class Counter
         Assert.Contains("es_lib_entry_Move(uintptr_t p __asm(\"a0\"), uintptr_t dx __asm(\"d0\"), struct es_lib_head *es_base __asm(\"a6\"))", c);
         Assert.DoesNotContain("int main(", c);
         Assert.DoesNotContain("<stdio.h>", c);
+        // Open counts the opener before anything that can run an expunge (AllocMem's low-memory handlers, a static
+        // constructor breaking Forbid), and takes the count back on each failure.
+        var open = c[c.IndexOf("static struct Library *es_lib_open(", StringComparison.Ordinal)..];
+        open = open[..open.IndexOf("\n}", StringComparison.Ordinal)];
+        var inc = open.IndexOf("base->lib.lib_OpenCnt++;", StringComparison.Ordinal);
+        Assert.True(inc >= 0 && inc < open.IndexOf("AllocMem(", StringComparison.Ordinal), open);
+        Assert.Contains("if (mem == NULL) { base->lib.lib_OpenCnt--; return NULL; }", open);
+        Assert.Contains("{ FreeMem(mem, neg + pos); base->lib.lib_OpenCnt--; return NULL; }", open);
+        Assert.Equal(2, open.Split("lib_OpenCnt++").Length);   // counted once
 
         const string main = @"
 #include <stdio.h>
