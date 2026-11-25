@@ -103,4 +103,29 @@ if (a is Impl && !(none is Impl) && b is Impl) ok++;
 Dos.PutStr(ok == 5 ? ""base ok\n"" : ""wrong "" + ok + ""\n"");";
         RunsAs(members, body, "base ok\n");
     }
+
+    [Fact]
+    public void Coalesce_and_foreach_with_a_derived_interface()
+    {
+        const string members = @"
+interface IA { int A(); }
+interface IB : IA { int B(); }
+class Impl : IB { public int A() { return 1; } public int B() { return 2; } }";
+        const string body = @"
+IB nb = null;
+IA ia = new Impl();
+IA co = nb ?? ia;
+IB full = new Impl();
+IA co2 = full ?? ia;
+IB[] arr = new IB[2];
+arr[0] = new Impl();
+arr[1] = new Impl();
+int sum = 0;
+foreach (IA x in arr) sum += x.A();
+int ok = 0;
+if (co.A() == 1 && co2.A() == 1) ok++;
+if (sum == 2) ok++;
+Dos.PutStr(ok == 2 ? ""derived ok\n"" : ""wrong "" + ok + ""\n"");";
+        RunsAs(members, body, "derived ok\n");
+    }
 }

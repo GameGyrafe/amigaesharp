@@ -2787,6 +2787,17 @@ ADD2SET(es_aros_wbstart, PROGRAM_ENTRIES, -50)
             elem = $"{coll}.ptr[{i}]";
         }
 
+        var elemType = collType is IArrayTypeSymbol at ? at.ElementType : ((INamedTypeSymbol)collType!).TypeArguments[0];
+        if (local.RefKind == RefKind.None && IsInterfaceType(local.Type) && IsInterfaceType(elemType) && !SymbolEqualityComparer.Default.Equals(local.Type, elemType))
+        {
+            if (!((INamedTypeSymbol)elemType).AllInterfaces.Contains(local.Type, SymbolEqualityComparer.Default))
+            {
+                Unsupported(fe, "foreach converting an interface element to an interface it does not derive from");
+                return;
+            }
+            elem = IfaceUp(elem, (INamedTypeSymbol)elemType, (INamedTypeSymbol)local.Type);
+        }
+
         Line($"for (int32_t {i} = 0; {i} < {len}; {i}++)");
         Line("{");
         _indent++;
@@ -3357,6 +3368,13 @@ ADD2SET(es_aros_wbstart, PROGRAM_ENTRIES, -50)
         {
             test = $"{tmp}{(IsInterfaceType(type) ? ".obj" : ".fn")} != NULL";
             left = Expr(b.Left, top: true);
+            // The left operand may be a derived interface: it goes through the table of the result's interface.
+            if (IsInterfaceType(type) && !SymbolEqualityComparer.Default.Equals(type, leftType))
+            {
+                if (!((INamedTypeSymbol)leftType).AllInterfaces.Contains(type, SymbolEqualityComparer.Default))
+                    return Unsupported(b, "?? with interface operands that do not derive from the result's interface");
+                left = IfaceUp(left, (INamedTypeSymbol)leftType, (INamedTypeSymbol)type);
+            }
             right = Expr(b.Right, top: true);
         }
         else if (IsHeapClass(type) && IsHeapClass(leftType))
