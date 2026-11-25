@@ -31,7 +31,7 @@ run, unit tested and debugged on the PC.
 | `src/ESharp.Platform` | The platform layer: `Video`, `Input`, `Sound`, `Dos`, `Mem`, `Heap`, collections, `Gui`, BOOPSI, MUI, IFF, fonts, and the `[AmigaLib]` bindings. Parsed together with user code, with the symbols below choosing the implementation. `Layout.g.cs` holds struct offsets measured per target. |
 | `src/ESharp.Target.Host` | Managed fakes for tests (`HostConsole`, `HostMem`, a fake chip RAM budget). Built with `HOST`. |
 | `src/ESharp.Assets` | The PNG and IFF ILBM readers, PNG writer, colour reduction and dithering, planar packing, WAV and 8SVX reading, the `assets.json` to `Assets.g.cs` generator with an incremental `Sync` and the Workbench icon writers. |
-| `src/ESharp.Cli` | The `esharp` command: `new`, `build`, `run`, `test`, `assets`, `addr`, `os4vm`, `doctor` (`Doctor.cs`), `precompile` and `verify-package` (`Precompile.cs`). Where a local compiler comes from (`--toolchain`, `ESHARP_TOOLCHAIN_*`, PATH; version check) is `Toolchain.cs`; Docker builds pass the same command line. The FS-UAE, SDL, host and AmigaOS 4.1 VM harnesses live here, plus the project template (`ProjectTemplate.cs`). Packs the dotnet tool **AmigaESharp.Tool**. |
+| `src/ESharp.Cli` | The `esharp` command: `new`, `build` (also of an Amiga shared library, `AmigaLibraryStep.cs`), `run`, `test`, `assets`, `addr`, `os4vm`, `doctor` (`Doctor.cs`), `precompile` and `verify-package` (`Precompile.cs`). Where a local compiler comes from (`--toolchain`, `ESHARP_TOOLCHAIN_*`, PATH; version check) is `Toolchain.cs`; Docker builds pass the same command line. The FS-UAE, SDL, host and AmigaOS 4.1 VM harnesses live here, plus the project template (`ProjectTemplate.cs`). Packs the dotnet tool **AmigaESharp.Tool**. |
 | `src/ESharp.Sdk` | Packaging only: **AmigaESharp.Sdk** (Runtime, Platform and Target.Host in `lib/net10.0`, the analyzer in `analyzers/dotnet/cs`, and `buildTransitive/AmigaESharp.Sdk.targets`, the step that makes a class library with `EsLibrary=true` an E# library). |
 | `tests/ESharp.Compiler.Tests` | The unit tests (xUnit). |
 | `samples/` | Programs that double as feature demos and tests (`ok NAME` / `FAIL NAME` lines). |
@@ -239,6 +239,53 @@ C with the program's C under the host gcc and runs it, and checks a mismatched C
 ES0124; the binary folder checks); `PrecompiledRoundTripTests.cs` packs Tween and Checksum with binaries through the Sdk step (sdl with
 the host gcc, m68k when its image is present), links them into TweenDemo, and runs verify-package (pass, and fail on a tampered binary)
 and two precompiles in different folders (same bytes).
+
+## Amiga shared libraries
+
+A project with `EsOutputType` `AmigaLibrary` (issue #154; m68k AmigaOS 3.x so far) is compiled as a program without an entry point
+(`CompileOptions.AmigaLibrary`). The pieces:
+
+- **Rules, registers, `.fd`, binding:** `src/ESharp.Compiler/AmigaLibrary.cs`. `AmigaLibraries.Plan` finds the `[LibraryFunction]`
+  methods of the program's trees (by file path, then position: that is the vector order), checks them (ES0130-ES0135, descriptors in
+  `Descriptors.cs`) and gives each its registers (`AssignRegisters`: numbers d0-d7, pointers a0-a3, overflow into the other kind's
+  free registers, never a4/a5). `EsCompiler` runs it before the subset's later steps for the diagnostics, and again on the final
+  compilation (generics expanded, C keywords renamed) for the emitter. `Fd` writes the `.fd` file; `Binding` writes the C# binding (a
+  struct per opener with `#if AMIGA` vector calls through `[LibraryCall]` externs and, elsewhere, direct calls of the library's methods
+  between `SharedLibrary.Enter` and `Leave`; the boundary structs copied, fields only, for the Amiga build of a program that does not
+  compile the library). `CompileResult.AmigaLibrary` carries them.
+- **The library's C:** `src/ESharp.Compiler/CEmitter.AmigaLibrary.cs` (`LibMode`). The E# data of one opener is one block: the
+  runtime's variables (`RuntimeState` and the `[LibraryBase]` bases go into `struct es_rt`, written where the includes end, at
+  `LibRtMarker`) and the program's static fields, properties and events (`EmitStaticField`, `EmitStaticProperty` and the events call
+  `LibStatic` instead of defining a global; `struct es_user` follows the types, at `ES_RT_SIZE` in the block). Each name is a macro for
+  its member through `es_d`, so every other part of the emitter is unchanged. On m68k `es_d` is a global register variable in a4 (the
+  rest of the file never uses a4); each vector's entry (`es_lib_entry_<F>`, register parameters with `__asm("d0")`, the base in a6) calls
+  `es_lib_call_<F>`, which saves the caller's a4, points it at the opener's block and restores it. A constant initial value is a
+  `static` template copied in (`_libInit`); the rest runs in `es_lib_data_init` (`EmitDeferredStatics` and the static constructors),
+  and `es_lib_data_fini` runs the `[AtExit]` methods and frees the opener's pool. `es_new` and `free` become `es_lib_alloc` and
+  `es_lib_free` (`FreeName`): an exec pool per opener on m68k, a list of calloc blocks elsewhere (the host tests); `es_fatal` ends in
+  `es_lib_fatal` (an alert). Under `#if defined(__mc68000__)` follow the library proper: `SysBase` and the shared ROM library bases
+  (`SharedBases`: dos, graphics, intuition, from the headers the code includes), the base layout `struct es_lib_head` (exec's
+  `struct Library`, the master base, the segment list, an opener's allocation size), init (from InitResident's RTF_AUTOINIT table),
+  open (copies the jump table and head into a new block with the data after it, `CacheClearU`, `es_lib_data_init`), close, expunge, the
+  reserved vector, the vector table and the init table. `LibraryRomTag` puts the start of the file in top-level asm (gcc writes it
+  before the functions, and the file is the link's first object): `moveq #-1,d0; rts` and the RomTag right after it, because ramlib on
+  Kickstart 3.1 did not find one further into the hunk. `CheckLibraryFeatures` reports what a library cannot use yet (ES0134).
+- **The program side:** a `[LibraryCall(offset, registers)]` extern (`EmitLibraryCall`) is a C function that loads the arguments into
+  their registers and a6 from its first parameter, and `jsr offset(a6)` with d0, d1, a0 and a1 as clobbered outputs (ES0136 for a bad
+  declaration, ES0099 off m68k). `src/ESharp.Platform/SharedLibrary.cs` opens and closes (exec on the Amiga; on the host and sdl a
+  handle), counts (`es_lib_open_count`: FindName in exec's list under Forbid) and, on the host, keeps each opener's statics apart by
+  reflection (start values deep-copied per opener, swapped in and out by `Enter`/`Leave`).
+- **The CLI:** `src/ESharp.Cli/AmigaLibraryStep.cs` reads the csproj properties and finds the AmigaLibrary folders in a program's
+  `esharp.include`. `Program.Build` builds a library project (`-nostartfiles -nostdlib ... -lgcc`, output `<name>.library`, plus the
+  `.fd`, the binding, the map and the `-g` object), and for a program that uses one: drops the library's files from an Amiga build,
+  writes and adds the binding, and after the link builds the library with the same toolchain options and copies it next to the program.
+  `esharp test` adds the binding to the host run. `FsUae.Run` copies every `.library` beside the program into `DH0:Libs`.
+
+Tests: `AmigaLibraryTests.cs` (registers, the rules, the `.fd` read back by BindGen's parser, the binding compiled into a program for
+m68k and sdl, `[LibraryCall]` checks, and the library's C built with the host gcc, with AddressSanitizer and LeakSanitizer when they
+are there: two openers called through `es_lib_call_<F>`, each with its own data, then torn down with nothing left), the host side of
+`SharedLibrary` (`SharedLibraryHostTests`) and `AmigaLibraryCliTests` (`esharp build` of samples/amigalib and samples/amigalibdemo for
+m68k, sdl and os4, `esharp test` of the demo on the host, and with the pinned m68k image the RomTag at the start of the built file).
 
 ## Packaging
 

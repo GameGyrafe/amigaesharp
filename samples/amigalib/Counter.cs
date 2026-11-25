@@ -1,4 +1,5 @@
 using ESharp;
+using ESharp.Platform;
 
 namespace AmigaLibSample;
 
@@ -46,6 +47,17 @@ public static class Counter
     public static int Sum9(int a, int b, int c, int d, int e, int f, int g, int h, int i)
     {
         return a + b * 2 + c * 3 + d * 4 + e * 5 + f * 6 + g * 7 + h * 8 + i * 9;
+    }
+
+    /// <summary>
+    /// Waits <paramref name="ticks"/> 50ths of a second through dos.library, which the library opens once for all its openers (added
+    /// last, so the vectors before it stay where they were).
+    /// </summary>
+    [LibraryFunction]
+    public static int Pause(int ticks)
+    {
+        Dos.Delay(ticks);
+        return ticks;
     }
 }
 

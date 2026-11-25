@@ -17,7 +17,8 @@ Usage:
                                     Create a new hello-world project. Its csproj references the AmigaESharp.Sdk package
                                     at this tool's version (--package), or, with --source or when this esharp runs from an
                                     E# checkout, that checkout's projects (for contributors; ESHARP_ROOT names one)
-  esharp build [path] [options]     Check the subset, emit C, and run the target C compiler
+  esharp build [path] [options]     Check the subset, emit C, and run the target C compiler (a project whose csproj sets
+                                    EsOutputType AmigaLibrary: an Amiga shared library, its .fd file and C# binding; m68k)
   esharp run [path] [options]       Build for m68k and run it in FS-UAE (or --target sdl: run it through SDL;
                                     --target os4: run it in the AmigaOS 4.1 QEMU VM named by ESHARP_OS4_VM)
   esharp assets [dir|assets.json] [--force]
@@ -884,6 +885,8 @@ Targets:
         if (MuiDrawer(muiOption, workbenchOption, out var muiDrawer, out var workbench) is { } muiError) return Fail(muiError);
         var rc = Build(buildArgs.ToArray(), out var exe);
         if (rc != 0 || exe == null) return rc;
+        if (exe.EndsWith(".library", StringComparison.OrdinalIgnoreCase))
+            return Fail($"{exe} is an Amiga shared library, not a program: run a program that names its folder in esharp.include (samples/amigalibdemo uses samples/amigalib)");
         if (Os4Vm.ProgramArgsError(programArgs) is { } argsError) return Fail(argsError);
         return FsUae.Run(exe, headless, TimeSpan.FromSeconds(timeout), kickstart, model, fsuae, screenshot, input, serial, programArgs, muiDrawer, workbench);
     }

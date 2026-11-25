@@ -10,6 +10,68 @@ The minimum system is now an **Amiga 1200: 68020, AGA, 2 MB chip RAM, Kickstart 
 - **Kept on purpose:** `HasAga()` and `HasRtg()` with their fallbacks. A classic A1200 always has AGA, but PowerPC, RTG-only and AROS targets may not, so the checks stay as the portable way to ask. **Not yet done:** using 68020 instructions deliberately and AROS (a new target, untested).
 - Verified after the change: all 17 samples built with `-m68020` and run on Kickstart 3.1 (A1200) in FS-UAE: 300 `ok` lines, no `FAIL` (the script shows only the last 25 lines of each sample, so long ones are truncated), 136 unit tests pass. Not verified: PowerPC, real hardware, a 68000/Kickstart 2.04 run (no longer supported).
 
+## Amiga shared libraries from E# (issue #154, part 3)
+
+A project with `EsOutputType` `AmigaLibrary` builds an AmigaOS shared library: `esharp build` writes `obj/m68k/<name>.library`, a
+`.fd` file and a C# binding, and an E# program that names the library's folder in `esharp.include` opens it with OpenLibrary and calls
+it through the binding. Each opener has its own copy of the library's E# data (the maintainer's decision). How to use it:
+docs/GUIDE.md, "Amiga shared libraries (.library)"; how it is built: docs/ARCHITECTURE.md, "Amiga shared libraries". m68k AmigaOS 3.x
+only; AROS and AmigaOS 4 later.
+
+- **Exported functions:** public static methods marked `[LibraryFunction]` (new attribute), plain values only (integers up to 32 bits,
+  `bool`, `string`, pointers to numbers, void, pointers and structs of fields); anything else is ES0130-ES0133 or ES0135. Vectors in
+  declaration order from -30; numbers in d0-d7, pointers in a0-a3, overflow into the other kind's free registers (12 arguments at most;
+  a4 and a5 are not used). The `.fd` file has `##base _<Name>Base` and `##bias 30`; BindGen's fd reader reads it back in a unit test.
+- **Per-opener data (the choice):** all E# variables of the library (static fields, properties and events of every class, the
+  platform's too, and the runtime's state) are members of one data block per opener, reached through register a4 (a gcc global
+  register variable; the rest of the file never uses a4). The block lies right after the opener's copy of the library base, which
+  OpenLibrary returns: Open copies the jump table and the head, runs the static initializers there and gives the opener an exec memory
+  pool; each vector's entry sets a4 from the base in a6 and restores the caller's a4 on the way out. Not chosen: gcc's `-fbaserel`
+  small-data model with a copy of the data hunk per opener (it relies on the linker's data relocations and cannot be run in the host
+  tests). Close runs the `[AtExit]` methods, deletes the pool and frees the copy; Expunge frees the base when the open count is 0, else
+  at the last Close. SysBase and dos, graphics and intuition (when the code calls them) are opened at init and shared.
+- **No C startup, our own RomTag:** the library is linked with `-nostartfiles -nostdlib` and libgcc only (GPL 3 with the GCC Runtime
+  Library Exception); `memcpy`, `memset`, `memmove`, `memcmp` are our own. Found on the way: Kickstart 3.1's ramlib did not load a
+  library whose RomTag was 470 bytes into the code hunk (OpenLibrary returned NULL by name and by path, while LoadSeg and InitResident
+  by hand worked), and loads it with the RomTag right after the `moveq #-1,d0; rts` at the start of the file, so the RomTag is written
+  there in top-level asm.
+- **Program side:** `[LibraryCall(offset, "registers")]` (new attribute) on a static extern whose first parameter is the base: the
+  emitter writes the register call (`jsr offset(a6)`); ES0136 for a bad declaration, ES0099 off m68k. `SharedLibrary` (platform) opens,
+  closes, counts (`FindName` in exec's list under Forbid), flushes (an allocation exec cannot satisfy, so it expunges unused
+  libraries) and asks an open library to go at its last Close (`ExpungeWhenClosed`: RemLibrary). On the host the library's code is compiled into the program and each opener gets a deep copy of the start values of the
+  library's statics, swapped in and out around each call. On sdl the library's code is compiled in too, but its openers share one copy
+  of the data (not done; the demo skips those checks there).
+- **ES0134 (not in a library yet):** `[EntryPoint]`, `Args`, `[ChipRam]`, `[Interrupt]`, `[HookEntry]` (so BOOPSI hooks and MUI
+  dispatchers), amiga.lib functions. A fatal runtime error in library code is a recoverable alert (0x000100E5) and the calling task
+  waits.
+- **Verified (Linux x86-64, 2026-11-25):** `dotnet test`: 816 passed, 2 skipped (the SDK-backed BindGen test and the OS4 VM test),
+  among them `AmigaLibraryTests` (register assignment, the rules, the `.fd` file, the binding compiled into a program for m68k and sdl,
+  `[LibraryCall]` checks, and the library's C built with the host gcc under AddressSanitizer and LeakSanitizer: two openers with their
+  own counters, arrays, objects and auto-property, a struct filled through a pointer, string arguments and results, a new opener in
+  the same memory starting fresh, nothing left after the teardown), `SharedLibraryHostTests` and `AmigaLibraryCliTests` (build of both
+  samples for m68k, sdl and os4, `esharp test` of the demo on the host, and the built m68k file: hunk header, `moveq #-1,d0; rts`, the
+  RomTag's match word, the `$VER` string).
+  `esharp test samples/amigalibdemo --target m68k --docker <pinned m68k image> --model A1200 --kickstart <rom>` with Kickstart 3.1
+  (40.069): host 32 ok, 0 FAIL, 4 skipped (the memory and second-process checks are Amiga-only); Amiga 36 ok, 0 FAIL, return code 0,
+  "Host and Amiga agree on every check". The run opens `amigalib.library` (built by the same command, copied to `DH0:Libs` in FS-UAE)
+  twice and checks: separate bases, open count +2, a newer version refused, separate counters, call counts, history objects and
+  statistics, reset of one opener only, bool results, nine arguments (the ninth in a0), Adler-32 of caller memory, string argument and
+  result, a struct filled through a pointer, a dos.library call inside the library, a third opener starting from the initial data, the
+  open count dropping on each Close, expunge on a memory flush (not in exec's list afterwards) with the free memory exactly as before
+  the opens (after one warm-up cycle), a memory flush leaving an open library alone, an expunge asked for while open
+  (`ExpungeWhenClosed`, exec RemLibrary: LIBF_DELEXP) that happens at the last Close, with the free memory again exactly as before (so
+  the segment list our Close returns is unloaded), a second process (the demo started again with `CHILD` through `SystemTagList`, asynchronous)
+  making 20000 calls with its own opener while the first made 1300 with its own (both counts right), open count 0 after both, and a
+  fresh load after the expunge. The same with Kickstart 3.0 (39.106): Amiga 36 ok, 0 FAIL (the first process made 1100 calls).
+  `--target sdl --docker esharp-sdl`: 21 ok, 0 FAIL, 15 skipped (the 11 checks that need per-opener data and the 4 Amiga-only ones), "Host and SDL agree".
+  Found on the way: a memory flush (FlushUnused) while the library is open does not reach its Expunge on Kickstart 3.1, so the delayed
+  expunge is asked for with RemLibrary.
+  Text output only, no screenshots.
+- **Not verified:** AROS, AmigaOS 4 and MorphOS libraries (not built: `esharp build` stops for them), per-opener data on sdl (not done),
+  callers that are not E# programs (C or assembler with the `.fd` file: not tried; no C header or proto file is written), real hardware,
+  `esharp addr` on library code, a library with `[LibraryBase]` classes (bases per opener) or with graphics or intuition calls in the
+  emulator, very large per-opener data, and the hardware test pack (the demo is not in it).
+
 ## IFF in E#: `Iff` on every target (part of issue #155)
 
 Step 2 of #155. `Iff`/`IffFile` (`src/ESharp.Platform/Iff.cs`) keep their public calls and now exist on sdl and the dotnet host
@@ -142,7 +204,7 @@ it is built: docs/ARCHITECTURE.md, "Precompiled binaries".
   aros-i386 runs were not made), a local toolchain for m68k and the other Amiga targets in the pack (sdl with the host gcc only; Docker
   builds always run in `/work`), Windows and macOS (the pack step and the round trip test run on Linux only), packages with
   `[Interrupt]` or `[HookEntry]` methods or MUI custom classes as binaries, `esharp addr` in binary code (not mapped), real hardware.
-  `.library` (part 3 of #154) is not done.
+  `.library` (part 3 of #154): see "Amiga shared libraries from E#" (m68k).
 
 ## SDL joystick and a portable message box (part of issue #155)
 
@@ -1925,7 +1987,7 @@ Open work as of 2026-11-14 (the GitHub issues are the live list; the v1 tracker 
 - **Windows (#11):** CI now runs a `windows` job (windows-latest, PR head): `dotnet test` (439 passed, 2 skipped, 0 failed; the runner has a MinGW gcc, so the generated-C tests run there and only the Docker/VM/SDK-dependent tests skip), emit-only builds of `samples/hello` and `samples/cards`, `esharp test samples/linq`, a clean `git status` afterwards, and a package round trip against the PR's own packages (`dotnet pack`, install the tool from the folder into a tool path, a nuget.config with the local feed, version and PackageReference checked, NU1603 fails the step, `esharp new`, `dotnet run`, `esharp test`, `esharp build --emit-only`). A `.gitattributes` keeps the working tree LF (the runner has `core.autocrlf=true`), and the native test output is read CRLF-tolerant. Still needs a person on a real Windows machine: Docker Desktop with `--docker` builds, FS-UAE for Windows, VS Code, and Windows with a different (or no) C compiler. `tools/aros-hosted` is Linux-only. macOS was checked, see "VS Code support".
 - **Bindings (#19, #40):** GadTools wrappers (v1), the BOOPSI core with hooks (#40 part 1, see "BOOPSI core and hooks") and the MUI wrappers on it (#40 part 2, see "MUI wrappers") are done. MUI custom classes (#93, see "MUI custom classes") are done too. Open: ReAction (last, if at all).
 - **Display design (not implemented):** [design/DISPLAY.md](design/DISPLAY.md) proposes logical coordinates with an integer scale, mode choice that follows the Workbench's monitor family (MODE option, asl screen-mode requester), 256 colours with a shared palette, a gradient pen (copper on AGA), window mode on the Workbench and multi-scale art. Nothing in it is built or verified yet; it waits for the maintainer's approval.
-- **v2:** AROS i386 (#4: toolchain, target and hosted runs done, see "AROS i386"; the MUI crashes on hosted i386 were an AROS bug, worked around (#105); open: native pc-i386), E# library source packages on NuGet (#31: parts 1 to 4 done, see "E# library packages, part 1", "part 2: assets in packages", "part 3: C files and headers in packages" and "part 4: classes derived from package classes"; the `AmigaESharp.*` id prefix is reserved on nuget.org for the maintainer's account since 2026-11-24, so #31 is done; the library project template `esharp new --library` is done, see "Library project template"; the later pieces from its proposal are in #154: precompiled per-target binaries are done, see "Precompiled per-target libraries in E# packages"; `.library` is open), user classes deriving from platform classes (#42: done for `GtWindow`, see "Classes derived from platform classes"). Capturing lambdas stored in fields and events (#41): done (PR #83), see "Heap closures and events".
+- **v2:** AROS i386 (#4: toolchain, target and hosted runs done, see "AROS i386"; the MUI crashes on hosted i386 were an AROS bug, worked around (#105); open: native pc-i386), E# library source packages on NuGet (#31: parts 1 to 4 done, see "E# library packages, part 1", "part 2: assets in packages", "part 3: C files and headers in packages" and "part 4: classes derived from package classes"; the `AmigaESharp.*` id prefix is reserved on nuget.org for the maintainer's account since 2026-11-24, so #31 is done; the library project template `esharp new --library` is done, see "Library project template"; the later pieces from its proposal are in #154: precompiled per-target binaries are done, see "Precompiled per-target libraries in E# packages"; the m68k `.library` is done, see "Amiga shared libraries from E#", open: AROS and AmigaOS 4 libraries and per-opener data on sdl), user classes deriving from platform classes (#42: done for `GtWindow`, see "Classes derived from platform classes"). Capturing lambdas stored in fields and events (#41): done (PR #83), see "Heap closures and events".
 - **Local toolchains (#122):** part 1 done (configuration, `esharp doctor`, VS Code tasks, a local m68k build in CI; see
   "Local toolchains, part 1"). Open: macOS and Windows by hand, and whether os4, morphos and AROS get a local route
   ([design/TOOLCHAINS.md](design/TOOLCHAINS.md) has the options; the maintainer picks).

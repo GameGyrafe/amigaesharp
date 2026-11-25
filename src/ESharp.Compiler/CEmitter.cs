@@ -862,7 +862,7 @@ internal sealed partial class CEmitter
             result.AppendLine("#endif");
             result.AppendLine();
         }
-        if (_natives.Contains("es_lib_open_count"))
+        if (_natives.Contains("es_lib_open_count") || _natives.Contains("es_lib_expunge_when_closed"))
         {
             // SharedLibrary.OpenCount (the bindings of E# .library files): the open count of a library in exec's list, -1 when it is not loaded.
             result.AppendLine("#if defined(__mc68000__) || defined(__AROS__)");
@@ -877,8 +877,20 @@ internal sealed partial class CEmitter
             result.AppendLine("    Permit();");
             result.AppendLine("    return n;");
             result.AppendLine("}");
+            // SharedLibrary.ExpungeWhenClosed: exec RemLibrary on a library that is open, so its Expunge marks it (LIBF_DELEXP) and it
+            // goes at its last Close. Only while it is open: with no openers RemLibrary's Expunge would free it and nobody would unload its code.
+            result.AppendLine("static __attribute__((unused)) int32_t es_lib_expunge_when_closed(const char *name)");
+            result.AppendLine("{");
+            result.AppendLine("    int32_t done = 0;");
+            result.AppendLine("    Forbid();");
+            result.AppendLine("    struct Node *node = FindName(&SysBase->LibList, (CONST_STRPTR)name);");
+            result.AppendLine("    if (node != NULL && ((struct Library *)node)->lib_OpenCnt > 0) { RemLibrary((struct Library *)node); done = 1; }");
+            result.AppendLine("    Permit();");
+            result.AppendLine("    return done;");
+            result.AppendLine("}");
             result.AppendLine("#else");
             result.AppendLine("static __attribute__((unused)) int32_t es_lib_open_count(const char *name) { (void)name; return -1; }   /* not done on this target yet */");
+            result.AppendLine("static __attribute__((unused)) int32_t es_lib_expunge_when_closed(const char *name) { (void)name; return 0; }");
             result.AppendLine("#endif");
             result.AppendLine();
         }

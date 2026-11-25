@@ -329,3 +329,117 @@ public unsafe class SharedLibraryHostTests
         ESharp.Platform.SharedLibrary.Close(c);
     }
 }
+
+/// <summary>esharp build and test with samples/amigalib (EsOutputType AmigaLibrary) and samples/amigalibdemo (a program that names it in esharp.include).</summary>
+[Collection("ProcessConsole")]
+public class AmigaLibraryCliTests
+{
+    private static string Samples => Path.Combine(PackageRoundTripTests.RepoRoot, "samples");
+
+    private static string InProcess(Func<int> run, out int exit)
+    {
+        var output = new StringWriter();
+        var saved = Console.Out;
+        var savedError = Console.Error;
+        Console.SetOut(output);
+        Console.SetError(output);
+        try { exit = run(); }
+        finally { Console.SetOut(saved); Console.SetError(savedError); }
+        return output.ToString().Replace("\r\n", "\n");
+    }
+
+    [Fact]
+    public void The_library_project_reads_its_name_and_version_from_the_csproj()
+    {
+        var dir = Path.Combine(Path.GetTempPath(), "esharp-amigalib-" + Guid.NewGuid().ToString("N"), "MyLib");
+        Directory.CreateDirectory(dir);
+        try
+        {
+            File.WriteAllText(Path.Combine(dir, "MyLib.csproj"), "<Project><PropertyGroup><EsOutputType>AmigaLibrary</EsOutputType><Version>2.5.1</Version><EsLibraryDate>1.2.2026</EsLibraryDate></PropertyGroup></Project>");
+            var p = ESharp.Cli.AmigaLibraryStep.Read(dir)!;
+            Assert.Equal(("mylib.library", 2, 5, "Mylib", "MylibLibrary", "mylib.library 2.5 (1.2.2026)"),
+                (p.Options.Name, p.Options.Version, p.Options.Revision, p.Options.Pascal, p.Options.Binding, p.Options.IdString));
+            File.WriteAllText(Path.Combine(dir, "MyLib.csproj"), "<Project><PropertyGroup><EsOutputType>AmigaLibrary</EsOutputType><EsLibraryName>other.library</EsLibraryName><EsLibraryVersion>40</EsLibraryVersion><EsLibraryRevision>3</EsLibraryRevision><EsLibraryBinding>Other</EsLibraryBinding></PropertyGroup></Project>");
+            p = ESharp.Cli.AmigaLibraryStep.Read(dir)!;
+            Assert.Equal(("other.library", 40, 3, "Other"), (p.Options.Name, p.Options.Version, p.Options.Revision, p.Options.Binding));
+            File.WriteAllText(Path.Combine(dir, "MyLib.csproj"), "<Project><PropertyGroup><EsOutputType>Library</EsOutputType></PropertyGroup></Project>");
+            Assert.Throws<InvalidDataException>(() => ESharp.Cli.AmigaLibraryStep.Read(dir));
+            File.WriteAllText(Path.Combine(dir, "MyLib.csproj"), "<Project><PropertyGroup><EsOutputType>AmigaLibrary</EsOutputType><EsLibraryName>bad</EsLibraryName></PropertyGroup></Project>");
+            Assert.Throws<InvalidDataException>(() => ESharp.Cli.AmigaLibraryStep.Read(dir));
+            File.WriteAllText(Path.Combine(dir, "MyLib.csproj"), "<Project><PropertyGroup><EsStackSize>4096</EsStackSize></PropertyGroup></Project>");
+            Assert.Null(ESharp.Cli.AmigaLibraryStep.Read(dir));
+        }
+        finally { Directory.Delete(Path.GetDirectoryName(dir)!, true); }
+    }
+
+    [Fact]
+    public void Build_writes_the_fd_and_binding_and_a_program_calls_the_library_on_m68k_but_compiles_it_in_on_sdl()
+    {
+        var work = Path.Combine(Path.GetTempPath(), "esharp-amigalib-" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            var lib = Path.Combine(work, "lib");
+            var text = InProcess(() => ESharp.Cli.Program.Build(new[] { Path.Combine(Samples, "amigalib"), "--emit-only", "-o", lib }, out _), out var exit);
+            Assert.True(exit == 0, text);
+            Assert.Contains("12 function(s), amigalib.library 1.2 (25.11.2026)", text);
+            Assert.Contains("##base _AmigalibBase", File.ReadAllText(Path.Combine(lib, "amigalib_lib.fd")));
+            Assert.Contains("public unsafe struct AmigalibLibrary", File.ReadAllText(Path.Combine(lib, "AmigalibLibrary.cs")));
+            Assert.Contains("es_lib_romtag", File.ReadAllText(Path.Combine(lib, "amigalib.c")));
+            text = InProcess(() => ESharp.Cli.Program.Build(new[] { Path.Combine(Samples, "amigalib"), "--target", "sdl", "--emit-only", "-o", lib }, out _), out exit);
+            Assert.NotEqual(0, exit);
+            Assert.Contains("builds for --target m68k only", text);
+
+            var m68k = Path.Combine(work, "m68k");
+            text = InProcess(() => ESharp.Cli.Program.Build(new[] { Path.Combine(Samples, "amigalibdemo"), "--emit-only", "-o", m68k }, out _), out exit);
+            Assert.True(exit == 0, text);
+            var c = File.ReadAllText(Path.Combine(m68k, "amigalibdemo.c"));
+            Assert.Contains("jsr -54(%%a6)", c);                                    // Add, through the opener's base
+            Assert.DoesNotContain("Es_AmigaLibSample_Counter_Add(int32_t step)", c);  // the library's code is in the .library, not here
+            Assert.True(File.Exists(Path.Combine(m68k, "esharp-amigalib", "AmigalibLibrary.cs")));
+
+            var sdl = Path.Combine(work, "sdl");
+            text = InProcess(() => ESharp.Cli.Program.Build(new[] { Path.Combine(Samples, "amigalibdemo"), "--target", "sdl", "--emit-only", "-o", sdl }, out _), out exit);
+            Assert.True(exit == 0, text);
+            c = File.ReadAllText(Path.Combine(sdl, "amigalibdemo.c"));
+            Assert.Contains("Es_AmigaLibSample_Counter_Add(int32_t step)", c);
+            Assert.DoesNotContain("jsr", c);
+
+            text = InProcess(() => ESharp.Cli.Program.Build(new[] { Path.Combine(Samples, "amigalibdemo"), "--target", "os4", "--emit-only", "-o", Path.Combine(work, "os4") }, out _), out exit);
+            Assert.NotEqual(0, exit);
+            Assert.Contains("builds for m68k only", text);
+        }
+        finally { if (Directory.Exists(work)) Directory.Delete(work, true); }
+    }
+
+    [Fact]
+    public void The_demo_passes_on_the_host_with_two_openers_kept_apart()
+    {
+        var text = InProcess(() => ESharp.Cli.Program.Test(new[] { Path.Combine(Samples, "amigalibdemo") }), out var exit);
+        Assert.True(exit == 0, text);
+        Assert.Contains("ok history objects per opener", text);
+        Assert.Contains("ok a third opener starts fresh", text);
+        Assert.Contains("ok expunged when nobody has it open", text);
+        Assert.DoesNotContain("\nFAIL ", text);
+        Assert.Contains("TEST PASSED", text);
+    }
+
+    [Fact]
+    public void The_m68k_library_starts_with_its_RomTag()
+    {
+        if (!PackageRoundTripTests.HasImage(PackageRoundTripTests.M68kImage)) return;
+        var work = Path.Combine(Path.GetTempPath(), "esharp-amigalib-" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            var text = InProcess(() => ESharp.Cli.Program.Build(new[] { Path.Combine(Samples, "amigalib"), "--docker", PackageRoundTripTests.M68kImage, "-o", work }, out _), out var exit);
+            Assert.True(exit == 0, text);
+            var bytes = File.ReadAllBytes(Path.Combine(work, "amigalib.library"));
+            // A hunk file (HUNK_HEADER), and the code hunk's first words: moveq #-1,d0; rts; then the RomTag's RTC_MATCHWORD.
+            Assert.Equal(new byte[] { 0, 0, 0x03, 0xF3 }, bytes[..4]);
+            var code = Enumerable.Range(0, bytes.Length - 4).First(i => bytes[i] == 0 && bytes[i + 1] == 0 && bytes[i + 2] == 0x03 && bytes[i + 3] == 0xE9) + 8;
+            Assert.Equal(new byte[] { 0x70, 0xFF, 0x4E, 0x75, 0x4A, 0xFC }, bytes[code..(code + 6)]);
+            var all = System.Text.Encoding.ASCII.GetString(bytes);
+            Assert.Contains("$VER: amigalib.library 1.2 (25.11.2026)", all);
+        }
+        finally { if (Directory.Exists(work)) Directory.Delete(work, true); }
+    }
+}

@@ -110,7 +110,7 @@ public static class AmigaLibraries
     /// <summary>The binding struct's own members, which a library function may not be named.</summary>
     public static readonly IReadOnlyList<string> BindingMembers = new[]
     {
-        "Base", "IsOpen", "Open", "Close", "OpenCount", "FlushUnused", "LibraryName", "LibraryVersion", "LibraryRevision", "Types", "Equals", "GetHashCode", "ToString", "GetType",
+        "Base", "IsOpen", "Open", "Close", "OpenCount", "FlushUnused", "ExpungeWhenClosed", "LibraryName", "LibraryVersion", "LibraryRevision", "Types", "Equals", "GetHashCode", "ToString", "GetType",
     };
 
     /// <summary>The first function's vector offset: after Open, Close, Expunge and the reserved vector.</summary>
@@ -391,6 +391,9 @@ public static class AmigaLibraries
         L();
         L("        /// <summary>Asks exec to expunge the libraries nobody has open (this one too, when it has no openers).</summary>");
         L("        public static void FlushUnused() { SharedLibrary.FlushUnused(); }");
+        L();
+        L("        /// <summary>While the library is open: it goes when its last opener closes (exec RemLibrary). False when it is not open.</summary>");
+        L("        public static bool ExpungeWhenClosed() { return SharedLibrary.ExpungeWhenClosed(LibraryName); }");
         foreach (var (m, regs, offset) in plan.Functions)
         {
             var ret = m.ReturnsVoid ? "void" : TypeText(m.ReturnType);

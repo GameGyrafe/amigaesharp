@@ -183,6 +183,7 @@ public static unsafe class Program
         Separate("reset one opener", b.Value() == 1000 && b.Calls() == 0 && b.Recent(0) == -1 && a.Value() == 112 && a.Recent(0) == 112);
         Check("bool results", a.IsEven(4) && !a.IsEven(7));
         Check("nine arguments (the ninth in a0)", a.Sum9(1, 2, 3, 4, 5, 6, 7, 8, 9) == 285);
+        Check("a dos.library call inside the library", a.Pause(2) == 2);
 
         // Checksum: the caller's memory, a string, a struct filled through a pointer, a string result.
         byte[] data = new byte[9];
@@ -230,6 +231,20 @@ public static unsafe class Program
 #else
         Dos.PutStr("skip all memory back after the expunge\n");
 #endif
+        // An expunge asked for while it is open only marks it (LIBF_DELEXP); it goes when the last opener closes.
+        var held = AmigalibLibrary.Open(1);
+        AmigalibLibrary.FlushUnused();
+        Check("a memory flush leaves an open library alone", held.IsOpen && AmigalibLibrary.OpenCount() == 1);
+        Check("an expunge asked for while it is open", AmigalibLibrary.ExpungeWhenClosed());
+        Check("still there with its opener", AmigalibLibrary.OpenCount() == 1);
+        Separate("the opener still has its data", held.Add(1) == 101);
+        held.Close();
+        Check("expunged at the last close", AmigalibLibrary.OpenCount() == -1);
+#if AMIGA
+        Check("all memory back after the delayed expunge", Exec.AvailMem(0) == freeBefore);
+#else
+        Dos.PutStr("skip all memory back after the delayed expunge\n");
+#endif
 #if AMIGA
         Check("a second process calls the library at the same time, with its own opener", TwoProcesses());
         Check("open count back to 0 after both processes", AmigalibLibrary.OpenCount() == 0);
@@ -238,7 +253,7 @@ public static unsafe class Program
         Dos.PutStr("skip open count back to 0 after both processes\n");
 #endif
         var again = AmigalibLibrary.Open(1);
-        Check("loads again after the expunge, with fresh data", again.IsOpen && again.Value() == 100 && again.Calls() == 0);
+        Separate("loads again after the expunge, with fresh data", again.IsOpen && again.Value() == 100 && again.Calls() == 0);
         again.Close();
         return _failed == 0 ? 0 : 10;
     }

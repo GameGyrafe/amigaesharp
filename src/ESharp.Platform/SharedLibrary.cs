@@ -34,6 +34,15 @@ public static unsafe class SharedLibrary
     private static extern int OpenCountOf(string name);
 
     /// <summary>
+    /// While the library is open: asks it to go when its last opener closes (exec RemLibrary, whose Expunge then sets LIBF_DELEXP).
+    /// False when it is not open (use <see cref="FlushUnused"/> then).
+    /// </summary>
+    public static bool ExpungeWhenClosed(string name) { return ExpungeWhenClosedOf(name) != 0; }
+
+    [Native("es_lib_expunge_when_closed")]
+    private static extern int ExpungeWhenClosedOf(string name);
+
+    /// <summary>
     /// Asks exec to expunge the libraries nobody has open: an allocation larger than any Amiga's memory, which exec answers by flushing
     /// unused libraries (each one's Expunge) before it fails.
     /// </summary>
@@ -46,6 +55,7 @@ public static unsafe class SharedLibrary
     // sdl: the library's code is part of the program; openers are only counted (no per-opener data yet).
     private static string[] _names = new string[16];
     private static int[] _counts = new int[16];
+    private static bool[] _expungeAsked = new bool[16];
     private static int _serial;
 
     public static void* Open(string name, int version, int libraryVersion, string types)
@@ -65,6 +75,7 @@ public static unsafe class SharedLibrary
         }
         if (slot < 0) return null;
         _counts[slot]++;
+        _expungeAsked[slot] = false;
         _serial++;
         return (void*)(nint)(((slot + 1) << 16) | (_serial & 0xFFFF));
     }
@@ -73,7 +84,9 @@ public static unsafe class SharedLibrary
     {
         if (library == null) return;
         int slot = (int)(((nint)library >> 16) & 0xFF) - 1;
-        if (slot >= 0 && slot < 16 && _counts[slot] > 0) _counts[slot]--;
+        if (slot < 0 || slot >= 16 || _counts[slot] == 0) return;
+        _counts[slot]--;
+        if (_counts[slot] == 0 && _expungeAsked[slot]) { _names[slot] = null; _expungeAsked[slot] = false; }
     }
 
     public static int OpenCount(string name)
@@ -88,6 +101,15 @@ public static unsafe class SharedLibrary
     public static void Enter(void* library) { }
 
     public static void Leave(void* library) { }
+
+    public static bool ExpungeWhenClosed(string name)
+    {
+        for (int i = 0; i < 16; i++)
+        {
+            if (_names[i] != null && _names[i] == name && _counts[i] > 0) { _expungeAsked[i] = true; return true; }
+        }
+        return false;
+    }
 
     /// <summary>Forgets the libraries nobody has open (as an expunge would).</summary>
     public static void FlushUnused()
@@ -109,6 +131,7 @@ public static unsafe class SharedLibrary
         public readonly System.Collections.Generic.Dictionary<FieldInfo, object?> Start = new();
         public int Count;
         public bool Loaded;   // false after FlushUnused: "not in memory" until the next Open (the start values stay)
+        public bool ExpungeAsked;   // FlushUnused while it was open: it goes at the last Close, as with exec's LIBF_DELEXP
     }
 
     private sealed class Opener
@@ -136,6 +159,7 @@ public static unsafe class SharedLibrary
                 _libraries[name] = lib;
             }
             lib.Loaded = true;
+            lib.ExpungeAsked = false;
             var opener = new Opener { Of = lib };
             var copies = new System.Collections.Generic.Dictionary<object, object>(ReferenceEqualityComparer.Instance);
             foreach (var f in lib.Fields) opener.Values[f] = DeepCopy(lib.Start[f], copies);
@@ -153,12 +177,24 @@ public static unsafe class SharedLibrary
         {
             if (library == null || !_openers.Remove((nint)library, out var opener)) return;
             opener.Of.Count--;
+            if (opener.Of.Count == 0 && opener.Of.ExpungeAsked) { opener.Of.Loaded = false; opener.Of.ExpungeAsked = false; }
         }
     }
 
     public static int OpenCount(string name)
     {
         lock (_lock) return _libraries.TryGetValue(name, out var lib) && lib.Loaded ? lib.Count : -1;
+    }
+
+    /// <summary>While the library is open: it goes (not in memory) when its last opener closes.</summary>
+    public static bool ExpungeWhenClosed(string name)
+    {
+        lock (_lock)
+        {
+            if (!_libraries.TryGetValue(name, out var lib) || !lib.Loaded || lib.Count == 0) return false;
+            lib.ExpungeAsked = true;
+            return true;
+        }
     }
 
     /// <summary>Forgets the libraries nobody has open (as an expunge would): the next Open starts from their start values again.</summary>
