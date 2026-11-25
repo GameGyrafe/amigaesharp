@@ -36,9 +36,114 @@ public static unsafe class Program
 #endif
     }
 
+#if AMIGA
+    // dos.library calls for the second process (dostags.h values, from the AROS headers: SYS_Dummy is TAG_USER + 32).
+    [AmigaLib("dos", -606), Since(36)] private static extern int SystemTagList(byte* command, void* tags);
+    [AmigaLib("dos", -576), Since(36)] private static extern int GetProgramName(byte* buffer, int length);
+    [AmigaLib("dos", -30)] private static extern nuint Open(string name, int accessMode);
+    [AmigaLib("dos", -36)] private static extern int Close(nuint file);
+    private const uint SysInput = 0x80000021u, SysOutput = 0x80000022u, SysAsynch = 0x80000023u;
+    private const string ChildDone = "RAM:amigalibdemo.child";
+    private const int ChildAdds = 20000;
+
+    /// <summary>
+    /// The second process (this program started again with CHILD): its own opener, many Adds while the first process is calling the
+    /// library too, then "ok" or "FAIL" into a file in RAM: for the first process to read.
+    /// </summary>
+    private static int Child()
+    {
+        var lib = AmigalibLibrary.Open(1);
+        bool ok = lib.IsOpen;
+        if (ok)
+        {
+            for (int i = 1; i <= ChildAdds && ok; i++) ok = lib.Add(1) == 100 + i;
+            ok = ok && lib.Calls() == ChildAdds && lib.Recent(0) == 100 + ChildAdds;
+            lib.Close();
+        }
+        byte[] result = new byte[2];
+        result[0] = ok ? (byte)'o' : (byte)'F';
+        result[1] = ok ? (byte)'k' : (byte)'L';
+        Files.WriteAll(ChildDone, result);
+        return ok ? 0 : 10;
+    }
+
+    /// <summary>Starts this program again as the second process (asynchronously, its input and output NIL:); false when it could not.</summary>
+    private static bool StartChild()
+    {
+        byte[] command = new byte[300];
+        int length = 0;
+        fixed (byte* p = command)
+        {
+            if (GetProgramName(p, 280) == 0) return false;
+            while (p[length] != 0) length++;
+            byte[] word = new byte[6];
+            word[0] = (byte)' '; word[1] = (byte)'C'; word[2] = (byte)'H'; word[3] = (byte)'I'; word[4] = (byte)'L'; word[5] = (byte)'D';
+            for (int i = 0; i < 6; i++) p[length + i] = word[i];
+            p[length + 6] = 0;
+            nuint input = Open("NIL:", 1005), output = Open("NIL:", 1006);
+            if (input == 0 || output == 0)
+            {
+                if (input != 0) Close(input);
+                if (output != 0) Close(output);
+                return false;
+            }
+            uint[] tags = new uint[8];
+            tags[0] = SysInput; tags[1] = (uint)input; tags[2] = SysOutput; tags[3] = (uint)output; tags[4] = SysAsynch; tags[5] = 1; tags[6] = 0; tags[7] = 0;
+            fixed (uint* t = tags)
+            {
+                if (SystemTagList(p, t) != 0)
+                {
+                    Close(input);
+                    Close(output);
+                    return false;
+                }
+            }
+        }
+        return true;   // the system closes NIL: for the child when it ends
+    }
+
+    /// <summary>Calls the library from this process while the second one does too, until the second one is done; true when both kept their own count.</summary>
+    private static bool TwoProcesses()
+    {
+        Files.Delete(ChildDone);
+        if (!StartChild()) return false;
+        var lib = AmigalibLibrary.Open(1);
+        if (!lib.IsOpen) return false;
+        bool ok = true;
+        int done = 0, rounds = 0;
+        int size;
+        byte* result = null;
+        while (ok && rounds < 2000)
+        {
+            for (int i = 0; i < 100 && ok; i++)
+            {
+                done++;
+                ok = lib.Add(1) == 100 + done;
+            }
+            rounds++;
+            result = Files.ReadAll(ChildDone, out size, false);
+            if (result != null) break;
+            if (rounds % 20 == 0) Dos.Delay(1);
+        }
+        ok = ok && lib.Calls() == done && result != null && result[0] == (byte)'o' && result[1] == (byte)'k';
+        if (result != null) Mem.Free(result);
+        lib.Close();
+        Files.Delete(ChildDone);
+        Dos.PutStr("the first process made ");
+        Dos.PutInt(done);
+        Dos.PutStr(" calls while the second one made ");
+        Dos.PutInt(ChildAdds);
+        Dos.PutStr("\n");
+        return ok;
+    }
+#endif
+
     [EntryPoint]
     public static int Main()
     {
+#if AMIGA
+        if (Args.Has("CHILD")) return Child();
+#endif
 #if SDL
         Dos.PutStr("sdl: the library's code is part of this program and its openers share one copy of its data, so the checks that need their own are skipped\n");
 #endif
@@ -124,6 +229,13 @@ public static unsafe class Program
         }
 #else
         Dos.PutStr("skip all memory back after the expunge\n");
+#endif
+#if AMIGA
+        Check("a second process calls the library at the same time, with its own opener", TwoProcesses());
+        Check("open count back to 0 after both processes", AmigalibLibrary.OpenCount() == 0);
+#else
+        Dos.PutStr("skip a second process calls the library at the same time, with its own opener\n");
+        Dos.PutStr("skip open count back to 0 after both processes\n");
 #endif
         var again = AmigalibLibrary.Open(1);
         Check("loads again after the expunge, with fresh data", again.IsOpen && again.Value() == 100 && again.Calls() == 0);

@@ -91,9 +91,9 @@ internal sealed partial class CEmitter
             var name = DeclaredName(d);
             sb.AppendLine($"#define {name} (es_d->{name})");
         }
-        sb.AppendLine("static void *es_lib_alloc(size_t n);");
-        sb.AppendLine("static void es_lib_free(void *p);");
-        sb.AppendLine("static void es_lib_fatal(void);");
+        sb.AppendLine("static __attribute__((unused)) void *es_lib_alloc(size_t n);");
+        sb.AppendLine("static __attribute__((unused)) void es_lib_free(void *p);");
+        sb.AppendLine("static __attribute__((unused)) void es_lib_fatal(void);");
         sb.AppendLine("static int es_lib_heap_init(void);");
         sb.AppendLine("static void es_lib_heap_fini(void);");
         sb.AppendLine();
@@ -332,9 +332,9 @@ internal sealed partial class CEmitter
             "/* RTF_AUTOINIT: InitResident calls MakeLibrary with the base size, the vectors and no init struct, then es_lib_init. */",
             "static const uint32_t es_lib_inittab[4] __attribute__((used)) = { sizeof(struct es_lib_head), (uint32_t)es_lib_vectors, 0, (uint32_t)es_lib_init };",
             "/* The opener's memory: an exec pool, so closing frees all of it at once. */",
-            "static int es_lib_heap_init(void) { es_d->es_heap = CreatePool(MEMF_PUBLIC | MEMF_CLEAR, 4096, 1024); return es_d->es_heap != NULL; }",
-            "static void es_lib_heap_fini(void) { if (es_d->es_heap != NULL) { DeletePool(es_d->es_heap); es_d->es_heap = NULL; } }",
-            "static void *es_lib_alloc(size_t n)",
+            "static __attribute__((unused)) int es_lib_heap_init(void) { es_d->es_heap = CreatePool(MEMF_PUBLIC | MEMF_CLEAR, 4096, 1024); return es_d->es_heap != NULL; }",
+            "static __attribute__((unused)) void es_lib_heap_fini(void) { if (es_d->es_heap != NULL) { DeletePool(es_d->es_heap); es_d->es_heap = NULL; } }",
+            "static __attribute__((unused)) void *es_lib_alloc(size_t n)",
             "{",
             "    uint32_t *p = (uint32_t *)AllocPooled(es_d->es_heap, (ULONG)n + 8);",
             "    if (p == NULL) return NULL;",
@@ -342,7 +342,7 @@ internal sealed partial class CEmitter
             "    __builtin_memset(p + 2, 0, n);",
             "    return p + 2;",
             "}",
-            "static void es_lib_free(void *q)",
+            "static __attribute__((unused)) void es_lib_free(void *q)",
             "{",
             "    if (q == NULL) return;",
             "    uint32_t *p = (uint32_t *)q - 2;",
@@ -350,7 +350,7 @@ internal sealed partial class CEmitter
             "}",
             "/* A fatal error of the E# runtime (out of memory, an index out of range with --debug) in library code: there is no program to end, so",
             "   a recoverable alert, then the calling task waits for ever. */",
-            "static void es_lib_fatal(void) { Alert(0x000100E5UL); Wait(0); for (;;) { } }",
+            "static __attribute__((unused)) void es_lib_fatal(void) { Alert(0x000100E5UL); Wait(0); for (;;) { } }",
             "/* What gcc may call for a struct copy or clear (no C library is linked). */",
             "void *memcpy(void *d, const void *s, size_t n) { char *a = (char *)d; const char *b = (const char *)s; while (n--) *a++ = *b++; return d; }",
             "void *memmove(void *d, const void *s, size_t n)",
@@ -365,8 +365,8 @@ internal sealed partial class CEmitter
             "/* Not m68k (the host tests): the opener's memory is a list of calloc blocks, freed when the opener closes. */",
             "#include <stdlib.h>",
             "struct es_lib_block { struct es_lib_block *next, *prev; uint64_t align; };",
-            "static int es_lib_heap_init(void) { es_d->es_heap = NULL; return 1; }",
-            "static void *es_lib_alloc(size_t n)",
+            "static __attribute__((unused)) int es_lib_heap_init(void) { es_d->es_heap = NULL; return 1; }",
+            "static __attribute__((unused)) void *es_lib_alloc(size_t n)",
             "{",
             "    struct es_lib_block *b = (struct es_lib_block *)calloc(1, sizeof *b + n);",
             "    if (b == NULL) return NULL;",
@@ -375,7 +375,7 @@ internal sealed partial class CEmitter
             "    es_d->es_heap = b;",
             "    return b + 1;",
             "}",
-            "static void es_lib_free(void *q)",
+            "static __attribute__((unused)) void es_lib_free(void *q)",
             "{",
             "    if (q == NULL) return;",
             "    struct es_lib_block *b = (struct es_lib_block *)q - 1;",
@@ -383,13 +383,13 @@ internal sealed partial class CEmitter
             "    if (b->next != NULL) b->next->prev = b->prev;",
             "    free(b);",
             "}",
-            "static void es_lib_heap_fini(void)",
+            "static __attribute__((unused)) void es_lib_heap_fini(void)",
             "{",
             "    struct es_lib_block *b = (struct es_lib_block *)es_d->es_heap;",
             "    while (b != NULL) { struct es_lib_block *n = b->next; free(b); b = n; }",
             "    es_d->es_heap = NULL;",
             "}",
-            "static void es_lib_fatal(void) { abort(); }",
+            "static __attribute__((unused)) void es_lib_fatal(void) { abort(); }",
             "#endif",
         }) Line(l);
     }
