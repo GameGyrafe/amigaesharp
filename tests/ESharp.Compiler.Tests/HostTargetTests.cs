@@ -484,6 +484,54 @@ public class HostTargetTests
     }
 
     [Fact]
+    public void Iff_writer_keeps_its_path_across_a_compacting_gc()
+    {
+        // the path is built at run time, so it is a heap string the GC may move between Create and Finish
+        string path = Path.Combine(Path.GetTempPath(), "esharp_iff_gc_" + Environment.ProcessId + ".iff");
+        path = new string(path.ToCharArray());
+        try
+        {
+            var w = ESharp.Platform.Iff.Create(path, ESharp.Platform.Iff.Id("ESHP"));
+            Assert.True(w.IsOpen);
+            unsafe { byte* d = stackalloc byte[3]; d[0] = 1; d[1] = 2; d[2] = 3; Assert.True(w.WriteChunk(ESharp.Platform.Iff.Id("ABCD"), d, 3)); }
+            var junk = new string[200000];
+            for (int i = 0; i < junk.Length; i++) junk[i] = "x" + i;
+            junk = new string[1];
+            GC.Collect(2, GCCollectionMode.Forced, true, true);
+            GC.Collect(2, GCCollectionMode.Forced, true, true);
+            Assert.True(w.Finish());
+            var bytes = File.ReadAllBytes(path);
+            Assert.Equal(12 + 8 + 4, bytes.Length);
+            Assert.Equal("ABCD", System.Text.Encoding.ASCII.GetString(bytes, 12, 4));
+        }
+        finally { File.Delete(path); }
+    }
+
+    [Fact]
+    public void Iff_writer_nests_exactly_MaxDepth_groups_inside_the_form()
+    {
+        string path = Path.Combine(Path.GetTempPath(), "esharp_iff_depth_" + Environment.ProcessId + ".iff");
+        try
+        {
+            var w = ESharp.Platform.Iff.Create(path, ESharp.Platform.Iff.Id("ESHP"));
+            int opened = 0;
+            while (opened < 40 && w.BeginGroup(ESharp.Platform.Iff.IdForm, ESharp.Platform.Iff.Id("SUBF"))) opened++;
+            Assert.Equal(ESharp.Platform.Iff.MaxDepth, opened);                // 16 fit, the 17th is refused
+            Assert.False(w.BeginGroup(ESharp.Platform.Iff.IdForm, ESharp.Platform.Iff.Id("SUBF")));
+            for (int i = 0; i < opened; i++) Assert.True(w.EndGroup());
+            Assert.True(w.Finish());
+            var r = ESharp.Platform.Iff.OpenRead(path);
+            int groups = 0, maxDepth = 0;
+            while (r.Next()) { groups++; if (r.ChunkDepth > maxDepth) maxDepth = r.ChunkDepth; }
+            Assert.False(r.Damaged);
+            Assert.Equal(16, groups);
+            Assert.Equal(15, maxDepth);
+            r.Close();
+        }
+        finally { File.Delete(path); }
+    }
+
+    [Fact]
     public void Asl_sample_runs_on_the_host_and_reports_the_pick_or_a_missing_library()
     {
         using var console = HostConsole.Capture();

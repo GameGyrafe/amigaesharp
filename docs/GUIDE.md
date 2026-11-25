@@ -354,7 +354,7 @@ a group shows as a step whose depth is lower than the one before (`FORM{FORM X{A
 helper works on the same file (its state is on the heap); `Next()` sets `ChunkId`, `ChunkSize`, `ChunkType` and `ChunkDepth` in the copy it
 is called on, so pass the file by `ref` to a helper that steps through it, and use none of the copies after `Finish()` or `Close()`. A
 chunk that does not fit in the file stops the reader with `Damaged` on both implementations, and the writer's misuse results are the
-same on both (a group of type 0 is refused by iffparse and accepted by the E# writer; use a real type). `Iff.Open()` only says whether iffparse.library is in use (always false on sdl and the host).
+same on both (a group of type 0 is refused by iffparse and accepted by the E# writer; use a real type). `Iff.Open()` only says whether iffparse.library is in use (always false on sdl and the host). The file's own top level is always a FORM (`Create` writes one, `OpenRead` refuses a file that starts with LIST or CAT). The E# code holds the whole file in memory: writing grows the buffer by doubling, so while it grows the peak is up to about three times the file size (old buffer, new buffer, and the caller's own data), and reading holds the file once.
 
 The Amiga library bindings are hand-written `static extern` methods tagged `[AmigaLib]`, with struct offsets measured per
 target into `Layout.g.cs` (`tools/BindGen/layouts.sh`). `tools/BindGen` can also generate bindings from `.fd` files and

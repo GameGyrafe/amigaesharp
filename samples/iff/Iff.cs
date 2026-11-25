@@ -221,9 +221,9 @@ public static unsafe class Program
 #elif SDL
         string pathA = "esharp_iff_a.iff", pathB = "esharp_iff_b.iff", pathC = "esharp_iff_c.iff";
 #else
-        string pathA = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "esharp_iff_a.iff");
-        string pathB = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "esharp_iff_b.iff");
-        string pathC = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "esharp_iff_c.iff");
+        string pathA = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "esharp_iff_" + System.Environment.ProcessId + "_a.iff");
+        string pathB = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "esharp_iff_" + System.Environment.ProcessId + "_b.iff");
+        string pathC = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "esharp_iff_" + System.Environment.ProcessId + "_c.iff");
 #endif
         byte[] data = new byte[300];
         for (int i = 0; i < 300; i++) data[i] = (byte)(i * 7 + 3);

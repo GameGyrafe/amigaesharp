@@ -35,8 +35,7 @@ public static unsafe class IffParse
 /// <see cref="Write"/> calls, <see cref="EndChunk"/>, and <see cref="Finish"/> at the end. To read: <see cref="Next"/> steps
 /// to the next chunk (its <see cref="ChunkId"/> and <see cref="ChunkSize"/>), <see cref="Read"/> gets its bytes.
 /// Nested groups (FORM, LIST, CAT, PROP) are written with <see cref="BeginGroup"/> and <see cref="EndGroup"/>; reading steps into
-/// them: <see cref="Next"/> reports the group itself (<see cref="ChunkId"/> is its kind, <see cref="ChunkType"/> its type, a
-/// <see cref="Read"/> gives 0 bytes) and then the chunks inside it; <see cref="ChunkDepth"/> says how deeply each is nested, which
+/// them: <see cref="Next"/> reports the group itself (<see cref="ChunkId"/> is its kind, <see cref="ChunkType"/> its type; do not <see cref="Read"/> a group) and then the chunks inside it; <see cref="ChunkDepth"/> says how deeply each is nested, which
 /// is how the end of a group shows. A copy of an <c>IffFile</c> (passed by value to a helper) works on the same file, with the same
 /// result on every target; what <see cref="Next"/> reports (<see cref="ChunkId"/> and the like) is set in the copy it was called on,
 /// so pass the file by <c>ref</c> to a helper that steps through it. After <see cref="Finish"/> or <see cref="Close"/> use none of the copies.
@@ -64,6 +63,7 @@ public unsafe struct IffFile
     internal nuint File;
     internal bool Writing;
     internal bool Library;                     // Amiga: iffparse.library does the work; otherwise the E# code below
+    internal string WritePath;                 // the E# writer's path: here and not in the state block, which the GC cannot see (strings are immutable, so copies agree)
     internal nuint St;                         // the state block (IffState, on the heap): shared by every copy of this struct, see Iff.NewState
 
     /// <summary>Starts a chunk in a file being written. Its size is filled in by <see cref="EndChunk"/>.</summary>
@@ -178,42 +178,42 @@ public unsafe struct IffFile
 #if AMIGA
         if (Library)
         {
-        if (!IsOpen || Writing || ((IffState*)St)->Truncated) return false;     // Truncated: a damaged file stays at its error
-        for (int guard = 0; guard < 100000; guard++)
-        {
-            int rc = IffParse.ParseIFF((void*)Handle, (int)Layout.IffParseRawStep);
-            if (rc == 0)
+            if (!IsOpen || Writing || ((IffState*)St)->Truncated) return false;     // Truncated: a damaged file stays at its error
+            for (int guard = 0; guard < 100000; guard++)
             {
-                byte* cn = (byte*)IffParse.CurrentChunk((void*)Handle);
-                if (cn == null) return false;
-                IffState* st = (IffState*)St;
-                ChunkId = *(uint*)(cn + Layout.CnId);
-                ChunkSize = *(int*)(cn + Layout.CnSize);
-                // iffparse reports a chunk whose header it could read and only fails when its data is read; the E# reader does not
-                // report a chunk that does not fit, so check against the file's length here. The position is followed by the
-                // sizes (header 8 bytes, a group's type 4 more, data and pad), not asked of the stream, which iffparse may read ahead.
-                bool grp = Iff.IsGroup(ChunkId);
-                int dataStart = st->Pos + (grp ? 12 : 8);
-                int dataLen = grp ? ChunkSize - 4 : ChunkSize;
-                if (st->Len < 0 || dataLen < 0 || dataLen > st->Len - dataStart)
+                int rc = IffParse.ParseIFF((void*)Handle, (int)Layout.IffParseRawStep);
+                if (rc == 0)
                 {
-                    st->Truncated = true;
-                    Damaged = true;
-                    return false;
+                    byte* cn = (byte*)IffParse.CurrentChunk((void*)Handle);
+                    if (cn == null) return false;
+                    IffState* st = (IffState*)St;
+                    ChunkId = *(uint*)(cn + Layout.CnId);
+                    ChunkSize = *(int*)(cn + Layout.CnSize);
+                    // iffparse reports a chunk whose header it could read and only fails when its data is read; the E# reader does not
+                    // report a chunk that does not fit, so check against the file's length here. The position is followed by the
+                    // sizes (header 8 bytes, a group's type 4 more, data and pad), not asked of the stream, which iffparse may read ahead.
+                    bool grp = Iff.IsGroup(ChunkId);
+                    int dataStart = st->Pos + (grp ? 12 : 8);
+                    int dataLen = grp ? ChunkSize - 4 : ChunkSize;
+                    if (st->Len < 0 || dataLen < 0 || dataLen > st->Len - dataStart)
+                    {
+                        st->Truncated = true;
+                        Damaged = true;
+                        return false;
+                    }
+                    st->Pos = grp ? dataStart : dataStart + ChunkSize + (ChunkSize & 1);
+                    ChunkDepth = st->Depth;
+                    if (Iff.IsGroup(ChunkId)) { ChunkType = *(uint*)(cn + Layout.CnType); st->Depth++; }
+                    else ChunkType = 0u;
+                    return true;
                 }
-                st->Pos = grp ? dataStart : dataStart + ChunkSize + (ChunkSize & 1);
-                ChunkDepth = st->Depth;
-                if (Iff.IsGroup(ChunkId)) { ChunkType = *(uint*)(cn + Layout.CnType); st->Depth++; }
-                else ChunkType = 0u;
-                return true;
+                if ((uint)rc != Layout.IffErrEoc) { Damaged = (uint)rc != Layout.IffErrEof; return false; }   // the end of the file or an error
+                // an end of chunk just goes on; the end of a group (not the file's own FORM) lowers the depth
+                byte* ended = (byte*)IffParse.CurrentChunk((void*)Handle);
+                IffState* es = (IffState*)St;
+                if (ended != null && Iff.IsGroup(*(uint*)(ended + Layout.CnId)) && es->Depth > 0) es->Depth--;
             }
-            if ((uint)rc != Layout.IffErrEoc) { Damaged = (uint)rc != Layout.IffErrEof; return false; }   // the end of the file or an error
-            // an end of chunk just goes on; the end of a group (not the file's own FORM) lowers the depth
-            byte* ended = (byte*)IffParse.CurrentChunk((void*)Handle);
-            IffState* es = (IffState*)St;
-            if (ended != null && Iff.IsGroup(*(uint*)(ended + Layout.CnId)) && es->Depth > 0) es->Depth--;
-        }
-        return false;
+            return false;
         }
 #endif
         return EsNext();
@@ -303,7 +303,7 @@ public unsafe struct IffFile
         Put32(s, Iff.IdForm); Put32(s, 0); Put32(s, formType);
         // Create (or replace) the file now, as iffparse does, so an unwritable path is reported here and not by Finish.
         if (!Files.WriteAll(path, new ReadOnlySpan<byte>(s->Buf, s->Len))) { Mem.Free(s->Buf); Mem.Free((byte*)s); return false; }
-        s->Path = path;
+        WritePath = path;
         s->Stack[0] = 4;
         s->Depth = 1;
         St = st;
@@ -354,7 +354,7 @@ public unsafe struct IffFile
     private bool EsBeginGroup(uint group, uint type)
     {
         IffState* s = (IffState*)St;
-        if (!IsOpen || !Writing || s->InChunk || s->Depth >= Iff.MaxDepth || !Ensure(s, 12)) return false;
+        if (!IsOpen || !Writing || s->InChunk || s->Depth > Iff.MaxDepth || !Ensure(s, 12)) return false;
         Put32(s, group); Put32(s, 0); Put32(s, type);
         s->Stack[s->Depth] = s->Len - 8;
         s->Depth++;
@@ -376,7 +376,7 @@ public unsafe struct IffFile
         IffState* s = (IffState*)St;
         if (!IsOpen || !Writing || s->InChunk || s->Depth != 1) return false;
         Patch32(s, 4, (uint)(s->Len - 8));
-        bool ok = Files.WriteAll(s->Path, new ReadOnlySpan<byte>(s->Buf, s->Len));
+        bool ok = Files.WriteAll(WritePath, new ReadOnlySpan<byte>(s->Buf, s->Len));
         FreeState();
         IsOpen = false;
         return ok;
@@ -460,7 +460,6 @@ internal unsafe struct IffState
     public int Depth;                 // writing: open groups including the FORM; reading: groups open inside the FORM
     public int* Stack;                // writing: where the size field of each open group is; reading: where each open group ends
     public bool InChunk, Truncated;
-    public string Path;
 }
 
 /// <summary>
