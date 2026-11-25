@@ -68,7 +68,8 @@ An E# library is an ordinary .NET class library on NuGet whose DLL also carries 
 embedded resources (issue #31). The IDE, `dotnet build`, `dotnet run` and the host side of `esharp test` use the
 compiled DLL (the library built with `HOST`). `esharp build`, `run` and `test --target` read the sources back out of the
 restored package and compile them with your program for the chosen target, so every `#if AMIGA` / `#elif SDL` branch is
-there. `samples/packages` has two libraries (`Tween`: easing curves, a generic tween struct, and a ball sprite and a blip sound
+there; a package packed with its precompiled binaries is linked from the binary for the target instead ("Precompiled binaries"
+below). `samples/packages` has two libraries (`Tween`: easing curves, a generic tween struct, and a ball sprite and a blip sound
 from its own `assets.json`; `Checksum`: an Adler-32 checksum in C of its own) and a game that uses both (`TweenDemo`), with the
 steps in its README.
 
@@ -179,7 +180,8 @@ MyLib/
   refuses them (ESL006), and so does the game's build for a package that carries them (ES0118). The library build refuses
   (ESL006) a `.c` or `.h` anywhere else in the project, any other file in `native/`, and prebuilt code anywhere (`.o`, `.obj`,
   `.a`, `.lib`, `.so`, `.dylib`): a package carries C source only, which the game's own compiler builds for its target with its
-  flags. `NativeC` without a `native/` folder, or the other way round, stops it too (ESL015). The files are embedded in the DLL
+  flags. (The only binaries a package carries are the ones the pack step builds from these sources, "Precompiled binaries" below,
+  and those include the package's C.) `NativeC` without a `native/` folder, or the other way round, stops it too (ESL015). The files are embedded in the DLL
   (`esharp/native/<folder>/<name>`) and listed in the manifest (`"native": { "prefix": ..., "files": [...] }`); the package
   carries them nowhere else.
 - **How it is built.** `esharp build` (also `run` and `test --target`, with `--docker` or `--toolchain`) writes the chosen set to
@@ -272,11 +274,58 @@ warns. The checks on package code:
 | The same type (namespace, name, arity; also a `partial` one) in a package and the program, or in two packages (also an asset class: the message names the `assets.json`) | ES0115 |
 | An `internal` member of a package used from the program or another package, also through a derived class (`base(...)` or the implicit `base()` to an internal constructor, an override of an internal or `private protected` member) | ES0116 |
 | A class of the program or of another package derived from a package class that is not marked `[Extensible]` (also in the IDE and `dotnet build`, from the package's DLL) | ES0117 |
-| A package that cannot be used: an unknown manifest format or resource, asset inputs (images, sounds) in it, a bad path, a reserved or invalid symbol in its `defines`, an asset declaration it cannot read or whose generated source it does not carry, a C file outside `esharp/native/common` or `esharp/native/<target>`, prebuilt code, C files the manifest does not list (or listed files it does not carry), native C without the `NativeC` feature or the other way round, a bad native prefix | ES0118 |
+| A package that cannot be used: an unknown manifest format or resource, asset inputs (images, sounds) in it, a bad path, a reserved or invalid symbol in its `defines`, an asset declaration it cannot read or whose generated source it does not carry, a C file outside `esharp/native/common` or `esharp/native/<target>`, prebuilt code, C files the manifest does not list (or listed files it does not carry), native C without the `NativeC` feature or the other way round, a bad native prefix; a precompiled binary that is not as its `binary.json` says (a file it does not list, a SHA-256 that differs, other objects in the archive, another package, version or sources) and prebuilt code anywhere else in the package (`.o`, `.obj`, `.a`, `.lib`, `.so`, `.dylib`) | ES0118 |
+| The package has precompiled binaries, but none for this target, or made by another E#, or for another configuration (`--debug`, `--trace`): its sources are compiled instead (a warning) | ES0124 |
 
 Types with the same name in different namespaces (the program's `Game.Ease` and the package's `Tween.Ease`) are fine: their C
 names carry the namespace, as for any two namespaces. Package code is emitted in full, like program code (unused package
 functions are not pruned yet). `esharp.include` stays the way to share source folders between local projects without NuGet.
+
+### Precompiled binaries
+
+The same model as the native libraries of .NET binding packages (issue #154): the library's author builds a static library per
+target when packing, and the package carries it next to the DLL. A game built with the same E# links it instead of compiling the
+package's sources. The sources still ship: they are needed for generic copies over the game's own types (`Pool<MyEnemy>`), as the
+fallback, and for the IDE, the analyzer, the licence checks and `esharp verify-package`.
+
+- **Packing.** `dotnet pack` of an `EsLibrary` project runs `esharp precompile` (the AmigaESharp.Sdk targets call the esharp tool,
+  `EsCommand`, default `esharp` on PATH; a checkout's template sets `dotnet run --project <checkout>/src/ESharp.Cli --`). For every
+  target in `EsTargets` it compiles the library alone (a library build of the compiler: the package's C, no `main`) and builds it
+  with that target's toolchain into `lib/net10.0/esharp-bin/<target>/library.a` (`sdl` is `sdl-linux-x64`, the only sdl build so
+  far; one folder per OS and CPU later, #156), with the package's C files as objects of their own, and its manifest
+  `binary.json`: the target, the E# stamp (the esharp version and the identity of its compiler, because names, layouts and the runtime
+  change with it), the configuration (`release`), the C names of the generic copies it holds, the runtime pieces and library bases its
+  code uses, the archive's objects and its SHA-256, and a hash of the sources it was built from. The toolchain per target: an image
+  from `EsPrecompileArgs` (`--image m68k=<image>`, or `--docker [image]` for all), else `ESHARP_TOOLCHAIN_<TARGET>` (or
+  `ESHARP_TOOLCHAIN`), else the default image (`esharp-amiga-toolchain`, `esharp-aros-i386`, `esharp-sdl`) when it is in the local
+  Docker, else a compiler of the pinned version on PATH. **The pack fails** (ESL016) when a listed target has none: remove the target
+  from `EsTargets`, or set `<EsPrecompile>false</EsPrecompile>` to ship sources only (as before). A library whose code calls the
+  sdl C runtime's `[Native]` functions directly cannot be precompiled (ES0125: that runtime keeps its state in the program). A library
+  that uses other E# packages gets no binaries yet: `esharp precompile` says so and the package ships its sources only.
+- **Linking.** `esharp build` (and `run`, `test --target`) uses a package's binary when there is one for the target, made by this
+  E# for this configuration; it prints `Package X 1.0.0: linked from its precompiled m68k binary (...); its sources are not compiled`
+  and copies the archive to `obj/<target>/esharp-bin/<id>/`. Otherwise it compiles the sources with warning ES0124 saying why (a
+  package without binaries compiles from source without a warning). `--from-source` compiles every package from its sources.
+  The program's C then declares the package's functions, statics and class tables instead of defining them, and defines only the
+  generic copies the binary does not hold (over the program's own types); every copy has a fixed C name (`Es_Tween_Tween__int`), so
+  none is defined twice. The archive goes after the program's C on the compiler line (before the system libraries); the build
+  passes `-fno-common`.
+- **One runtime.** The E# runtime's state (the counters of `Heap.LiveClosures`, the exit hook of a fatal error, the text ring of
+  string formatting, the command line of `Args`, the library bases) is the program's: a binary declares it, and the program defines
+  what its packages' binaries use (their manifests say which). The program's code also defines every platform function a binary
+  calls, and all the virtual members of the platform classes its classes derive from (`GtWindow`).
+- **Start-up order.** With binaries, `main` runs the platform's static initializers first, then each binary's (an init function in
+  the binary, in package order), then the program's and those of packages compiled from source.
+- **Reproducible.** The compiler runs in a work folder with fixed relative names (in Docker always `/work`), without debug
+  information, and `ar` writes the archive in deterministic mode (no times, owners or modes), so two builds in different folders give
+  the same bytes, and the pinned m68k image and `esharp-amiga-toolchain` give the same m68k binary.
+- **Checking a package.** `esharp verify-package <nupkg or extracted folder>` rebuilds each binary from the sources the package
+  carries, with the same toolchain choice as the pack (`--image <target>=<image>`, `--docker`), and compares the bytes: `ok m68k:
+  library.a rebuilt from the package's sources, byte for byte`, or `FAIL` and exit code 1. It needs the esharp version that built the
+  binaries (the stamp). The game's build itself checks only that the
+  binaries are the ones `binary.json` lists (ES0118 otherwise); any other prebuilt file in the package is refused.
+- **Not covered.** `esharp addr` maps addresses in the program's own C only (a binary's code has no line table in the map).
+  A binary built for one esharp version is used only by that version (no stable ABI yet).
 
 ## The language subset
 
@@ -814,6 +863,8 @@ esharp test [path] [options]       run on the host; with --target m68k|os4|aros|
 esharp assets [dir|assets.json] [--force]   PNG, ILBM and WAV to Assets.g.cs
 esharp addr <exe | dir> [<where>] [--target <t>] [--docker [image] | --toolchain <dir>]   crash address to C# file:line
 esharp os4vm check|start|install-hook|remove-hook   AmigaOS 4.1 QEMU VM helpers
+esharp precompile <library dir> --dll <dll> --out <dir> [--targets <a;b>] [--docker [image]] [--image <t>=<image>]   an E# library's per-target binaries (run by dotnet pack)
+esharp verify-package <nupkg | folder> [--docker [image]] [--image <t>=<image>]   rebuild a package's binaries from its sources and compare the bytes
 esharp doctor [--target <name> [--toolchain <dir>]]   what builds and runs here: Docker images, local toolchains, emulators
 esharp --version
 ```

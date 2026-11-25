@@ -36,6 +36,9 @@ internal sealed partial class CEmitter
     /// converted from, and every class has its own table, so the table says the class: x is a T when its table is the one of T or of a class
     /// derived from T. When the table is of a base class of T (the object was converted while typed as the base), the object's own type id
     /// decides, which such a class has because it has a subclass. A null value has no table and is never a T.
+    /// A package's binary (library mode) does not know the program's classes, some of which may derive from T (through an [Extensible]
+    /// class): when no table it knows matches and T has type ids, a table that says its object has a class table (es_poly) lets the
+    /// object's own type id decide, as it would in the whole-program build.
     /// </summary>
     private string IfaceIs(string subject, INamedTypeSymbol iface, INamedTypeSymbol target)
     {
@@ -47,6 +50,8 @@ internal sealed partial class CEmitter
             else if (IsBaseOrSame(target, c) && IsPoly(target))
                 tests.Add($"({table} && es_is((const struct ES_Type *)(({TypeName(c)} *){subject}.obj)->{VtPath(c)}, {TypeIdOf(target)}))");
         }
+        if (Split.Library && IsPoly(target))
+            tests.Add($"({subject}.vt != NULL && {subject}.vt->es_poly && es_is(es_type_of({subject}.obj), {TypeIdOf(target)}))");
         return tests.Count == 0 ? "0" : "(" + string.Join(" || ", tests) + ")";
     }
 

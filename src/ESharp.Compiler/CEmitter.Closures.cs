@@ -981,7 +981,7 @@ internal sealed partial class CEmitter
     }
 
     /// <summary>The C runtime for heap closures and events (needs es_new).</summary>
-    private static void AppendClosureRuntime(StringBuilder result)
+    private void AppendClosureRuntime(StringBuilder result)
     {
         foreach (var line in new[]
         {
@@ -989,7 +989,7 @@ internal sealed partial class CEmitter
             "   A frame that owns delegate variables (an [Owned] parameter, a setter's value, a local only given new closures) has a fini",
             "   that drops their references before the frame is freed. */",
             "typedef struct es_frame { int32_t rc; struct es_frame *up; void (*fini)(struct es_frame *); } es_frame;",
-            "static int32_t es_frames_live;",
+            RuntimeState("int32_t es_frames_live;"),
             "static __attribute__((unused)) void *es_frame_new(size_t n, void *up)",
             "{",
             "    es_frame *f = (es_frame *)es_new(n);",
@@ -1013,7 +1013,7 @@ internal sealed partial class CEmitter
             "}",
             "static __attribute__((unused)) void es_frame_drop(void *slot) { es_frame_release(*(void **)slot); }",
             "/* References held by closures (a stored lambda, or an event's copy of a delegate), for Heap.LiveClosures(). */",
-            "static int32_t es_closures_live;",
+            RuntimeState("int32_t es_closures_live;"),
             "static __attribute__((unused)) void *es_closure_retain(void *p)",
             "{",
             "    if (p != NULL) { ((es_frame *)p)->rc++; es_closures_live++; }",

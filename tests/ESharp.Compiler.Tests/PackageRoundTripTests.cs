@@ -1,3 +1,4 @@
+using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO.Compression;
 using ESharp.Compiler;
@@ -14,10 +15,10 @@ namespace ESharp.Compiler.Tests;
 [Collection("ProcessConsole")]
 public class PackageRoundTripTests
 {
-    private const string SdkVersion = "0.0.1-roundtrip";
-    private const string M68kImage = "amigadev/crosstools:m68k-amigaos@sha256:32ec76dac03a642203f0f09f0416480d6c25de1092ed7ed472db870304a64859";
+    internal const string SdkVersion = "0.0.1-roundtrip";
+    internal const string M68kImage = "amigadev/crosstools:m68k-amigaos@sha256:32ec76dac03a642203f0f09f0416480d6c25de1092ed7ed472db870304a64859";
 
-    private static string RepoRoot => Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", ".."));
+    internal static string RepoRoot => Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", ".."));
 
     [Fact]
     public void Library_packs_restores_from_a_local_feed_and_builds_with_the_game()
@@ -108,10 +109,10 @@ public class PackageRoundTripTests
             foreach (var (code, file, says) in new[]
                      {
                          ("ESL006", "stray.c", "stray.c (C files and headers go in native/common/ or native/<target>/)"),
-                         ("ESL006", Path.Combine("native", "m68k", "fast.o"), "native/m68k/fast.o (prebuilt code: a package carries C source only)"),
+                         ("ESL006", Path.Combine("native", "m68k", "fast.o"), "native/m68k/fast.o (prebuilt code: a package carries C source only; its binaries are built by the pack step, EsPrecompile)"),
                          ("ESL006", Path.Combine("native", "amigaos", "x.c"), "native/amigaos/x.c (C files go in native/common/ or native/<target>/"),
                          ("ESL006", Path.Combine("native", "os4", "Cksum_Tune.h"), "only in case"),
-                         ("ESL006", "libfast.a", "libfast.a (prebuilt code: a package carries C source only)"),
+                         ("ESL006", "libfast.a", "libfast.a (prebuilt code: a package carries C source only; its binaries are built by the pack step, EsPrecompile)"),
                      })
             {
                 var path = Path.Combine(cks, file);
@@ -134,7 +135,7 @@ public class PackageRoundTripTests
             File.WriteAllText(cksProj, cksText);
             foreach (var dir in new[] { "bin", "obj" })
                 if (Directory.Exists(Path.Combine(cks, dir))) Directory.Delete(Path.Combine(cks, dir), true);
-            var (cksExit, cksLog) = DotnetResult(work, packages, "pack", "Checksum", "-o", feed, "-p:ESharpSdkVersion=" + SdkVersion);
+            var (cksExit, cksLog) = DotnetResult(work, packages, "pack", "Checksum", "-o", feed, "-p:ESharpSdkVersion=" + SdkVersion, "-p:EsPrecompile=false");
             Assert.True(cksExit == 0 && !cksLog.Contains("ESL0"), $"dotnet pack of the C library failed or warned:\n{cksLog}");
             var cksDll = Path.Combine(work, "Checksum.dll");
             using (var zip = ZipFile.OpenRead(Path.Combine(feed, "ESharpSample.Checksum.1.0.0.nupkg")))
@@ -153,7 +154,7 @@ public class PackageRoundTripTests
 
             // A class of the library that is not [Extensible] (only in this copy): the game may not derive from it (ES0117 below).
             File.WriteAllText(Path.Combine(work, "Tween", "Plain.cs"), "namespace Tween;\n\npublic class Plain\n{\n    public int N;\n}\n");
-            var (packExit, packLog) = DotnetResult(work, packages, "pack", "Tween", "-o", feed, "-p:ESharpSdkVersion=" + SdkVersion);
+            var (packExit, packLog) = DotnetResult(work, packages, "pack", "Tween", "-o", feed, "-p:ESharpSdkVersion=" + SdkVersion, "-p:EsPrecompile=false");
             Assert.True(packExit == 0 && !packLog.Contains("ESL0"), $"dotnet pack failed or warned:\n{packLog}");
             var nupkg = Path.Combine(feed, "ESharpSample.Tween.1.0.0.nupkg");
             Assert.True(File.Exists(nupkg), "no package from dotnet pack");
@@ -351,7 +352,8 @@ public class PackageRoundTripTests
             FakeSdkPackage(feed);
             var packages = Path.Combine(work, "packages");
 
-            var (packExit, packLog) = DotnetResult(proj, packages, "pack", "Easing", "-o", "feed");
+            // Sources only: the template lists all six targets, and the pack would need a toolchain for each to build binaries (#154).
+            var (packExit, packLog) = DotnetResult(proj, packages, "pack", "Easing", "-o", "feed", "-p:EsPrecompile=false");
             Assert.True(packExit == 0 && !packLog.Contains("ESL0"), $"dotnet pack of the template library failed or warned:\n{packLog}");
             var nupkg = Path.Combine(feed, "MyCompany.Easing.1.0.0.nupkg");
             Assert.True(File.Exists(nupkg), "no package from dotnet pack");
@@ -406,7 +408,7 @@ public class PackageRoundTripTests
     /// An AmigaESharp.Sdk package as src/ESharp.Sdk packs it (lib/net10.0 host assemblies, the analyzer, buildTransitive targets),
     /// from what this test build already has, so the round trip does not rebuild src/ or depend on a published version.
     /// </summary>
-    private static void FakeSdkPackage(string feed)
+    internal static void FakeSdkPackage(string feed)
     {
         var path = Path.Combine(feed, $"AmigaESharp.Sdk.{SdkVersion}.nupkg");
         using var zip = ZipFile.Open(path, ZipArchiveMode.Create);
@@ -431,7 +433,7 @@ public class PackageRoundTripTests
             File.WriteAllText(Path.Combine(dir, name), "<Project />\n");
     }
 
-    private static void CopyProject(string from, string to)
+    internal static void CopyProject(string from, string to)
     {
         Directory.CreateDirectory(to);
         foreach (var file in Directory.GetFiles(from))   // the project's own files (no bin/ or obj/ of a local build)
@@ -440,15 +442,18 @@ public class PackageRoundTripTests
             CopyProject(dir, Path.Combine(to, Path.GetFileName(dir)));
     }
 
-    private static void Dotnet(string dir, string packages, params string[] args)
+    internal static void Dotnet(string dir, string packages, params string[] args)
     {
         var (exit, log) = DotnetResult(dir, packages, args);
         Assert.True(exit == 0, $"dotnet {string.Join(" ", args)} failed:\n{log}");
     }
 
-    private static (int Exit, string Log) DotnetResult(string dir, string packages, params string[] args)
+    private static (int Exit, string Log) DotnetResult(string dir, string packages, params string[] args) => DotnetResult(dir, packages, null, args);
+
+    internal static (int Exit, string Log) DotnetResult(string dir, string packages, IReadOnlyDictionary<string, string>? env, params string[] args)
     {
         var psi = new ProcessStartInfo("dotnet") { WorkingDirectory = dir, RedirectStandardOutput = true, RedirectStandardError = true };
+        foreach (var (k, v) in env ?? new Dictionary<string, string>()) psi.Environment[k] = v;
         foreach (var a in args) psi.ArgumentList.Add(a);
         psi.ArgumentList.Add("-nologo");
         psi.Environment["NUGET_PACKAGES"] = packages;
@@ -461,7 +466,7 @@ public class PackageRoundTripTests
         return (p.ExitCode, output + "\n" + err.Result);
     }
 
-    private static bool HasImage(string image)
+    internal static bool HasImage(string image)
     {
         try
         {

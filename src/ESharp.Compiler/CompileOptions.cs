@@ -44,6 +44,18 @@ public sealed class CompileOptions
     /// <summary>The E# version building the program, checked against each package's minimum; null skips that check.</summary>
     public string? SdkVersion { get; init; }
 
+    /// <summary>
+    /// Library mode (<c>esharp precompile</c>, issue #154): no program sources; the C of this package (the only one in <see cref="Packages"/>: a
+    /// package with E# dependencies is not precompiled, error ES0125) for its binary, with an init function instead of main (see <see cref="CompileResult.Library"/>).
+    /// </summary>
+    public EsPackage? LibraryBuild { get; init; }
+
+    /// <summary>Link a package's precompiled binary for the target instead of compiling its sources, where one fits (see <see cref="Stamp"/>).</summary>
+    public bool UseBinaries { get; init; } = true;
+
+    /// <summary>This E#'s stamp (<see cref="PackageBinaries.Stamp"/>): a binary made by another E# is not used. Null: no binary is used.</summary>
+    public string? Stamp { get; init; }
+
     /// <summary>Test hook: name the program files as library files (no ES0103 for internal library members).</summary>
     internal bool UserFilesAreLibrary { get; init; }
 }

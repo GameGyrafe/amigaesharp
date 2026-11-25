@@ -171,6 +171,15 @@ public static class Descriptors
         "ES0123", "[Native] extern for a package's C function",
         "The [Native] extern '{0}' names '{1}', a C function of package '{2}' (native prefix '{3}'); only the package declares its own C functions: call its C# method instead");
 
+    public static readonly DiagnosticDescriptor PackageBinaryNotUsed = new(
+        "ES0124", "Package compiled from its sources instead of its binary",
+        "Package '{0}' {1} has precompiled binaries, but {2}; its sources are compiled with the program instead",
+        Category, DiagnosticSeverity.Warning, isEnabledByDefault: true);
+
+    public static readonly DiagnosticDescriptor PackageNotPrecompilable = Error(
+        "ES0125", "Package cannot be precompiled",
+        "This package cannot be built as a binary for its targets: {0}; set EsPrecompile to false in the library project (it then ships its sources only)");
+
     public static System.Collections.Immutable.ImmutableArray<DiagnosticDescriptor> SubsetRules =>
         System.Collections.Immutable.ImmutableArray.Create(
             Exceptions, Linq, FloatingPoint, AsyncAwait, Dynamic, Reflection,

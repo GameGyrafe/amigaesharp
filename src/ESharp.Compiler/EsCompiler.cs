@@ -44,7 +44,7 @@ public static class EsCompiler
             "ESharpProgram",
             userTrees.Concat(packageTrees).Concat(libTrees),
             References(),
-            new CSharpCompilationOptions(OutputKind.ConsoleApplication, allowUnsafe: true,
+            new CSharpCompilationOptions(options.LibraryBuild == null ? OutputKind.ConsoleApplication : OutputKind.DynamicallyLinkedLibrary, allowUnsafe: true,
                 nullableContextOptions: NullableContextOptions.Disable));
 
         var diagnostics = new List<Diagnostic>();
@@ -66,7 +66,8 @@ public static class EsCompiler
             .Where(d => IsUser(d, userSet) && !(d.Id == "ES0100" && options.Defines.Contains("SDL"))));
 
         // 3. Entry point rules (the program's files; an entry point in a package is an error of its own), and the package checks.
-        CheckEntryPoint(compilation, new HashSet<SyntaxTree>(userTrees), diagnostics);
+        // A library build (esharp precompile) has no program and no entry point.
+        if (options.LibraryBuild == null) CheckEntryPoint(compilation, new HashSet<SyntaxTree>(userTrees), diagnostics);
         PackageChecks.Sources(compilation, userTrees, packageOf, diagnostics);
         // The C prototypes of the packages' own C functions (their [Native] externs), for the program's C and esharp_natives.h.
         var prototypes = PackageNatives.Prototypes(compilation, packageOf, diagnostics);
@@ -80,6 +81,18 @@ public static class EsCompiler
 
         if (diagnostics.Any(d => d.Severity == DiagnosticSeverity.Error))
             return new CompileResult(null, Sorted(diagnostics)) { Chip = chip };
+
+        // A binary holds one package's code alone: verify-package rebuilds it from that package, and main runs the binaries' init
+        // functions before the packages compiled from source.
+        if (options.LibraryBuild is { } only && options.Packages.Any(p => p != only))
+        {
+            diagnostics.Add(Diagnostic.Create(Descriptors.PackageNotPrecompilable, Location.None,
+                "it uses the E# package(s) " + string.Join(", ", options.Packages.Where(p => p != only).Select(p => p.Id)) + ", and a package with E# dependencies is not precompiled yet"));
+            return new CompileResult(null, Sorted(diagnostics)) { Chip = chip };
+        }
+
+        // Precompiled binaries of the packages (issue #154): which ones the program links instead of compiling their sources.
+        var linked = options.LibraryBuild == null ? ChooseBinaries(options, diagnostics) : new List<(EsPackage Package, PackageBinary Binary)>();
 
         // 4. Monomorphise generics, then check the expanded program still compiles.
         var expanded = Monomorphizer.Expand(compilation, userSet, parse);
@@ -95,14 +108,57 @@ public static class EsCompiler
         (compilation, userSet) = CKeywords.Apply(compilation, userSet);
 
         // 5. Emit C.
+        var plan = options.LibraryBuild is { } library
+            ? new SplitPlan { LibraryPrefix = library.PathPrefix, InitName = PackageBinaries.InitName(library.Id), MadeTypes = expanded.MadeTypes, MadeMethods = expanded.MadeMethods }
+            : linked.Count > 0
+                ? new SplitPlan
+                {
+                    Binaries = linked.ToDictionary(l => l.Package.PathPrefix, l => l.Binary), InitOrder = linked.Select(l => l.Binary).ToList(),
+                    MadeTypes = expanded.MadeTypes, MadeMethods = expanded.MadeMethods,
+                }
+                : new SplitPlan();
         var emitter = new CEmitter(compilation, userSet, diagnostics, options.BoundsChecks, options.CFileName)
         {
             PackagePrototypes = options.Packages.Where(prototypes.ContainsKey).SelectMany(p => prototypes[p]).Distinct().ToList(),
+            Split = plan,
         };
         var c = emitter.Emit();
+        // The packages' C: a binary holds its package's (library mode: only the library's own; program mode: not the linked ones').
+        var nativePackages = options.LibraryBuild is { } lib
+            ? options.Packages.Where(p => p == lib).ToList()
+            : options.Packages.Where(p => !linked.Any(l => l.Package == p)).ToList();
         return new CompileResult(
             diagnostics.Any(d => d.Severity == DiagnosticSeverity.Error) ? null : c,
-            Sorted(diagnostics)) { Chip = chip, Native = PackageNatives.Outputs(options.Packages, options.TargetName, prototypes) };
+            Sorted(diagnostics))
+        {
+            Chip = chip, Native = PackageNatives.Outputs(nativePackages, options.TargetName, prototypes),
+            Library = emitter.LibraryInfo, Linked = linked.Select(l => l.Binary).ToList(),
+        };
+    }
+
+    /// <summary>
+    /// The packages whose binary for the target the program links: built by this E# (<see cref="CompileOptions.Stamp"/>) for this build's
+    /// configuration. A package that has binaries, but none that fits, is compiled from its sources with warning ES0124 saying why.
+    /// </summary>
+    private static List<(EsPackage Package, PackageBinary Binary)> ChooseBinaries(CompileOptions options, List<Diagnostic> diagnostics)
+    {
+        var result = new List<(EsPackage, PackageBinary)>();
+        if (!options.UseBinaries || options.TargetName == null || options.Stamp == null) return result;
+        var target = PackageBinaries.BinaryTarget(options.TargetName);
+        var config = PackageBinaries.Config(options.Defines);
+        foreach (var p in options.Packages)
+        {
+            if (p.Binaries.Count == 0 || p.Problems.Count > 0) continue;
+            var b = p.Binaries.FirstOrDefault(x => x.BinaryTarget == target);
+            string? why = b == null ? $"none for {target} (it has {string.Join(", ", p.Binaries.Select(x => x.BinaryTarget))})"
+                : b.Stamp != options.Stamp ? $"its {target} binary was built by E# {b.Stamp}, and this is E# {options.Stamp}"
+                : b.Config != config ? $"its {target} binary is a {b.Config} build, and this is a {config} build"
+                : b.Target != options.TargetName ? $"its {target} binary is for target {b.Target}"
+                : null;
+            if (why != null) diagnostics.Add(Diagnostic.Create(Descriptors.PackageBinaryNotUsed, Location.None, p.Id, p.Version, why));
+            else result.Add((p, b!));
+        }
+        return result;
     }
 
     /// <summary>

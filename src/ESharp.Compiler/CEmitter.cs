@@ -122,6 +122,13 @@ internal sealed partial class CEmitter
     /// <summary>Classes whose objects carry a virtual function table: every class of a hierarchy that has a subclass or a virtual member.</summary>
     private bool IsPoly(ITypeSymbol? t) => t is INamedTypeSymbol c && IsHeapClass(c) && _polyRoots.Contains(RootClass(c));
 
+    /// <summary>
+    /// A class marked [Extensible]. In a split build it always has a class table: the program may derive from a package's class that has no
+    /// virtual members and no subclasses in the package, and the binary's layout and type ids must be the ones the program's subclass uses.
+    /// </summary>
+    private static bool IsExtensible(INamedTypeSymbol c) =>
+        c.GetAttributes().Any(a => a.AttributeClass is { Name: "ExtensibleAttribute", ContainingNamespace: { Name: "ESharp", ContainingNamespace.IsGlobalNamespace: true } });
+
     /// <summary>Part of a hierarchy: needs pointer casts when it is used as its base class.</summary>
     private bool IsHier(ITypeSymbol? t) => t is INamedTypeSymbol c && IsHeapClass(c) && (BaseClass(c) != null || _polyRoots.Contains(c));
 
@@ -194,6 +201,7 @@ internal sealed partial class CEmitter
         if (type == null || GetAttribute(type, "LibraryBaseAttribute") is not { } a) return null;
         string lib = (string)a.ConstructorArguments[0].Value!, name = (string)a.ConstructorArguments[1].Value!, ctype = (string)a.ConstructorArguments[2].Value!;
         _bases[name] = ctype;
+        _baseLibs[name] = lib;
         // muimaster.library: no header (the MUI SDK's are not used); the emitter defines its calls itself (MuiMasterCalls).
         if (lib == "muimaster") _usesMuiMaster = true;
         else _headers.Add($"proto/{lib}.h");
@@ -220,7 +228,7 @@ internal sealed partial class CEmitter
         var heapClasses = types.Where(IsHeapClass).Select(t => (INamedTypeSymbol)t).OrderBy(Depth).ToList();
         _heapClasses = heapClasses;
         foreach (var c in heapClasses)
-            if (BaseClass(c) != null || c.GetMembers().OfType<IMethodSymbol>().Any(IsDynamic)) _polyRoots.Add(RootClass(c));
+            if (BaseClass(c) != null || c.GetMembers().OfType<IMethodSymbol>().Any(IsDynamic) || (Split.Active && IsExtensible(c))) _polyRoots.Add(RootClass(c));
         var enums = types.Where(t => t.TypeKind == TypeKind.Enum).ToList();
         var statics = types.Where(t => t.TypeKind == TypeKind.Class).ToList();
 
@@ -242,6 +250,9 @@ internal sealed partial class CEmitter
             Line("struct ES_Type { const struct ES_Type *base; };");
             // Type ids are table addresses: an object is an instance of a class when that class's id is on its chain of base classes.
             Line("static __attribute__((unused)) bool es_is(const struct ES_Type *t, const struct ES_Type *want) { for (; t != NULL; t = t->base) if (t == want) return true; return false; }");
+            // Library mode: the type id of an object whose class this file may not know (its first member is its class table pointer).
+            if (Split.Library)
+                Line("static __attribute__((unused)) const struct ES_Type *es_type_of(const void *o) { const struct ES_Type *t; __builtin_memcpy(&t, o, sizeof t); return t; }");
             foreach (var c in heapClasses.Where(c => IsPoly(c) && BaseClass(c) == null)) Line($"struct {CvtName(c)};");
         }
         foreach (var s in structs) EmitStruct(s);
@@ -257,7 +268,8 @@ internal sealed partial class CEmitter
         foreach (var c in heapClasses.Where(IsPoly)) EmitCvt(c);
         foreach (var c in heapClasses.Where(IsPoly))
         {
-            Line($"static __attribute__((unused)) const struct {CvtName(c)} {TypeName(c)}_vt;");
+            // Split builds: one table per class in the whole link (its address is the type id), defined by the object that owns the class.
+            Line(Split.Active ? $"extern const struct {CvtName(c)} {TypeName(c)}_vt;" : $"static __attribute__((unused)) const struct {CvtName(c)} {TypeName(c)}_vt;");
             _usesAlloc = true;
             Line($"static __attribute__((unused)) {TypeName(c)} *{TypeName(c)}_alloc(void) {{ {TypeName(c)} *o = ES_NEW({TypeName(c)}); o->{VtPath(c)} = (const struct {CvtName(RootClass(c))} *)&{TypeName(c)}_vt; return o; }}");
         }
@@ -274,7 +286,7 @@ internal sealed partial class CEmitter
         foreach (var ev in staticEvents)
         {
             _usesClosures = true;
-            Line($"static es_event {StaticEventName(ev)};");
+            Line(IsExternal(ev) ? $"extern es_event {StaticEventName(ev)};" : $"{Storage}es_event {StaticEventName(ev)};");
         }
         if (fields.Count + staticProps.Count + staticEvents.Count > 0) Line("");
 
@@ -289,26 +301,50 @@ internal sealed partial class CEmitter
         methods.AddRange(reachable.Where(m => m.MethodKind == MethodKind.LocalFunction));
         methods.AddRange(reachable.Where(m => m.MethodKind == MethodKind.AnonymousFunction)
             .GroupBy(m => FuncName(m)).Select(g => g.First()));
-        _staticConstructors.AddRange(methods.Where(m => m.MethodKind == MethodKind.StaticConstructor));
+        // Split builds: functions another object defines are declared only (a lambda or local function only its own function calls).
+        methods.RemoveAll(m => IsExternal(m) && m.MethodKind is MethodKind.AnonymousFunction or MethodKind.LocalFunction);
+        _staticConstructors.AddRange(methods.Where(m => m.MethodKind == MethodKind.StaticConstructor && !IsExternal(m)));
         foreach (var m in methods)
         {
             Line(Prototype(m) + ";");
             if (m.MethodKind == MethodKind.Constructor && IsHeapClass(m.ContainingType)) Line(InitPrototype(m) + ";");
         }
-        foreach (var c in _fieldInitClasses) Line($"static void {FieldInitName(c)}({TypeName(c)} *{ThisName});");
+        foreach (var c in _fieldInitClasses) Line($"{Storage}void {FieldInitName(c)}({TypeName(c)} *{ThisName});");
         if (methods.Count > 0 || _fieldInitClasses.Count > 0) Line("");
         CheckBodilessAsm(reachable);
         EmitInterruptDeclarations(methods);
         EmitHookDeclarations(methods);
-        foreach (var c in heapClasses.Where(IsPoly)) EmitVtInstance(c, reachable);
+        foreach (var c in heapClasses.Where(c => IsPoly(c) && !IsExternal(c))) EmitVtInstance(c, reachable);
         foreach (var c in heapClasses)
             foreach (var i in interfaces.Where(i => c.AllInterfaces.Contains(i, SymbolEqualityComparer.Default)))
                 EmitVtable(i, c);
 
-        foreach (var c in _fieldInitClasses) EmitFieldInit(c);
-        foreach (var m in methods) EmitMethod(m);
+        foreach (var c in _fieldInitClasses.Where(c => !IsExternal(c))) EmitFieldInit(c);
+        foreach (var m in methods.Where(m => !IsExternal(m))) EmitMethod(m);
 
-        EmitMain();
+        // Program mode: what the binaries' code needs of the runtime and the library bases they use (the program defines them).
+        foreach (var binary in Split.InitOrder)
+        {
+            UseRuntime(binary.Runtime);
+            foreach (var b in binary.Bases)
+            {
+                _bases[b.Name] = b.CType;
+                if (b.Lib == "muimaster") _usesMuiMaster = true;
+                else if (b.Lib.Length > 0) _headers.Add($"proto/{b.Lib}.h");
+            }
+        }
+        if (Split.Library)
+        {
+            EmitLibraryInit();
+            LibraryInfo = new LibraryBuildInfo(Split.InitName, LibraryInstances(types), RuntimeUses(),
+                _bases.Select(b => new PackageBase(_baseLibs.TryGetValue(b.Key, out var l) ? l : "", b.Key, b.Value)).ToList())
+                { Delegates = _delegatesDefined.ToList(), DelegateUses = _delegatesUsed.ToList() };
+        }
+        else
+        {
+            EmitBinaryDelegateWrappers(methods.Where(m => !IsExternal(m)));
+            EmitMain();
+        }
         EmitInterruptEntries();
         EmitHookEntries();
 
@@ -350,13 +386,13 @@ internal sealed partial class CEmitter
             result.AppendLine("#include <dos/obsolete.h>");
             result.AppendLine("#endif");
         }
-        foreach (var (name, type) in _bases) result.AppendLine($"{type} *es_{name};");
+        if (!Split.Library) foreach (var (name, type) in _bases) result.AppendLine($"{type} *es_{name};");   // a package's binary uses the program's
         // libauto (-lauto) opens the interface of the usual libraries at start-up on AmigaOS 4, but it has none for
         // cybergraphics.library, which may be absent anyway: SetBase gets "main" version 1 itself and drops it again.
         if (_bases.ContainsKey("CyberGfxBase"))
         {
             result.AppendLine("#if defined(__amigaos4__)");
-            result.AppendLine("struct CyberGfxIFace *ICyberGfx;");
+            result.AppendLine(Split.Library ? "extern struct CyberGfxIFace *ICyberGfx;" : "struct CyberGfxIFace *ICyberGfx;");
             result.AppendLine("static void es_setbase_CyberGfxBase(struct Library *lib)");
             result.AppendLine("{");
             result.AppendLine("    if (ICyberGfx != NULL) { DropInterface((struct Interface *)ICyberGfx); ICyberGfx = NULL; }");
@@ -464,9 +500,9 @@ internal sealed partial class CEmitter
         {
             foreach (var line in new[]
             {
-                "static char es_fmt_buf[8][128];",
-                "static int es_fmt_index;",
-                "static char *es_fmt_begin(void) { char *b = es_fmt_buf[es_fmt_index]; es_fmt_index = (es_fmt_index + 1) & 7; return b; }",
+                RuntimeState("char es_fmt_buf[8][128];"),
+                RuntimeState("int es_fmt_index;"),
+                SplitHelper + "char *es_fmt_begin(void) { char *b = es_fmt_buf[es_fmt_index]; es_fmt_index = (es_fmt_index + 1) & 7; return b; }",
                 // s.Substring(start[, count]) copies into the same ring as interpolation; out-of-range arguments are clamped (no exceptions).
                 "static __attribute__((unused)) const char *es_substr(const char *s, int32_t start, int32_t count)",
                 "{",
@@ -557,7 +593,7 @@ internal sealed partial class CEmitter
             result.AppendLine("#include <stdio.h>");
             result.AppendLine("#include <stdlib.h>");
             if (!_usesBounds) AppendFatalHelper(result);
-            result.AppendLine("static void *es_new(size_t n)");
+            result.AppendLine(SplitHelper + "void *es_new(size_t n)");
             result.AppendLine("{");
             result.AppendLine("    void *p = calloc(1, n);");
             result.AppendLine("    if (p == NULL) { es_errstr(\"out of memory\\n\"); es_fatal(); }");
@@ -587,14 +623,22 @@ internal sealed partial class CEmitter
             result.AppendLine("    return *a == *b;");
             result.AppendLine("}");
         }
-        if (UsesArgs)
+        if (UsesArgs && Split.Library)
+        {
+            // A package's binary reads the program's command line (main fills it in, from the Workbench tool types too).
+            result.AppendLine("extern int es_argc;");
+            result.AppendLine("extern char **es_argv;");
+            result.AppendLine("static __attribute__((unused)) int32_t es_args_count(void) { return es_argc > 1 ? (int32_t)es_argc - 1 : 0; }");
+            result.AppendLine("static __attribute__((unused)) const char *es_args_get(int32_t i) { return i >= 0 && i < es_args_count() ? es_argv[i + 1] : NULL; }");
+        }
+        else if (UsesArgs)
         {
             // Args: main keeps argc/argv; argument 0 is the program name, so Args counts from 1.
             // A Workbench start has argc 0 and argv pointing at the WBStartup message (the C startup code of every Amiga target does this):
             // the program icon's tool types then stand in for the command line (issue #84). "KEY=VALUE" and "SWITCH" tool types are the
             // words Args.Value/Has already look for; a tool type in parentheses is switched off in the icon and is skipped.
-            result.AppendLine("static int es_argc;");
-            result.AppendLine("static char **es_argv;");
+            result.AppendLine(RuntimeState("int es_argc;"));
+            result.AppendLine(RuntimeState("char **es_argv;"));
             result.AppendLine("#define ES_WB_MAX 64");
             result.AppendLine("static char *es_wb_args[ES_WB_MAX + 2];");
             result.AppendLine("static char es_wb_buf[2048];");
@@ -817,7 +861,11 @@ internal sealed partial class CEmitter
         // Non-Amiga targets: [Native] calls named es_std_* are standard C (stdio, stdlib, time), es_sdl_* need SDL 3. The C runtime is
         // pasted in whole (its functions are static and marked unused), so a program that only prints needs no SDL at all.
         var usesSdl = _natives.Any(n => n.StartsWith("es_sdl_", StringComparison.Ordinal));
-        if (usesSdl || _natives.Any(n => n.StartsWith("es_std_", StringComparison.Ordinal)))
+        if (Split.Library && (usesSdl || _natives.Any(n => n.StartsWith("es_std_", StringComparison.Ordinal))))
+            // The C runtime of the sdl target keeps state (the window, the input, the sounds) in static variables: one copy, the program's.
+            _diagnostics.Add(Diagnostic.Create(Descriptors.PackageNotPrecompilable, Location.None,
+                "its code calls the C runtime of the platform layer directly ([Native] " + string.Join(", ", _natives.Where(n => n.StartsWith("es_sdl_", StringComparison.Ordinal) || n.StartsWith("es_std_", StringComparison.Ordinal)).OrderBy(n => n, StringComparer.Ordinal)) + "), which keeps its state in the program"));
+        else if (usesSdl || _natives.Any(n => n.StartsWith("es_std_", StringComparison.Ordinal)))
         {
             result.Append(LibrarySources.CRuntime("es_std.h"));
             if (usesSdl) result.Append(LibrarySources.CRuntime("es_sdl.h"));
@@ -1253,6 +1301,11 @@ static __attribute__((unused)) int32_t MUI_DeleteCustomClass(void *mcc)
                     case IMethodSymbol m: Add(m); break;
                     case IFieldSymbol or IPropertySymbol: _usedSymbols.Add(member); break;
                 }
+        // Split builds: the table of a class that a package's binary defines has every slot filled (the program may call any of them through
+        // it), and the binary and the program both reach those implementations (the program defines the platform's).
+        foreach (var t in types.Where(t => IsHeapClass(t) && IsSplitOwnedClass(t)))
+            foreach (var def in AllSlots(t))
+                if (FinalImpl(t, def) is { } impl && DeclaresBody(impl)) Add(impl);
         var walkedFields = new HashSet<ISymbol>(SymbolEqualityComparer.Default);
 
         while (true)
@@ -1774,7 +1827,7 @@ static __attribute__((unused)) int32_t MUI_DeleteCustomClass(void *mcc)
             var slotPath = string.Concat(Enumerable.Repeat("es_base.", depth - Depth(def.ContainingType))) + VSlot(def);
             inits.Add($".{slotPath} = {thunk}");
         }
-        Line($"static __attribute__((unused)) const struct {CvtName(c)} {TypeName(c)}_vt = {{ {string.Join(", ", inits)} }};");
+        Line($"{(Split.Active ? "" : "static __attribute__((unused)) ")}const struct {CvtName(c)} {TypeName(c)}_vt = {{ {string.Join(", ", inits)} }};");
         Line("");
     }
 
@@ -1784,6 +1837,9 @@ static __attribute__((unused)) int32_t MUI_DeleteCustomClass(void *mcc)
         Line($"struct {TypeName(i)}_vtbl");
         Line("{");
         _indent++;
+        // Split builds: whether the object behind the table starts with a class table pointer ('vt'), so that a package's binary can test
+        // the object's own class when the table is of a program class it does not know (see IfaceIs).
+        if (Split.Active) Line("unsigned char es_poly;");
         foreach (var m in i.GetMembers().OfType<IMethodSymbol>().Where(m => m.MethodKind == MethodKind.Ordinary))
         {
             if (m.IsGenericMethod) Unsupported(decl, "generic method in an interface");
@@ -1797,6 +1853,14 @@ static __attribute__((unused)) int32_t MUI_DeleteCustomClass(void *mcc)
     /// <summary>The function table that lets a class be used as an interface, with one small function per method that casts the object back.</summary>
     private void EmitVtable(INamedTypeSymbol i, INamedTypeSymbol c)
     {
+        // Split builds: one table per class and interface in the whole link (an 'is' test on an interface value compares its address),
+        // defined by the object that owns the class, as its class table is.
+        if (IsExternal(c))
+        {
+            Line($"extern const struct {TypeName(i)}_vtbl {VtableName(i, c)};");
+            Line("");
+            return;
+        }
         var decl = c.DeclaringSyntaxReferences.First().GetSyntax();
         var slots = new List<string>();
         foreach (var im in i.GetMembers().OfType<IMethodSymbol>().Where(m => m.MethodKind == MethodKind.Ordinary))
@@ -1811,7 +1875,8 @@ static __attribute__((unused)) int32_t MUI_DeleteCustomClass(void *mcc)
             Line("}");
             slots.Add($".{SlotName(im)} = {thunk}");
         }
-        Line($"static __attribute__((unused)) const struct {TypeName(i)}_vtbl {VtableName(i, c)} = {{ {string.Join(", ", slots)} }};");
+        if (Split.Active) slots.Insert(0, $".es_poly = {(IsPoly(c) ? 1 : 0)}");
+        Line($"{(Split.Active ? "" : "static __attribute__((unused)) ")}const struct {TypeName(i)}_vtbl {VtableName(i, c)} = {{ {string.Join(", ", slots)} }};");
         Line("");
     }
 
@@ -1890,7 +1955,7 @@ static __attribute__((unused)) int32_t MUI_DeleteCustomClass(void *mcc)
 
     private void EmitFieldInit(INamedTypeSymbol c)
     {
-        Line($"static void {FieldInitName(c)}({TypeName(c)} *{ThisName})");
+        Line($"{Storage}void {FieldInitName(c)}({TypeName(c)} *{ThisName})");
         Line("{");
         _indent++;
         _this = ThisKind.Pointer;
@@ -1949,10 +2014,16 @@ static __attribute__((unused)) int32_t MUI_DeleteCustomClass(void *mcc)
         // Chip RAM is a 68k-only concept in the C dialect: PowerPC systems allocate chip memory
         // at run time instead, so the attribute is a no-op there.
         if (f.IsVolatile) text = f.Type is IArrayTypeSymbol ? "volatile " + text : VolatileDecl(f, decl);   // shared with an interrupt server
+        if (IsExternal(f))
+        {
+            // Split builds: defined (and initialized) by the object that owns it.
+            Line(f.Type is IArrayTypeSymbol arrType ? $"extern {(f.IsVolatile ? "volatile " : "")}{ArrayDeclarator(arrType, FieldName(f), init, decl, withItems: false)};" : $"extern {text};");
+            return;
+        }
         if (HasAttribute(f, "ChipRamAttribute") && IsDefined("M68K"))
             text = "__chip " + text;
         if (deferred) _deferredStatics.Add((f, FieldName(f), init!));
-        Line(f.Type is IArrayTypeSymbol || init == null || deferred ? $"static {text};" : $"static {text} = {Expr(init, top: true)};");
+        Line(f.Type is IArrayTypeSymbol || init == null || deferred ? $"{Storage}{text};" : $"{Storage}{text} = {Expr(init, top: true)};");
     }
 
     /// <summary>The element list of an array creation (<c>new T[] { ... }</c>, <c>{ ... }</c>), or null for <c>new T[N]</c>.</summary>
@@ -1992,9 +2063,11 @@ static __attribute__((unused)) int32_t MUI_DeleteCustomClass(void *mcc)
     }
 
     /// <summary>The start-up assignments of <see cref="_deferredStatics"/>: declaration order, except that a field another one reads is set first.</summary>
-    private void EmitDeferredStatics()
+    private readonly HashSet<ISymbol> _deferredDone = new(SymbolEqualityComparer.Default);
+
+    private void EmitDeferredStatics(Func<ISymbol, bool>? which = null)
     {
-        var done = new HashSet<ISymbol>(SymbolEqualityComparer.Default);
+        var done = _deferredDone;
         var byField = new Dictionary<ISymbol, (ISymbol Symbol, string Target, ExpressionSyntax Init)>(SymbolEqualityComparer.Default);
         foreach (var d in _deferredStatics) byField[d.Symbol] = d;
         void Emit((ISymbol Symbol, string Target, ExpressionSyntax Init) d)
@@ -2008,7 +2081,8 @@ static __attribute__((unused)) int32_t MUI_DeleteCustomClass(void *mcc)
             }
             else Line($"{d.Target} = {Expr(d.Init, top: true)};");
         }
-        foreach (var d in _deferredStatics) Emit(d);
+        foreach (var d in _deferredStatics)
+            if (which == null || which(d.Symbol)) Emit(d);
     }
 
     // volatile on a pointer or reference field must qualify the pointer itself ("T * volatile x"), not what it points at.
@@ -2023,13 +2097,14 @@ static __attribute__((unused)) int32_t MUI_DeleteCustomClass(void *mcc)
         var decl = (PropertyDeclarationSyntax)p.DeclaringSyntaxReferences.First().GetSyntax();
         var name = $"{TypeName(p.ContainingType)}_{p.Name}";
         var text = Decl(p.Type, name, decl);
+        if (IsExternal(p)) { Line($"extern {text};"); return; }
         if (decl.Initializer != null && !IsCConstant(decl.Initializer.Value))
         {
             _deferredStatics.Add((p, name, decl.Initializer.Value));
-            Line($"static {text};");
+            Line($"{Storage}{text};");
             return;
         }
-        Line(decl.Initializer == null ? $"static {text};" : $"static {text} = {Expr(decl.Initializer.Value, top: true)};");
+        Line(decl.Initializer == null ? $"{Storage}{text};" : $"{Storage}{text} = {Expr(decl.Initializer.Value, top: true)};");
     }
 
     private string Prototype(IMethodSymbol m)
@@ -2047,6 +2122,9 @@ static __attribute__((unused)) int32_t MUI_DeleteCustomClass(void *mcc)
             _ => Unsupported(node, "this kind of ref parameter"),
         }));
         var ps = parts.Count == 0 ? "void" : string.Join(", ", parts);
+        // Split builds: a lambda's name comes from its place in the file, which a generic copy added to a package's file moves; only its
+        // own object uses it, so it is static there (two objects can then not define the same name).
+        var linkage = Split.Active && m.MethodKind == MethodKind.AnonymousFunction ? "static __attribute__((unused)) " : "";
         // A constructor is a function that builds and returns the struct.
         var ret = m.MethodKind == MethodKind.Constructor ? m.ContainingType : m.ReturnType;
         if (m.ReturnsByRef || m.ReturnsByRefReadonly)
@@ -2054,9 +2132,9 @@ static __attribute__((unused)) int32_t MUI_DeleteCustomClass(void *mcc)
             // ref T F(...)  ->  T *F(...): the function returns the address of the place.
             if (m.MethodKind is not (MethodKind.Ordinary or MethodKind.LocalFunction) || m.IsVirtual || m.IsAbstract || m.IsOverride || ret is IArrayTypeSymbol)
                 Unsupported(node, "ref return from a property, indexer, lambda, virtual or abstract member, or of an array type");
-            return Decl(ret, "*" + FuncName(m) + "(" + ps + ")", node);
+            return linkage + Decl(ret, "*" + FuncName(m) + "(" + ps + ")", node);
         }
-        return Decl(ret, FuncName(m) + "(" + ps + ")", node);
+        return linkage + Decl(ret, FuncName(m) + "(" + ps + ")", node);
     }
 
     /// <summary>A class constructor is two functions: NAME allocates and calls NAME_init, which runs the body on an existing object (so a derived constructor can run it for its base part).</summary>
@@ -2220,8 +2298,8 @@ static __attribute__((unused)) int32_t MUI_DeleteCustomClass(void *mcc)
         }
         result.AppendLine("static __attribute__((unused)) void es_errstr(const char *s) { fputs(s, stderr); }");
         if (IsDefined("AMIGA")) result.AppendLine("#endif");
-        result.AppendLine("static void (*es_exit_hook)(void);");
-        result.AppendLine("static void es_fatal(void)");
+        result.AppendLine(RuntimeState("void (*es_exit_hook)(void);"));
+        result.AppendLine(SplitHelper + "void es_fatal(void)");
         result.AppendLine("{");
         result.AppendLine("    void (*h)(void) = es_exit_hook;");
         result.AppendLine("    es_exit_hook = NULL;");
@@ -2303,6 +2381,7 @@ ADD2SET(es_aros_wbstart, PROGRAM_ENTRIES, -50)
             Line("}");
             Line("");
         }
+        foreach (var binary in Split.InitOrder) Line($"void {binary.Init}(void);   /* in the binary of package {binary.Id} {binary.Version} */");
         if (IsDefined("AMIGA")) foreach (var l in ArosWorkbenchStart.Split('\n')) Line(l.TrimEnd('\r'));
         Line(UsesArgs ? "int main(int argc, char **argv)" : "int main(void)");
         Line("{");
@@ -2318,8 +2397,22 @@ ADD2SET(es_aros_wbstart, PROGRAM_ENTRIES, -50)
         if ((_usesBounds || _usesAlloc) && _atExit.Count > 0) Line("es_exit_hook = es_run_atexit;");
         // Static field initializers that are not C constants, then the static constructors, run once at start-up, in the order the types
         // appear (C# runs them lazily, before a type is first used).
-        EmitDeferredStatics();
-        foreach (var cctor in _staticConstructors) Line(FuncName(cctor) + "();");
+        if (Split.InitOrder.Count > 0)
+        {
+            // With precompiled packages: the platform's first (the packages' code may use it), then each package's (its init function, in
+            // the package's binary), then the program's own and those of the packages compiled from source.
+            bool Platform(ISymbol s) => s.OriginalDefinition.DeclaringSyntaxReferences.All(r => !_user.Contains(r.SyntaxTree));
+            EmitDeferredStatics(Platform);
+            foreach (var cctor in _staticConstructors.Where(Platform)) Line(FuncName(cctor) + "();");
+            foreach (var binary in Split.InitOrder) Line(binary.Init + "();");
+            EmitDeferredStatics(s => !Platform(s));
+            foreach (var cctor in _staticConstructors.Where(c => !Platform(c))) Line(FuncName(cctor) + "();");
+        }
+        else
+        {
+            EmitDeferredStatics();
+            foreach (var cctor in _staticConstructors) Line(FuncName(cctor) + "();");
+        }
         // [AtExit] methods of the classes the program used run after the entry point returns, in the order they were reached.
         if (entry.ReturnsVoid)
         {
@@ -4000,15 +4093,50 @@ ADD2SET(es_aros_wbstart, PROGRAM_ENTRIES, -50)
         var invoke = del?.DelegateInvokeMethod;
         if (del == null || invoke == null) return FuncName(m);   // not a delegate conversion
         if (HasAttribute(m, "AmigaLibAttribute") || m.IsExtern) return Unsupported(at, "a library function as a delegate; wrap it in a lambda");
+        var wrapper = DelegateWrapper(m, invoke.Parameters, invoke.ReturnType, at);
+        return $"(({CType(del, at)}){{ {wrapper}, NULL }})";
+    }
+
+    /// <summary>
+    /// The wrapper <c>F__dg</c> that makes the static method F a delegate's function (it takes the unused environment first). Its address
+    /// is the delegate's identity (an event's -= compares it): a whole-program C file defines it static; in a split build the object
+    /// that owns F defines it once with external linkage (a binary lists those it defines and those of the platform's methods it
+    /// declares, which the program defines), and the other objects declare it.
+    /// </summary>
+    private string DelegateWrapper(IMethodSymbol m, IReadOnlyList<IParameterSymbol> parameters, ITypeSymbol returns, SyntaxNode at)
+    {
         var wrapper = FuncName(m) + "__dg";
         var key = "ES_zwrap_" + wrapper;
-        if (!_spans.ContainsKey(key))
+        if (_spans.ContainsKey(key)) return wrapper;
+        var ps = parameters.Select((p, i) => p.RefKind == RefKind.None ? Decl(p.Type, $"a{i}", at) : Decl(p.Type, $"*a{i}", at)).Prepend("void *_env");
+        var args = string.Join(", ", parameters.Select((_, i) => $"a{i}"));
+        var signature = Decl(returns, $"{wrapper}({string.Join(", ", ps)})", at);
+        var define = true;
+        if (Split.Library)
         {
-            var ps = invoke.Parameters.Select((p, i) => p.RefKind == RefKind.None ? Decl(p.Type, $"a{i}", at) : Decl(p.Type, $"*a{i}", at)).Prepend("void *_env");
-            var args = string.Join(", ", invoke.Parameters.Select((_, i) => $"a{i}"));
-            _spans[key] = $"{Prototype(m)};\nstatic {Decl(invoke.ReturnType, $"{wrapper}({string.Join(", ", ps)})", at)} {{ {(invoke.ReturnsVoid ? "" : "return ")}{FuncName(m)}({args}); }}\n";
+            define = !IsExternal(m);
+            (define ? _delegatesDefined : _delegatesUsed).Add(wrapper);
         }
-        return $"(({CType(del, at)}){{ {wrapper}, NULL }})";
+        else if (Split.Active && IsExternal(m) && BinaryOf(PathOf(m)) is { } binary)
+            define = !binary.Delegates.Contains(wrapper);   // the binary defines it when its own code uses F as a delegate
+        _spans[key] = define
+            ? $"{Prototype(m)};\n{(Split.Active ? "" : "static ")}{signature} {{ {(returns.SpecialType == SpecialType.System_Void ? "" : "return ")}{FuncName(m)}({args}); }}\n"
+            : $"{Prototype(m)};\n{signature};\n";
+        return wrapper;
+    }
+
+    private readonly SortedSet<string> _delegatesDefined = new(StringComparer.Ordinal), _delegatesUsed = new(StringComparer.Ordinal);
+
+    /// <summary>Program mode: the wrappers of the platform's methods that the binaries' code uses as delegates and declares only.</summary>
+    private void EmitBinaryDelegateWrappers(IEnumerable<IMethodSymbol> methods)
+    {
+        var needed = new HashSet<string>(Split.InitOrder.SelectMany(b => b.DelegateUses), StringComparer.Ordinal);
+        if (needed.Count == 0) return;
+        foreach (var m in methods)
+            if (m.MethodKind == MethodKind.Ordinary && needed.Remove(FuncName(m) + "__dg") && m.DeclaringSyntaxReferences.FirstOrDefault()?.GetSyntax() is { } at)
+                DelegateWrapper(m, m.Parameters, m.ReturnType, at);
+        foreach (var name in needed.OrderBy(n => n, StringComparer.Ordinal))
+            _diagnostics.Add(Diagnostic.Create(Descriptors.Unsupported, Location.None, $"the delegate wrapper '{name}' that a precompiled package's binary uses (its method is not reached)"));
     }
 
     /// <summary>Local functions become C functions of their own, so they may not use the locals, parameters or 'this' of the method around them.</summary>
