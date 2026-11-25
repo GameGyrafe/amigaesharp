@@ -314,7 +314,7 @@ public class HostTargetTests
         IffSample.Program.Main();
         Assert.DoesNotContain("FAIL", console.Output);
         Assert.StartsWith("using the built-in E# reader and writer\n", console.Output);
-        Assert.Equal(28, console.Output.Split('\n').Count(l => l.StartsWith("ok ")));
+        Assert.Equal(34, console.Output.Split('\n').Count(l => l.StartsWith("ok ")));
     }
 
     [Fact]
@@ -505,6 +505,21 @@ public class HostTargetTests
             Assert.Equal("ABCD", System.Text.Encoding.ASCII.GetString(bytes, 12, 4));
         }
         finally { File.Delete(path); }
+    }
+
+    private static unsafe int UnmanagedSize<T>() where T : unmanaged => sizeof(T);
+
+    [Fact]
+    public unsafe void IffFile_is_an_unmanaged_struct_on_the_host_as_on_the_C_targets()
+    {
+        // Compiles only while IffFile holds no managed reference: IffFile*, sizeof and the unmanaged-only collections.
+        var f = new ESharp.Platform.IffFile();
+        ESharp.Platform.IffFile* p = &f;
+        Assert.False(p->IsOpen);
+        Assert.Equal(sizeof(ESharp.Platform.IffFile), UnmanagedSize<ESharp.Platform.IffFile>());
+        Assert.True(typeof(ESharp.Platform.Pool<ESharp.Platform.IffFile>).IsValueType);
+        Assert.True(typeof(ESharp.Platform.HashSet<ESharp.Platform.IffFile>).IsValueType);
+        Assert.False(System.Runtime.CompilerServices.RuntimeHelpers.IsReferenceOrContainsReferences<ESharp.Platform.IffFile>());
     }
 
     [Fact]

@@ -150,13 +150,13 @@ Check(Keys.Find('Q').Code == 0x10 && Keys.Find('Q').Qualifier == Keys.LeftShift,
         Assert.DoesNotContain("FAIL", output);
         Assert.StartsWith("using the built-in E# reader and writer\n", output);
         Assert.Contains("sum 17dcd906", output);                                // the same bytes as the dotnet host and iffparse.library write
-        Assert.Equal(28, output.Split('\n').Count(l => l.StartsWith("ok ")));
+        Assert.Equal(34, output.Split('\n').Count(l => l.StartsWith("ok ")));
         if (HasSanitizers)
         {
             var (scode, soutput) = RunSanitized(r.C!);
             Assert.Equal(0, scode);
             Assert.DoesNotContain("FAIL", soutput);
-            Assert.Equal(28, soutput.Split('\n').Count(l => l.StartsWith("ok ")));
+            Assert.Equal(34, soutput.Split('\n').Count(l => l.StartsWith("ok ")));
         }
     }
 

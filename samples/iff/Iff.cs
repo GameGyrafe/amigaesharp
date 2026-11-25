@@ -211,6 +211,34 @@ public static unsafe class Program
         Check(bad, tag, "misuse of a writer gives false and the file can still be finished");
     }
 
+    // A path built at run time, then more formatted strings than the C targets' 8 ring buffers hold before Finish (a score drawn
+    // while saving): the file must still get its own name and all its bytes, and no file may appear under one of the other strings.
+    static void RunTimePath(string prefix, int slot, byte* d, bool builtIn, string tag)
+    {
+        Iff.ForceBuiltIn = builtIn;
+        IffFile w = Iff.Create($"{prefix}esharp_iff_save{slot}.iff", Iff.Id("TEST"));
+        Iff.ForceBuiltIn = false;
+        bool ok = w.IsOpen && w.WriteChunk(Iff.Id("DATA"), d, 4);
+        int chars = 0;
+        for (int i = 0; i < 9; i++) { string s = $"score {i}"; chars += s.Length; }
+        ok = w.Finish() && ok;
+        Check(ok && chars == 63, tag, "a writer made with a path built at run time finishes after 9 more formatted strings");
+        string path = $"{prefix}esharp_iff_save{slot}.iff";
+        byte* back = Files.ReadAll(path, out int size, false);
+        Check(back != null && size == 24 && Be(back, 0) == Iff.IdForm && Be(back, 4) == 16u && Be(back, 12) == Iff.Id("DATA"), tag,
+              "that file has its own name and all its bytes");
+        if (back != null) Mem.Free(back);
+        bool stray = false;
+        for (int i = 0; i < 9; i++)
+        {
+            string other = $"score {i}";
+            byte* o = Files.ReadAll(other, out int osize, false);
+            if (o != null) { stray = true; Mem.Free(o); Files.Delete(other); }
+        }
+        Check(!stray, tag, "no file was written under one of the later strings");
+        Files.Delete(path);
+    }
+
     [EntryPoint]
     public static void Main()
     {
@@ -218,9 +246,12 @@ public static unsafe class Program
         Iff.Close();
 #if AMIGA
         string pathA = "RAM:esharp_iff_a.iff", pathB = "RAM:esharp_iff_b.iff", pathC = "RAM:esharp_iff_c.iff";
+        string prefix = "RAM:";
 #elif SDL
         string pathA = "esharp_iff_a.iff", pathB = "esharp_iff_b.iff", pathC = "esharp_iff_c.iff";
+        string prefix = "";
 #else
+        string prefix = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "esharp_iff_" + System.Environment.ProcessId + "_");
         string pathA = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "esharp_iff_" + System.Environment.ProcessId + "_a.iff");
         string pathB = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "esharp_iff_" + System.Environment.ProcessId + "_b.iff");
         string pathC = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "esharp_iff_" + System.Environment.ProcessId + "_c.iff");
@@ -268,6 +299,8 @@ public static unsafe class Program
         {
             Misuse(pathC, d, true, "the E# code: ");
             Misuse(pathC, d, false, "");
+            RunTimePath(prefix, 3, d, true, "the E# code: ");
+            RunTimePath(prefix, 4, d, false, "");
         }
 
         Files.Delete(pathA);

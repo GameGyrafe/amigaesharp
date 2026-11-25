@@ -52,7 +52,18 @@ when the size is odd (not counted in the size).
   (the same bytes were made independently with a Python script from the format facts). It reads each file with each reader,
   walks the 13 steps (sizes, ids, types, depths, bytes), and checks cut files, a non-IFF file, a missing file, the two nestings, a
   writer passed by value to a helper (8000-byte chunk, a grow) and misuse of a writer, the last four with each implementation.
-  28 ok lines on every target; a first line says which implementation is in use.
+  34 ok lines on every target (28 before the second re-review); a first line says which implementation is in use.
+- **Re-review 2 fixes (PR 159):** (1) the E# writer copies the path given to `Create` into memory owned by the file's state block
+  (freed with it) and writes the file under that copy at `Finish`. Before, it kept the `string`, and on the C targets a path built at
+  run time (`$"save{slot}.iff"`) lives in one of the 8 ring buffers: after 8 more formatted strings `Finish` wrote the file under
+  another string's text (found on sdl). The iffparse path uses the path only inside `Create`. (2) `IffFile` has no managed field
+  again, so it is an unmanaged struct on the dotnet host as on main (`IffFile*`, `sizeof`, `Pool<IffFile>`; a host test checks it).
+  (3) `samples/iff` now creates a file with a path built at run time, formats 9 more strings, finishes, and checks the file has its
+  name and its 24 bytes and that no file appeared under one of the other strings, with each implementation (6 more ok lines). On the
+  old code this fails on sdl. Verified: `dotnet test` 794 tests, 792 passed, 2 skipped, 0 failed; `esharp test samples/iff` on A1200 Kickstart 3.1 FS-UAE without
+  `LIBS:` ("using the built-in E# reader and writer") and with `--mui 3.8 --workbench <wb>` ("using iffparse.library"): host 34,
+  Amiga 34, agree, return code 0; `--target sdl` (esharp-sdl): 34, agree; `--target aros` (hosted AROS x86-64, iffparse.library):
+  34, 0 traps, agree. Not run again: os4.
 
 Verified:
 - `dotnet test`: 791 tests, 789 passed, 2 skipped (the OS4 VM and SDK-backed BindGen ones), 0 failed. New or changed tests: host run of the sample (16 ok), the byte layout, a

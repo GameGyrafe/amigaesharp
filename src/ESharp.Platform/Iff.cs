@@ -39,6 +39,7 @@ public static unsafe class IffParse
 /// is how the end of a group shows. A copy of an <c>IffFile</c> (passed by value to a helper) works on the same file, with the same
 /// result on every target; what <see cref="Next"/> reports (<see cref="ChunkId"/> and the like) is set in the copy it was called on,
 /// so pass the file by <c>ref</c> to a helper that steps through it. After <see cref="Finish"/> or <see cref="Close"/> use none of the copies.
+/// It is an unmanaged struct on every target (no managed reference in it), so <c>IffFile*</c> and <c>Pool&lt;IffFile&gt;</c> work.
 /// </summary>
 public unsafe struct IffFile
 {
@@ -63,7 +64,6 @@ public unsafe struct IffFile
     internal nuint File;
     internal bool Writing;
     internal bool Library;                     // Amiga: iffparse.library does the work; otherwise the E# code below
-    internal string WritePath;                 // the E# writer's path: here and not in the state block, which the GC cannot see (strings are immutable, so copies agree)
     internal nuint St;                         // the state block (IffState, on the heap): shared by every copy of this struct, see Iff.NewState
 
     /// <summary>Starts a chunk in a file being written. Its size is filled in by <see cref="EndChunk"/>.</summary>
@@ -289,6 +289,7 @@ public unsafe struct IffFile
         if (s != null)
         {
             if (s->Buf != null) Mem.Free(s->Buf);
+            if (s->Path != null) Mem.Free(s->Path);
             Mem.Free((byte*)s);
         }
         St = 0;
@@ -299,14 +300,16 @@ public unsafe struct IffFile
         nuint st = Iff.NewState();
         if (st == 0) return false;
         IffState* s = (IffState*)st;
-        if (!Ensure(s, 12)) { Mem.Free((byte*)s); return false; }
+        St = st;                                        // FreeState below undoes everything on a failure
+        // The path is copied into the state block's own memory: a string built at run time ($"save{n}.iff") lives in one of the
+        // ring buffers on the C targets and is overwritten after 8 more formatted strings, long before Finish.
+        s->Path = Iff.CopyPath(path);
+        if (s->Path == null || !Ensure(s, 12)) { FreeState(); return false; }
         Put32(s, Iff.IdForm); Put32(s, 0); Put32(s, formType);
         // Create (or replace) the file now, as iffparse does, so an unwritable path is reported here and not by Finish.
-        if (!Files.WriteAll(path, new ReadOnlySpan<byte>(s->Buf, s->Len))) { Mem.Free(s->Buf); Mem.Free((byte*)s); return false; }
-        WritePath = path;
+        if (!Files.WriteAll(path, new ReadOnlySpan<byte>(s->Buf, s->Len))) { FreeState(); return false; }
         s->Stack[0] = 4;
         s->Depth = 1;
-        St = st;
         Writing = true;
         IsOpen = true;
         FormType = formType;
@@ -376,7 +379,7 @@ public unsafe struct IffFile
         IffState* s = (IffState*)St;
         if (!IsOpen || !Writing || s->InChunk || s->Depth != 1) return false;
         Patch32(s, 4, (uint)(s->Len - 8));
-        bool ok = Files.WriteAll(WritePath, new ReadOnlySpan<byte>(s->Buf, s->Len));
+        bool ok = Files.WriteAll(Iff.PathString(s->Path), new ReadOnlySpan<byte>(s->Buf, s->Len));
         FreeState();
         IsOpen = false;
         return ok;
@@ -459,6 +462,7 @@ internal unsafe struct IffState
     public int Len, Cap, Pos, DataStart, DataEnd, FormEnd, SizeAt;
     public int Depth;                 // writing: open groups including the FORM; reading: groups open inside the FORM
     public int* Stack;                // writing: where the size field of each open group is; reading: where each open group ends
+    public byte* Path;                // writing (E# code): the path given to Create, a zero-terminated copy owned by this block
     public bool InChunk, Truncated;
 }
 
@@ -467,7 +471,6 @@ internal unsafe struct IffState
 /// and give the same bytes. On sdl and on the dotnet host the reader and writer are E# code over <see cref="Files"/>. On the Amiga
 /// targets iffparse.library does the work when it can be opened (it is on the Workbench disk, not in ROM); without it the same E#
 /// code takes over, so a program needs no check. <see cref="Iff.ForceBuiltIn"/> chooses the E# code even where the library is there.
-/// The path given to <see cref="Create"/> must stay valid until <see cref="IffFile.Finish"/>.
 /// </summary>
 public static unsafe class Iff
 {
@@ -503,6 +506,41 @@ public static unsafe class Iff
             v = (v << 8) | (c & 255u);
         }
         return v;
+    }
+
+    /// <summary>A zero-terminated copy of <paramref name="path"/> in its own heap block (freed with the state). Null if memory is short.</summary>
+    internal static byte* CopyPath(string path)
+    {
+#if AMIGA || SDL
+        byte* src = Cast.StringToPtr(path);
+        int n = 0;
+        while (src[n] != 0) n++;
+#else
+        // Host: the bytes of the managed string (Latin-1, as on the Amiga); no managed reference goes into native memory.
+        byte[] bytes = System.Text.Encoding.Latin1.GetBytes(path);
+        int n = bytes.Length;
+#endif
+        byte* d = Mem.AllocFast((uint)(n + 1));
+        if (d == null) return null;
+#if AMIGA || SDL
+        for (int i = 0; i < n; i++) d[i] = src[i];
+#else
+        for (int i = 0; i < n; i++) d[i] = bytes[i];
+#endif
+        d[n] = 0;
+        return d;
+    }
+
+    /// <summary>The path <see cref="CopyPath"/> made, as a string for <see cref="Files"/> (on the C targets the same bytes, not a copy).</summary>
+    internal static string PathString(byte* p)
+    {
+#if AMIGA || SDL
+        return Cast.PtrToString(p);
+#else
+        int n = 0;
+        while (p[n] != 0) n++;
+        return System.Text.Encoding.Latin1.GetString(p, n);
+#endif
     }
 
     internal static bool IsGroup(uint id) => id == IdForm || id == IdList || id == IdCat || id == IdProp;

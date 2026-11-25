@@ -341,7 +341,7 @@ Fonts, BOOPSI, MUI and the raw library bindings such as `LowLevel`) do not exist
 | System | `Exec`, `Graphics`, `Intuition`, `CyberGfx` and other `[AmigaLib]` bindings, `Interrupts`, `TagList` | `interrupts`, `hwinfo` |
 
 `Iff` reads and writes IFF files (the format of ILBM pictures and 8SVX sounds) with the same calls on every target:
-`Iff.Create(path, Iff.Id("ESHP"))`, `BeginChunk`/`Write`/`EndChunk` (or `WriteChunk`), `BeginGroup(Iff.IdList, type)`/`EndGroup()`
+`Iff.Create(path, Iff.Id("ESHP"))` (the path is copied, so one built at run time, `$"save{slot}.iff"`, may be reused at once), `BeginChunk`/`Write`/`EndChunk` (or `WriteChunk`), `BeginGroup(Iff.IdList, type)`/`EndGroup()`
 for nested FORM, LIST, CAT and PROP groups, `Finish()`; `Iff.OpenRead(path)`, `Next()`, `Read(buffer, max)`, and `Damaged`
 to tell a cut or corrupt file from the end of the file. The code is E# over `Files` (the file is built or read in memory;
 big endian sizes, a pad byte after an odd size). On the Amiga targets iffparse.library does the work when it can be
