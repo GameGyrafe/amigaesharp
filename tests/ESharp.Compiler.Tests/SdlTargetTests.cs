@@ -137,6 +137,30 @@ Check(Keys.Find('Q').Code == 0x10 && Keys.Find('Q').Qualifier == Keys.LeftShift,
     }
 
     [Fact]
+    public void Iff_sample_runs_on_sdl_natively_and_writes_the_reference_bytes()
+    {
+        if (!HasGcc) return;
+        var path = Path.Combine(Samples, "iff", "Iff.cs");
+        var r = EsCompiler.Compile(new[] { new SourceFile(path, File.ReadAllText(path)) }, Targets.Sdl.ToOptions());
+        Assert.True(r.Success, string.Join("\n", r.Diagnostics));
+        Assert.DoesNotContain("proto/", r.C!);
+        Assert.DoesNotContain("IFFHandle", r.C!);
+        var (code, output) = RunWithHostGcc(r.C!);
+        Assert.Equal(0, code);
+        Assert.DoesNotContain("FAIL", output);
+        Assert.StartsWith("using the built-in E# reader and writer\n", output);
+        Assert.Contains("sum 17dcd906", output);                                // the same bytes as the dotnet host and iffparse.library write
+        Assert.Equal(16, output.Split('\n').Count(l => l.StartsWith("ok ")));
+        if (HasSanitizers)
+        {
+            var (scode, soutput) = RunSanitized(r.C!);
+            Assert.Equal(0, scode);
+            Assert.DoesNotContain("FAIL", soutput);
+            Assert.Equal(16, soutput.Split('\n').Count(l => l.StartsWith("ok ")));
+        }
+    }
+
+    [Fact]
     public void Input_script_keeps_pointer_steps_and_turns_X11_keys_into_Amiga_raw_keys()
     {
         Assert.Equal("click 400,300;rel -80,50;press;key 69", SdlRun.TranslateInput("click 400,300; rel -80,50 ;press;key 9"));

@@ -1084,7 +1084,7 @@ Clock.Close();";
     }
 
     [Fact]
-    public void Iff_sample_compiles_for_m68k_with_a_private_iffparse_base()
+    public void Iff_sample_compiles_for_m68k_with_a_private_iffparse_base_and_the_built_in_fallback()
     {
         var path = Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "..", "samples", "iff", "Iff.cs");
         var r = EsCompiler.Compile(new[] { new SourceFile("Iff.cs", File.ReadAllText(path)) }, Targets.M68k.ToOptions());
@@ -1097,6 +1097,18 @@ Clock.Close();";
         Assert.Contains("PushChunk(", r.C!);
         Assert.Contains("WriteChunkBytes(", r.C!);
         Assert.Contains("ReadChunkBytes(", r.C!);
+    }
+
+    [Theory]
+    [InlineData("os4")]
+    [InlineData("aros")]
+    [InlineData("sdl")]
+    public void Iff_sample_compiles_for_every_target(string target)
+    {
+        var path = Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "..", "samples", "iff", "Iff.cs");
+        var r = EsCompiler.Compile(new[] { new SourceFile("Iff.cs", File.ReadAllText(path)) }, Targets.Find(target)!.ToOptions());
+        Assert.True(r.Success, string.Join("\n", r.Diagnostics));
+        Assert.Equal(target != "sdl", r.C!.Contains("PushChunk("));
     }
 
     [Fact]

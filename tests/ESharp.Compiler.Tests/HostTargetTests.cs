@@ -313,11 +313,12 @@ public class HostTargetTests
         using var console = HostConsole.Capture();
         IffSample.Program.Main();
         Assert.DoesNotContain("FAIL", console.Output);
-        Assert.Equal(10, console.Output.Split('\n').Count(l => l.StartsWith("ok ")));
+        Assert.StartsWith("using the built-in E# reader and writer\n", console.Output);
+        Assert.Equal(16, console.Output.Split('\n').Count(l => l.StartsWith("ok ")));
     }
 
     [Fact]
-    public void Iff_file_has_the_standard_layout_and_a_missing_library_gives_a_closed_file()
+    public void Iff_file_has_the_standard_layout()
     {
         string path = Path.Combine(Path.GetTempPath(), "esharp_iff_layout_" + Environment.ProcessId + ".iff");
         try
@@ -335,15 +336,151 @@ public class HostTargetTests
             Assert.Equal(new byte[] { 0, 0, 0, 16 }, bytes[4..8]);                 // ILBM + chunk header (8) + 3 bytes + pad
             Assert.Equal("ILBMABCD", System.Text.Encoding.ASCII.GetString(bytes, 8, 8));
             Assert.Equal(new byte[] { 0, 0, 0, 3, 7, 8, 9, 0 }, bytes[16..24]);
-            ESharp.Platform.Iff.HostAvailable = false;
-            Assert.False(ESharp.Platform.Iff.Open());
-            Assert.False(ESharp.Platform.Iff.Create(path, 0).IsOpen);
-            Assert.False(ESharp.Platform.Iff.OpenRead(path).IsOpen);
-            using var console = HostConsole.Capture();
-            IffSample.Program.Main();
-            Assert.Equal("iffparse.library is not installed: nothing to do\n", console.Output);
+            Assert.Equal(24, bytes.Length);
+            Assert.False(ESharp.Platform.Iff.Open());                              // no iffparse.library on the host: the E# code is used
         }
-        finally { ESharp.Platform.Iff.HostAvailable = true; File.Delete(path); }
+        finally { File.Delete(path); }
+    }
+
+    [Fact]
+    public void Iff_reads_a_hand_made_file_with_nested_groups_and_an_odd_last_chunk()
+    {
+        // FORM ILBM { BMHD(3 bytes + pad) ; LIST ILBM { PROP ILBM { CMAP(1, no pad at the end of the file) } } }
+        var bytes = new System.Collections.Generic.List<byte>();
+        void Id(string s) => bytes.AddRange(System.Text.Encoding.ASCII.GetBytes(s));
+        void Be(int v) => bytes.AddRange(new[] { (byte)(v >> 24), (byte)(v >> 16), (byte)(v >> 8), (byte)v });
+        Id("FORM"); Be(4 + 12 + 8 + 4 + 8 + 4 + 8 + 1); Id("ILBM");
+        Id("BMHD"); Be(3); bytes.AddRange(new byte[] { 1, 2, 3, 0 });
+        Id("LIST"); Be(4 + 8 + 4 + 9); Id("ILBM");
+        Id("PROP"); Be(4 + 9); Id("ILBM");
+        Id("CMAP"); Be(1); bytes.Add(9);
+        string path = Path.Combine(Path.GetTempPath(), "esharp_iff_hand_" + Environment.ProcessId + ".iff");
+        try
+        {
+            File.WriteAllBytes(path, bytes.ToArray());
+            var r = ESharp.Platform.Iff.OpenRead(path);
+            Assert.True(r.IsOpen);
+            Assert.Equal(ESharp.Platform.Iff.Id("ILBM"), r.FormType);
+            unsafe
+            {
+                byte* b = stackalloc byte[16];
+                Assert.True(r.Next()); Assert.Equal(ESharp.Platform.Iff.Id("BMHD"), r.ChunkId); Assert.Equal(3, r.ChunkSize);
+                Assert.Equal(3, r.Read(b, 16)); Assert.Equal(3, b[2]); Assert.Equal(0, r.Read(b, 16));
+                Assert.True(r.Next()); Assert.Equal(ESharp.Platform.Iff.IdList, r.ChunkId); Assert.Equal(ESharp.Platform.Iff.Id("ILBM"), r.ChunkType);
+                Assert.True(r.Next()); Assert.Equal(ESharp.Platform.Iff.IdProp, r.ChunkId);
+                Assert.True(r.Next()); Assert.Equal(ESharp.Platform.Iff.Id("CMAP"), r.ChunkId);
+                Assert.Equal(1, r.Read(b, 16)); Assert.Equal(9, b[0]);
+                Assert.False(r.Next());
+                Assert.False(r.Damaged);
+            }
+            r.Close();
+        }
+        finally { File.Delete(path); }
+    }
+
+    [Fact]
+    public void Iff_writer_makes_an_ILBM_the_asset_reader_loads_and_the_reader_steps_through_it()
+    {
+        // 2 x 1 pixels, 1 plane, 2 colours: BMHD (20 bytes), CMAP (6, a pad-free even size) and BODY (one row of 2 bytes)
+        string path = Path.Combine(Path.GetTempPath(), "esharp_iff_ilbm_" + Environment.ProcessId + ".iff");
+        try
+        {
+            var w = ESharp.Platform.Iff.Create(path, ESharp.Platform.Iff.Id("ILBM"));
+            unsafe
+            {
+                byte* bmhd = stackalloc byte[20];
+                for (int i = 0; i < 20; i++) bmhd[i] = 0;
+                bmhd[1] = 2; bmhd[3] = 1; bmhd[8] = 1;
+                byte* cmap = stackalloc byte[6];
+                cmap[0] = 0; cmap[1] = 0; cmap[2] = 0; cmap[3] = 255; cmap[4] = 128; cmap[5] = 0;
+                byte* body = stackalloc byte[2];
+                body[0] = 0x40; body[1] = 0;                                        // pixel 0 = colour 0, pixel 1 = colour 1
+                Assert.True(w.WriteChunk(ESharp.Platform.Iff.Id("BMHD"), bmhd, 20));
+                Assert.True(w.WriteChunk(ESharp.Platform.Iff.Id("CMAP"), cmap, 6));
+                Assert.True(w.WriteChunk(ESharp.Platform.Iff.Id("BODY"), body, 2));
+            }
+            Assert.True(w.Finish());
+            var image = ESharp.Assets.Ilbm.Read(File.ReadAllBytes(path));
+            Assert.Equal(2, image.Width);
+            Assert.Equal(new byte[] { 0, 0, 0, 255, 255, 128, 0, 255 }, image.Rgba);
+            var r = ESharp.Platform.Iff.OpenRead(path);
+            int steps = 0;
+            while (r.Next()) steps++;
+            Assert.Equal(3, steps);
+            r.Close();
+        }
+        finally { File.Delete(path); }
+    }
+
+    [Fact]
+    public void Iff_reader_reports_a_damaged_file_without_crashing()
+    {
+        // every prefix of a good file: opens or not, steps and reads without a crash, and a cut file ends with Damaged
+        string path = Path.Combine(Path.GetTempPath(), "esharp_iff_cut_" + Environment.ProcessId + ".iff");
+        try
+        {
+            var w = ESharp.Platform.Iff.Create(path, ESharp.Platform.Iff.Id("ESHP"));
+            unsafe
+            {
+                byte* d = stackalloc byte[5];
+                Assert.True(w.WriteChunk(ESharp.Platform.Iff.Id("ABCD"), d, 5));
+                Assert.True(w.BeginGroup(ESharp.Platform.Iff.IdForm, ESharp.Platform.Iff.Id("SUBF")));
+                Assert.True(w.WriteChunk(ESharp.Platform.Iff.Id("EFGH"), d, 3));
+                Assert.True(w.EndGroup());
+            }
+            Assert.True(w.Finish());
+            var good = File.ReadAllBytes(path);
+            for (int len = 0; len < good.Length; len++)
+            {
+                File.WriteAllBytes(path, good[..len]);
+                var r = ESharp.Platform.Iff.OpenRead(path);
+                if (!r.IsOpen) { Assert.True(len < 12 || len == 0); continue; }
+                int steps = 0;
+                unsafe { byte* b = stackalloc byte[16]; while (r.Next() && steps < 10) { steps++; r.Read(b, 16); } }
+                Assert.True(steps < 10);
+                Assert.True(r.Damaged, "cut at " + len);
+                r.Close();
+            }
+            // a chunk size larger than the file, and a group smaller than its type field
+            var big = (byte[])good.Clone(); big[16] = 0x7F;
+            File.WriteAllBytes(path, big);
+            var rb = ESharp.Platform.Iff.OpenRead(path);
+            Assert.True(rb.IsOpen); Assert.False(rb.Next()); Assert.True(rb.Damaged); rb.Close();
+            var small = (byte[])good.Clone(); small[4 + 8 + 8 + 5 + 1 + 7] = 2;                 // the inner FORM's size low byte
+            File.WriteAllBytes(path, small);
+            var rs = ESharp.Platform.Iff.OpenRead(path);
+            Assert.True(rs.Next()); Assert.False(rs.Next()); Assert.True(rs.Damaged); rs.Close();
+        }
+        finally { File.Delete(path); }
+    }
+
+    [Fact]
+    public void Iff_writes_nested_groups_with_sizes_and_pads_and_refuses_misuse()
+    {
+        string path = Path.Combine(Path.GetTempPath(), "esharp_iff_groups_" + Environment.ProcessId + ".iff");
+        try
+        {
+            var w = ESharp.Platform.Iff.Create(path, ESharp.Platform.Iff.Id("ESHP"));
+            Assert.True(w.BeginGroup(ESharp.Platform.Iff.IdCat, ESharp.Platform.Iff.Id("ESHP")));
+            unsafe { byte* one = stackalloc byte[1]; one[0] = 5; Assert.True(w.WriteChunk(ESharp.Platform.Iff.Id("ONE "), one, 1)); }
+            Assert.False(w.Finish());                                              // a group is still open
+            Assert.True(w.EndGroup());
+            Assert.False(w.EndGroup());                                            // the FORM itself is ended by Finish
+            Assert.False(w.BeginGroup(ESharp.Platform.Iff.Id("ABCD"), 0));         // not a group id
+            Assert.True(w.Finish());
+            var bytes = File.ReadAllBytes(path);
+            // FORM 28 ESHP, CAT  18 ESHP, ONE  1 5 pad
+            Assert.Equal(12 + 12 + 10, bytes.Length);
+            Assert.Equal(new byte[] { 0, 0, 0, 26 }, bytes[4..8]);
+            Assert.Equal("CAT ", System.Text.Encoding.ASCII.GetString(bytes, 12, 4));
+            Assert.Equal(new byte[] { 0, 0, 0, 14 }, bytes[16..20]);
+            Assert.False(w.IsOpen);
+            Assert.False(w.BeginChunk(1));
+            // an unwritable path: not open
+            Assert.False(ESharp.Platform.Iff.Create(Path.Combine(path, "no", "such", "dir.iff"), 0).IsOpen);
+            Assert.False(ESharp.Platform.Iff.OpenRead(Path.Combine(path, "missing")).IsOpen);
+        }
+        finally { File.Delete(path); }
     }
 
     [Fact]

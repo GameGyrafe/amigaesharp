@@ -10,10 +10,58 @@ The minimum system is now an **Amiga 1200: 68020, AGA, 2 MB chip RAM, Kickstart 
 - **Kept on purpose:** `HasAga()` and `HasRtg()` with their fallbacks. A classic A1200 always has AGA, but PowerPC, RTG-only and AROS targets may not, so the checks stay as the portable way to ask. **Not yet done:** using 68020 instructions deliberately and AROS (a new target, untested).
 - Verified after the change: all 17 samples built with `-m68020` and run on Kickstart 3.1 (A1200) in FS-UAE: 300 `ok` lines, no `FAIL` (the script shows only the last 25 lines of each sample, so long ones are truncated), 136 unit tests pass. Not verified: PowerPC, real hardware, a 68000/Kickstart 2.04 run (no longer supported).
 
+## IFF in E#: `Iff` on every target (part of issue #155)
+
+Step 2 of #155. `Iff`/`IffFile` (`src/ESharp.Platform/Iff.cs`) keep their public calls and now exist on sdl and the dotnet host
+too. The reader and writer are E# code over `Files`: a file being written is built in memory (`Mem.AllocFast`, grown by doubling)
+and written by `Finish`; a file being read is loaded whole by `Files.ReadAll`. Facts used (EA IFF 85): a group is an id (FORM, LIST,
+CAT, PROP), a big-endian 32-bit size and a 4-byte type; a chunk is an id, a big-endian size and the data, followed by a pad byte
+when the size is odd (not counted in the size).
+
+- **Which implementation:** sdl and the host: always the E# code. Amiga targets: iffparse.library when `Exec.OpenLibrary` opens it
+  (the Amiga keeps it: it is the system's own code and what other programs on the machine use), the E# code when it cannot be
+  opened or when `Iff.ForceBuiltIn` is set. `Iff.Open()` now only tells which one is in use (it used to be the check that stopped a
+  program without the library); `Create`/`OpenRead` open the library themselves. The host fake (`Iff.HostAvailable`) is gone: the
+  host runs the E# code.
+- **Additions** (all optional, existing code is unchanged): `IffFile.BeginGroup(group, type)` and `EndGroup()` for nested groups
+  (`Iff.IdForm`, `IdList`, `IdCat`, `IdProp`), `ChunkType`, `Damaged`. Reading steps into groups as iffparse's raw step does; do
+  not `Read` a group (iffparse then returns its raw contents and steps past what is inside; the E# code returns 0 bytes).
+- **Damaged files:** `OpenRead` fails for a missing file, one under 12 bytes, one that does not start with FORM or whose FORM size is
+  under 4. A FORM size past the end of the file is allowed (cut file: the chunks before the cut are read); `Next()` then returns
+  false with `Damaged` set when a chunk or group does not fit (size past the end, group under 4 bytes, a header cut short) or
+  the file ended before its FORM did. A last odd chunk without its pad byte is accepted. The E# reader does not check a nested
+  group's size against its parent's, only against the end of the FORM. `Create` writes the 12-byte header at once, so an
+  unwritable path gives a closed file there rather than at `Finish`. `Files.WriteAll` on the host now returns false for an IO error
+  instead of throwing.
+- **samples/iff** now runs everywhere: it writes a FORM ESHP with a header, an odd-sized, a 300-byte (two `Write` calls) and an
+  empty chunk, a LIST holding a PROP and a FORM, a CAT holding a FORM of another type, and a last chunk (464 bytes), once with
+  `Iff` as it is configured and once with `ForceBuiltIn`, and checks the two files are equal and have the FNV-1a sum `17dcd906`
+  (the same bytes were made independently with a Python script from the format facts). It reads each file with each reader,
+  walks the 13 steps (sizes, ids, types, bytes), and checks cut files, a non-IFF file, a missing file and misuse of a writer.
+  16 ok lines on every target; a first line says which implementation is in use.
+
+Verified:
+- `dotnet test`: 791 tests, 789 passed, 2 skipped (the OS4 VM and SDK-backed BindGen ones), 0 failed. New or changed tests: host run of the sample (16 ok), the byte layout, a
+  hand-made file with a nested LIST/PROP and an odd last chunk without pad, nested groups written with sizes and misuse refused, an
+  ILBM written by `Iff` and loaded by `Ilbm.Read` (the asset reader), every prefix of a file read without a crash and with `Damaged`
+  set, the sample compiled for m68k, os4, aros and sdl, and built with the host gcc for sdl (with address/undefined sanitizers when
+  the machine has them): 16 ok and the sum `17dcd906`.
+- A1200, Kickstart 3.1 (40.069), FS-UAE, the pinned m68k image, program on DH0 and the Workbench 3.1 disk 2 read-only as DF0 with
+  `LIBS:` assigned to `DF0:Libs`: "using iffparse.library", 16 ok, 0 FAIL, return code 0; the file written through iffparse.library has
+  the same size and bytes as the E# writer's (check "the E# writer's bytes are the other writer's bytes", and sum `17dcd906`
+  equal to the reference), and the library reader walks the E# writer's file. Without `LIBS:` (the same disk as DF0, no assign):
+  "using the built-in E# reader and writer", 16 ok, 0 FAIL. `esharp test samples/iff --target m68k` (no `LIBS:`): host 16, Amiga 16, no
+  differences. `--target sdl` (esharp-sdl image): 16 ok, agree. `--target aros` (hosted AROS x86-64): 16 ok, 0 traps, agree.
+  `--target os4` (QEMU VM): 16 ok, agree (whether the VM has iffparse.library was not looked at, so which implementation ran is not known).
+- Not verified: AmigaOS 4 and AROS with and without the library separately, MorphOS, PowerPC real hardware, real Amiga hardware, big
+  files (the whole file is held in memory: a 10 MB IFF needs 10 MB), reading a file written by another program than E# and
+  iffparse (apart from the hand-made one in the tests), LZ/ByteRun1 (not part of IFF itself; `Ilbm` in the asset tools decodes
+  pictures at build time), Kickstart 3.0.
+
 ## SDL joystick and a portable message box (part of issue #155)
 
 The first step of #155 (SDL versions of the Amiga-only APIs): `Joystick` on SDL game pads, and a new message box,
-`Requester.Show`, on every target. IFF in E#, the file requester and fonts as assets are later steps. How to use both:
+`Requester.Show`, on every target. The file requester and fonts as assets are later steps (IFF in E# is the section above). How to use both:
 docs/GUIDE.md, "Platform APIs".
 
 - **Joystick on SDL.** `Joystick.cs` is no longer `#if !SDL`; the Amiga branch (lowlevel.library) is unchanged, the host
@@ -829,11 +877,11 @@ sdl3`, run under `sh -c`; `--docker` without a name picks `esharp-sdl` for this 
   `Sound` (four SDL audio streams on the default device, signed 8-bit mono at 3546895 / period, gain = volume / 64, fed from a callback for
   cycles and loops), `Trace` (standard error).
 - **Not on SDL (Amiga-only):** (since issue #155 `Joystick` and the new `Requester` exist on SDL too, see "SDL joystick and a portable message box")
-  `Gui`/GadTools, `Asl`, `Iff`/iffparse, `Fonts`/diskfont, `Joystick`/lowlevel and the raw bindings (`Exec`,
+  `Gui`/GadTools, `Asl`, `Fonts`/diskfont, `Joystick`/lowlevel and the raw bindings (`Exec`,
   `Intuition`, `Graphics`, `CyberGfx`, `Utility`, `Keymap`, `TimerDevice`, `Layout`) are not compiled for SDL: using one is the C# unknown-name
   error plus **ES0102** "'Gui' is Amiga-only and does not exist on target 'sdl'; put the code in #if AMIGA". `HasAga()` is true (256
   colours always work), `HasRtg`/`OpenRtg`/`IsRtg` are false (no RTG card: programs take their fallback path). `samples/controls`, `gui`,
-  `asl`, `iff`, `fonts` therefore do not build for sdl.
+  `asl`, `fonts` therefore do not build for sdl (`iff` does since the IFF step of #155, "IFF in E#").
 - **CLI:** `esharp run --target sdl [--docker [esharp-sdl]] [--headless]`: headless runs the binary inside the image (or on this machine
   without `--docker`) with `SDL_VIDEODRIVER=offscreen SDL_AUDIODRIVER=dummy`; without `--headless` the static binary runs on this desktop.
   `--input` takes the FS-UAE syntax (`click X,Y;rel DX,DY;press;key N[+M]`, plus `close` on this target: a window close request followed by SDL's quit event, which counts as one Esc, X11 key codes) with X,Y in the game's screen pixels; the CLI
@@ -1122,7 +1170,7 @@ Not verified: os4 in the VM and MorphOS for this change (`--target morphos` fail
 All three libraries are on the Workbench disk (`Libs:`), not in ROM, so each wrapper uses its own `[LibraryBase]` and starts cleanly without the library: `Open()` / `DiskFontsAvailable` return false and the sample prints that it is not installed.
 
 - **`Fonts.Open(name, size)`** returns a `FontHandle` (`IsOpen`, `Height`, `Width`, `Baseline`). With diskfont.library available it calls `OpenDiskFont` (memory and ROM first, then `FONTS:`; exact size preferred, else the closest, so check `Height`); graphics `OpenFont` alone returns the closest size in memory, so without the library only an exact size counts (ROM topaz 8 still opens). `Fonts.Draw(font, text, x, y, color)` and `Fonts.TextWidth` use the `Video` window's rastport (`SetFont`, `Move`, `Text`), so a font is usable by drawing code as long as a `Video` screen is open; the built-in `Font` class is unchanged. `Fonts.Close(ref font)` and `Fonts.Close()` (the library). Host (same rule): topaz 8 and 9 plus `Fonts.HostAdd`, `Fonts.HostDiskFonts = false` for the missing-library path; text is drawn with the built-in 5x7 font.
-- **`Iff`** writes and reads one FORM: `Iff.Create(path, Iff.Id("ESHP"))`, then `BeginChunk` / `Write` / `EndChunk` (or `WriteChunk`) and `Finish()`; `Iff.OpenRead(path)` gives `FormType`, and `Next()` steps through the chunks (`ChunkId`, `ChunkSize`) with `Read(buffer, max)`. It uses iffparse in raw-step mode on a dos file (`InitIFFasDOS`), so sizes are patched and pad bytes written by the library. Host: the same file format written and read with plain .NET (a unit test checks the byte layout), `Iff.HostAvailable = false` for the missing-library path. Only a FORM at the top level and flat chunks (no nested FORM/LIST/CAT, no property or collection chunks).
+- **`Iff`** (since #155 also E# code, see "IFF in E#"; this section is how the iffparse path was verified) writes and reads one FORM: `Iff.Create(path, Iff.Id("ESHP"))`, then `BeginChunk` / `Write` / `EndChunk` (or `WriteChunk`) and `Finish()`; `Iff.OpenRead(path)` gives `FormType`, and `Next()` steps through the chunks (`ChunkId`, `ChunkSize`) with `Read(buffer, max)`. It uses iffparse in raw-step mode on a dos file (`InitIFFasDOS`), so sizes are patched and pad bytes written by the library. Host: the same file format written and read with plain .NET (a unit test checks the byte layout), `Iff.HostAvailable = false` for the missing-library path. Only a FORM at the top level and flat chunks (no nested FORM/LIST/CAT, no property or collection chunks).
 - **`Asl.PickFile(title, drawer)`** shows asl.library's file requester (on the `Video` screen if one is open, else the default public screen) and returns the path (drawer and file joined) or null on Cancel or a missing library; the string is valid until the next call. `Asl.CanAllocate()` allocates and frees a requester. Host: `Asl.HostPick` is the answer, `Asl.HostAvailable = false` for the missing-library path.
 
 The samples print `ok` / `FAIL`. `samples/asl` only opens the requester if `RAM:asl-open` exists (so an unattended run does not wait for a click); `RunAll` in the hardware pack creates it and deletes it afterwards.
