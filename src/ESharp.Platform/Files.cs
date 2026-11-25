@@ -83,6 +83,7 @@ public static unsafe class Files
         try { File.WriteAllBytes(path, data.ToArray()); return true; }
         catch (IOException) { return false; }
         catch (UnauthorizedAccessException) { return false; }
+        catch (ArgumentException) { return false; }          // "" or a character the host file system refuses: false, as on sdl and the Amiga
 #endif
     }
 

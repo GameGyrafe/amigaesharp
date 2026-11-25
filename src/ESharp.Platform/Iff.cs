@@ -515,20 +515,21 @@ public static unsafe class Iff
         byte* src = Cast.StringToPtr(path);
         int n = 0;
         while (src[n] != 0) n++;
-#else
-        // Host: the bytes of the managed string (Latin-1, as on the Amiga); no managed reference goes into native memory.
-        byte[] bytes = System.Text.Encoding.Latin1.GetBytes(path);
-        int n = bytes.Length;
-#endif
         byte* d = Mem.AllocFast((uint)(n + 1));
         if (d == null) return null;
-#if AMIGA || SDL
         for (int i = 0; i < n; i++) d[i] = src[i];
-#else
-        for (int i = 0; i < n; i++) d[i] = bytes[i];
-#endif
         d[n] = 0;
         return d;
+#else
+        // Host: the string's UTF-16 code units, unchanged (any character, lone surrogates too), ending in a zero unit;
+        // no managed reference goes into native memory.
+        int n = path.Length;
+        char* d = (char*)Mem.AllocFast((uint)(2 * (n + 1)));
+        if (d == null) return null;
+        for (int i = 0; i < n; i++) d[i] = path[i];
+        d[n] = '\0';
+        return (byte*)d;
+#endif
     }
 
     /// <summary>The path <see cref="CopyPath"/> made, as a string for <see cref="Files"/> (on the C targets the same bytes, not a copy).</summary>
@@ -537,9 +538,7 @@ public static unsafe class Iff
 #if AMIGA || SDL
         return Cast.PtrToString(p);
 #else
-        int n = 0;
-        while (p[n] != 0) n++;
-        return System.Text.Encoding.Latin1.GetString(p, n);
+        return new string((char*)p);
 #endif
     }
 

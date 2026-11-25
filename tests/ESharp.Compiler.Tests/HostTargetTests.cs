@@ -343,6 +343,49 @@ public class HostTargetTests
     }
 
     [Fact]
+    public void Iff_writer_keeps_a_path_with_characters_above_latin1_on_the_host()
+    {
+        // The writer copies its path at Create and writes the file under that copy at Finish: every character must survive the
+        // copy, or Finish writes a second file with '?' in its name and leaves the real one as its 12-byte header.
+        string dir = Path.Combine(Path.GetTempPath(), "esharp_iff_utf_" + Environment.ProcessId);
+        Directory.CreateDirectory(dir);
+        try
+        {
+            string path = Path.Combine(dir, "euro\u20ac\u0416\U0001F600" + 7 + ".iff");   // euro sign, Cyrillic Zhe, a surrogate pair
+            var w = ESharp.Platform.Iff.Create(path, ESharp.Platform.Iff.Id("ILBM"));
+            Assert.True(w.IsOpen);
+            unsafe
+            {
+                byte* three = stackalloc byte[3];
+                three[0] = 7; three[1] = 8; three[2] = 9;
+                Assert.True(w.WriteChunk(ESharp.Platform.Iff.Id("ABCD"), three, 3));
+            }
+            Assert.True(w.Finish());
+            Assert.Equal(24, new FileInfo(path).Length);                       // the whole file, under the real name
+            Assert.Equal(new[] { path }, Directory.GetFiles(dir));             // and no second file (no "euro?..." name)
+        }
+        finally { Directory.Delete(dir, true); }
+    }
+
+    [Fact]
+    public void Iff_create_with_an_empty_or_invalid_path_returns_a_closed_file_on_the_host()
+    {
+        foreach (string path in new[] { "", "bad\0name.iff" })
+        {
+            var w = ESharp.Platform.Iff.Create(path, ESharp.Platform.Iff.Id("ILBM"));
+            Assert.False(w.IsOpen);
+            unsafe
+            {
+                byte* one = stackalloc byte[1];
+                Assert.False(w.WriteChunk(ESharp.Platform.Iff.Id("ABCD"), one, 1));
+            }
+            Assert.False(w.Finish());
+            w.Close();                                                          // harmless on a closed file
+        }
+        Assert.False(ESharp.Platform.Files.WriteAll("", new byte[] { 1 }));
+    }
+
+    [Fact]
     public void Iff_reads_a_hand_made_file_with_nested_groups_and_an_odd_last_chunk()
     {
         // FORM ILBM { BMHD(3 bytes + pad) ; LIST ILBM { PROP ILBM { CMAP(1, no pad at the end of the file) } } }
