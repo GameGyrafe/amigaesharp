@@ -61,7 +61,8 @@ when the size is odd (not counted in the size).
   closed file on every target, the host included. `IffFile` has no managed field, so it is an unmanaged struct on the dotnet host
   (`IffFile*`, `sizeof`, `Pool<IffFile>`; a host test checks it). `samples/iff` creates a file with a path built at run time,
   formats 9 more strings, finishes, and checks the file has its name and its 24 bytes and that no file appeared under one of the
-  other strings, with each implementation. Verified: `dotnet test` 794 tests, 792 passed, 2 skipped, 0 failed; `esharp test samples/iff` on A1200 Kickstart 3.1 FS-UAE without
+  other strings, with each implementation. Verified: `dotnet test` 805 tests, 803 passed, 2 skipped, 0 failed (with main merged, the
+  host path tests included); the generated C of `samples/iff` (m68k, sdl) is unchanged by those host fixes and the merge; `esharp test samples/iff` on A1200 Kickstart 3.1 FS-UAE without
   `LIBS:` ("using the built-in E# reader and writer") and with `--mui 3.8 --workbench <wb>` ("using iffparse.library"): host 34,
   Amiga 34, agree, return code 0; `--target sdl` (esharp-sdl): 34, agree; `--target aros` (hosted AROS x86-64, iffparse.library):
   34, 0 traps, agree. Not run again: os4.
