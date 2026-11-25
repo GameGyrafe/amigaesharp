@@ -20,6 +20,13 @@ internal static class FsUae
         if (Directory.Exists(runDir)) Directory.Delete(runDir, recursive: true);
         Directory.CreateDirectory(Path.Combine(dh0, "S"));
         File.Copy(exe, Path.Combine(dh0, name));
+        // E# Amiga libraries the program uses (issue #154; the build puts them next to it): into DH0:Libs, which the boot assigns as LIBS:.
+        var libraries = LibrariesBeside(exe);
+        if (libraries.Count > 0)
+        {
+            Directory.CreateDirectory(Path.Combine(dh0, "Libs"));
+            foreach (var lib in libraries) File.Copy(lib, Path.Combine(dh0, "Libs", Path.GetFileName(lib)));
+        }
         if (serial != null) File.WriteAllText(serial, "");   // FS-UAE writes the Amiga's serial output into this file
 
         // Headless runs redirect the program's output to a file and then write a marker, so the
@@ -27,7 +34,8 @@ internal static class FsUae
         // AmigaDOS wants the redirection right after the command name, before the program's own arguments.
         if (Os4Vm.ProgramArgsError(programArgs) is { } argsError) { Console.Error.WriteLine($"esharp: {argsError}"); return 1; }
         var line = string.IsNullOrWhiteSpace(programArgs) ? "" : " " + programArgs.Trim();
-        var pre = muiDrawer == null ? "" : string.Concat(Mui.StartupLines(IconStackSize(exe)).Select(l => l + "\n"));
+        var pre = muiDrawer == null ? "" : string.Concat(Mui.StartupLines(IconStackSize(exe)).Select(l => l + "\n"))
+            + (libraries.Count > 0 ? "Assign LIBS: DH0:Libs ADD\n" : "");   // the MUI lines replace LIBS: with the Workbench disk's
         File.WriteAllText(Path.Combine(dh0, "S", "Startup-sequence"), pre + (headless ? HeadlessLines(name, line) : $"dh0:{name}{line}\n"));
 
         var config = Path.Combine(runDir, "run.fs-uae");
@@ -122,6 +130,13 @@ internal static class FsUae
             if (xvfb is { HasExited: false }) xvfb.Kill();
             xvfb?.Dispose();
         }
+    }
+
+    /// <summary>The <c>.library</c> files in the program's folder (the E# libraries its build made, issue #154).</summary>
+    internal static System.Collections.Generic.List<string> LibrariesBeside(string exe)
+    {
+        var dir = Path.GetDirectoryName(Path.GetFullPath(exe))!;
+        return Directory.GetFiles(dir, "*.library").OrderBy(f => f, StringComparer.Ordinal).ToList();
     }
 
     /// <summary>

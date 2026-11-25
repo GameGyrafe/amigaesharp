@@ -130,7 +130,7 @@ internal sealed partial class CEmitter
     /// formatting, the command line of Args): static in a whole-program C file; in a split build it lives once, in the program (external
     /// linkage there, declared extern in a package's C), so the program and every binary share it.
     /// </summary>
-    private string RuntimeState(string declaration) => !Split.Active ? "static " + declaration : Split.Library ? "extern " + declaration : declaration;
+    private string RuntimeState(string declaration) => LibMode ? LibRt(declaration) : !Split.Active ? "static " + declaration : Split.Library ? "extern " + declaration : declaration;
 
     /// <summary>A runtime helper without state that every whole-program C file calls: static in each C file, marked unused in a split one (a file may not call it).</summary>
     private string SplitHelper => Split.Active ? "static __attribute__((unused)) " : "static ";

@@ -56,6 +56,12 @@ public sealed class CompileOptions
     /// <summary>This E#'s stamp (<see cref="PackageBinaries.Stamp"/>): a binary made by another E# is not used. Null: no binary is used.</summary>
     public string? Stamp { get; init; }
 
+    /// <summary>
+    /// An Amiga shared library build (<c>EsOutputType</c> <c>AmigaLibrary</c>, issue #154): no entry point; the C is a <c>.library</c> whose
+    /// functions are the program's [LibraryFunction] methods, each opener with its own copy of the E# data (m68k AmigaOS 3.x only for now).
+    /// </summary>
+    public AmigaLibraryOptions? AmigaLibrary { get; init; }
+
     /// <summary>Test hook: name the program files as library files (no ES0103 for internal library members).</summary>
     internal bool UserFilesAreLibrary { get; init; }
 }

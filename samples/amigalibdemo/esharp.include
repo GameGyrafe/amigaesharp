@@ -1,0 +1,3 @@
+# The E# Amiga library this program opens (EsOutputType AmigaLibrary): on the host and sdl its code is compiled in,
+# on m68k the build makes amigalib.library and the program calls it through the binding.
+../amigalib

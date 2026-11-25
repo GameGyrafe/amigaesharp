@@ -44,7 +44,7 @@ public static class EsCompiler
             "ESharpProgram",
             userTrees.Concat(packageTrees).Concat(libTrees),
             References(),
-            new CSharpCompilationOptions(options.LibraryBuild == null ? OutputKind.ConsoleApplication : OutputKind.DynamicallyLinkedLibrary, allowUnsafe: true,
+            new CSharpCompilationOptions(options.LibraryBuild == null && options.AmigaLibrary == null ? OutputKind.ConsoleApplication : OutputKind.DynamicallyLinkedLibrary, allowUnsafe: true,
                 nullableContextOptions: NullableContextOptions.Disable));
 
         var diagnostics = new List<Diagnostic>();
@@ -67,7 +67,11 @@ public static class EsCompiler
 
         // 3. Entry point rules (the program's files; an entry point in a package is an error of its own), and the package checks.
         // A library build (esharp precompile) has no program and no entry point.
-        if (options.LibraryBuild == null) CheckEntryPoint(compilation, new HashSet<SyntaxTree>(userTrees), diagnostics);
+        if (options.LibraryBuild == null && options.AmigaLibrary == null) CheckEntryPoint(compilation, new HashSet<SyntaxTree>(userTrees), diagnostics);
+        // An Amiga shared library (issue #154): its [LibraryFunction] methods, checked, with their registers.
+        var amigaLibrary = options.AmigaLibrary is { } libOptions ? AmigaLibraries.Plan(compilation, userTrees, libOptions, diagnostics) : null;
+        if (options.AmigaLibrary != null && options.LibraryBuild != null)
+            diagnostics.Add(Diagnostic.Create(Descriptors.LibraryUnsupported, Location.None, "a package build", "an E# library package (EsLibrary) is not an Amiga shared library (EsOutputType AmigaLibrary)"));
         PackageChecks.Sources(compilation, userTrees, packageOf, diagnostics);
         // The C prototypes of the packages' own C functions (their [Native] externs), for the program's C and esharp_natives.h.
         var prototypes = PackageNatives.Prototypes(compilation, packageOf, diagnostics);
@@ -121,6 +125,9 @@ public static class EsCompiler
         {
             PackagePrototypes = options.Packages.Where(prototypes.ContainsKey).SelectMany(p => prototypes[p]).Distinct().ToList(),
             Split = plan,
+            // The emitter's copy of the plan names the methods of the final compilation (generics expanded, C keywords renamed).
+            AmigaLibrary = amigaLibrary == null ? null : AmigaLibraries.Plan(compilation,
+                compilation.SyntaxTrees.Where(t => userSet.Contains(t) && userTrees.Any(u => u.FilePath == t.FilePath)).ToList(), amigaLibrary.Options, new List<Diagnostic>()),
         };
         var c = emitter.Emit();
         // The packages' C: a binary holds its package's (library mode: only the library's own; program mode: not the linked ones').
@@ -133,6 +140,8 @@ public static class EsCompiler
         {
             Chip = chip, Native = PackageNatives.Outputs(nativePackages, options.TargetName, prototypes),
             Library = emitter.LibraryInfo, Linked = linked.Select(l => l.Binary).ToList(),
+            AmigaLibrary = amigaLibrary == null ? null : new AmigaLibraryOutput(
+                AmigaLibraries.Fd(amigaLibrary.Options, AmigaLibraries.Infos(amigaLibrary)), AmigaLibraries.Binding(amigaLibrary, userTrees), AmigaLibraries.Infos(amigaLibrary)),
         };
     }
 
