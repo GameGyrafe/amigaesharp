@@ -171,7 +171,7 @@ public class HostTargetTests
         ESharp.Platform.Args.HostSet();
         ObjectsSample.Program.Main();
         Assert.DoesNotContain("FAIL", console.Output);
-        Assert.Equal(21, console.Output.Split('\n').Count(l => l.StartsWith("ok ")));
+        Assert.Equal(24, console.Output.Split('\n').Count(l => l.StartsWith("ok ")));
     }
 
     [Fact]

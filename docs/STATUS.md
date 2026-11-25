@@ -72,6 +72,16 @@ only; AROS and AmigaOS 4 later.
   `esharp addr` on library code, a library with `[LibraryBase]` classes (bases per opener) or with graphics or intuition calls in the
   emulator, very large per-opener data, and the hardware test pack (the demo is not in it).
 
+## Emitter fixes: delegate == method group, static fields in structs, base interfaces (issue #161)
+
+Three programs that gcc rejected now build and give dotnet's answer.
+
+- **A delegate compared with a method group** (`a == F`, `F == a`, `!=`): the method group is the delegate it converts to, and the compare is on the function (the method's wrapper, one per method), as for two delegates.
+- **Static fields in structs**, generic or not (`struct Box<T> { static int Count; }`): they were only emitted for classes, so the C used an undeclared symbol. Each instantiation has its own fields, initializers (also ones that run code) and static constructor, as in C#.
+- **An interface value converted to a base interface** (`interface IB : IA`, then `IA a = b;`, `(IA)b`, passing, returning), and a call of a base interface's method through the derived one (`b.A()`). Each interface table (`X_vtbl`) now holds one pointer to the table of every base interface for the same class (`es_up_...`), filled in with the class's tables; the conversion is the same object with that table (null stays null). Casting an interface value to an interface it does not derive from is `ES0099`, as `is`/`as` between interfaces still are.
+- **Precompiled packages (split builds):** a generic struct copy's static fields have one owner, as a class's static fields did: the binary that makes the copy defines them, the program declares them, and a copy the program alone makes is the program's. The base-interface pointers need no knowledge of the other side: the owner of a class fills its tables, the binary and the program lay an interface's table out from the same declaration, and a conversion only reads the pointer. Tested with a binary that converts and calls through the program's classes and the program doing the same with the binary's.
+- Verified: `Issue161Tests` (host gcc compile and run: method group compares, statics in generic and plain structs with initializers, a static constructor and deferred initializers, base-interface conversions through variables, casts, arguments, returns, null and calls) and `PrecompiledTests.Static_fields_of_generic_structs_and_base_interface_conversions_in_a_split_build`. `samples/objects` has 3 new checks (24 in all): host 24 ok; `esharp test --target m68k --model A1200 --kickstart <rom>` on Kickstart 3.1 (40.069) in FS-UAE 24 ok, host and Amiga agree; `--target sdl` 24 ok, host and SDL agree. Not verified: os4, morphos and AROS runs of the new checks.
+
 ## IFF in E#: `Iff` on every target (part of issue #155)
 
 Step 2 of #155. `Iff`/`IffFile` (`src/ESharp.Platform/Iff.cs`) keep their public calls and now exist on sdl and the dotnet host

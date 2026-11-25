@@ -91,6 +91,23 @@ internal sealed partial class CEmitter
         return overloads > 1 ? im.Name + "_" + string.Join("_", im.Parameters.Select(p => Mangle(p.Type))) : im.Name;
     }
 
+    /// <summary>The member of an interface's table that points to the table of its base interface <paramref name="bi"/> for the same class.</summary>
+    private static string UpName(INamedTypeSymbol bi) => "es_up_" + TypeName(bi);
+
+    /// <summary>An interface value seen as one of its base interfaces: the same object, the table of that interface (null stays null).</summary>
+    private string IfaceUp(string value, INamedTypeSymbol from, INamedTypeSymbol to)
+    {
+        var t = $"_u{++_temp}";
+        return $"({{ {TypeName(from)} {t} = {value}; ({TypeName(to)}){{ {t}.obj, {t}.vt != NULL ? {t}.vt->{UpName(to)} : NULL }}; }})";
+    }
+
+    /// <summary>The way from the table of the interface a call goes through to the table that declares <paramref name="m"/>: nothing, or the pointer to a base interface's table.</summary>
+    private string ViaBase(ExpressionSyntax receiver, IMethodSymbol m)
+    {
+        var declared = m.ContainingType;
+        return Model(receiver).GetTypeInfo(receiver).Type is INamedTypeSymbol via && !SymbolEqualityComparer.Default.Equals(via, declared) ? UpName(declared) + "->" : "";
+    }
+
     private static string VtableName(INamedTypeSymbol iface, INamedTypeSymbol cls) => $"{TypeName(iface)}_vt_{QualifiedName(cls)}";
 
     // ---- class hierarchies
@@ -230,7 +247,7 @@ internal sealed partial class CEmitter
         foreach (var c in heapClasses)
             if (BaseClass(c) != null || c.GetMembers().OfType<IMethodSymbol>().Any(IsDynamic) || (Split.Active && IsExtensible(c))) _polyRoots.Add(RootClass(c));
         var enums = types.Where(t => t.TypeKind == TypeKind.Enum).ToList();
-        var statics = types.Where(t => t.TypeKind == TypeKind.Class).ToList();
+        var statics = types.Where(t => t.TypeKind is TypeKind.Class or TypeKind.Struct).ToList();
 
         var reachable = ReachableMethods(types);
         var usedStatics = new HashSet<ISymbol>(SymbolEqualityComparer.Default);
@@ -319,8 +336,8 @@ internal sealed partial class CEmitter
         EmitHookDeclarations(methods);
         foreach (var c in heapClasses.Where(c => IsPoly(c) && !IsExternal(c))) EmitVtInstance(c, reachable);
         foreach (var c in heapClasses)
-            foreach (var i in interfaces.Where(i => c.AllInterfaces.Contains(i, SymbolEqualityComparer.Default)))
-                EmitVtable(i, c);
+            foreach (var i in interfaces.Where(i => c.AllInterfaces.Contains(i, SymbolEqualityComparer.Default)).OrderBy(i => i.AllInterfaces.Length))
+                EmitVtable(i, c);   // base interfaces first: a table points to those of its base interfaces
 
         // [LibraryCall] externs (the binding of an E# .library): each is a function that calls the vector.
         foreach (var m in methods0.Where(m => m.IsExtern && HasAttribute(m, "LibraryCallAttribute") && reachable.Contains(m.OriginalDefinition))) EmitLibraryCall(m);
@@ -1898,6 +1915,10 @@ static __attribute__((unused)) int32_t MUI_DeleteCustomClass(void *mcc)
         // Split builds: whether the object behind the table starts with a class table pointer ('vt'), so that a package's binary can test
         // the object's own class when the table is of a program class it does not know (see IfaceIs).
         if (Split.Active) Line("unsigned char es_poly;");
+        // The tables of the base interfaces, for the same object: converting an interface value to a base interface (issue #161) and calling
+        // a base interface's method through it read them. Only the interface's own declaration decides the layout, so a package's binary and
+        // the program lay it out alike; the class's owner fills them in (EmitVtable).
+        foreach (var bi in i.AllInterfaces.Where(IsInterfaceType)) Line($"const struct {TypeName(bi)}_vtbl *{UpName(bi)};");
         foreach (var m in i.GetMembers().OfType<IMethodSymbol>().Where(m => m.MethodKind == MethodKind.Ordinary))
         {
             if (m.IsGenericMethod) Unsupported(decl, "generic method in an interface");
@@ -1933,6 +1954,7 @@ static __attribute__((unused)) int32_t MUI_DeleteCustomClass(void *mcc)
             Line("}");
             slots.Add($".{SlotName(im)} = {thunk}");
         }
+        foreach (var bi in i.AllInterfaces.Where(IsInterfaceType)) slots.Add($".{UpName(bi)} = &{VtableName(bi, c)}");
         if (Split.Active) slots.Insert(0, $".es_poly = {(IsPoly(c) ? 1 : 0)}");
         Line($"{(Split.Active ? "" : "static __attribute__((unused)) ")}const struct {TypeName(i)}_vtbl {VtableName(i, c)} = {{ {string.Join(", ", slots)} }};");
         Line("");
@@ -2858,6 +2880,17 @@ ADD2SET(es_aros_wbstart, PROGRAM_ENTRIES, -50)
             elem = $"{coll}.ptr[{i}]";
         }
 
+        var elemType = collType is IArrayTypeSymbol at ? at.ElementType : ((INamedTypeSymbol)collType!).TypeArguments[0];
+        if (local.RefKind == RefKind.None && IsInterfaceType(local.Type) && IsInterfaceType(elemType) && !SymbolEqualityComparer.Default.Equals(local.Type, elemType))
+        {
+            if (!((INamedTypeSymbol)elemType).AllInterfaces.Contains(local.Type, SymbolEqualityComparer.Default))
+            {
+                Unsupported(fe, "foreach converting an interface element to an interface it does not derive from");
+                return;
+            }
+            elem = IfaceUp(elem, (INamedTypeSymbol)elemType, (INamedTypeSymbol)local.Type);
+        }
+
         Line($"for (int32_t {i} = 0; {i} < {len}; {i}++)");
         Line("{");
         _indent++;
@@ -3072,6 +3105,12 @@ ADD2SET(es_aros_wbstart, PROGRAM_ENTRIES, -50)
             return Unsupported(e, "converting a struct to an interface (boxing); only classes can be used as interface values");
         }
 
+        // An interface value converted to a base interface: the object with the table of that interface.
+        if (IsInterfaceType(info.ConvertedType) && IsInterfaceType(info.Type) && !SymbolEqualityComparer.Default.Equals(info.Type, info.ConvertedType))
+            return ((INamedTypeSymbol)info.Type!).AllInterfaces.Contains(info.ConvertedType!, SymbolEqualityComparer.Default)
+                ? IfaceUp(text, (INamedTypeSymbol)info.Type!, (INamedTypeSymbol)info.ConvertedType!)
+                : Unsupported(e, "converting an interface value to an interface it does not derive from");
+
         // A derived class used where its base class is expected: the base part is the first member, so the pointer is the same, only its type changes.
         if (info.Type is INamedTypeSymbol upFrom && info.ConvertedType is INamedTypeSymbol upTo && IsHeapClass(upFrom) && IsHeapClass(upTo)
             && !SymbolEqualityComparer.Default.Equals(upFrom, upTo) && IsBaseOrSame(upFrom, upTo))
@@ -3233,6 +3272,15 @@ ADD2SET(es_aros_wbstart, PROGRAM_ENTRIES, -50)
                 if (Model(cast).GetSymbolInfo(cast).Symbol is IMethodSymbol { MethodKind: MethodKind.Conversion } conv)
                     return $"{FuncName(conv)}({Expr(cast.Expression, top: true)})";
                 var t = Model(cast).GetTypeInfo(cast.Type).Type!;
+                var from = Model(cast).GetTypeInfo(cast.Expression).Type;
+                if (IsInterfaceType(t) && IsInterfaceType(from))
+                {
+                    // Interface to interface: a base interface is the same object with that interface's table; anything else needs a type test E# does not make.
+                    if (SymbolEqualityComparer.Default.Equals(t, from)) return Expr(cast.Expression);
+                    return ((INamedTypeSymbol)from!).AllInterfaces.Contains(t, SymbolEqualityComparer.Default)
+                        ? IfaceUp(Expr(cast.Expression, top: true), (INamedTypeSymbol)from!, (INamedTypeSymbol)t)
+                        : Unsupported(cast, "casting an interface value to an interface it does not derive from");
+                }
                 return $"(({CType(t, cast)}){Expr(cast.Expression)})";
             }
 
@@ -3348,8 +3396,10 @@ ADD2SET(es_aros_wbstart, PROGRAM_ENTRIES, -50)
              IsDelegate(Model(b).GetTypeInfo(b.Left).Type) || IsDelegate(Model(b).GetTypeInfo(b.Right).Type)))
         {
             // Interface values are equal when they hold the same object, delegates when they hold the same function (and environment); null is an empty value.
+            // A method group has no type of its own: it is the delegate it converts to (a == F), whose function is the method's wrapper.
             string Side(ExpressionSyntax x) => x is LiteralExpressionSyntax l && l.IsKind(SyntaxKind.NullLiteralExpression) ? "NULL"
-                : IsInterfaceType(Model(x).GetTypeInfo(x).Type) ? $"{Expr(x)}.obj" : IsDelegate(Model(x).GetTypeInfo(x).Type) ? $"{Expr(x)}.fn" : Expr(x);
+                : IsInterfaceType(Model(x).GetTypeInfo(x).Type) ? $"{Expr(x)}.obj"
+                : IsDelegate(Model(x).GetTypeInfo(x).Type) || Model(x).GetTypeInfo(x) is { Type: null, ConvertedType.TypeKind: TypeKind.Delegate } ? $"{Expr(x)}.fn" : Expr(x);
             var cmp = $"{Side(b.Left)} {b.OperatorToken.Text} {Side(b.Right)}";
             return top ? cmp : $"({cmp})";
         }
@@ -3411,6 +3461,13 @@ ADD2SET(es_aros_wbstart, PROGRAM_ENTRIES, -50)
         {
             test = $"{tmp}{(IsInterfaceType(type) ? ".obj" : ".fn")} != NULL";
             left = Expr(b.Left, top: true);
+            // The left operand may be a derived interface: it goes through the table of the result's interface.
+            if (IsInterfaceType(type) && !SymbolEqualityComparer.Default.Equals(type, leftType))
+            {
+                if (!((INamedTypeSymbol)leftType).AllInterfaces.Contains(type, SymbolEqualityComparer.Default))
+                    return Unsupported(b, "?? with interface operands that do not derive from the result's interface");
+                left = IfaceUp(left, (INamedTypeSymbol)leftType, (INamedTypeSymbol)type);
+            }
             right = Expr(b.Right, top: true);
         }
         else if (IsHeapClass(type) && IsHeapClass(leftType))
@@ -3920,11 +3977,11 @@ ADD2SET(es_aros_wbstart, PROGRAM_ENTRIES, -50)
                 // Pick().M(x): the interface value is evaluated once, into a temporary of a statement expression.
                 var it = $"_i{++_temp}";
                 var itArgs = inv.ArgumentList.Arguments.Select(a => Argument(a, m)).Prepend($"{it}.obj");
-                return $"({{ {CType(Model(ifaceAccess.Expression).GetTypeInfo(ifaceAccess.Expression).Type!, inv)} {it} = {Expr(ifaceAccess.Expression, top: true)}; {it}.vt->{SlotName(m)}({string.Join(", ", itArgs)}); }})";
+                return $"({{ {CType(Model(ifaceAccess.Expression).GetTypeInfo(ifaceAccess.Expression).Type!, inv)} {it} = {Expr(ifaceAccess.Expression, top: true)}; {it}.vt->{ViaBase(ifaceAccess.Expression, m)}{SlotName(m)}({string.Join(", ", itArgs)}); }})";
             }
             var target = Expr(ifaceAccess.Expression);
             var callArgs = inv.ArgumentList.Arguments.Select(a => Argument(a, m)).Prepend($"{target}.obj");
-            return $"{target}.vt->{SlotName(m)}({string.Join(", ", callArgs)})";
+            return $"{target}.vt->{ViaBase(ifaceAccess.Expression, m)}{SlotName(m)}({string.Join(", ", callArgs)})";
         }
 
         // A method of the .NET library that nothing above maps: E# has no code for it, so it would be an undefined symbol at link time.
