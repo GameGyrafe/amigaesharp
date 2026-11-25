@@ -122,6 +122,13 @@ internal sealed partial class CEmitter
     /// <summary>Classes whose objects carry a virtual function table: every class of a hierarchy that has a subclass or a virtual member.</summary>
     private bool IsPoly(ITypeSymbol? t) => t is INamedTypeSymbol c && IsHeapClass(c) && _polyRoots.Contains(RootClass(c));
 
+    /// <summary>
+    /// A class marked [Extensible]. In a split build it always has a class table: the program may derive from a package's class that has no
+    /// virtual members and no subclasses in the package, and the binary's layout and type ids must be the ones the program's subclass uses.
+    /// </summary>
+    private static bool IsExtensible(INamedTypeSymbol c) =>
+        c.GetAttributes().Any(a => a.AttributeClass is { Name: "ExtensibleAttribute", ContainingNamespace: { Name: "ESharp", ContainingNamespace.IsGlobalNamespace: true } });
+
     /// <summary>Part of a hierarchy: needs pointer casts when it is used as its base class.</summary>
     private bool IsHier(ITypeSymbol? t) => t is INamedTypeSymbol c && IsHeapClass(c) && (BaseClass(c) != null || _polyRoots.Contains(c));
 
@@ -221,7 +228,7 @@ internal sealed partial class CEmitter
         var heapClasses = types.Where(IsHeapClass).Select(t => (INamedTypeSymbol)t).OrderBy(Depth).ToList();
         _heapClasses = heapClasses;
         foreach (var c in heapClasses)
-            if (BaseClass(c) != null || c.GetMembers().OfType<IMethodSymbol>().Any(IsDynamic)) _polyRoots.Add(RootClass(c));
+            if (BaseClass(c) != null || c.GetMembers().OfType<IMethodSymbol>().Any(IsDynamic) || (Split.Active && IsExtensible(c))) _polyRoots.Add(RootClass(c));
         var enums = types.Where(t => t.TypeKind == TypeKind.Enum).ToList();
         var statics = types.Where(t => t.TypeKind == TypeKind.Class).ToList();
 
@@ -243,6 +250,9 @@ internal sealed partial class CEmitter
             Line("struct ES_Type { const struct ES_Type *base; };");
             // Type ids are table addresses: an object is an instance of a class when that class's id is on its chain of base classes.
             Line("static __attribute__((unused)) bool es_is(const struct ES_Type *t, const struct ES_Type *want) { for (; t != NULL; t = t->base) if (t == want) return true; return false; }");
+            // Library mode: the type id of an object whose class this file may not know (its first member is its class table pointer).
+            if (Split.Library)
+                Line("static __attribute__((unused)) const struct ES_Type *es_type_of(const void *o) { const struct ES_Type *t; __builtin_memcpy(&t, o, sizeof t); return t; }");
             foreach (var c in heapClasses.Where(c => IsPoly(c) && BaseClass(c) == null)) Line($"struct {CvtName(c)};");
         }
         foreach (var s in structs) EmitStruct(s);
@@ -1827,6 +1837,9 @@ static __attribute__((unused)) int32_t MUI_DeleteCustomClass(void *mcc)
         Line($"struct {TypeName(i)}_vtbl");
         Line("{");
         _indent++;
+        // Split builds: whether the object behind the table starts with a class table pointer ('vt'), so that a package's binary can test
+        // the object's own class when the table is of a program class it does not know (see IfaceIs).
+        if (Split.Active) Line("unsigned char es_poly;");
         foreach (var m in i.GetMembers().OfType<IMethodSymbol>().Where(m => m.MethodKind == MethodKind.Ordinary))
         {
             if (m.IsGenericMethod) Unsupported(decl, "generic method in an interface");
@@ -1862,6 +1875,7 @@ static __attribute__((unused)) int32_t MUI_DeleteCustomClass(void *mcc)
             Line("}");
             slots.Add($".{SlotName(im)} = {thunk}");
         }
+        if (Split.Active) slots.Insert(0, $".es_poly = {(IsPoly(c) ? 1 : 0)}");
         Line($"{(Split.Active ? "" : "static __attribute__((unused)) ")}const struct {TypeName(i)}_vtbl {VtableName(i, c)} = {{ {string.Join(", ", slots)} }};");
         Line("");
     }

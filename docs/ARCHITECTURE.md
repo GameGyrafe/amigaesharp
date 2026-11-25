@@ -215,7 +215,11 @@ compiler embedding Runtime and Platform (`LibrarySources.cs`). The pieces:
   definition) gets external linkage in the program and is `extern` in a binary, and lambdas are `static`. Whatever is compared by
   address has one definition in the link, by its owner: class tables `X_vt` (type ids), interface tables `I_vt_X` (`is` and switch on
   an interface value) and method-group wrappers `F__dg` (an event's `-=`; `DelegateWrapper`: the binary lists the wrappers it defines
-  and the platform's it only declares, which the program defines). A package with E# dependencies is not precompiled (ES0125;
+  and the platform's it only declares, which the program defines). A binary does not know the program's classes, some of which derive
+  from its `[Extensible]` classes: in a split build every interface table starts with `es_poly` (its object starts with a class table
+  pointer), and in library mode `IfaceIs` adds, for a class with type ids, a test of the object's own type id (`es_type_of`, `es_is`)
+  after the tables it knows; an `[Extensible]` class always has a class table in a split build, so a program subclass of one without
+  virtual members has the layout the binary was built with. A package with E# dependencies is not precompiled (ES0125;
   `esharp precompile` skips it), so a binary holds one package and its init order cannot run before a dependency's. `PackageBinaries.ReadFolder` checks the binaries
   beside a restored DLL (listed files, SHA-256, archive members: GNU/BSD ar and the Amiga hunk library that m68k-amigaos-ar writes, the
   package's id, version and sources) and `StrayPrebuilt` refuses any other prebuilt file (ES0118). `Program.Build` copies the archives

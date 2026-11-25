@@ -41,8 +41,11 @@
     project folder, the library's DLL, an output folder under obj/ and EsTargets (then EsPrecompileArgs). For every target in EsTargets
     it compiles the library alone into a static library (lib/<tfm>/esharp-bin/<target>/library.a, the package's C files included) with a manifest (binary.json: target, the E# stamp, the generic copies it holds, the files' SHA-256). Games
     built by the same E# link it instead of compiling the sources (which the package still carries, for generics over the game's types and
-    as the fallback); esharp verify-package rebuilds it from those sources and compares the bytes. The pack fails when a listed target's
-    toolchain is missing (a Docker image, or ESHARP_TOOLCHAIN_<TARGET>).
+    as the fallback); esharp verify-package rebuilds it from those sources and compares the bytes. Each target's toolchain is, in this
+    order: an image named in EsPrecompileArgs (the esharp precompile options image <target>=<image>, or docker [<image>] for
+    every target, which without an image means the target's pinned one); a local toolchain in ESHARP_TOOLCHAIN_<TARGET> (or ESHARP_TOOLCHAIN for the Amiga targets); the target's
+    pinned Docker image when it is in the local Docker; the target's compiler on PATH when it is the pinned version (the option
+    any-cc-version accepts another; sdl has no pinned version, so no PATH compiler). The pack fails when a listed target has none of these.
       EsPrecompile       false: no binaries, sources only (as before #154)
       EsCommand          how to run esharp (default: esharp, the dotnet tool on PATH; e.g. dotnet path/to/esharp.dll)
       EsPrecompileArgs   more options for esharp precompile (see esharp help): an image for all targets or for one target, or a local

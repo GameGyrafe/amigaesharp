@@ -33,10 +33,12 @@ it is built: docs/ARCHITECTURE.md, "Precompiled binaries".
   archive members, including the Amiga hunk library form of m68k-amigaos-ar), and any other prebuilt file in a package is ES0118.
 - **`esharp verify-package <nupkg | folder>`:** rebuilds each binary from the shipped sources and compares bytes (VERIFIED, or FAIL and
   exit code 1).
-- **Verified (Linux x86-64, 2026-11-25):** `dotnet test`: 791 tests, 789 passed, 2 skipped (the SDK-backed BindGen test and the OS4 VM
+- **Verified (Linux x86-64, 2026-11-25):** `dotnet test`: 792 tests, 790 passed, 2 skipped (the SDK-backed BindGen test and the OS4 VM
   test), including `PrecompiledTests` (library C and program C built with the host gcc, linked and run: same output as the source
   build; `Pair<Mine>`/`Pick<Mine>` over a program type emitted by the program, `Pick<int>` only referenced; `is` and a switch on
-  interface values of a package class and a program class, an event handler added in the package and removed in the program (and
+  interface values of a package class and a program class; `is`, `as`, a type switch and a stored interface value tested inside the
+  binary on program classes derived from an `[Extensible]` package class (with and without virtual members) and on unrelated program
+  classes; an event handler added in the package and removed in the program (and
   the other way), a platform method used as a delegate in the package, same-named generics in two namespaces: same output as the
   source build; ES0125 for a library build with an E# dependency; ES0124 on another stamp, a debug build and a target without a
   binary; the binary folder checks) and `PrecompiledRoundTripTests` (Tween and Checksum packed

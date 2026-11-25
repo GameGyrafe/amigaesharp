@@ -337,6 +337,105 @@ public static class P
         finally { Directory.Delete(dir, true); }
     }
 
+    private const string DerivedLibSource = @"using ESharp;
+using ESharp.Platform;
+
+namespace Lib;
+
+public interface IThing { int Id(); }
+
+[Extensible]
+public class Base : IThing { public virtual int Id() => 1; }
+
+public class Sub : Base { public override int Id() => 3; }
+
+[Extensible]
+public class Plain : IThing { public int V = 7; public int Id() => V; }
+
+public static class Probe
+{
+    public static IThing Keep;
+    public static int IsBase(IThing t) => t is Base ? 1 : 0;
+    public static int IsSub(IThing t) => t is Sub ? 1 : 0;
+    public static int Kind(IThing t) => t switch { Sub => 3, Base => 1, _ => 0 };
+    public static int Bound(IThing t) => t switch { Base b => b.Id() * 10, _ => -1 };
+    public static int AsId(IThing t) { var b = t as Base; return b == null ? -1 : b.Id(); }
+    public static void Store(IThing t) { Keep = t; }
+    public static int KeptIsBase() => Keep is Base ? 1 : 0;
+    public static int ClassIsSub(Base b) => b is Sub ? 1 : 0;
+    public static int IsPlain(IThing t) => t is Plain ? 1 : 0;
+    public static int Read(Plain p) => p.V;
+}
+";
+
+    private const string DerivedGameSource = @"using ESharp;
+using ESharp.Platform;
+using Lib;
+
+namespace Game;
+
+public class Derived : Base { public override int Id() => 2; }
+public class Deeper : Derived { public override int Id() => 4; }
+public class Other : IThing { public int Id() => 5; }
+public class OtherPoly : IThing { public virtual int Id() => 6; }
+public class Kid : Plain { public int W = 3; }
+
+public static class P
+{
+    static string Row(IThing t) =>
+        $""{Probe.IsBase(t)} {Probe.IsSub(t)} {Probe.Kind(t)} {Probe.Bound(t)} {Probe.AsId(t)} {(t is Base ? 1 : 0)}\n"";
+
+    [EntryPoint]
+    public static void Main()
+    {
+        IThing d = new Derived();
+        Base asBase = new Deeper();
+        IThing viaBase = asBase;
+        Dos.PutStr(Row(d));
+        Dos.PutStr(Row(new Deeper()));
+        Dos.PutStr(Row(viaBase));
+        Dos.PutStr(Row(new Sub()));
+        Dos.PutStr(Row(new Base()));
+        Dos.PutStr(Row(new Other()));
+        Dos.PutStr(Row(new OtherPoly()));
+        IThing none = null;
+        Dos.PutStr(Row(none));
+        Probe.Store(d);
+        Dos.PutStr($""kept {Probe.KeptIsBase()} class {Probe.ClassIsSub(new Derived())} {Probe.ClassIsSub(new Sub())} {d.Id()}\n"");
+        var kid = new Kid();
+        IThing tk = kid;
+        Dos.PutStr($""plain {Probe.Read(kid)} {Probe.IsPlain(tk)} {Probe.IsPlain(d)} {kid.W} {tk.Id()}\n"");
+    }
+}
+";
+
+    [Fact]
+    public void Interface_tests_in_the_binary_see_program_classes_derived_from_an_extensible_class()
+    {
+        // The binary knows only its own interface tables; a program class derived from an [Extensible] package class has a table of its
+        // own, so is, as and switch on an interface value fall back to the object's own type id (re-review of #160). An [Extensible] class
+        // without virtual members (Plain) has a class table in a split build, so a program subclass has the layout the binary expects.
+        var lib = PackageTests.Package("Sample.Derive", new Dictionary<string, string> { ["Lib.cs"] = DerivedLibSource });
+        const string expected =
+            "1 0 1 20 2 1\n1 0 1 40 4 1\n1 0 1 40 4 1\n1 1 3 30 3 1\n1 0 1 10 1 1\n0 0 0 -1 -1 0\n0 0 0 -1 -1 0\n0 0 0 -1 -1 0\nkept 1 class 0 1 2\nplain 7 1 0 3 7\n";
+        var source = EsCompiler.Compile(new[] { new SourceFile("game.cs", DerivedGameSource) }, Options(lib, stamp: null));
+        Assert.True(source.Success, string.Join("\n", source.Diagnostics.Select(d => d.ToString())));
+        if (!CanBuild) return;
+        var (binary, dir) = BuildBinary(lib);
+        try
+        {
+            var (code, fromSource) = RunWithHostGcc(source.C!);
+            Assert.Equal(0, code);
+            Assert.Equal(expected, fromSource);
+            var linked = EsCompiler.Compile(new[] { new SourceFile("game.cs", DerivedGameSource) }, Options(lib.WithBinaries(new[] { binary })));
+            Assert.True(linked.Success, string.Join("\n", linked.Diagnostics.Select(d => d.ToString())));
+            Assert.Single(linked.Linked);
+            Assert.Contains(".es_poly = 1", linked.C!);
+            Assert.Equal(expected, LinkAndRun(linked.C!, binary, dir));
+        }
+        finally { Directory.Delete(dir, true); }
+    }
+
     [Fact]
     public void A_package_with_esharp_dependencies_is_not_precompiled()
     {
