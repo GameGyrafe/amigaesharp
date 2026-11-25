@@ -22,8 +22,9 @@ internal static class Monomorphizer
     private const int MaxRounds = 16;
 
     /// <summary>
-    /// The expanded compilation. <paramref name="MadeTypes"/> and <paramref name="MadeMethods"/> are the names of the copies (Pair__int,
-    /// Pick__int): a precompiled package lists the C names of the copies it holds, and a program's build tells its own copies apart by them.
+    /// The expanded compilation. <paramref name="MadeTypes"/> and <paramref name="MadeMethods"/> are the copies, each by its qualified
+    /// name (<see cref="CopyName"/>: Lib.Pair__int, Lib.Tools.Pick__int, so same-named generics in two namespaces stay apart): a
+    /// precompiled package lists the C names of the copies it holds, and a program's build tells its own copies apart by them.
     /// </summary>
     public sealed record Result(CSharpCompilation Compilation, HashSet<SyntaxTree> User, List<Diagnostic> Errors,
         IReadOnlyCollection<string> MadeTypes, IReadOnlyCollection<string> MadeMethods);
@@ -42,6 +43,10 @@ internal static class Monomorphizer
         public IReadOnlyList<ITypeSymbol> Args = null!;
         public string NewName = "";
     }
+
+    /// <summary>The key of a copy named <paramref name="name"/> declared in <paramref name="container"/> (a namespace or a non-generic type).</summary>
+    public static string CopyName(ISymbol container, string name) =>
+        container is INamespaceSymbol { IsGlobalNamespace: true } ? name : container.ToDisplayString() + "." + name;
 
     public static Result Expand(CSharpCompilation compilation, HashSet<SyntaxTree> user, CSharpParseOptions parse)
     {
@@ -97,7 +102,7 @@ internal static class Monomorphizer
 
                     if (made.Add(key))
                     {
-                        (key[0] == 'T' ? madeTypes : madeMethods).Add(newName);
+                        (key[0] == 'T' ? madeTypes : madeMethods).Add(CopyName(symbol!.OriginalDefinition.ContainingSymbol, newName));
                         var defTree = def.SyntaxTree;
                         if (!instances.TryGetValue(defTree, out var il)) instances[defTree] = il = new List<Instance>();
                         il.Add(new Instance

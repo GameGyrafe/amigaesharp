@@ -231,6 +231,124 @@ public static class P
         finally { Directory.Delete(dir, true); }
     }
 
+    private const string IdentityLibSource = @"using System;
+using ESharp;
+using ESharp.Platform;
+
+namespace Lib;
+
+public interface IThing { int Id(); }
+
+public class LibThing : IThing { public int Id() => 1; }
+
+public struct Box<T> where T : unmanaged { public T V; public Box(T v) { V = v; } }
+
+public static class Bus
+{
+    public static int Count;
+    public static event Action Ticked;
+    public static event Action Done;
+    public static void OnTick() { Count++; }
+    public static void OnOther() { Count += 10; }
+    public static void Subscribe() { Ticked += OnTick; }
+    public static void Unsubscribe() { Ticked -= OnTick; }
+    public static void Fire() { Ticked?.Invoke(); }
+    public static void HookFlush() { Done += Dos.FlushOutput; }
+    public static bool IsLib(IThing t) => t is LibThing;
+    public static int Kind(IThing t) => t switch { LibThing => 1, _ => 0 };
+    public static int Boxed() => new Box<int>(5).V;
+}
+";
+
+    private const string IdentityGameSource = @"using ESharp;
+using ESharp.Platform;
+using Lib;
+
+namespace Game;
+
+public struct Box<T> where T : unmanaged { public T V; public Box(T v) { V = v; } }
+
+public class GameThing : IThing { public int Id() => 2; }
+
+public static class P
+{
+    static int B(bool b) => b ? 1 : 0;
+
+    [EntryPoint]
+    public static void Main()
+    {
+        IThing a = new LibThing();
+        IThing g = new GameThing();
+        Dos.PutStr($""is {B(a is LibThing)} {B(g is GameThing)} {B(a is GameThing)} lib {B(Bus.IsLib(a))} {B(Bus.IsLib(g))}\n"");
+        var k = g switch { GameThing => 2, LibThing => 1, _ => 0 };
+        Dos.PutStr($""kind {Bus.Kind(a)} {Bus.Kind(g)} {k}\n"");
+        Bus.Subscribe();
+        Bus.Ticked -= Bus.OnTick;
+        Bus.Fire();
+        Bus.Ticked += Bus.OnTick;
+        Bus.Ticked += Bus.OnOther;
+        Bus.Unsubscribe();
+        Bus.Fire();
+        Bus.Ticked -= Bus.OnOther;
+        Bus.Fire();
+        Bus.HookFlush();
+        Bus.Done -= Dos.FlushOutput;
+        Dos.PutStr($""count {Bus.Count} box {Bus.Boxed()} {new Box<int>(6).V}\n"");
+    }
+}
+";
+
+    [Fact]
+    public void Interface_tests_and_delegate_identity_hold_across_the_binary()
+    {
+        // An interface value's 'is' and switch compare its table's address, and an event's -= compares the wrapper of a method group:
+        // the program and the binary must use one table and one wrapper each (defined by their owner), as a whole-program build does.
+        var lib = PackageTests.Package("Sample.Ident", new Dictionary<string, string> { ["Lib.cs"] = IdentityLibSource });
+        const string expected = "is 1 1 0 lib 1 0\nkind 1 0 2\ncount 10 box 5 6\n";
+        var source = EsCompiler.Compile(new[] { new SourceFile("game.cs", IdentityGameSource) }, Options(lib, stamp: null));
+        Assert.True(source.Success, string.Join("\n", source.Diagnostics.Select(d => d.ToString())));
+        var built = EsCompiler.Compile(System.Array.Empty<SourceFile>(), Options(lib, library: true));
+        Assert.True(built.Success, string.Join("\n", built.Diagnostics.Select(d => d.ToString())));
+        Assert.Contains("\nconst struct Es_Lib_IThing_vtbl Es_Lib_IThing_vt_Lib_LibThing = {", built.C!);
+        Assert.Contains("Es_Lib_Bus_OnTick__dg", built.Library!.Delegates);
+        Assert.Contains("Es_ESharp_Platform_Dos_FlushOutput__dg", built.Library.DelegateUses);
+        Assert.Contains("Es_Lib_Box__int", built.Library.Generics);
+        if (!CanBuild) return;
+        var (binary, dir) = BuildBinary(lib);
+        try
+        {
+            var (code, fromSource) = RunWithHostGcc(source.C!);
+            Assert.Equal(0, code);
+            Assert.Equal(expected, fromSource);
+            var linked = EsCompiler.Compile(new[] { new SourceFile("game.cs", IdentityGameSource) }, Options(lib.WithBinaries(new[] { binary })));
+            Assert.True(linked.Success, string.Join("\n", linked.Diagnostics.Select(d => d.ToString())));
+            Assert.Single(linked.Linked);
+            var c = linked.C!;
+            Assert.Contains("\nextern const struct Es_Lib_IThing_vtbl Es_Lib_IThing_vt_Lib_LibThing;", c);
+            Assert.Contains("\nconst struct Es_Lib_IThing_vtbl Es_Lib_IThing_vt_Game_GameThing = {", c);
+            Assert.Contains("\nvoid Es_Lib_Bus_OnTick__dg(void *_env);", c);                   // the binary's
+            Assert.Contains("\nvoid Es_Lib_Bus_OnOther__dg(void *_env) {", c);                 // the binary's code never uses it as a delegate
+            Assert.Contains("\nvoid Es_ESharp_Platform_Dos_FlushOutput__dg(void *_env) {", c); // the platform's: the program defines it
+            // Same-named generics in two namespaces: Lib.Box<int> is the binary's copy, Game.Box<int> the program's own.
+            Assert.Contains("Es_Lib_Box__int", binary.Generics);
+            Assert.DoesNotContain("Es_Game_Box__int", binary.Generics);
+            Assert.Equal(expected, LinkAndRun(c, binary, dir));
+        }
+        finally { Directory.Delete(dir, true); }
+    }
+
+    [Fact]
+    public void A_package_with_esharp_dependencies_is_not_precompiled()
+    {
+        var lib = Lib();
+        var other = PackageTests.Package("Sample.Other", new Dictionary<string, string> { ["Other.cs"] = "namespace Other; public static class O { public static int One() => 1; }" });
+        var r = EsCompiler.Compile(System.Array.Empty<SourceFile>(), Options(lib, library: true) is var o
+            ? new CompileOptions { Defines = o.Defines, TargetName = o.TargetName, Packages = new[] { lib, other }, Stamp = Stamp, LibraryBuild = lib, CFileName = "library.c" }
+            : null);
+        Assert.False(r.Success);
+        Assert.Contains(r.Diagnostics, d => d.Id == "ES0125" && d.GetMessage().Contains("Sample.Other"));
+    }
+
     [Fact]
     public void A_binary_from_another_esharp_or_config_falls_back_to_the_sources_with_ES0124()
     {

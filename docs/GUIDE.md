@@ -300,7 +300,8 @@ fallback, and for the IDE, the analyzer, the licence checks and `esharp verify-p
   `ESHARP_TOOLCHAIN`), else the default image (`esharp-amiga-toolchain`, `esharp-aros-i386`, `esharp-sdl`) when it is in the local
   Docker, else a compiler of the pinned version on PATH. **The pack fails** (ESL016) when a listed target has none: remove the target
   from `EsTargets`, or set `<EsPrecompile>false</EsPrecompile>` to ship sources only (as before). A library whose code calls the
-  sdl C runtime's `[Native]` functions directly cannot be precompiled (ES0125: that runtime keeps its state in the program).
+  sdl C runtime's `[Native]` functions directly cannot be precompiled (ES0125: that runtime keeps its state in the program). A library
+  that uses other E# packages gets no binaries yet: `esharp precompile` says so and the package ships its sources only.
 - **Linking.** `esharp build` (and `run`, `test --target`) uses a package's binary when there is one for the target, made by this
   E# for this configuration; it prints `Package X 1.0.0: linked from its precompiled m68k binary (...); its sources are not compiled`
   and copies the archive to `obj/<target>/esharp-bin/<id>/`. Otherwise it compiles the sources with warning ES0124 saying why (a
@@ -321,7 +322,7 @@ fallback, and for the IDE, the analyzer, the licence checks and `esharp verify-p
 - **Checking a package.** `esharp verify-package <nupkg or extracted folder>` rebuilds each binary from the sources the package
   carries, with the same toolchain choice as the pack (`--image <target>=<image>`, `--docker`), and compares the bytes: `ok m68k:
   library.a rebuilt from the package's sources, byte for byte`, or `FAIL` and exit code 1. It needs the esharp version that built the
-  binaries (the stamp); a package that depends on other E# packages is not handled yet. The game's build itself checks only that the
+  binaries (the stamp). The game's build itself checks only that the
   binaries are the ones `binary.json` lists (ES0118 otherwise); any other prebuilt file in the package is refused.
 - **Not covered.** `esharp addr` maps addresses in the program's own C only (a binary's code has no line table in the map).
   A binary built for one esharp version is used only by that version (no stable ABI yet).

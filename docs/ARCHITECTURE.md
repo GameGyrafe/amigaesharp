@@ -204,15 +204,19 @@ compiler embedding Runtime and Platform (`LibrarySources.cs`). The pieces:
   defines what is declared in the package's trees (functions, static fields with external linkage, class tables `X_vt`, field
   initializers `X_finit`, the generic copies the package makes) and declares the rest, and `main` becomes `es_pkginit_<id>()` (its static
   initializers and constructors). `CompileResult.Library` records the generic copies' C names (`Monomorphizer.Result.MadeTypes` /
-  `MadeMethods` tell a copy from other code), the runtime pieces the code uses and its library bases. `Precompile.BuildBinary` compiles
+  `MadeMethods` tell a copy from other code, by qualified name), the runtime pieces the code uses and its library bases. `Precompile.BuildBinary` compiles
   that C and the package's C files (`-c`, fixed names, in `/work` with Docker) and archives them with `ar rcsD`; `PackageBinaries`
   writes `binary.json` (stamp: tool version + the compiler assembly's MVID). *Program mode* (`EsCompiler.ChooseBinaries`: a binary for
   `PackageBinaries.BinaryTarget(target)` with this stamp and `Config`, else ES0124): `IsExternal` is true for a symbol of a linked
   package's tree unless it belongs to a generic copy the binary does not list; those are declared only, the rest is emitted as before,
   and `main` calls the init functions after the platform's static initializers. Both modes compute the same reachable set for the
   package (its whole code is a root, as program code is; in a split build every slot of a package class's table is reached), so the
-  program defines every platform function and runtime variable a binary refers to; the runtime's state (`SplitRuntimeLinkage`) gets
-  external linkage in the program and is `extern` in a binary, and lambdas are `static`. `PackageBinaries.ReadFolder` checks the binaries
+  program defines every platform function and runtime variable a binary refers to; the runtime's state (`RuntimeState` at each
+  definition) gets external linkage in the program and is `extern` in a binary, and lambdas are `static`. Whatever is compared by
+  address has one definition in the link, by its owner: class tables `X_vt` (type ids), interface tables `I_vt_X` (`is` and switch on
+  an interface value) and method-group wrappers `F__dg` (an event's `-=`; `DelegateWrapper`: the binary lists the wrappers it defines
+  and the platform's it only declares, which the program defines). A package with E# dependencies is not precompiled (ES0125;
+  `esharp precompile` skips it), so a binary holds one package and its init order cannot run before a dependency's. `PackageBinaries.ReadFolder` checks the binaries
   beside a restored DLL (listed files, SHA-256, archive members: GNU/BSD ar and the Amiga hunk library that m68k-amigaos-ar writes, the
   package's id, version and sources) and `StrayPrebuilt` refuses any other prebuilt file (ES0118). `Program.Build` copies the archives
   to `obj/<target>/esharp-bin/<id>/` and puts them after the program's C. `esharp verify-package` rebuilds each binary with

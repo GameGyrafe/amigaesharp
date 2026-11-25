@@ -23,7 +23,8 @@ it is built: docs/ARCHITECTURE.md, "Precompiled binaries".
   target's toolchain (image given, `ESHARP_TOOLCHAIN_<T>`, the default image when present, or a compiler of the pinned version on
   PATH), the package's C files as objects of their own, `ar rcsD`. The pack fails (ESL016) when a listed target has no toolchain.
   `binary.json`: target, E# stamp (tool version + compiler assembly MVID), configuration, generic copies' C names, runtime pieces,
-  library bases, objects, SHA-256, sources hash. A package that calls the sdl C runtime's natives itself cannot be precompiled (ES0125).
+  library bases, method-group wrappers it defines and uses, objects, SHA-256, sources hash. A package that calls the sdl C runtime's
+  natives itself cannot be precompiled (ES0125), nor yet one that uses other E# packages (precompile skips it: sources only).
 - **Game build:** a binary for the target with this stamp and configuration is linked (`linked from its precompiled m68k binary ...;
   its sources are not compiled`); otherwise the sources, with warning ES0124 (other E#, `--debug`/`--trace`, no binary for the target);
   `--from-source` forces sources. Generic copies the binary holds are declared, the program emits only the others (over its own types).
@@ -32,10 +33,13 @@ it is built: docs/ARCHITECTURE.md, "Precompiled binaries".
   archive members, including the Amiga hunk library form of m68k-amigaos-ar), and any other prebuilt file in a package is ES0118.
 - **`esharp verify-package <nupkg | folder>`:** rebuilds each binary from the shipped sources and compares bytes (VERIFIED, or FAIL and
   exit code 1).
-- **Verified (Linux x86-64, 2026-11-25):** `dotnet test`: 789 tests, 787 passed, 2 skipped (the SDK-backed BindGen test and the OS4 VM
+- **Verified (Linux x86-64, 2026-11-25):** `dotnet test`: 791 tests, 789 passed, 2 skipped (the SDK-backed BindGen test and the OS4 VM
   test), including `PrecompiledTests` (library C and program C built with the host gcc, linked and run: same output as the source
-  build; `Pair<Mine>`/`Pick<Mine>` over a program type emitted by the program, `Pick<int>` only referenced; ES0124 on another stamp,
-  a debug build and a target without a binary; the binary folder checks) and `PrecompiledRoundTripTests` (Tween and Checksum packed
+  build; `Pair<Mine>`/`Pick<Mine>` over a program type emitted by the program, `Pick<int>` only referenced; `is` and a switch on
+  interface values of a package class and a program class, an event handler added in the package and removed in the program (and
+  the other way), a platform method used as a delegate in the package, same-named generics in two namespaces: same output as the
+  source build; ES0125 for a library build with an E# dependency; ES0124 on another stamp, a debug build and a target without a
+  binary; the binary folder checks) and `PrecompiledRoundTripTests` (Tween and Checksum packed
   through the Sdk step with this build's esharp: sdl with the host gcc and m68k in the pinned image; TweenDemo links both, its C has
   `Es_Tween_Ease_InQuad` declared but not defined; a changed stamp falls back with ES0124; an unlisted `extra.o` and a loose `fast.a`
   give ES0118; verify-package passes, and fails on a tampered archive with and without its hash updated; two precompiles in
@@ -47,15 +51,18 @@ it is built: docs/ARCHITECTURE.md, "Precompiled binaries".
   --docker <pinned m68k image> --model A1200 --kickstart <rom>` (Kickstart 3.1): host 22 ok, Amiga 22 ok, 0 FAIL, return code 0;
   CounterDemo 9 ok both sides; TweenDemo `--target sdl --docker esharp-sdl` 22 ok; hosted AROS x86-64 TweenDemo 22 ok and CounterDemo
   9 ok, 0 traps; AmigaOS 4.1 VM TweenDemo 21 ok, 1 skipped (as from source) and CounterDemo 9 ok. The m68k screenshot of TweenDemo
-  (ball along the tween, package sprite) is byte-identical with and without the binaries.
+  (ball along the tween, package sprite) is byte-identical with and without the binaries. After the review fixes (one interface
+  table and one method-group wrapper per link, runtime linkage at its definitions, copies keyed by qualified name, no binaries for
+  packages with E# dependencies) Tween, Checksum and Counter were packed again with binaries for all their targets, verify-package
+  VERIFIED each, and the linked runs were repeated with the same results: m68k (Kickstart 3.1) TweenDemo 22/22 and CounterDemo 9/9,
+  sdl TweenDemo 22, hosted AROS x86-64 22 and 9 (0 traps), AmigaOS 4.1 VM 21 + 1 skipped and 9; the screenshot was not re-taken.
 - **Build time (TweenDemo, m68k, pinned image, 3 runs each):** `esharp build` 2.9-3.0 s with the binaries and 2.9-3.2 s from source,
   no measurable difference: the build is dominated by starting Docker for the three compiler runs, and these libraries are small
   (Tween's m68k binary is 5 KB). The C the game compiles shrinks from 3109 to 2646 lines, and the m68k gcc step alone (inside one
   container, 5 runs) takes 156-167 ms with the binaries against 197-205 ms from source.
 - **Not verified:** the morphos and aros-i386 binaries linked into a program and run (they build and verify; no morphos runner, and
   aros-i386 runs were not made), a local toolchain for m68k and the other Amiga targets in the pack (sdl with the host gcc only; Docker
-  builds always run in `/work`), Windows and macOS (the pack step and the round trip test run on Linux only), a package that depends on
-  another E# package (pack takes the dependencies from the library's restore; verify-package does not handle it yet), packages with
+  builds always run in `/work`), Windows and macOS (the pack step and the round trip test run on Linux only), packages with
   `[Interrupt]` or `[HookEntry]` methods or MUI custom classes as binaries, `esharp addr` in binary code (not mapped), real hardware.
   `.library` (part 3 of #154) is not done.
 

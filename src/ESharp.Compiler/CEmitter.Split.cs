@@ -57,11 +57,15 @@ internal sealed partial class CEmitter
     {
         for (var c = s.OriginalDefinition; c != null && c is not INamespaceSymbol; c = c.ContainingSymbol)
         {
-            if (c is IMethodSymbol { MethodKind: MethodKind.Ordinary } m && Split.MadeMethods.Contains(m.Name)) return FuncName(m);
-            if (c is INamedTypeSymbol t && Split.MadeTypes.Contains(t.Name)) return TypeName(t);
+            if (c is IMethodSymbol { MethodKind: MethodKind.Ordinary } m && IsCopy(m)) return FuncName(m);
+            if (c is INamedTypeSymbol t && IsCopy(t)) return TypeName(t);
         }
         return null;
     }
+
+    /// <summary>A generic copy the monomorphiser made (matched by its qualified name, not its short one).</summary>
+    private bool IsCopy(ISymbol s) =>
+        (s is INamedTypeSymbol ? Split.MadeTypes : Split.MadeMethods).Contains(Monomorphizer.CopyName(s.OriginalDefinition.ContainingSymbol, s.Name));
 
     private PackageBinary? BinaryOf(string? path)
     {
@@ -122,40 +126,14 @@ internal sealed partial class CEmitter
     private readonly SortedDictionary<string, string> _baseLibs = new(StringComparer.Ordinal);   // base name -> library, for the manifest
 
     /// <summary>
-    /// The E# runtime's state lives once, in the program: in a split build its variables get external linkage in the program's C and
-    /// are declared extern in a package's (the counters of Heap.LiveClosures, the exit hook of a fatal error, the text ring of string
-    /// formatting, the command line of Args). Helpers without state stay static in each C file; those a file may not call are marked unused.
+    /// A variable of the E# runtime's state (the counters of Heap.LiveClosures, the exit hook of a fatal error, the text ring of string
+    /// formatting, the command line of Args): static in a whole-program C file; in a split build it lives once, in the program (external
+    /// linkage there, declared extern in a package's C), so the program and every binary share it.
     /// </summary>
-    private string SplitRuntimeLinkage(string prologue)
-    {
-        if (!Split.Active) return prologue;
-        var lib = Split.Library;
-        var state = new Dictionary<string, string>(StringComparer.Ordinal)
-        {
-            ["static int32_t es_frames_live;"] = "int32_t es_frames_live;",
-            ["static int32_t es_closures_live;"] = "int32_t es_closures_live;",
-            ["static void (*es_exit_hook)(void);"] = "void (*es_exit_hook)(void);",
-            ["static char es_fmt_buf[8][128];"] = "char es_fmt_buf[8][128];",
-            ["static int es_fmt_index;"] = "int es_fmt_index;",
-            ["static int es_argc;"] = "int es_argc;",
-            ["static char **es_argv;"] = "char **es_argv;",
-        };
-        var unused = new Dictionary<string, string>(StringComparer.Ordinal)
-        {
-            ["static void *es_new(size_t n)"] = "static __attribute__((unused)) void *es_new(size_t n)",
-            ["static void es_fatal(void)"] = "static __attribute__((unused)) void es_fatal(void)",
-            ["static char *es_fmt_begin(void) { char *b = es_fmt_buf[es_fmt_index]; es_fmt_index = (es_fmt_index + 1) & 7; return b; }"] =
-                "static __attribute__((unused)) char *es_fmt_begin(void) { char *b = es_fmt_buf[es_fmt_index]; es_fmt_index = (es_fmt_index + 1) & 7; return b; }",
-        };
-        var lines = prologue.Split('\n');
-        for (var i = 0; i < lines.Length; i++)
-        {
-            var line = lines[i].TrimEnd('\r');
-            if (state.TryGetValue(line, out var global)) lines[i] = lib ? "extern " + global : global;
-            else if (unused.TryGetValue(line, out var marked)) lines[i] = marked;
-        }
-        return string.Join("\n", lines);
-    }
+    private string RuntimeState(string declaration) => !Split.Active ? "static " + declaration : Split.Library ? "extern " + declaration : declaration;
+
+    /// <summary>A runtime helper without state that every whole-program C file calls: static in each C file, marked unused in a split one (a file may not call it).</summary>
+    private string SplitHelper => Split.Active ? "static __attribute__((unused)) " : "static ";
 
     /// <summary>Library mode: the init function (static initializers that are not C constants, then static constructors).</summary>
     private void EmitLibraryInit()
@@ -177,9 +155,9 @@ internal sealed partial class CEmitter
         foreach (var t in types)
         {
             if (IsExternal(t)) continue;
-            if (Split.MadeTypes.Contains(t.Name)) names.Add(TypeName(t));
+            if (IsCopy(t)) names.Add(TypeName(t));
             foreach (var m in t.GetMembers().OfType<IMethodSymbol>())
-                if (m.MethodKind == MethodKind.Ordinary && !m.IsGenericMethod && Split.MadeMethods.Contains(m.Name)) names.Add(FuncName(m));
+                if (m.MethodKind == MethodKind.Ordinary && !m.IsGenericMethod && IsCopy(m)) names.Add(FuncName(m));
         }
         return names.ToList();
     }

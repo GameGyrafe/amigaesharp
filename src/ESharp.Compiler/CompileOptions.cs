@@ -45,8 +45,8 @@ public sealed class CompileOptions
     public string? SdkVersion { get; init; }
 
     /// <summary>
-    /// Library mode (<c>esharp precompile</c>, issue #154): no program sources; the C of this package (one of <see cref="Packages"/>, the others
-    /// are its E# dependencies) for its binary, with an init function instead of main (see <see cref="CompileResult.Library"/>).
+    /// Library mode (<c>esharp precompile</c>, issue #154): no program sources; the C of this package (the only one in <see cref="Packages"/>: a
+    /// package with E# dependencies is not precompiled, error ES0125) for its binary, with an init function instead of main (see <see cref="CompileResult.Library"/>).
     /// </summary>
     public EsPackage? LibraryBuild { get; init; }
 

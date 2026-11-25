@@ -82,6 +82,15 @@ public static class EsCompiler
         if (diagnostics.Any(d => d.Severity == DiagnosticSeverity.Error))
             return new CompileResult(null, Sorted(diagnostics)) { Chip = chip };
 
+        // A binary holds one package's code alone: verify-package rebuilds it from that package, and main runs the binaries' init
+        // functions before the packages compiled from source.
+        if (options.LibraryBuild is { } only && options.Packages.Any(p => p != only))
+        {
+            diagnostics.Add(Diagnostic.Create(Descriptors.PackageNotPrecompilable, Location.None,
+                "it uses the E# package(s) " + string.Join(", ", options.Packages.Where(p => p != only).Select(p => p.Id)) + ", and a package with E# dependencies is not precompiled yet"));
+            return new CompileResult(null, Sorted(diagnostics)) { Chip = chip };
+        }
+
         // Precompiled binaries of the packages (issue #154): which ones the program links instead of compiling their sources.
         var linked = options.LibraryBuild == null ? ChooseBinaries(options, diagnostics) : new List<(EsPackage Package, PackageBinary Binary)>();
 

@@ -78,11 +78,19 @@ internal static class Precompile
         if (dll == null || outDir == null) return Fail("precompile needs --dll <the library's DLL> and --out <folder>");
         if (!File.Exists(dll)) return Fail($"{dll} not found (build the library first)");
         if (ReadLibrary(dll, out var library) is { } readError) return Fail(readError);
-        var dependencies = new List<EsPackage>();
         if (project != null)
         {
             if (PackageStep.Load(project, out var restored) is { } loadError) return Fail(loadError);
-            dependencies.AddRange(restored.Packages.Where(p => !string.Equals(p.Id, library!.Id, StringComparison.OrdinalIgnoreCase)));
+            // A package that uses other E# packages ships its sources only: verify-package rebuilds a binary from the package alone,
+            // which such a binary cannot be (it is compiled against its dependencies' code), and main runs the binaries' init functions
+            // before any package compiled from source, which would be the wrong order for a binary's dependency.
+            var dependencies = restored.Packages.Where(p => !string.Equals(p.Id, library!.Id, StringComparison.OrdinalIgnoreCase)).Select(p => p.Id).ToList();
+            if (dependencies.Count > 0)
+            {
+                Console.WriteLine($"esharp precompile: {library!.Id} uses the E# package(s) {string.Join(", ", dependencies)}, so it gets no precompiled binaries: " +
+                                  "the package carries its sources, and programs compile it (a package with E# dependencies is not precompiled yet).");
+                return 0;
+            }
         }
         var names = (targetsText ?? string.Join(";", library!.Manifest!.Targets)).Split(';', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
         var targets = new List<TargetInfo>();
@@ -105,7 +113,7 @@ internal static class Precompile
         foreach (var (t, tool) in chosen)
         {
             var watch = Stopwatch.StartNew();
-            if (BuildBinary(library!, dependencies, t, tool, outDir, out var binary) is { } buildError) return Fail(buildError);
+            if (BuildBinary(library!, t, tool, outDir, out var binary) is { } buildError) return Fail(buildError);
             Console.WriteLine($"Precompiled {library!.Id} {library.Version} for {t.Name}: {Path.Combine(outDir, binary!.BinaryTarget, PackageBinaries.ArchiveName)} " +
                               $"({binary.Objects.Count} object(s), {binary.Generics.Count} generic copies; {tool.Describe}; {watch.Elapsed.TotalSeconds:0.0} s)");
         }
@@ -184,14 +192,14 @@ internal static class Precompile
     }
 
     /// <summary>Builds one target's binary of <paramref name="library"/> into <c>&lt;outDir&gt;/&lt;binary target&gt;/</c>.</summary>
-    private static string? BuildBinary(EsPackage library, IReadOnlyList<EsPackage> dependencies, TargetInfo target, Tool tool, string outDir, out PackageBinary? binary)
+    private static string? BuildBinary(EsPackage library, TargetInfo target, Tool tool, string outDir, out PackageBinary? binary)
     {
         binary = null;
         var options = new CompileOptions
         {
             Defines = target.Defines.ToArray(),
             TargetName = target.Name,
-            Packages = new[] { library }.Concat(dependencies).ToList(),
+            Packages = new[] { library },
             LibraryBuild = library,
             CFileName = "library.c",
             AllowCopyleft = true,   // the library's own licence is the author's choice; programs check it when they use the package
@@ -361,7 +369,7 @@ internal static class Precompile
                         continue;
                     }
                     if (FindTool(target, tools, out var tool) is { } toolError) { Console.WriteLine($"FAIL {b.BinaryTarget}: {toolError}"); failed++; continue; }
-                    if (BuildBinary(library, Array.Empty<EsPackage>(), target, tool!, outDir, out var rebuilt) is { } buildError)
+                    if (BuildBinary(library, target, tool!, outDir, out var rebuilt) is { } buildError)
                     {
                         Console.WriteLine($"FAIL {b.BinaryTarget}: rebuild failed: {buildError}");
                         failed++;

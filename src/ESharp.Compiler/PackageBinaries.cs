@@ -38,12 +38,28 @@ public sealed record PackageBinary(
     /// <summary>The folder the binary was read from (null for one that was just built).</summary>
     public string? Folder { get; init; }
 
+    /// <summary>
+    /// The delegate wrappers of methods used as delegates (<c>F__dg</c>) that the binary defines: of the package's own methods. Their
+    /// address is the delegate's identity (an event's -= compares it), so the whole link has one of each; the program declares these.
+    /// </summary>
+    public IReadOnlyList<string> Delegates { get; init; } = Array.Empty<string>();
+
+    /// <summary>The delegate wrappers of the platform's methods that the binary declares only: the program defines them.</summary>
+    public IReadOnlyList<string> DelegateUses { get; init; } = Array.Empty<string>();
+
     /// <summary>The archive's path in <see cref="Folder"/>.</summary>
     public string? Archive => Folder == null ? null : Path.Combine(Folder, PackageBinaries.ArchiveName);
 }
 
 /// <summary>What a library build (<see cref="CompileOptions.LibraryBuild"/>) found out: what the binary's manifest records.</summary>
-public sealed record LibraryBuildInfo(string Init, IReadOnlyList<string> Generics, IReadOnlyList<string> Runtime, IReadOnlyList<PackageBase> Bases);
+public sealed record LibraryBuildInfo(string Init, IReadOnlyList<string> Generics, IReadOnlyList<string> Runtime, IReadOnlyList<PackageBase> Bases)
+{
+    /// <summary>See <see cref="PackageBinary.Delegates"/>.</summary>
+    public IReadOnlyList<string> Delegates { get; init; } = Array.Empty<string>();
+
+    /// <summary>See <see cref="PackageBinary.DelegateUses"/>.</summary>
+    public IReadOnlyList<string> DelegateUses { get; init; } = Array.Empty<string>();
+}
 
 /// <summary>Names, files, the E# stamp and the reading and writing of <c>binary.json</c> (issue #154).</summary>
 public static class PackageBinaries
@@ -102,7 +118,7 @@ public static class PackageBinaries
     public static PackageBinary FromBuild(EsPackage package, string target, string stamp, string config, LibraryBuildInfo info,
         IReadOnlyList<string> objects, IReadOnlyList<BinaryFile> files) =>
         new(package.Id, package.Version, target, BinaryTarget(target), stamp, config, info.Init, info.Generics, info.Runtime, info.Bases,
-            objects, files, SourcesHash(package));
+            objects, files, SourcesHash(package)) { Delegates = info.Delegates, DelegateUses = info.DelegateUses };
 
     private static readonly JsonSerializerOptions Json = new() { Encoder = System.Text.Encodings.Web.JavaScriptEncoder.UnsafeRelaxedJsonEscaping };
 
@@ -120,6 +136,8 @@ public static class PackageBinaries
         sb.Append($"  \"init\": {Q(b.Init)},\n");
         sb.Append($"  \"generics\": {L(b.Generics)},\n");
         sb.Append($"  \"runtime\": {L(b.Runtime)},\n");
+        sb.Append($"  \"delegates\": {L(b.Delegates)},\n");
+        sb.Append($"  \"delegateUses\": {L(b.DelegateUses)},\n");
         sb.Append("  \"bases\": [" + string.Join(", ", b.Bases.Select(x => $"{{ \"lib\": {Q(x.Lib)}, \"name\": {Q(x.Name)}, \"ctype\": {Q(x.CType)} }}")) + "],\n");
         sb.Append($"  \"objects\": {L(b.Objects)},\n");
         sb.Append("  \"files\": [" + string.Join(", ", b.Files.Select(f => $"{{ \"name\": {Q(f.Name)}, \"sha256\": {Q(f.Sha256)} }}")) + "]\n");
@@ -151,12 +169,13 @@ public static class PackageBinaries
                 foreach (var x in fv.EnumerateArray().Where(x => x.ValueKind == JsonValueKind.Object))
                     files.Add(new BinaryFile(Str(x, "name"), Str(x, "sha256").ToLowerInvariant()));
             var b = new PackageBinary(Str(root, "id"), Str(root, "version"), Str(root, "target"), Str(root, "binaryTarget"), Str(root, "esharp"),
-                Str(root, "config"), Str(root, "init"), List("generics"), List("runtime"), bases, List("objects"), files, Str(root, "sources"));
+                Str(root, "config"), Str(root, "init"), List("generics"), List("runtime"), bases, List("objects"), files, Str(root, "sources"))
+                { Delegates = List("delegates"), DelegateUses = List("delegateUses") };
             if (b.Target.Length == 0 || b.BinaryTarget.Length == 0 || b.Stamp.Length == 0 || !IsCName(b.Init))
                 problem = "it lacks the target, the E# stamp or the init function";
             else if (!files.Any(x => x.Name == ArchiveName))
                 problem = $"it does not list {ArchiveName}";
-            else if (b.Generics.Concat(bases.Select(x => x.Name)).Any(x => !IsCName(x)) || bases.Any(x => !IsCName(x.Lib) || x.CType.Any(c => !(char.IsLetterOrDigit(c) || c is ' ' or '_'))))
+            else if (b.Generics.Concat(b.Delegates).Concat(b.DelegateUses).Concat(bases.Select(x => x.Name)).Any(x => !IsCName(x)) || bases.Any(x => !IsCName(x.Lib) || x.CType.Any(c => !(char.IsLetterOrDigit(c) || c is ' ' or '_'))))
                 problem = "it names a C symbol that is not a C name";
             return problem == null ? b : null;
         }
