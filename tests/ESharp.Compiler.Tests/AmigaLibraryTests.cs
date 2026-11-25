@@ -191,7 +191,9 @@ int main(void)
     /* A new opener in the same memory starts from the initial values again. */
     __builtin_memset(a, 0, ES_LIB_DATA_SIZE);
     if (!es_lib_data_init(a)) return 1;
-    printf(""again %d %d\n"", es_lib_call_Add(a, 0), es_lib_call_Boxed(a));
+    int boxed = es_lib_call_Boxed(a);   /* before Add, which counts in the box too (C leaves the order of printf's arguments open) */
+    int again = es_lib_call_Add(a, 0);
+    printf(""again %d %d\n"", again, boxed);
     es_lib_data_fini(a);
     es_lib_data_fini(b);
     free(a);
