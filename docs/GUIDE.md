@@ -348,7 +348,13 @@ big endian sizes, a pad byte after an odd size). On the Amiga targets iffparse.l
 opened and the E# code takes over when it cannot, so no program needs to check; both write the same bytes (checked byte for
 byte, `samples/iff`). `Iff.ForceBuiltIn = true` chooses the E# code even where the library is present. Reading steps into
 groups: `Next()` reports the group (`ChunkId` is FORM, LIST, CAT or PROP, `ChunkType` its type) and then the chunks inside it;
-do not `Read` a group. `Iff.Open()` only says whether iffparse.library is in use (always false on sdl and the host).
+do not `Read` a group. `ChunkDepth` says how deeply each reported chunk or group is nested (0: directly in the file's FORM), so the end of
+a group shows as a step whose depth is lower than the one before (`FORM{FORM X{A} B}` reads A at depth 1 and B at 0,
+`FORM{FORM X{A B}}` reads both at 1). A group may hold at most `Iff.MaxDepth` (16) groups inside it. An `IffFile` passed by value to a
+helper works on the same file (its state is on the heap); `Next()` sets `ChunkId`, `ChunkSize`, `ChunkType` and `ChunkDepth` in the copy it
+is called on, so pass the file by `ref` to a helper that steps through it, and use none of the copies after `Finish()` or `Close()`. A
+chunk that does not fit in the file stops the reader with `Damaged` on both implementations, and the writer's misuse results are the
+same on both (a group of type 0 is refused by iffparse and accepted by the E# writer; use a real type). `Iff.Open()` only says whether iffparse.library is in use (always false on sdl and the host).
 
 The Amiga library bindings are hand-written `static extern` methods tagged `[AmigaLib]`, with struct offsets measured per
 target into `Layout.g.cs` (`tools/BindGen/layouts.sh`). `tools/BindGen` can also generate bindings from `.fd` files and

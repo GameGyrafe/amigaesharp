@@ -24,36 +24,51 @@ when the size is odd (not counted in the size).
   program without the library); `Create`/`OpenRead` open the library themselves. The host fake (`Iff.HostAvailable`) is gone: the
   host runs the E# code.
 - **Additions** (all optional, existing code is unchanged): `IffFile.BeginGroup(group, type)` and `EndGroup()` for nested groups
-  (`Iff.IdForm`, `IdList`, `IdCat`, `IdProp`), `ChunkType`, `Damaged`. Reading steps into groups as iffparse's raw step does; do
+  (`Iff.IdForm`, `IdList`, `IdCat`, `IdProp`), `ChunkType`, `ChunkDepth`, `Damaged`. Reading steps into groups as iffparse's raw step does; do
   not `Read` a group (iffparse then returns its raw contents and steps past what is inside; the E# code returns 0 bytes).
 - **Damaged files:** `OpenRead` fails for a missing file, one under 12 bytes, one that does not start with FORM or whose FORM size is
   under 4. A FORM size past the end of the file is allowed (cut file: the chunks before the cut are read); `Next()` then returns
   false with `Damaged` set when a chunk or group does not fit (size past the end, group under 4 bytes, a header cut short) or
-  the file ended before its FORM did. A last odd chunk without its pad byte is accepted. The E# reader does not check a nested
-  group's size against its parent's, only against the end of the FORM. `Create` writes the 12-byte header at once, so an
+  the file ended before its FORM did. A last odd chunk without its pad byte is accepted. The E# reader checks a chunk or group
+  against the end of the group it is in (not only the FORM's); the iffparse path checks it against the file's length (it reports a cut
+  chunk itself and only fails when its data is read, so the wrapper follows the position by the sizes and stops with `Damaged` the
+  same way; not against its parent group). `Create` writes the 12-byte header at once, so an
   unwritable path gives a closed file there rather than at `Finish`. `Files.WriteAll` on the host now returns false for an IO error
   instead of throwing.
+- **Review fixes (PR 159):** (1) the E# state (buffer, length, group stack, reader position) is in a heap block behind
+  `IffFile.St`, shared by every copy of the struct; before, a copy passed by value to a helper freed the caller's buffer on a grow
+  (use after free, found with ASan on sdl). The iffparse path keeps its group depth and "chunk open" in the same block, and now
+  refuses the same misuse the E# writer does (write or `EndChunk` with no chunk open, a chunk or group inside a chunk, `Finish` with a
+  chunk or group open). (2) `IffFile.ChunkDepth` (0 directly in the file's FORM) tells where a group ends: the two nestings
+  `FORM{FORM X{A} B}` and `FORM{FORM X{A B}}` read differently on both implementations; at most `Iff.MaxDepth` (16) groups deep. (3) The
+  iffparse run is `run samples/iff ... --mui 3.8 --workbench <wb>` (AGENTS.md): `--mui` is what assigns `LIBS:` to the Workbench disk,
+  and the sample does not use MUI. (4) The damaged-file, nesting and misuse checks now run with both implementations (a tag in the
+  check name says which). Differences found on the iffparse path: it refuses a group of type 0 (the E# writer accepts it), and it
+  reported a chunk that ran past the end of the file (fixed as above). A copy of an `IffFile` does not see what `Next` set in another
+  copy (`ChunkId` and the like are per copy); the file position is shared.
 - **samples/iff** now runs everywhere: it writes a FORM ESHP with a header, an odd-sized, a 300-byte (two `Write` calls) and an
   empty chunk, a LIST holding a PROP and a FORM, a CAT holding a FORM of another type, and a last chunk (464 bytes), once with
   `Iff` as it is configured and once with `ForceBuiltIn`, and checks the two files are equal and have the FNV-1a sum `17dcd906`
   (the same bytes were made independently with a Python script from the format facts). It reads each file with each reader,
-  walks the 13 steps (sizes, ids, types, bytes), and checks cut files, a non-IFF file, a missing file and misuse of a writer.
-  16 ok lines on every target; a first line says which implementation is in use.
+  walks the 13 steps (sizes, ids, types, depths, bytes), and checks cut files, a non-IFF file, a missing file, the two nestings, a
+  writer passed by value to a helper (8000-byte chunk, a grow) and misuse of a writer, the last four with each implementation.
+  28 ok lines on every target; a first line says which implementation is in use.
 
 Verified:
 - `dotnet test`: 791 tests, 789 passed, 2 skipped (the OS4 VM and SDK-backed BindGen ones), 0 failed. New or changed tests: host run of the sample (16 ok), the byte layout, a
   hand-made file with a nested LIST/PROP and an odd last chunk without pad, nested groups written with sizes and misuse refused, an
   ILBM written by `Iff` and loaded by `Ilbm.Read` (the asset reader), every prefix of a file read without a crash and with `Damaged`
   set, the sample compiled for m68k, os4, aros and sdl, and built with the host gcc for sdl (with address/undefined sanitizers when
-  the machine has them): 16 ok and the sum `17dcd906`.
+  the machine has them): 28 ok and the sum `17dcd906` (the sample now includes a writer passed by value to a helper, which is
+  what ASan caught before the fix). After the review fixes: 791 tests, 789 passed, 2 skipped, 0 failed.
 - A1200, Kickstart 3.1 (40.069), FS-UAE, the pinned m68k image, program on DH0 and the Workbench 3.1 disk 2 read-only as DF0 with
-  `LIBS:` assigned to `DF0:Libs`: "using iffparse.library", 16 ok, 0 FAIL, return code 0; the file written through iffparse.library has
+  `LIBS:` assigned to `DF0:Libs`: "using iffparse.library", 28 ok, 0 FAIL (after the review fixes, run with `--mui 3.8 --workbench <wb>`, see AGENTS.md; the damaged, nesting and misuse checks ran on the library too), return code 0; the file written through iffparse.library has
   the same size and bytes as the E# writer's (check "the E# writer's bytes are the other writer's bytes", and sum `17dcd906`
   equal to the reference), and the library reader walks the E# writer's file. Without `LIBS:` (the same disk as DF0, no assign):
-  "using the built-in E# reader and writer", 16 ok, 0 FAIL. `esharp test samples/iff --target m68k` (no `LIBS:`): host 16, Amiga 16, no
-  differences. `--target sdl` (esharp-sdl image): 16 ok, agree. `--target aros` (hosted AROS x86-64): 16 ok, 0 traps, agree.
-  `--target os4` (QEMU VM): 16 ok, agree (whether the VM has iffparse.library was not looked at, so which implementation ran is not known).
-- Not verified: AmigaOS 4 and AROS with and without the library separately, MorphOS, PowerPC real hardware, real Amiga hardware, big
+  "using the built-in E# reader and writer", 28 ok, 0 FAIL. `esharp test samples/iff --target m68k` (no `LIBS:`): host 28, Amiga 28, no
+  differences. `--target sdl` (esharp-sdl image): 28 ok, agree. `--target aros` (hosted AROS x86-64; iffparse.library there, so the library path ran): 28 ok, 0 traps, agree.
+  `--target os4` (QEMU VM): 28 ok, agree (whether the VM has iffparse.library was not looked at, so which implementation ran is not known).
+- Not verified: the iffparse path of MorphOS and i386 AROS, AmigaOS 4 and AROS with and without the library separately, MorphOS, PowerPC real hardware, real Amiga hardware, big
   files (the whole file is held in memory: a 10 MB IFF needs 10 MB), reading a file written by another program than E# and
   iffparse (apart from the hand-made one in the tests), LZ/ByteRun1 (not part of IFF itself; `Ilbm` in the asset tools decodes
   pictures at build time), Kickstart 3.0.

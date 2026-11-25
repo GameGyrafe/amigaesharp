@@ -23,6 +23,14 @@ public static unsafe class Program
         Dos.PutStr("\n");
     }
 
+    static void Check(bool ok, string tag, string name)
+    {
+        Dos.PutStr(ok ? "ok " : "FAIL ");
+        Dos.PutStr(tag);
+        Dos.PutStr(name);
+        Dos.PutStr("\n");
+    }
+
     static string[] Hex = { "0", "1", "2", "3", "4", "5", "6", "7", "8", "9", "a", "b", "c", "d", "e", "f" };
 
     static void PutHex(uint v)
@@ -86,6 +94,7 @@ public static unsafe class Program
         uint[] ids = { Iff.Id("HEAD"), Iff.Id("NAME"), Iff.Id("BODY"), Iff.Id("NONE"), Iff.IdList, Iff.IdProp, Iff.Id("DFLT"),
                        Iff.IdForm, Iff.Id("ITEM"), Iff.IdCat, Iff.IdForm, Iff.Id("ITEM"), Iff.Id("TAIL") };
         int[] sizes = { 8, 5, 300, 0, 54, 16, 3, 18, 5, 26, 14, 1, 2 };
+        int[] depths = { 0, 0, 0, 0, 0, 1, 2, 1, 2, 0, 1, 2, 0 };             // where each group ends shows in these
         int n = 0;
         bool good = true;
         while (r.Next())
@@ -93,7 +102,7 @@ public static unsafe class Program
             if (n >= 13) { good = false; break; }
             bool isGroup = r.ChunkId == Iff.IdList || r.ChunkId == Iff.IdProp || r.ChunkId == Iff.IdForm || r.ChunkId == Iff.IdCat;
             int got = isGroup ? 0 : r.Read(buf, 400);          // never Read a group: iffparse would give its raw contents and step past the chunks inside
-            good = good && r.ChunkId == ids[n] && r.ChunkSize == sizes[n] && (isGroup || got == sizes[n]);
+            good = good && r.ChunkDepth == depths[n] && r.ChunkId == ids[n] && r.ChunkSize == sizes[n] && (isGroup || got == sizes[n]);
             if (isGroup) good = good && (r.ChunkType == form || (n == 10 && r.ChunkType == Iff.Id("SUBF")));
             if (n == 0) good = good && buf[0] == 1 && buf[7] == 8;
             if (n == 1) good = good && buf[0] == 'h' && buf[4] == 'o';
@@ -102,6 +111,104 @@ public static unsafe class Program
         }
         r.Close();
         return good && !r.IsOpen && n == 13 ? n : -1;
+    }
+
+    // Cut and damaged files: no crash, an error result. fa is the good file (sa bytes), written to path in pieces.
+    static void Damaged(string path, byte* fa, int sa, bool builtIn, string tag)
+    {
+        Iff.ForceBuiltIn = builtIn;
+        int cut = 55;                                          // part way into the BODY chunk (HEAD ends at 28, NAME at 42, BODY data from 50)
+        Check(Files.WriteAll(path, new ReadOnlySpan<byte>(fa, cut)), tag, "a truncated copy is written");
+        IffFile t = Iff.OpenRead(path);
+        int steps = 0;
+        while (t.Next()) steps++;
+        Check(t.IsOpen && steps == 2 && t.Damaged, tag, "a file cut inside a chunk stops with an error after the chunks before it");
+        t.Close();
+        Files.WriteAll(path, new ReadOnlySpan<byte>(fa, 20));
+        IffFile h = Iff.OpenRead(path);
+        Check(h.IsOpen && !h.Next() && h.Damaged, tag, "a file cut after its header has an error and no chunk");
+        h.Close();
+        Files.WriteAll(path, new ReadOnlySpan<byte>(fa, 7));
+        Check(!Iff.OpenRead(path).IsOpen, tag, "a file shorter than a FORM header does not open");
+        Files.WriteAll(path, new ReadOnlySpan<byte>(fa + 12, 40));
+        Check(!Iff.OpenRead(path).IsOpen, tag, "a file that does not start with FORM does not open");
+        Iff.ForceBuiltIn = false;
+    }
+
+    // Writes FORM{ FORM SUBF{ AAAA } BBBB } (bInside false) or FORM{ FORM SUBF{ AAAA BBBB } } (true).
+    static bool WriteNested(string path, byte* d, bool bInside)
+    {
+        IffFile w = Iff.Create(path, Iff.Id("ESHP"));
+        if (!w.IsOpen) return false;
+        bool ok = w.BeginGroup(Iff.IdForm, Iff.Id("SUBF")) && w.WriteChunk(Iff.Id("AAAA"), d, 4);
+        if (bInside) ok = ok && w.WriteChunk(Iff.Id("BBBB"), d, 4) && w.EndGroup();
+        else ok = ok && w.EndGroup() && w.WriteChunk(Iff.Id("BBBB"), d, 4);
+        return w.Finish() && ok;
+    }
+
+    // The two nestings read as different steps: ChunkDepth tells where the group ends.
+    static void Nesting(string path, byte* d, bool builtIn, string tag)
+    {
+        for (int k = 0; k < 2; k++)
+        {
+            Iff.ForceBuiltIn = builtIn;
+            bool wrote = WriteNested(path, d, k == 1);
+            IffFile r = Iff.OpenRead(path);
+            Iff.ForceBuiltIn = false;
+            bool good = wrote && r.IsOpen;
+            int n = 0;
+            while (good && r.Next())
+            {
+                int want = n == 0 ? 0 : n == 1 ? 1 : (k == 1 ? 1 : 0);
+                good = good && r.ChunkDepth == want && (n != 0 || (r.ChunkId == Iff.IdForm && r.ChunkType == Iff.Id("SUBF")));
+                n++;
+            }
+            r.Close();
+            Check(good && n == 3, tag, k == 0 ? "a chunk after a group ends has the depth of the group" : "a chunk inside a group has the depth of the chunk before it");
+        }
+    }
+
+    // A helper gets the writer by value: it must work on the same file (the state is not copied with the struct).
+    static bool PutBody(IffFile w, byte* big) => w.WriteChunk(Iff.Id("BODY"), big, 8000) && w.WriteChunk(Iff.Id("TAIL"), big, 3);
+
+    static bool Passed(string path, byte* d, bool builtIn)
+    {
+        byte* big = Mem.AllocFast(8000u);
+        if (big == null) return false;
+        for (int i = 0; i < 8000; i++) big[i] = (byte)(i * 13 + 1);
+        Iff.ForceBuiltIn = builtIn;
+        IffFile w = Iff.Create(path, Iff.Id("ESHP"));
+        Iff.ForceBuiltIn = false;
+        bool ok = w.IsOpen && PutBody(w, big);
+        ok = w.Finish() && ok;
+        IffFile r = Iff.OpenRead(path);
+        ok = ok && r.IsOpen && r.Next() && r.ChunkId == Iff.Id("BODY") && r.ChunkSize == 8000;
+        byte* back = Mem.AllocFast(8000u);
+        if (back == null) ok = false;
+        else
+        {
+            ok = ok && r.Read(back, 8000) == 8000;
+            for (int i = 0; i < 8000 && ok; i++) ok = back[i] == big[i];
+            Mem.Free(back);
+        }
+        ok = ok && r.Next() && r.ChunkId == Iff.Id("TAIL") && r.ChunkSize == 3 && !r.Next() && !r.Damaged;
+        r.Close();
+        Mem.Free(big);
+        return ok;
+    }
+
+    // Misuse of a writer is an error result, not a crash, and the file can still be finished.
+    static void Misuse(string path, byte* d, bool builtIn, string tag)
+    {
+        Iff.ForceBuiltIn = builtIn;
+        IffFile m = Iff.Create(path, Iff.Id("ESHP"));
+        Iff.ForceBuiltIn = false;
+        bool bad = m.IsOpen;
+        bad = bad && !m.Write(d, 4) && !m.EndChunk() && !m.EndGroup();    // no chunk is open
+        bad = bad && m.BeginChunk(Iff.Id("ABCD")) && !m.BeginChunk(Iff.Id("EFGH")) && !m.BeginGroup(Iff.IdForm, 0) && !m.Finish();
+        bad = bad && m.EndChunk() && !m.BeginGroup(Iff.Id("ABCD"), 0);
+        bad = bad && m.BeginGroup(Iff.IdForm, Iff.Id("SUBF")) && !m.Finish() && m.EndGroup() && m.Finish();    // not while a group is open
+        Check(bad, tag, "misuse of a writer gives false and the file can still be finished");
     }
 
     [EntryPoint]
@@ -146,41 +253,22 @@ public static unsafe class Program
             Check(Walk(pathA, b, true) == 13, "the E# reader reads the first file");
             Check(Walk(pathB, b, false) == 13, "the second file reads back");
 
-            // damaged files: no crash, an error result
-            Iff.ForceBuiltIn = true;
-            int cut = 55;                                          // part way into the BODY chunk (HEAD ends at 28, NAME at 42, BODY data from 50)
-            Check(Files.WriteAll(pathC, new ReadOnlySpan<byte>(fa, cut)), "a truncated copy is written");
-            IffFile t = Iff.OpenRead(pathC);
-            int steps = 0;
-            while (t.Next()) steps++;
-            Check(t.IsOpen && steps == 2 && t.Damaged, "a file cut inside a chunk stops with an error after the chunks before it");
-            t.Close();
-            Files.WriteAll(pathC, new ReadOnlySpan<byte>(fa, 20));
-            IffFile h = Iff.OpenRead(pathC);
-            Check(h.IsOpen && !h.Next() && h.Damaged, "a file cut after its header has an error and no chunk");
-            h.Close();
-            Files.WriteAll(pathC, new ReadOnlySpan<byte>(fa, 7));
-            Check(!Iff.OpenRead(pathC).IsOpen, "a file shorter than a FORM header does not open");
-            Files.WriteAll(pathC, new ReadOnlySpan<byte>(fa + 12, 40));
-            Check(!Iff.OpenRead(pathC).IsOpen, "a file that does not start with FORM does not open");
-            Iff.ForceBuiltIn = false;
+            Damaged(pathC, fa, sa, true, "the E# reader: ");
+            Damaged(pathC, fa, sa, false, "");                      // whatever Iff uses here (iffparse.library on an Amiga that has it)
+            Nesting(pathC, d, true, "the E# code: ");
+            Nesting(pathC, d, false, "");
+            Check(Passed(pathC, d, true), "a writer copied by value to a helper keeps working on its file (E# code)");
+            Check(Passed(pathC, d, false), "a writer copied by value to a helper keeps working on its file");
             if (fa != null) Mem.Free(fa);
             if (fb != null) Mem.Free(fb);
         }
         Check(!Iff.OpenRead("RAM:esharp_no_such_file.iff").IsOpen, "a missing file does not open");
 
-        // misuse of a writer is an error result, not a crash
-        Iff.ForceBuiltIn = true;
-        IffFile m = Iff.Create(pathC, Iff.Id("ESHP"));
-        bool bad = m.IsOpen;
         fixed (byte* d = data)
         {
-            bad = bad && !m.Write(d, 4) && !m.EndChunk() && !m.EndGroup();    // no chunk is open
-            bad = bad && m.BeginChunk(Iff.Id("ABCD")) && !m.BeginChunk(Iff.Id("EFGH")) && !m.BeginGroup(Iff.IdForm, 0) && !m.Finish();
-            bad = bad && m.EndChunk() && !m.BeginGroup(Iff.Id("ABCD"), 0) && m.Finish();
+            Misuse(pathC, d, true, "the E# code: ");
+            Misuse(pathC, d, false, "");
         }
-        Iff.ForceBuiltIn = false;
-        Check(bad, "misuse of a writer gives false and the file can still be finished");
 
         Files.Delete(pathA);
         Files.Delete(pathB);

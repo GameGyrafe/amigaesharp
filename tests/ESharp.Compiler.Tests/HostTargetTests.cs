@@ -314,7 +314,7 @@ public class HostTargetTests
         IffSample.Program.Main();
         Assert.DoesNotContain("FAIL", console.Output);
         Assert.StartsWith("using the built-in E# reader and writer\n", console.Output);
-        Assert.Equal(16, console.Output.Split('\n').Count(l => l.StartsWith("ok ")));
+        Assert.Equal(28, console.Output.Split('\n').Count(l => l.StartsWith("ok ")));
     }
 
     [Fact]

@@ -36,7 +36,10 @@ public static unsafe class IffParse
 /// to the next chunk (its <see cref="ChunkId"/> and <see cref="ChunkSize"/>), <see cref="Read"/> gets its bytes.
 /// Nested groups (FORM, LIST, CAT, PROP) are written with <see cref="BeginGroup"/> and <see cref="EndGroup"/>; reading steps into
 /// them: <see cref="Next"/> reports the group itself (<see cref="ChunkId"/> is its kind, <see cref="ChunkType"/> its type, a
-/// <see cref="Read"/> gives 0 bytes) and then the chunks inside it.
+/// <see cref="Read"/> gives 0 bytes) and then the chunks inside it; <see cref="ChunkDepth"/> says how deeply each is nested, which
+/// is how the end of a group shows. A copy of an <c>IffFile</c> (passed by value to a helper) works on the same file, with the same
+/// result on every target; what <see cref="Next"/> reports (<see cref="ChunkId"/> and the like) is set in the copy it was called on,
+/// so pass the file by <c>ref</c> to a helper that steps through it. After <see cref="Finish"/> or <see cref="Close"/> use none of the copies.
 /// </summary>
 public unsafe struct IffFile
 {
@@ -51,16 +54,17 @@ public unsafe struct IffFile
     public uint ChunkType;
     /// <summary>True when <see cref="Next"/> returned false because the file is damaged or cut short (not just at its end).</summary>
     public bool Damaged;
-    internal nuint Handle;
+    /// <summary>
+    /// How deeply the chunk <see cref="Next"/> stopped at is nested: 0 for a chunk or group directly in the file's FORM, 1 inside a
+    /// group of it, and so on. Together with the order of the steps it tells where each group ends (a chunk whose depth is lower
+    /// than the one before it is outside the group the one before was in), so the nesting written by <see cref="BeginGroup"/> can be rebuilt.
+    /// </summary>
+    public int ChunkDepth;
+    internal nuint Handle;                     // Amiga: the iffparse handle
     internal nuint File;
     internal bool Writing;
     internal bool Library;                     // Amiga: iffparse.library does the work; otherwise the E# code below
-    // State of the E# implementation: the whole file in memory (written by Finish, read by OpenRead)
-    internal byte* Buf;
-    internal int Len, Cap, Pos, DataStart, DataEnd, FormEnd, SizeAt, Depth;
-    internal int* Stack;                       // writing: where the size field of each open group is
-    internal bool InChunk, Truncated;
-    internal string Path;
+    internal nuint St;                         // the state block (IffState, on the heap): shared by every copy of this struct, see Iff.NewState
 
     /// <summary>Starts a chunk in a file being written. Its size is filled in by <see cref="EndChunk"/>.</summary>
     public bool BeginChunk(uint id)
@@ -69,7 +73,10 @@ public unsafe struct IffFile
         if (Library)
         {
             if (!IsOpen || !Writing) return false;
-            return IffParse.PushChunk((void*)Handle, 0, id, Layout.IffSizeUnknown) == 0;
+            IffState* st = (IffState*)St;
+            if (st->InChunk || IffParse.PushChunk((void*)Handle, 0, id, Layout.IffSizeUnknown) != 0) return false;
+            st->InChunk = true;
+            return true;
         }
 #endif
         return EsBeginChunk(id);
@@ -81,7 +88,7 @@ public unsafe struct IffFile
 #if AMIGA
         if (Library)
         {
-            if (!IsOpen || !Writing || length < 0) return false;
+            if (!IsOpen || !Writing || length < 0 || !((IffState*)St)->InChunk) return false;
             return IffParse.WriteChunkBytes((void*)Handle, data, length) == length;
         }
 #endif
@@ -95,6 +102,9 @@ public unsafe struct IffFile
         if (Library)
         {
             if (!IsOpen || !Writing) return false;
+            IffState* st = (IffState*)St;
+            if (!st->InChunk) return false;
+            st->InChunk = false;
             return IffParse.PopChunk((void*)Handle) == 0;
         }
 #endif
@@ -109,7 +119,10 @@ public unsafe struct IffFile
         if (Library)
         {
             if (!IsOpen || !Writing) return false;
-            return IffParse.PushChunk((void*)Handle, type, group, Layout.IffSizeUnknown) == 0;
+            IffState* st = (IffState*)St;
+            if (st->InChunk || st->Depth >= Iff.MaxDepth || IffParse.PushChunk((void*)Handle, type, group, Layout.IffSizeUnknown) != 0) return false;
+            st->Depth++;
+            return true;
         }
 #endif
         return EsBeginGroup(group, type);
@@ -122,6 +135,9 @@ public unsafe struct IffFile
         if (Library)
         {
             if (!IsOpen || !Writing) return false;
+            IffState* st = (IffState*)St;
+            if (st->InChunk || st->Depth < 1) return false;
+            st->Depth--;
             return IffParse.PopChunk((void*)Handle) == 0;
         }
 #endif
@@ -143,9 +159,12 @@ public unsafe struct IffFile
         if (Library)
         {
             if (!IsOpen || !Writing) return false;
+            IffState* st = (IffState*)St;
+            if (st->InChunk || st->Depth != 0) return false;
             bool ok = IffParse.PopChunk((void*)Handle) == 0;          // the FORM
             IffParse.CloseIFF((void*)Handle);
             Iff.Release((void*)Handle, File);
+            FreeState();
             IsOpen = false;
             return ok;
         }
@@ -159,7 +178,7 @@ public unsafe struct IffFile
 #if AMIGA
         if (Library)
         {
-        if (!IsOpen || Writing) return false;
+        if (!IsOpen || Writing || ((IffState*)St)->Truncated) return false;     // Truncated: a damaged file stays at its error
         for (int guard = 0; guard < 100000; guard++)
         {
             int rc = IffParse.ParseIFF((void*)Handle, (int)Layout.IffParseRawStep);
@@ -167,12 +186,32 @@ public unsafe struct IffFile
             {
                 byte* cn = (byte*)IffParse.CurrentChunk((void*)Handle);
                 if (cn == null) return false;
+                IffState* st = (IffState*)St;
                 ChunkId = *(uint*)(cn + Layout.CnId);
                 ChunkSize = *(int*)(cn + Layout.CnSize);
-                ChunkType = Iff.IsGroup(ChunkId) ? *(uint*)(cn + Layout.CnType) : 0u;
+                // iffparse reports a chunk whose header it could read and only fails when its data is read; the E# reader does not
+                // report a chunk that does not fit, so check against the file's length here. The position is followed by the
+                // sizes (header 8 bytes, a group's type 4 more, data and pad), not asked of the stream, which iffparse may read ahead.
+                bool grp = Iff.IsGroup(ChunkId);
+                int dataStart = st->Pos + (grp ? 12 : 8);
+                int dataLen = grp ? ChunkSize - 4 : ChunkSize;
+                if (st->Len < 0 || dataLen < 0 || dataLen > st->Len - dataStart)
+                {
+                    st->Truncated = true;
+                    Damaged = true;
+                    return false;
+                }
+                st->Pos = grp ? dataStart : dataStart + ChunkSize + (ChunkSize & 1);
+                ChunkDepth = st->Depth;
+                if (Iff.IsGroup(ChunkId)) { ChunkType = *(uint*)(cn + Layout.CnType); st->Depth++; }
+                else ChunkType = 0u;
                 return true;
             }
-            if ((uint)rc != Layout.IffErrEoc) { Damaged = (uint)rc != Layout.IffErrEof; return false; }   // the end of the file or an error; an end of chunk just goes on
+            if ((uint)rc != Layout.IffErrEoc) { Damaged = (uint)rc != Layout.IffErrEof; return false; }   // the end of the file or an error
+            // an end of chunk just goes on; the end of a group (not the file's own FORM) lowers the depth
+            byte* ended = (byte*)IffParse.CurrentChunk((void*)Handle);
+            IffState* es = (IffState*)St;
+            if (ended != null && Iff.IsGroup(*(uint*)(ended + Layout.CnId)) && es->Depth > 0) es->Depth--;
         }
         return false;
         }
@@ -202,56 +241,72 @@ public unsafe struct IffFile
         {
             IffParse.CloseIFF((void*)Handle);
             Iff.Release((void*)Handle, File);
+            FreeState();
             IsOpen = false;
             return;
         }
 #endif
-        if (Buf != null) Mem.Free(Buf);
-        if (Stack != null) Mem.Free((byte*)Stack);
-        Buf = null; Stack = null;
+        FreeState();
         IsOpen = false;
     }
 
-    // ---- The E# implementation: the file is built in (or read into) memory, so it needs only Files and Mem. ----
+    // ---- The E# implementation: the file is built in (or read into) memory, so it needs only Files and Mem. All its state is
+    // in the heap block behind St, so a copy of this struct (passed by value to a helper) works on the same file. ----
 
-    private bool Ensure(int extra)
+    private bool Ensure(IffState* s, int extra)
     {
-        if (extra < 0 || Len > 0x7FFFFFFF - extra) return false;
-        int need = Len + extra;
-        if (need <= Cap) return true;
-        int cap = Cap < 4096 ? 4096 : Cap;
+        if (extra < 0 || s->Len > 0x7FFFFFFF - extra) return false;
+        int need = s->Len + extra;
+        if (need <= s->Cap) return true;
+        int cap = s->Cap < 4096 ? 4096 : s->Cap;
         while (cap < need) { if (cap > 0x3FFFFFFF) { cap = need; break; } cap *= 2; }
         byte* nb = Mem.AllocFast((uint)cap);
         if (nb == null) return false;
-        for (int i = 0; i < Len; i++) nb[i] = Buf[i];
-        if (Buf != null) Mem.Free(Buf);
-        Buf = nb;
-        Cap = cap;
+        for (int i = 0; i < s->Len; i++) nb[i] = s->Buf[i];
+        if (s->Buf != null) Mem.Free(s->Buf);
+        s->Buf = nb;
+        s->Cap = cap;
         return true;
     }
 
-    private void Put32(uint v)
+    private static void Put32(IffState* s, uint v)
     {
-        Buf[Len] = (byte)(v >> 24); Buf[Len + 1] = (byte)(v >> 16); Buf[Len + 2] = (byte)(v >> 8); Buf[Len + 3] = (byte)v;
-        Len += 4;
+        byte* b = s->Buf;
+        int n = s->Len;
+        b[n] = (byte)(v >> 24); b[n + 1] = (byte)(v >> 16); b[n + 2] = (byte)(v >> 8); b[n + 3] = (byte)v;
+        s->Len = n + 4;
     }
 
-    private void Patch32(int at, uint v)
+    private static void Patch32(IffState* s, int at, uint v)
     {
-        Buf[at] = (byte)(v >> 24); Buf[at + 1] = (byte)(v >> 16); Buf[at + 2] = (byte)(v >> 8); Buf[at + 3] = (byte)v;
+        byte* b = s->Buf;
+        b[at] = (byte)(v >> 24); b[at + 1] = (byte)(v >> 16); b[at + 2] = (byte)(v >> 8); b[at + 3] = (byte)v;
+    }
+
+    internal void FreeState()
+    {
+        IffState* s = (IffState*)St;
+        if (s != null)
+        {
+            if (s->Buf != null) Mem.Free(s->Buf);
+            Mem.Free((byte*)s);
+        }
+        St = 0;
     }
 
     internal bool EsStartWrite(string path, uint formType)
     {
-        Stack = (int*)Mem.AllocFast(16 * 4);
-        if (Stack == null) return false;
-        if (!Ensure(12)) { Mem.Free((byte*)Stack); Stack = null; return false; }
-        Put32(Iff.IdForm); Put32(0); Put32(formType);
+        nuint st = Iff.NewState();
+        if (st == 0) return false;
+        IffState* s = (IffState*)st;
+        if (!Ensure(s, 12)) { Mem.Free((byte*)s); return false; }
+        Put32(s, Iff.IdForm); Put32(s, 0); Put32(s, formType);
         // Create (or replace) the file now, as iffparse does, so an unwritable path is reported here and not by Finish.
-        if (!Files.WriteAll(path, new ReadOnlySpan<byte>(Buf, Len))) { Mem.Free(Buf); Mem.Free((byte*)Stack); Buf = null; Stack = null; return false; }
-        Path = path;
-        Stack[0] = 4;
-        Depth = 1;
+        if (!Files.WriteAll(path, new ReadOnlySpan<byte>(s->Buf, s->Len))) { Mem.Free(s->Buf); Mem.Free((byte*)s); return false; }
+        s->Path = path;
+        s->Stack[0] = 4;
+        s->Depth = 1;
+        St = st;
         Writing = true;
         IsOpen = true;
         FormType = formType;
@@ -260,80 +315,90 @@ public unsafe struct IffFile
 
     private bool EsBeginChunk(uint id)
     {
-        if (!IsOpen || !Writing || InChunk || !Ensure(8)) return false;
-        Put32(id);
-        SizeAt = Len;
-        Put32(0);
-        DataStart = Len;
-        InChunk = true;
+        IffState* s = (IffState*)St;
+        if (!IsOpen || !Writing || s->InChunk || !Ensure(s, 8)) return false;
+        Put32(s, id);
+        s->SizeAt = s->Len;
+        Put32(s, 0);
+        s->DataStart = s->Len;
+        s->InChunk = true;
         return true;
     }
 
     private bool EsWrite(byte* data, int length)
     {
-        if (!IsOpen || !Writing || !InChunk || length < 0 || !Ensure(length)) return false;
-        for (int i = 0; i < length; i++) Buf[Len + i] = data[i];
-        Len += length;
+        IffState* s = (IffState*)St;
+        if (!IsOpen || !Writing || !s->InChunk || length < 0 || !Ensure(s, length)) return false;
+        byte* b = s->Buf + s->Len;
+        for (int i = 0; i < length; i++) b[i] = data[i];
+        s->Len += length;
         return true;
     }
 
     private bool EsEndChunk()
     {
-        if (!IsOpen || !Writing || !InChunk) return false;
-        int size = Len - DataStart;
+        IffState* s = (IffState*)St;
+        if (!IsOpen || !Writing || !s->InChunk) return false;
+        int size = s->Len - s->DataStart;
         if ((size & 1) != 0)
         {
-            if (!Ensure(1)) return false;
-            Buf[Len] = 0;
-            Len++;
+            if (!Ensure(s, 1)) return false;
+            s->Buf[s->Len] = 0;
+            s->Len++;
         }
-        Patch32(SizeAt, (uint)size);
-        InChunk = false;
+        Patch32(s, s->SizeAt, (uint)size);
+        s->InChunk = false;
         return true;
     }
 
     private bool EsBeginGroup(uint group, uint type)
     {
-        if (!IsOpen || !Writing || InChunk || Depth >= 16 || !Ensure(12)) return false;
-        Put32(group); Put32(0); Put32(type);
-        Stack[Depth] = Len - 8;
-        Depth++;
+        IffState* s = (IffState*)St;
+        if (!IsOpen || !Writing || s->InChunk || s->Depth >= Iff.MaxDepth || !Ensure(s, 12)) return false;
+        Put32(s, group); Put32(s, 0); Put32(s, type);
+        s->Stack[s->Depth] = s->Len - 8;
+        s->Depth++;
         return true;
     }
 
     private bool EsEndGroup()
     {
-        if (!IsOpen || !Writing || InChunk || Depth < 2) return false;
-        Depth--;
-        int at = Stack[Depth];
-        Patch32(at, (uint)(Len - at - 4));
+        IffState* s = (IffState*)St;
+        if (!IsOpen || !Writing || s->InChunk || s->Depth < 2) return false;
+        s->Depth--;
+        int at = s->Stack[s->Depth];
+        Patch32(s, at, (uint)(s->Len - at - 4));
         return true;
     }
 
     private bool EsFinish()
     {
-        if (!IsOpen || !Writing || InChunk || Depth != 1) return false;
-        Patch32(4, (uint)(Len - 8));
-        bool ok = Files.WriteAll(Path, new ReadOnlySpan<byte>(Buf, Len));
-        Mem.Free(Buf);
-        Mem.Free((byte*)Stack);
-        Buf = null; Stack = null;
+        IffState* s = (IffState*)St;
+        if (!IsOpen || !Writing || s->InChunk || s->Depth != 1) return false;
+        Patch32(s, 4, (uint)(s->Len - 8));
+        bool ok = Files.WriteAll(s->Path, new ReadOnlySpan<byte>(s->Buf, s->Len));
+        FreeState();
         IsOpen = false;
         return ok;
     }
 
     internal bool EsStartRead(string path)
     {
-        Buf = Files.ReadAll(path, out int size, false);
-        if (Buf == null) return false;
-        if (size < 12 || Iff.Get32(Buf, 0) != Iff.IdForm) { Mem.Free(Buf); Buf = null; return false; }
-        uint formSize = Iff.Get32(Buf, 4);
-        if (formSize < 4) { Mem.Free(Buf); Buf = null; return false; }
-        Len = size;
-        if (formSize > (uint)(size - 8)) { FormEnd = size; Truncated = true; }
-        else FormEnd = 8 + (int)formSize;
-        FormType = Iff.Get32(Buf, 8);
-        Pos = 12;
+        byte* buf = Files.ReadAll(path, out int size, false);
+        if (buf == null) return false;
+        if (size < 12 || Iff.Get32(buf, 0) != Iff.IdForm) { Mem.Free(buf); return false; }
+        uint formSize = Iff.Get32(buf, 4);
+        if (formSize < 4) { Mem.Free(buf); return false; }
+        nuint st = Iff.NewState();
+        if (st == 0) { Mem.Free(buf); return false; }
+        IffState* s = (IffState*)st;
+        s->Buf = buf;
+        s->Len = size;
+        if (formSize > (uint)(size - 8)) { s->FormEnd = size; s->Truncated = true; }
+        else s->FormEnd = 8 + (int)formSize;
+        FormType = Iff.Get32(buf, 8);
+        s->Pos = 12;
+        St = st;
         IsOpen = true;
         return true;
     }
@@ -341,43 +406,61 @@ public unsafe struct IffFile
     private bool EsNext()
     {
         if (!IsOpen || Writing) return false;
+        IffState* s = (IffState*)St;
         ChunkType = 0;
         ChunkSize = 0;
-        DataStart = DataEnd = Pos;                    // nothing to Read until a chunk is found
-        if (Pos >= FormEnd) { Damaged = Truncated; return false; }
-        if (Pos + 8 > FormEnd) { Damaged = true; return false; }
-        uint id = Iff.Get32(Buf, Pos);
-        uint size = Iff.Get32(Buf, Pos + 4);
-        int start = Pos + 8;
+        s->DataStart = s->DataEnd = s->Pos;           // nothing to Read until a chunk is found
+        while (s->Depth > 0 && s->Pos >= s->Stack[s->Depth - 1]) s->Depth--;   // leave the groups that have ended
+        int limit = s->Depth > 0 ? s->Stack[s->Depth - 1] : s->FormEnd;
+        ChunkDepth = s->Depth;
+        if (s->Pos >= limit) { Damaged = s->Truncated && s->Depth == 0; return false; }
+        if (s->Pos + 8 > limit) { Damaged = true; return false; }
+        uint id = Iff.Get32(s->Buf, s->Pos);
+        uint size = Iff.Get32(s->Buf, s->Pos + 4);
+        int start = s->Pos + 8;
         if (Iff.IsGroup(id))
         {
             // a group: report it, and the next step goes to the first chunk inside it
-            if (size < 4 || size > (uint)(FormEnd - start)) { Damaged = true; return false; }
+            if (size < 4 || size > (uint)(limit - start) || s->Depth >= Iff.MaxDepth) { Damaged = true; return false; }
             ChunkId = id;
             ChunkSize = (int)size;
-            ChunkType = Iff.Get32(Buf, start);
-            Pos = start + 4;
+            ChunkType = Iff.Get32(s->Buf, start);
+            s->Stack[s->Depth] = start + (int)size;
+            s->Depth++;
+            s->Pos = start + 4;
             return true;
         }
-        if (size > (uint)(FormEnd - start)) { Damaged = true; return false; }
+        if (size > (uint)(limit - start)) { Damaged = true; return false; }
         ChunkId = id;
         ChunkSize = (int)size;
-        DataStart = start;
-        DataEnd = start + (int)size;
-        Pos = DataEnd + (int)(size & 1u);
-        if (Pos > FormEnd) Pos = FormEnd;             // a last odd chunk without its pad byte
+        s->DataStart = start;
+        s->DataEnd = start + (int)size;
+        s->Pos = s->DataEnd + (int)(size & 1u);
+        if (s->Pos > limit) s->Pos = limit;           // a last odd chunk without its pad byte
         return true;
     }
 
     private int EsRead(byte* buffer, int max)
     {
         if (!IsOpen || Writing || max < 0) return -1;
-        int left = DataEnd - DataStart;
+        IffState* s = (IffState*)St;
+        int left = s->DataEnd - s->DataStart;
         int n = max < left ? max : left;
-        for (int i = 0; i < n; i++) buffer[i] = Buf[DataStart + i];
-        DataStart += n;
+        for (int i = 0; i < n; i++) buffer[i] = s->Buf[s->DataStart + i];
+        s->DataStart += n;
         return n;
     }
+}
+
+/// <summary>The state of one <see cref="IffFile"/> (the E# implementation, and the group depth of the iffparse reader). It lives on the heap so that copies of the struct share it.</summary>
+internal unsafe struct IffState
+{
+    public byte* Buf;
+    public int Len, Cap, Pos, DataStart, DataEnd, FormEnd, SizeAt;
+    public int Depth;                 // writing: open groups including the FORM; reading: groups open inside the FORM
+    public int* Stack;                // writing: where the size field of each open group is; reading: where each open group ends
+    public bool InChunk, Truncated;
+    public string Path;
 }
 
 /// <summary>
@@ -396,6 +479,20 @@ public static unsafe class Iff
 
     /// <summary>Use the E# reader and writer even where iffparse.library is available (to compare the two). Set it before <see cref="Create"/> or <see cref="OpenRead"/>.</summary>
     public static bool ForceBuiltIn;
+
+    /// <summary>The most groups that can be open inside a file's FORM, written or read (a deeper file is damaged to the reader; <c>BeginGroup</c> returns false).</summary>
+    public const int MaxDepth = 16;
+
+    /// <summary>A zeroed heap block for the state of one <see cref="IffFile"/>, with room for the group stack after it. 0 if memory is short.</summary>
+    internal static nuint NewState()
+    {
+        int size = sizeof(IffState) + (MaxDepth + 1) * 4;
+        byte* b = Mem.AllocFast((uint)size);
+        if (b == null) return 0;
+        for (int i = 0; i < size; i++) b[i] = 0;
+        ((IffState*)b)->Stack = (int*)(b + sizeof(IffState));
+        return (nuint)b;
+    }
 
     /// <summary>The four-character chunk or form id <paramref name="text"/> as a number (<c>Iff.Id("FORM")</c>). Shorter text is padded with spaces.</summary>
     public static uint Id(string text)
@@ -468,12 +565,21 @@ public static unsafe class Iff
         IffFile f = new IffFile();
         nuint fh = DosLib.Open(path, write ? 1006 : 1005);          // MODE_NEWFILE / MODE_OLDFILE
         if (fh == 0) return f;
+        nuint st = NewState();
+        if (st == 0) { DosLib.Close(fh); return f; }
+        if (!write)
+        {
+            DosLib.Seek(fh, 0, 1);                                      // OFFSET_END
+            int length = DosLib.Seek(fh, 0, -1);                        // OFFSET_BEGINNING; returns where the end was
+            ((IffState*)st)->Len = length < 0 ? 0x7FFFFFFF : length;    // unknown: no check
+        }
         void* iff = IffParse.AllocIFF();
-        if (iff == null) { DosLib.Close(fh); return f; }
+        if (iff == null) { Mem.Free((byte*)st); DosLib.Close(fh); return f; }
         *(nuint*)((byte*)iff + Layout.IffStream) = fh;
         IffParse.InitIFFasDOS(iff);
-        if (IffParse.OpenIFF(iff, (int)(write ? Layout.IffWrite : Layout.IffRead)) != 0) { Release(iff, fh); return f; }
+        if (IffParse.OpenIFF(iff, (int)(write ? Layout.IffWrite : Layout.IffRead)) != 0) { Release(iff, fh); Mem.Free((byte*)st); return f; }
         f.Handle = (nuint)iff;
+        f.St = st;
         f.File = fh;
         f.Writing = write;
         f.Library = true;
@@ -490,6 +596,7 @@ public static unsafe class Iff
         {
             IffParse.CloseIFF((void*)f.Handle);
             Release((void*)f.Handle, f.File);
+            f.FreeState();
             DosLib.DeleteFile(path);
             return new IffFile();
         }
@@ -500,10 +607,12 @@ public static unsafe class Iff
     {
         IffFile f = Start(path, false);
         if (!f.IsOpen) return f;
+        ((IffState*)f.St)->Pos = 12;                                    // the FORM header is read below
         if (IffParse.ParseIFF((void*)f.Handle, (int)Layout.IffParseRawStep) != 0)
         {
             IffParse.CloseIFF((void*)f.Handle);
             Release((void*)f.Handle, f.File);
+            f.FreeState();
             return new IffFile();
         }
         byte* cn = (byte*)IffParse.CurrentChunk((void*)f.Handle);
@@ -511,6 +620,7 @@ public static unsafe class Iff
         {
             IffParse.CloseIFF((void*)f.Handle);
             Release((void*)f.Handle, f.File);
+            f.FreeState();
             return new IffFile();
         }
         f.FormType = *(uint*)(cn + Layout.CnType);
