@@ -21,7 +21,13 @@ internal static class Monomorphizer
 {
     private const int MaxRounds = 16;
 
-    public sealed record Result(CSharpCompilation Compilation, HashSet<SyntaxTree> User, List<Diagnostic> Errors);
+    /// <summary>
+    /// The expanded compilation. <paramref name="MadeTypes"/> and <paramref name="MadeMethods"/> are the copies, each by its qualified
+    /// name (<see cref="CopyName"/>: Lib.Pair__int, Lib.Tools.Pick__int, so same-named generics in two namespaces stay apart): a
+    /// precompiled package lists the C names of the copies it holds, and a program's build tells its own copies apart by them.
+    /// </summary>
+    public sealed record Result(CSharpCompilation Compilation, HashSet<SyntaxTree> User, List<Diagnostic> Errors,
+        IReadOnlyCollection<string> MadeTypes, IReadOnlyCollection<string> MadeMethods);
 
     private sealed class Use
     {
@@ -38,9 +44,15 @@ internal static class Monomorphizer
         public string NewName = "";
     }
 
+    /// <summary>The key of a copy named <paramref name="name"/> declared in <paramref name="container"/> (a namespace or a non-generic type).</summary>
+    public static string CopyName(ISymbol container, string name) =>
+        container is INamespaceSymbol { IsGlobalNamespace: true } ? name : container.ToDisplayString() + "." + name;
+
     public static Result Expand(CSharpCompilation compilation, HashSet<SyntaxTree> user, CSharpParseOptions parse)
     {
         var made = new HashSet<string>(StringComparer.Ordinal);
+        var madeTypes = new HashSet<string>(StringComparer.Ordinal);
+        var madeMethods = new HashSet<string>(StringComparer.Ordinal);
         var errors = new List<Diagnostic>();
 
         for (var round = 0; round < MaxRounds; round++)
@@ -90,6 +102,7 @@ internal static class Monomorphizer
 
                     if (made.Add(key))
                     {
+                        (key[0] == 'T' ? madeTypes : madeMethods).Add(CopyName(symbol!.OriginalDefinition.ContainingSymbol, newName));
                         var defTree = def.SyntaxTree;
                         if (!instances.TryGetValue(defTree, out var il)) instances[defTree] = il = new List<Instance>();
                         il.Add(new Instance
@@ -101,7 +114,7 @@ internal static class Monomorphizer
                 }
             }
 
-            if (!any) return new Result(compilation, user, errors);
+            if (!any) return new Result(compilation, user, errors, madeTypes, madeMethods);
 
             // Build the new tree for every tree that has uses to rewrite or declarations to copy.
             var touched = uses.Keys.Concat(instances.Keys).Distinct().ToList();
@@ -119,7 +132,7 @@ internal static class Monomorphizer
         }
 
         errors.Add(Diagnostic.Create(Descriptors.GenericDepth, Location.None, "(unknown)"));
-        return new Result(compilation, user, errors);
+        return new Result(compilation, user, errors, madeTypes, madeMethods);
     }
 
     // ------------------------------------------------------------------ analysis helpers

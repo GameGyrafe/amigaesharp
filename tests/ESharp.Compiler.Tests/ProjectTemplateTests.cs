@@ -274,6 +274,7 @@ public class ProjectTemplateTests : IDisposable
         Assert.Equal("true", Prop("EsLibrary"));
         Assert.Equal("m68k;os4;morphos;aros;aros-i386;sdl", Prop("EsTargets"));
         Assert.Equal("", Prop("EsFeatures"));
+        Assert.Equal("true", Prop("EsPrecompile"));   // binaries at dotnet pack (#154)
         Assert.Equal("disable", Prop("ImplicitUsings"));
         Assert.Equal("MyCompany.Easing", Prop("PackageId"));
         Assert.False(Prop("PackageId").StartsWith("AmigaESharp", StringComparison.OrdinalIgnoreCase));

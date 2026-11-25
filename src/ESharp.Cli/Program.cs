@@ -32,6 +32,12 @@ Usage:
   esharp os4vm check|start|install-hook|remove-hook [options]
                                     Helpers for the AmigaOS 4.1 QEMU VM in ESHARP_OS4_VM (python3; see the README.md
                                     in the os4vm folder next to esharp.dll)
+  esharp precompile <library dir> --dll <dll> --out <dir> [--targets <a;b>] [--docker [image]] [--image <target>=<image>]
+                                    Build the precompiled per-target binaries of an E# library (esharp-bin/<target>/library.a
+                                    and binary.json); the AmigaESharp.Sdk pack step runs this at dotnet pack (EsPrecompile)
+  esharp verify-package <nupkg | folder> [--docker [image]] [--image <target>=<image>]
+                                    Rebuild every precompiled binary of an E# package from the sources it carries and
+                                    compare the bytes (exit code 1 when one differs or a binary is not the pack step's)
   esharp doctor [--target <name> [--toolchain <dir>]]
                                     What this machine can do: per target, a build by Docker (image present) and/or by a
                                     local toolchain (compiler, version), and FS-UAE, the OS4 VM and the hosted AROS images.
@@ -57,6 +63,7 @@ Build options:
   --chip-budget <n> Fail if constant chip RAM reservations exceed n bytes (k/m suffix ok; 68k)
   --debug           Define DEBUG: bounds-checked arrays and spans, poisoned arena Reset (also defines TRACE)
   --trace           Define TRACE: keep Trace.Write/Line/Value calls (serial output); without it they compile to nothing
+  --from-source     Compile the E# library packages from their sources even where a precompiled binary for the target fits
 
 Run options (build options also apply; run is m68k, os4 or sdl):
   --headless        No window: run on a virtual display, print the program's output, exit
@@ -124,6 +131,8 @@ Targets:
             "test" => Test(args.Skip(1).ToArray()),
             "os4vm" => Os4VmHelper(args.Skip(1).ToArray()),
             "doctor" => Doctor.Run(args.Skip(1).ToArray()),
+            "precompile" => Precompile.Run(args.Skip(1).ToArray()),
+            "verify-package" => Precompile.Verify(args.Skip(1).ToArray()),
             _ => Fail($"unknown command '{args[0]}'"),
         };
     }
@@ -174,7 +183,7 @@ Targets:
                     buildArgs.Add(args[i]);
                     if (i + 1 < args.Length && !args[i + 1].StartsWith("-")) buildArgs.Add(args[++i]);
                     break;
-                case "--allow-float": case "--debug": case "--trace": case "--any-cc-version": buildArgs.Add(args[i]); break;
+                case "--allow-float": case "--debug": case "--trace": case "--any-cc-version": case "--from-source": buildArgs.Add(args[i]); break;
                 case "--toolchain" or "--sysroot" or "--cc" or "--cflags" when i + 1 < args.Length:
                     if (args[i] is "--toolchain" or "--sysroot" && args[i + 1].Length > 0) toolchainOptions.Add(args[i]);
                     buildArgs.Add(args[i]); buildArgs.Add(args[++i]);
@@ -431,7 +440,7 @@ Targets:
         builtExe = null;
         string path = ".";
         string? outDir = null;
-        bool emitOnly = false, allowFloat = false, debug = false, trace = false;
+        bool emitOnly = false, allowFloat = false, debug = false, trace = false, fromSource = false;
         long? chipBudget = null;
         var target = Targets.M68k;
         string? cc = null, cflags = null, docker = null, toolchain = null, sysrootOption = null;
@@ -447,6 +456,7 @@ Targets:
                 case "--allow-float": allowFloat = true; break;
                 case "--debug": debug = true; break;
                 case "--trace": trace = true; break;
+                case "--from-source": fromSource = true; break;
                 case "--chip-budget" when i + 1 < args.Length:
                     chipBudget = ParseSize(args[++i]);
                     if (chipBudget == null) return Fail($"bad --chip-budget '{args[i]}' (use bytes, or a number followed by k or m)");
@@ -495,8 +505,15 @@ Targets:
         var name = Path.GetFileNameWithoutExtension(files[0]);
         if (Directory.Exists(path)) name = new DirectoryInfo(Path.GetFullPath(path)).Name;
         // cFileName: the #line directives after user functions point back at the C file by this name.
-        var result = EsCompiler.Compile(sources, target.ToOptions(allowFloat, debug, chipBudget, trace, cFileName: name + ".c",
-            packages: packages.Packages, allowCopyleft: packages.AllowCopyleft, sdkVersion: SourceTree.ToolVersion));
+        var options = target.ToOptions(allowFloat, debug, chipBudget, trace, cFileName: name + ".c",
+            packages: packages.Packages, allowCopyleft: packages.AllowCopyleft, sdkVersion: SourceTree.ToolVersion);
+        // Precompiled package binaries (issue #154): linked when one was built by this E# for the target and this build's configuration.
+        var result = EsCompiler.Compile(sources, new CompileOptions
+        {
+            Defines = options.Defines, AllowFloat = options.AllowFloat, BoundsChecks = options.BoundsChecks, ChipBudget = options.ChipBudget,
+            CFileName = options.CFileName, TargetName = options.TargetName, Packages = options.Packages, AllowCopyleft = options.AllowCopyleft,
+            SdkVersion = options.SdkVersion, UseBinaries = !fromSource, Stamp = PackageBinaries.Stamp(SourceTree.ToolVersion),
+        });
 
         foreach (var d in result.Diagnostics)
             Console.Error.WriteLine(d.ToString());
@@ -531,6 +548,23 @@ Targets:
         }
         catch (Exception e) when (e is IOException or UnauthorizedAccessException) { return Fail("package C: " + e.Message); }
         if (nativeSources.Count > 0) Console.WriteLine($"Wrote the packages' C into {Path.Combine(outDir, PackageNatives.OutputFolder)} ({nativeSources.Count} C file(s), compiled with the program)");
+        // The precompiled binaries the program links, copied next to its C (a Docker build sees only the output folder).
+        var archives = new List<string>();
+        try
+        {
+            var binDir = Path.Combine(outDir, PackageBinaries.FolderName);
+            if (Directory.Exists(binDir)) Directory.Delete(binDir, true);
+            foreach (var b in result.Linked)
+            {
+                var rel = PackageBinaries.FolderName + "/" + b.Id + "/" + PackageBinaries.ArchiveName;
+                var file = Path.Combine(outDir, rel.Replace('/', Path.DirectorySeparatorChar));
+                Directory.CreateDirectory(Path.GetDirectoryName(file)!);
+                File.Copy(b.Archive!, file, true);
+                archives.Add(rel);
+                Console.WriteLine($"Package {b.Id} {b.Version}: linked from its precompiled {b.BinaryTarget} binary ({b.Objects.Count} object(s){(b.Generics.Count > 0 ? $", {b.Generics.Count} generic copies" : "")}); its sources are not compiled");
+            }
+        }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException) { return Fail("package binary: " + e.Message); }
         if (emitOnly) return 0;
 
         var userCc = cc != null;
@@ -570,10 +604,13 @@ Targets:
             compilerArgs.AddRange(flags);
             // -fno-common: a variable two packages both define (a name a macro made, which ES0120 does not see) is a link error,
             // not one merged variable (the pinned m68k gcc 6.5 defaults to -fcommon).
-            var native = withNative && nativeSources.Count > 0;
+            var native = withNative && (nativeSources.Count > 0 || archives.Count > 0);
             if (native) compilerArgs.Add(PackageNatives.CFlags);
             compilerArgs.AddRange(new[] { "-o", outFile, name + ".c" });
             if (native) compilerArgs.AddRange(nativeSources);
+            // The packages' binaries after the program's C (the linker takes from an archive what the objects before it need, and the
+            // archives' own references to the platform code are already defined by then), before the system libraries.
+            if (withNative && link) compilerArgs.AddRange(archives);
             if (link) compilerArgs.AddRange(target.Libs.Split(' ', StringSplitOptions.RemoveEmptyEntries));
 
             ProcessStartInfo psi;

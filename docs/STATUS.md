@@ -10,6 +10,64 @@ The minimum system is now an **Amiga 1200: 68020, AGA, 2 MB chip RAM, Kickstart 
 - **Kept on purpose:** `HasAga()` and `HasRtg()` with their fallbacks. A classic A1200 always has AGA, but PowerPC, RTG-only and AROS targets may not, so the checks stay as the portable way to ask. **Not yet done:** using 68020 instructions deliberately and AROS (a new target, untested).
 - Verified after the change: all 17 samples built with `-m68020` and run on Kickstart 3.1 (A1200) in FS-UAE: 300 `ok` lines, no `FAIL` (the script shows only the last 25 lines of each sample, so long ones are truncated), 136 unit tests pass. Not verified: PowerPC, real hardware, a 68000/Kickstart 2.04 run (no longer supported).
 
+## Precompiled per-target libraries in E# packages, and `esharp verify-package` (issue #154, part 2)
+
+`dotnet pack` of an `EsLibrary` project now builds the library for every target in `EsTargets` into a static library and packs it
+beside the DLL (`lib/net10.0/esharp-bin/<target>/library.a` and `binary.json`; sdl as `sdl-linux-x64`), as agreed in the issue. Games
+built by the same E# link it instead of compiling the package's sources. How to use it: docs/GUIDE.md, "Precompiled binaries"; how
+it is built: docs/ARCHITECTURE.md, "Precompiled binaries".
+
+- **Pack step:** the Sdk targets (`EsPackBinaries`, `EsPrecompile`, default true) call the esharp tool (`EsCommand`, default `esharp`;
+  `EsPrecompileArgs` for images) as `esharp precompile`: a library mode of the compiler (no program, no `main`: an init function
+  `es_pkginit_<id>`, the package's code defined with external linkage, everything else declared) compiled per target with that
+  target's toolchain (image given, `ESHARP_TOOLCHAIN_<T>`, the default image when present, or a compiler of the pinned version on
+  PATH), the package's C files as objects of their own, `ar rcsD`. The pack fails (ESL016) when a listed target has no toolchain.
+  `binary.json`: target, E# stamp (tool version + compiler assembly MVID), configuration, generic copies' C names, runtime pieces,
+  library bases, method-group wrappers it defines and uses, objects, SHA-256, sources hash. A package that calls the sdl C runtime's
+  natives itself cannot be precompiled (ES0125), nor yet one that uses other E# packages (precompile skips it: sources only).
+- **Game build:** a binary for the target with this stamp and configuration is linked (`linked from its precompiled m68k binary ...;
+  its sources are not compiled`); otherwise the sources, with warning ES0124 (other E#, `--debug`/`--trace`, no binary for the target);
+  `--from-source` forces sources. Generic copies the binary holds are declared, the program emits only the others (over its own types).
+  The runtime's state is the program's (extern in the binary); `main` runs the platform's initializers, then each binary's init, then
+  the program's (with binaries only). Hand-made objects stay refused: a binary must be what its `binary.json` lists (files, SHA-256,
+  archive members, including the Amiga hunk library form of m68k-amigaos-ar), and any other prebuilt file in a package is ES0118.
+- **`esharp verify-package <nupkg | folder>`:** rebuilds each binary from the shipped sources and compares bytes (VERIFIED, or FAIL and
+  exit code 1).
+- **Verified (Linux x86-64, 2026-11-25):** `dotnet test`: 792 tests, 790 passed, 2 skipped (the SDK-backed BindGen test and the OS4 VM
+  test), including `PrecompiledTests` (library C and program C built with the host gcc, linked and run: same output as the source
+  build; `Pair<Mine>`/`Pick<Mine>` over a program type emitted by the program, `Pick<int>` only referenced; `is` and a switch on
+  interface values of a package class and a program class; `is`, `as`, a type switch and a stored interface value tested inside the
+  binary on program classes derived from an `[Extensible]` package class (with and without virtual members) and on unrelated program
+  classes; an event handler added in the package and removed in the program (and
+  the other way), a platform method used as a delegate in the package, same-named generics in two namespaces: same output as the
+  source build; ES0125 for a library build with an E# dependency; ES0124 on another stamp, a debug build and a target without a
+  binary; the binary folder checks) and `PrecompiledRoundTripTests` (Tween and Checksum packed
+  through the Sdk step with this build's esharp: sdl with the host gcc and m68k in the pinned image; TweenDemo links both, its C has
+  `Es_Tween_Ease_InQuad` declared but not defined; a changed stamp falls back with ES0124; an unlisted `extra.o` and a loose `fast.a`
+  give ES0118; verify-package passes, and fails on a tampered archive with and without its hash updated; two precompiles in
+  different folders give the same bytes; a missing toolchain stops with ESL016). `tools/package-smoke.sh` with the packed tool and the
+  pinned m68k image: passes, including a library packed with binaries by the installed tool, linked into a game and VERIFIED.
+  By hand, Tween, Checksum and Counter packed with binaries for all their targets (m68k, os4, morphos, aros, aros-i386, and sdl for
+  the first two) and `esharp verify-package` on each: every binary rebuilt byte for byte (m68k with the pinned m68k image, which gives
+  the same bytes as `esharp-amiga-toolchain`). Then with those binaries linked: `esharp test samples/packages/TweenDemo --target m68k
+  --docker <pinned m68k image> --model A1200 --kickstart <rom>` (Kickstart 3.1): host 22 ok, Amiga 22 ok, 0 FAIL, return code 0;
+  CounterDemo 9 ok both sides; TweenDemo `--target sdl --docker esharp-sdl` 22 ok; hosted AROS x86-64 TweenDemo 22 ok and CounterDemo
+  9 ok, 0 traps; AmigaOS 4.1 VM TweenDemo 21 ok, 1 skipped (as from source) and CounterDemo 9 ok. The m68k screenshot of TweenDemo
+  (ball along the tween, package sprite) is byte-identical with and without the binaries. After the review fixes (one interface
+  table and one method-group wrapper per link, runtime linkage at its definitions, copies keyed by qualified name, no binaries for
+  packages with E# dependencies) Tween, Checksum and Counter were packed again with binaries for all their targets, verify-package
+  VERIFIED each, and the linked runs were repeated with the same results: m68k (Kickstart 3.1) TweenDemo 22/22 and CounterDemo 9/9,
+  sdl TweenDemo 22, hosted AROS x86-64 22 and 9 (0 traps), AmigaOS 4.1 VM 21 + 1 skipped and 9; the screenshot was not re-taken.
+- **Build time (TweenDemo, m68k, pinned image, 3 runs each):** `esharp build` 2.9-3.0 s with the binaries and 2.9-3.2 s from source,
+  no measurable difference: the build is dominated by starting Docker for the three compiler runs, and these libraries are small
+  (Tween's m68k binary is 5 KB). The C the game compiles shrinks from 3109 to 2646 lines, and the m68k gcc step alone (inside one
+  container, 5 runs) takes 156-167 ms with the binaries against 197-205 ms from source.
+- **Not verified:** the morphos and aros-i386 binaries linked into a program and run (they build and verify; no morphos runner, and
+  aros-i386 runs were not made), a local toolchain for m68k and the other Amiga targets in the pack (sdl with the host gcc only; Docker
+  builds always run in `/work`), Windows and macOS (the pack step and the round trip test run on Linux only), packages with
+  `[Interrupt]` or `[HookEntry]` methods or MUI custom classes as binaries, `esharp addr` in binary code (not mapped), real hardware.
+  `.library` (part 3 of #154) is not done.
+
 ## SDL joystick and a portable message box (part of issue #155)
 
 The first step of #155 (SDL versions of the Amiga-only APIs): `Joystick` on SDL game pads, and a new message box,
@@ -107,7 +165,7 @@ launch debugs the demo) and a README with the pack, restore and test steps. Both
 tool's version (package), or, from a checkout or with `--source`, the Host and Analyzers projects; the library then imports the Sdk's
 `buildTransitive` targets from the checkout, because a project reference does not bring a package's build files. A library
 packed from a checkout depends on the checkout's `ESharp.Target.Host` project, so the README says to make a library to publish
-with `--package`. The precompiled libraries and `.library` parts of #154 are not done. How to use it: docs/GUIDE.md, "Libraries".
+with `--package`. The precompiled libraries are part 2 (see "Precompiled per-target libraries in E# packages"); `.library` (part 3) is not done. How to use it: docs/GUIDE.md, "Libraries".
 
 - **Also:** `samples/packages/CounterDemo` now calls `Close()` (frees the two gadgets the constructors added) before `Heap.Free`
   when `Open` fails, as the #152 review asked; a unit test checks the order in the source. That failure path itself is not run
@@ -1791,7 +1849,7 @@ Open work as of 2026-11-14 (the GitHub issues are the live list; the v1 tracker 
 - **Windows (#11):** CI now runs a `windows` job (windows-latest, PR head): `dotnet test` (439 passed, 2 skipped, 0 failed; the runner has a MinGW gcc, so the generated-C tests run there and only the Docker/VM/SDK-dependent tests skip), emit-only builds of `samples/hello` and `samples/cards`, `esharp test samples/linq`, a clean `git status` afterwards, and a package round trip against the PR's own packages (`dotnet pack`, install the tool from the folder into a tool path, a nuget.config with the local feed, version and PackageReference checked, NU1603 fails the step, `esharp new`, `dotnet run`, `esharp test`, `esharp build --emit-only`). A `.gitattributes` keeps the working tree LF (the runner has `core.autocrlf=true`), and the native test output is read CRLF-tolerant. Still needs a person on a real Windows machine: Docker Desktop with `--docker` builds, FS-UAE for Windows, VS Code, and Windows with a different (or no) C compiler. `tools/aros-hosted` is Linux-only. macOS was checked, see "VS Code support".
 - **Bindings (#19, #40):** GadTools wrappers (v1), the BOOPSI core with hooks (#40 part 1, see "BOOPSI core and hooks") and the MUI wrappers on it (#40 part 2, see "MUI wrappers") are done. MUI custom classes (#93, see "MUI custom classes") are done too. Open: ReAction (last, if at all).
 - **Display design (not implemented):** [design/DISPLAY.md](design/DISPLAY.md) proposes logical coordinates with an integer scale, mode choice that follows the Workbench's monitor family (MODE option, asl screen-mode requester), 256 colours with a shared palette, a gradient pen (copper on AGA), window mode on the Workbench and multi-scale art. Nothing in it is built or verified yet; it waits for the maintainer's approval.
-- **v2:** AROS i386 (#4: toolchain, target and hosted runs done, see "AROS i386"; the MUI crashes on hosted i386 were an AROS bug, worked around (#105); open: native pc-i386), E# library source packages on NuGet (#31: parts 1 to 4 done, see "E# library packages, part 1", "part 2: assets in packages", "part 3: C files and headers in packages" and "part 4: classes derived from package classes"; the `AmigaESharp.*` id prefix is reserved on nuget.org for the maintainer's account since 2026-11-24, so #31 is done; the library project template `esharp new --library` is done, see "Library project template"; the later pieces from its proposal are in #154), user classes deriving from platform classes (#42: done for `GtWindow`, see "Classes derived from platform classes"). Capturing lambdas stored in fields and events (#41): done (PR #83), see "Heap closures and events".
+- **v2:** AROS i386 (#4: toolchain, target and hosted runs done, see "AROS i386"; the MUI crashes on hosted i386 were an AROS bug, worked around (#105); open: native pc-i386), E# library source packages on NuGet (#31: parts 1 to 4 done, see "E# library packages, part 1", "part 2: assets in packages", "part 3: C files and headers in packages" and "part 4: classes derived from package classes"; the `AmigaESharp.*` id prefix is reserved on nuget.org for the maintainer's account since 2026-11-24, so #31 is done; the library project template `esharp new --library` is done, see "Library project template"; the later pieces from its proposal are in #154: precompiled per-target binaries are done, see "Precompiled per-target libraries in E# packages"; `.library` is open), user classes deriving from platform classes (#42: done for `GtWindow`, see "Classes derived from platform classes"). Capturing lambdas stored in fields and events (#41): done (PR #83), see "Heap closures and events".
 - **Local toolchains (#122):** part 1 done (configuration, `esharp doctor`, VS Code tasks, a local m68k build in CI; see
   "Local toolchains, part 1"). Open: macOS and Windows by hand, and whether os4, morphos and AROS get a local route
   ([design/TOOLCHAINS.md](design/TOOLCHAINS.md) has the options; the maintainer picks).

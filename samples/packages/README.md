@@ -21,7 +21,7 @@ checks the Checksum package's C against a known value and against an Adler-32 lo
 
 - `Counter/` is a small E# library with a window class: `CounterWindow` derives from the platform's `GtWindow` and is `[Extensible]` itself
   (Amiga targets only, no sdl). `CounterDemo/` derives its `Score` window from it and runs the whole lifecycle (Open, events through
-  `Dispatch`, Close, free the window) on the PC and on the Amiga: `dotnet pack samples/packages/Counter -o /tmp/esfeed --source /tmp/esfeed`,
+  `Dispatch`, Close, free the window) on the PC and on the Amiga: `dotnet pack samples/packages/Counter -o /tmp/esfeed --source /tmp/esfeed -p:EsPrecompile=false` (or with binaries, below),
   `dotnet restore samples/packages/CounterDemo --source /tmp/esfeed`, then `esharp test samples/packages/CounterDemo [--target m68k ...]` (9 ok).
 
 The projects reference AmigaESharp.Sdk at `0.1.0-dev` (what `dotnet pack` of a checkout makes; pass
@@ -30,12 +30,30 @@ published, and nothing for this sample comes from nuget.org):
 
 ```bash
 dotnet pack src/ESharp.Sdk -o /tmp/esfeed                    # AmigaESharp.Sdk 0.1.0-dev, with the E# library step
-dotnet pack samples/packages/Tween -o /tmp/esfeed --source /tmp/esfeed   # ESharpSample.Tween 1.0.0
-dotnet pack samples/packages/Checksum -o /tmp/esfeed --source /tmp/esfeed   # ESharpSample.Checksum 1.0.0
+dotnet pack samples/packages/Tween -o /tmp/esfeed --source /tmp/esfeed -p:EsPrecompile=false   # ESharpSample.Tween 1.0.0, sources only
+dotnet pack samples/packages/Checksum -o /tmp/esfeed --source /tmp/esfeed -p:EsPrecompile=false   # ESharpSample.Checksum 1.0.0
 dotnet restore samples/packages/TweenDemo --source /tmp/esfeed
 dotnet run --project src/ESharp.Cli -- test samples/packages/TweenDemo                       # host: 22 ok
 dotnet run --project src/ESharp.Cli -- test samples/packages/TweenDemo --target m68k --docker <image> --kickstart <rom>
 ```
+
+**Precompiled binaries** (issue #154; docs/GUIDE.md, "Precompiled binaries"). `dotnet pack` of Tween, Checksum and Counter also
+builds each library for every target in its `EsTargets` with that target's toolchain and packs `lib/net10.0/esharp-bin/<target>/`
+(`library.a` and `binary.json`) beside the DLL; the game's build then links them and prints `linked from its precompiled m68k
+binary`. The pack step runs the esharp tool (`EsCommand`, default `esharp` on PATH) and needs a toolchain for each listed target
+(Tween and Checksum list all six: `esharp-amiga-toolchain`, `esharp-aros-i386` and `esharp-sdl` in the local Docker, or
+`ESHARP_TOOLCHAIN_<TARGET>`), else it stops (ESL016). From a checkout:
+
+```bash
+dotnet pack samples/packages/Tween -o /tmp/esfeed --source /tmp/esfeed "-p:EsCommand=dotnet run --project $PWD/src/ESharp.Cli --"
+dotnet pack samples/packages/Checksum -o /tmp/esfeed --source /tmp/esfeed "-p:EsCommand=dotnet run --project $PWD/src/ESharp.Cli --"
+dotnet pack samples/packages/Tween -o /tmp/esfeed --source /tmp/esfeed -p:EsPrecompile=false   # sources only, no toolchain needed
+dotnet run --project src/ESharp.Cli -- verify-package /tmp/esfeed/ESharpSample.Tween.1.0.0.nupkg   # rebuild and compare: VERIFIED
+dotnet run --project src/ESharp.Cli -- build samples/packages/TweenDemo --target m68k --docker <image> --from-source   # ignore the binaries
+```
+
+A binary is used only by the esharp that built it (with a checkout, the same build of it): after changing E#, pack the libraries
+again, or the game's build warns (ES0124) and compiles their sources.
 
 NuGet keeps the first copy of a version in its package cache (`~/.nuget/packages`): after changing the Sdk or the library,
 pack a new version, or set `NUGET_PACKAGES` to an empty folder for these commands. After changing `ball.png`, `blip.wav` or

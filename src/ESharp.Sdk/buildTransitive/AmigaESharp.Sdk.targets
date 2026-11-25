@@ -36,6 +36,21 @@
     build compiles the common files and those of its target with the program (docs/GUIDE.md, "C in a library"). Refused (ESL006):
     a .c or .h anywhere else in the project, any other file in native/ and prebuilt code anywhere (.o, .obj, .a, .lib, .so, .dylib):
     a package carries C source only. NativeC without a native/ folder, or the other way round, is ESL015; a bad prefix ESL014.
+
+    Precompiled binaries (issue #154): at dotnet pack, EsPackBinaries runs the esharp tool (EsCommand) as "esharp precompile" with the
+    project folder, the library's DLL, an output folder under obj/ and EsTargets (then EsPrecompileArgs). For every target in EsTargets
+    it compiles the library alone into a static library (lib/<tfm>/esharp-bin/<target>/library.a, the package's C files included) with a manifest (binary.json: target, the E# stamp, the generic copies it holds, the files' SHA-256). Games
+    built by the same E# link it instead of compiling the sources (which the package still carries, for generics over the game's types and
+    as the fallback); esharp verify-package rebuilds it from those sources and compares the bytes. Each target's toolchain is, in this
+    order: an image named in EsPrecompileArgs (the esharp precompile options image <target>=<image>, or docker [<image>] for
+    every target, which without an image means the target's pinned one); a local toolchain in ESHARP_TOOLCHAIN_<TARGET> (or ESHARP_TOOLCHAIN for the Amiga targets); the target's
+    pinned Docker image when it is in the local Docker; the target's compiler on PATH when it is the pinned version (the option
+    any-cc-version accepts another; sdl has no pinned version, so no PATH compiler). The pack fails when a listed target has none of these.
+      EsPrecompile       false: no binaries, sources only (as before #154)
+      EsCommand          how to run esharp (default: esharp, the dotnet tool on PATH; e.g. dotnet path/to/esharp.dll)
+      EsPrecompileArgs   more options for esharp precompile (see esharp help): an image for all targets or for one target, or a local
+                         compiler of another version than the pinned image's
+    These binaries are the only prebuilt code a package may carry: ESL006 above still refuses hand-made objects in the project.
   -->
 
   <UsingTask TaskName="EsWriteLibraryManifest" TaskFactory="RoslynCodeTaskFactory"
@@ -221,7 +236,7 @@
                 if (parts.Length != 3 || Array.IndexOf(folders, parts[1]) < 0)
                     refused.Add(rel + " (C files go in native/common/ or native/<target>/: " + string.Join(", ", folders, 1, folders.Length - 1) + ", one level deep)");
                 else if (!Regex.IsMatch(name, "^[A-Za-z0-9_][A-Za-z0-9_.-]*\\.[ch]$"))
-                    refused.Add(rel + (Array.IndexOf(prebuilt, ext) >= 0 ? " (prebuilt code: a package carries C source only)" : " (only .c and .h source with plain file names)"));
+                    refused.Add(rel + (Array.IndexOf(prebuilt, ext) >= 0 ? " (prebuilt code: a package carries C source only; its binaries are built by the pack step, EsPrecompile)" : " (only .c and .h source with plain file names)"));
                 else if (name.StartsWith("esharp_", StringComparison.OrdinalIgnoreCase))
                     refused.Add(rel + " (file names starting with esharp_ are the build's own)");
                 else
@@ -234,7 +249,7 @@
             else if (ext == ".c" || ext == ".h")
                 refused.Add((rel ?? full) + " (C files and headers go in native/common/ or native/<target>/)");
             else if (Array.IndexOf(prebuilt, ext) >= 0)
-                refused.Add((rel ?? full) + " (prebuilt code: a package carries C source only)");
+                refused.Add((rel ?? full) + " (prebuilt code: a package carries C source only; its binaries are built by the pack step, EsPrecompile)");
         }
         // File names that differ only in case are one file on Windows and macOS (a target's header would replace the common one there).
         var byName = new System.Collections.Generic.Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
@@ -280,6 +295,9 @@
          (a Compile item outside without one, such as source-only package contentFiles, is not the library's own source and is skipped). -->
     <SetLinkMetadataAutomatically Condition="'$(SetLinkMetadataAutomatically)' == ''">false</SetLinkMetadataAutomatically>
     <_EsLibraryManifest>$(IntermediateOutputPath)esharp-library.json</_EsLibraryManifest>
+    <EsPrecompile Condition="'$(EsPrecompile)' == ''">true</EsPrecompile>
+    <EsCommand Condition="'$(EsCommand)' == ''">esharp</EsCommand>
+    <TargetsForTfmSpecificContentInPackage Condition="'$(EsPrecompile)' == 'true'">$(TargetsForTfmSpecificContentInPackage);EsPackBinaries</TargetsForTfmSpecificContentInPackage>
   </PropertyGroup>
 
   <!-- The package id in the HOST DLL's metadata ([assembly: ESharp.EsLibrary(id)], in the generated assembly info, which is not
@@ -389,6 +407,20 @@
       <EmbeddedResource Include="$(_EsLibraryManifest)" LogicalName="esharp/library.json" Type="Non-Resx" WithCulture="false" />
       <EmbeddedResource Include="@(_EsSource)" LogicalName="esharp/src/$([System.String]::Copy('%(_EsSource.EsPath)').Replace('\', '/'))" Type="Non-Resx" WithCulture="false" />
       <EmbeddedResource Include="@(_EsNativeFile)" LogicalName="esharp/native/%(_EsNativeFile.EsPath)" Type="Non-Resx" WithCulture="false" />
+    </ItemGroup>
+  </Target>
+
+  <!-- dotnet pack: the precompiled per-target binaries beside the DLL (see the top of this file). -->
+  <Target Name="EsPackBinaries" Condition="'$(EsLibrary)' == 'true' and '$(EsPrecompile)' == 'true'">
+    <PropertyGroup>
+      <_EsBinOut>$([System.IO.Path]::GetFullPath('$(MSBuildProjectDirectory)/$(IntermediateOutputPath)esharp-bin'))</_EsBinOut>
+      <_EsDll>@(IntermediateAssembly->'%(FullPath)')</_EsDll>
+    </PropertyGroup>
+    <RemoveDir Directories="$(_EsBinOut)" />
+    <Exec Command="$(EsCommand) precompile &quot;$(MSBuildProjectDirectory)&quot; --dll &quot;$(_EsDll)&quot; --out &quot;$(_EsBinOut)&quot; --targets &quot;$(EsTargets)&quot; $(EsPrecompileArgs)" />
+    <ItemGroup>
+      <_EsBinFile Include="$(_EsBinOut)/**/*" />
+      <TfmSpecificPackageFile Include="@(_EsBinFile)" PackagePath="lib/$(TargetFramework)/esharp-bin/" />   <!-- NuGet adds the folder under esharp-bin (RecursiveDir) -->
     </ItemGroup>
   </Target>
 </Project>

@@ -947,7 +947,7 @@ public static unsafe class P
             "carries the C file 'm68k/extra.c', which its manifest does not list");
         foreach (var (path, says) in new[]
                  {
-                     ("m68k/libfx.a", "prebuilt code (object files, archives, libraries) is refused"),
+                     ("m68k/libfx.a", "prebuilt code (object files, archives, libraries) is refused (a package's only binaries are those the E# pack step builds"),
                      ("common/fx.o", "prebuilt code"),
                      ("common/sub/fx.c", "one level deep"),
                      ("amigaos/fx.c", "C files go in native/common/ or native/<target>/"),
