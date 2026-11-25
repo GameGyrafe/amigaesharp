@@ -100,6 +100,32 @@ public class Harbour
     }
 }
 
+/// <summary>A generic struct with static fields: each instantiation has its own (issue #161).</summary>
+public struct Tally<T> where T : unmanaged
+{
+    public static int Count;
+    public static int Start = 5;
+    public T Last;
+    public static int Add() { Count++; return Count; }
+}
+
+public interface IBase { int Id(); }
+public interface IDerived : IBase { int Extra(); }
+public interface IMore : IDerived { int More(); }
+
+public class Deep : IMore
+{
+    public int Id() { return 1; }
+    public int Extra() { return 2; }
+    public int More() { return 3; }
+}
+
+public class Shallow : IDerived
+{
+    public int Id() { return 10; }
+    public int Extra() { return 20; }
+}
+
 public static class Yard
 {
     static int _serial = 100;
@@ -130,6 +156,11 @@ public static class Program
         c.Count = count;
         return c;
     }
+
+    static void Noop() { }
+    static void Other() { }
+    static int Triple(int x) { return x * 3; }
+    static IBase Widen(IDerived d) { return d; }
 
     static ReadOnlySpan<Crate> NoCrates() { return ReadOnlySpan<Crate>.Empty; }
 
@@ -187,6 +218,23 @@ public static class Program
         Check(v.Weigh(ark.Hold) == 16 && r.Weigh(ark.Hold) == 4 && v.Weigh(NoCrates()) == 0, "span of structs through an interface");
         Check(Kind(v) == "ship Ark" && Kind(w) == "tug Puff" && Kind(r) == "raft" && Kind(null) == "none", "type tests on interface values");
         Check(w is Ship && !(r is Ship) && (w as Tug) == tug, "is and as");
+
+        // A delegate compared with a method group, the static fields of a generic struct, an interface converted to its base interface (issue #161).
+        Action noop = Noop;
+        Func<int, int> triple = Triple;
+        Check(noop == Noop && Noop == noop && noop != Other && triple == Triple && !(noop == Other), "delegate compared with a method group");
+        Tally<int>.Add();
+        Tally<int>.Add();
+        Tally<byte>.Add();
+        Check(Tally<int>.Count == 2 && Tally<byte>.Count == 1 && Tally<int>.Start == 5 && Tally<byte>.Start == 5, "static fields in a generic struct");
+        IMore deep = new Deep();
+        IDerived mid = deep;
+        IBase low = mid;
+        IBase fromShallow = Widen(new Shallow());
+        IDerived none = null;
+        IBase nothing = none;
+        Check(low.Id() == 1 && mid.Id() == 1 && deep.Id() == 1 && ((IBase)deep).Id() == 1 && fromShallow.Id() == 10 && nothing == null,
+            "interface converted to its base interface");
 
         var crates = new Vec<Crate>();
         for (int i = 1; i <= 6; i++) crates.Add(MakeCrate(i, 1));

@@ -436,6 +436,91 @@ public static class P
         finally { Directory.Delete(dir, true); }
     }
 
+    private const string Issue161LibSource = @"using ESharp;
+using ESharp.Platform;
+
+namespace Lib;
+
+public struct Counter<T> where T : unmanaged
+{
+    public static int N;
+    public static int Start = 10;
+    public T V;
+    public static int Bump() { N++; return N; }
+}
+
+public interface IA { int A(); }
+public interface IB : IA { int B(); }
+
+public class PkgImpl : IB { public int A() => 1; public int B() => 2; }
+
+public static class Up
+{
+    public static IA Down(IB b) => b;
+    public static int CallA(IB b) => b.A();
+    public static IB Make() => new PkgImpl();
+    public static int BumpInt() => Counter<int>.Bump();
+    public static int SeenInt() => Counter<int>.N;
+    public static int StartInt() => Counter<int>.Start;
+}
+";
+
+    private const string Issue161GameSource = @"using ESharp;
+using ESharp.Platform;
+using Lib;
+
+public struct M { public int V; }
+public interface IC : IB { int C(); }
+public class Mine : IB { public int A() => 100; public int B() => 200; }
+public class Mine3 : IC { public int A() => 7; public int B() => 8; public int C() => 9; }
+
+public static class P
+{
+    [EntryPoint]
+    public static void Main()
+    {
+        Up.BumpInt();
+        Counter<int>.Bump();
+        Counter<M>.Bump();
+        Counter<M>.Bump();
+        Counter<M>.Bump();
+        Dos.PutStr($""n {Counter<int>.N} {Up.SeenInt()} {Counter<M>.N} start {Up.StartInt()} {Counter<M>.Start}\n"");
+        IA a = Up.Down(new Mine());
+        IA b = Up.Down(Up.Make());
+        IC c = new Mine3();
+        IA d = Up.Down(c);
+        IB cb = c;
+        IA e = cb;
+        Dos.PutStr($""down {a.A()} {b.A()} {d.A()} {e.A()} call {Up.CallA(new Mine())} {Up.CallA(Up.Make())} {Up.CallA(c)}\n"");
+        Dos.PutStr($""is {(a is Mine ? 1 : 0)} {(b is PkgImpl ? 1 : 0)} {(d is Mine3 ? 1 : 0)} {(d is Mine ? 1 : 0)} {(e is Mine3 ? 1 : 0)}\n"");
+    }
+}
+";
+
+    [Fact]
+    public void Static_fields_of_generic_structs_and_base_interface_conversions_in_a_split_build()
+    {
+        // Issue #161: Counter<int> has one owner (the binary, which makes the copy itself), Counter<M> is the program's; a base-interface
+        // conversion reads the table the class's owner filled in, so the binary converts the program's classes and the program the binary's.
+        var lib = PackageTests.Package("Sample.Up", new Dictionary<string, string> { ["Lib.cs"] = Issue161LibSource });
+        const string expected = "n 2 2 3 start 10 10\ndown 100 1 7 7 call 100 1 7\nis 1 1 1 0 1\n";
+        var source = EsCompiler.Compile(new[] { new SourceFile("game.cs", Issue161GameSource) }, Options(lib, stamp: null));
+        Assert.True(source.Success, string.Join("\n", source.Diagnostics.Select(d => d.ToString())));
+        if (!CanBuild) return;
+        var (binary, dir) = BuildBinary(lib);
+        try
+        {
+            var (code, fromSource) = RunWithHostGcc(source.C!);
+            Assert.Equal(0, code);
+            Assert.Equal(expected, fromSource);
+            var linked = EsCompiler.Compile(new[] { new SourceFile("game.cs", Issue161GameSource) }, Options(lib.WithBinaries(new[] { binary })));
+            Assert.True(linked.Success, string.Join("\n", linked.Diagnostics.Select(d => d.ToString())));
+            Assert.Single(linked.Linked);
+            Assert.Equal(expected, LinkAndRun(linked.C!, binary, dir));
+        }
+        finally { Directory.Delete(dir, true); }
+    }
+
     [Fact]
     public void A_package_with_esharp_dependencies_is_not_precompiled()
     {
