@@ -90,6 +90,8 @@ Each links to a sample that shows it (every sample prints `ok` lines that `eshar
   [mui](samples/mui), [muiclass](samples/muiclass), [asl](samples/asl), [fonts](samples/fonts), [iff](samples/iff)).
 - **Low level when you need it:** `[InlineAsm]` (68020 and PowerPC with a C# fallback), `[Interrupt]` VBlank servers
   ([interrupts](samples/interrupts)), raw library bindings and tag lists ([hwinfo](samples/hwinfo)).
+- **Amiga shared libraries:** a project with `EsOutputType` `AmigaLibrary` builds a `.library` (m68k), its `.fd` file and a C#
+  binding; each opener gets its own copy of the library's data ([amigalib](samples/amigalib), [amigalibdemo](samples/amigalibdemo)).
 - **Debugging:** host builds step through under the .NET debugger; the Amiga build has a serial `Trace` and `esharp addr` to turn a
   crash address (m68k, AROS, AmigaOS 4) into a C# line ([trace](samples/trace), [crash](samples/crash), [DEBUGGING.md](docs/DEBUGGING.md)).
 - **Workbench integration:** `.info` icons and program arguments from tool types ([wbstart](samples/wbstart),

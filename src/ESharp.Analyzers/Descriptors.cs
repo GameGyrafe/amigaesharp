@@ -180,6 +180,36 @@ public static class Descriptors
         "ES0125", "Package cannot be precompiled",
         "This package cannot be built as a binary for its targets: {0}; set EsPrecompile to false in the library project (it then ships its sources only)");
 
+    // Amiga shared libraries built from E# (EsOutputType AmigaLibrary, issue #154). Compiler-only: the IDE does not know the project kind.
+
+    public static readonly DiagnosticDescriptor LibraryFunctionForm = Error(
+        "ES0130", "[LibraryFunction] on a method that cannot be a library function",
+        "'{0}' cannot be a function of the .library: {1}");
+
+    public static readonly DiagnosticDescriptor LibraryFunctionType = Error(
+        "ES0131", "[LibraryFunction] with a type that cannot cross the library boundary",
+        "'{0}': {1} has type '{2}'; a library function takes and returns only integers up to 32 bits, bool, string and pointers (to those, to void or to the library's structs); E# objects, arrays, delegates, structs by value, enums and 64-bit values stay inside the library");
+
+    public static readonly DiagnosticDescriptor LibraryFunctionRegisters = Error(
+        "ES0132", "[LibraryFunction] with more arguments than registers",
+        "'{0}' takes {1} arguments; a library function passes its arguments in registers (d0-d7 and a0-a3, 12 at most): pass a pointer to a struct instead");
+
+    public static readonly DiagnosticDescriptor LibraryNoFunctions = Error(
+        "ES0133", "Amiga library without functions",
+        "This project builds an Amiga shared library (EsOutputType AmigaLibrary) but has no public static method marked [LibraryFunction]");
+
+    public static readonly DiagnosticDescriptor LibraryUnsupported = Error(
+        "ES0134", "Not supported in an Amiga shared library",
+        "An E# .library cannot use {0} yet: {1}");
+
+    public static readonly DiagnosticDescriptor LibraryFunctionName = Error(
+        "ES0135", "Two library functions with the same name",
+        "'{0}' and '{1}' would both be the library function '{2}' in the .fd file and the binding; rename one of them");
+
+    public static readonly DiagnosticDescriptor LibraryCallForm = Error(
+        "ES0136", "[LibraryCall] on a method that cannot call a library vector",
+        "'{0}': {1}");
+
     public static System.Collections.Immutable.ImmutableArray<DiagnosticDescriptor> SubsetRules =>
         System.Collections.Immutable.ImmutableArray.Create(
             Exceptions, Linq, FloatingPoint, AsyncAwait, Dynamic, Reflection,

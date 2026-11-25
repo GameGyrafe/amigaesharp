@@ -4,7 +4,7 @@ The reference material behind the [README](../README.md): installing, the langua
 icons, MUI, running in emulators and VMs, and the `esharp` commands. [STATUS.md](STATUS.md) is the source of truth for what
 is verified (it says "not verified" where something was not run); this guide says how to use things.
 
-Contents: [Install](#install-and-the-packages) - [Projects and VS Code](#projects-and-vs-code) - [Libraries](#libraries-e-packages) - [The language subset](#the-language-subset) -
+Contents: [Install](#install-and-the-packages) - [Projects and VS Code](#projects-and-vs-code) - [Libraries](#libraries-e-packages) - [Amiga shared libraries](#amiga-shared-libraries-library) - [The language subset](#the-language-subset) -
 [Platform APIs](#platform-apis) - [Assets](#assets) - [Workbench icons](#workbench-icons) - [Building](#building) -
 [Running and testing](#running-and-testing) - [Emulators and VMs](#emulators-and-vms) - [MUI](#mui) - [Debugging](#debugging) -
 [Commands](#esharp-commands)
@@ -326,6 +326,116 @@ fallback, and for the IDE, the analyzer, the licence checks and `esharp verify-p
   binaries are the ones `binary.json` lists (ES0118 otherwise); any other prebuilt file in the package is refused.
 - **Not covered.** `esharp addr` maps addresses in the program's own C only (a binary's code has no line table in the map).
   A binary built for one esharp version is used only by that version (no stable ABI yet).
+
+## Amiga shared libraries (.library)
+
+A project whose csproj sets `EsOutputType` to `AmigaLibrary` builds an AmigaOS shared library instead of a program (issue #154):
+`esharp build` writes `obj/m68k/<name>.library`, its `.fd` file and a C# binding. An E# program opens it with OpenLibrary and calls
+it through the binding like any other Amiga library, and **each opener gets its own copy of the library's data**: two programs (or
+two OpenLibrary calls in one program) never see each other's static fields, objects or counters. m68k AmigaOS 3.x only so far;
+AROS and AmigaOS 4 come later. `samples/amigalib` is a small library and `samples/amigalibdemo` a program that uses it.
+
+```xml
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- read by esharp build (literal values only, as for the icon properties) -->
+  <PropertyGroup>
+    <EsOutputType>AmigaLibrary</EsOutputType>
+    <EsLibraryName>amigalib.library</EsLibraryName>   <!-- default: the folder's name in lower case + .library -->
+    <EsLibraryVersion>1</EsLibraryVersion>            <!-- default: the first number of Version, else 1 -->
+    <EsLibraryRevision>2</EsLibraryRevision>          <!-- default: the second number of Version, else 0 -->
+    <EsLibraryDate>25.11.2026</EsLibraryDate>         <!-- dd.mm.yyyy for the id and $VER strings; default: the day of the build -->
+    <EsLibraryBinding>AmigalibLibrary</EsLibraryBinding>   <!-- the binding's struct; default: <Name>Library -->
+  </PropertyGroup>
+</Project>
+```
+
+```csharp
+public static class Counter
+{
+    private static int _value = 100;            // each opener starts with 100
+    [LibraryFunction] public static int Add(int step) { _value += step; return _value; }
+    [LibraryFunction] public static int Value() { return _value; }
+}
+```
+
+```bash
+esharp build samples/amigalib --docker <m68k image>      # obj/m68k/amigalib.library, amigalib_lib.fd, AmigalibLibrary.cs
+esharp test samples/amigalibdemo --target m68k --docker <m68k image> --model A1200 --kickstart <rom>
+```
+
+- **Library functions.** Public static methods marked `[LibraryFunction]`, with a body, not generic. Parameters and results are plain
+  values: integers up to 32 bits (`sbyte` to `uint`, `char`, `nint`, `nuint`), `bool`, `string` (a C string: the pointer travels) and
+  pointers to numbers, `void`, pointers, or the library's structs. A struct that crosses the boundary holds only fields (numbers,
+  `bool`, pointers and such structs; no auto-properties, no fixed buffers); the binding copies its fields for the program. E# objects,
+  arrays, delegates, structs by value, enums, `long` and `ref`/`out`/`in` stay inside the library (ES0131); a method that is not public
+  static, is generic or is named like a member of the binding is ES0130; two functions of the same name ES0135; a library without
+  functions ES0133. A string the library returns points into the library's memory (a literal, or this opener's text ring): copy it
+  before the next call if it must last.
+- **Vectors and registers.** The functions get vectors in declaration order, file by file (sorted by path): the first at -30, then -36,
+  and so on (Open, Close, Expunge and the reserved vector come first). Numbers and `bool` go in d0-d7, pointers and strings in a0-a3, in
+  parameter order; when one kind runs out its arguments take the other kind's free registers (the ninth number of a function with no
+  pointers in a0), so up to 12 arguments fit (more is ES0132: pass a pointer to a struct). a4 and a5 are never used (a4 holds the
+  opener's data inside the library, a5 may be the caller's frame pointer). The result comes back in d0. **Adding a function later:**
+  add it after the last one of the last file, or every vector after it moves and programs built against the old binding call the
+  wrong function. The `.fd` file (`<name>_lib.fd`: `##base _AmigalibBase`, `##bias 30`, one line per function with its argument names
+  and registers) is the record; `tools/BindGen` reads it.
+- **Using the library from a program.** Name the library's folder in the program's `esharp.include` (`../amigalib`). The build then
+  makes the binding (`obj/<target>/esharp-amigalib/AmigalibLibrary.cs`) and compiles it with the program, so the program's source is the
+  same on every target:
+
+  ```csharp
+  var a = AmigalibLibrary.Open(1);        // exec OpenLibrary("amigalib.library", 1): one opener; a.IsOpen is false when it is missing or older
+  var b = AmigalibLibrary.Open(1);        // a second opener, with its own data
+  a.Add(5);                               // 105
+  b.Value();                              // still 100
+  a.Close(); b.Close();
+  int n = AmigalibLibrary.OpenCount();    // the open count in exec's library list, -1 when it is not loaded
+  AmigalibLibrary.FlushUnused();          // asks exec to expunge libraries nobody has open
+  AmigalibLibrary.ExpungeWhenClosed();    // while it is open: it goes at its last Close (exec RemLibrary)
+  ```
+
+  The binding is a struct holding one opener's `Base`, with `Open`, `Close`, `IsOpen`, `OpenCount`, `FlushUnused`, `ExpungeWhenClosed`, the constants
+  `LibraryName`, `LibraryVersion`, `LibraryRevision`, and one method per library function. On **m68k** the methods call the vectors
+  through `[LibraryCall(offset, "registers")]` externs with the opener's base in a6; the library's sources are not compiled into the
+  program, and `esharp build` builds the library with the same toolchain options and copies it next to the program. `esharp run` and
+  `esharp test` put every `.library` next to the program into `DH0:Libs` in FS-UAE, which the boot assigns as `LIBS:`. On a real Amiga
+  copy it to `LIBS:`. On the **host** (dotnet, `esharp test`) the library's code is compiled into the program and the binding calls it
+  directly; each opener still has its own static fields there (the host swaps them in and out around each call and deep-copies the
+  start values for every opener, so objects and arrays are the opener's own too). On **sdl** the library's code is compiled into the
+  game as well, but its openers share one copy of the data (per-opener data on sdl is not done yet). `os4`, `morphos`, `aros` and
+  `aros-i386` builds of a program that uses an E# library stop with a message.
+- **Per-opener data.** Every E# variable of the library (all static fields, properties and events, the platform's included, and the
+  runtime's state: the text ring of string formatting, the closure counters, the bases a `[LibraryBase]` class opens with `SetBase`) is
+  a member of one data block per opener. OpenLibrary returns a copy of the library base for each opener, with its data block right
+  after it; the library's code reaches the block through register a4, which the entry of each vector sets from the base in a6 and
+  restores for the caller. So two tasks in two openers can run library code at the same time, each with its own data, and the library
+  keeps no "current opener" anywhere. One opener's base should be used by one task at a time (as with bsdsocket.library); the memory
+  pool of an opener is not shared between tasks.
+- **Open, Close, Expunge.** Open (on the caller's task, under exec's Forbid, as for every library) makes the copy, a memory pool for the
+  opener (every object the library's code allocates comes from it), and runs the static initializers and static constructors in the
+  new data block, so keep them short and do no DOS I/O there. Close runs the `[AtExit]` methods of the classes the library uses,
+  frees the pool and the copy, and drops the open count of the base in exec's list. Expunge (exec asks for it when memory runs low,
+  or `FlushUnused`, or RemLibrary through `ExpungeWhenClosed`) frees the base when nobody has it open, else it waits for the last Close. exec.library, and dos, graphics and
+  intuition when the code calls them, are opened once at the library's init (version 39) and closed at expunge; they are shared, as
+  they hold no E# data.
+- **On the caller's task and stack.** Library code runs on the task that calls it, on that task's stack (nothing switches stacks): its
+  locals and the calls it makes take the caller's stack, so a deep recursion in the library needs the caller to have the stack
+  (`EsStackSize` for an E# program). The library writes nothing of its own to any output. `Dos.PutStr` and friends in library code
+  write to the caller's output, if the caller is a process that has one.
+- **Fatal errors.** An E# runtime error in library code (out of memory in `new`, or an index out of range with `--debug`) cannot end a
+  program: the library shows a recoverable alert (0x000100E5) and the calling task then waits for ever.
+- **Not in a library yet (ES0134):** `[EntryPoint]`, `Args`, `[ChipRam]` data (each opener's copy is not in chip RAM), `[Interrupt]`
+  servers and `[HookEntry]` methods (BOOPSI hooks, MUI dispatchers: the system calls them without an opener's data in a4), and
+  amiga.lib functions (DoMethod). Libraries other than exec, dos, graphics and intuition are opened through a `[LibraryBase]` class
+  (`SetBase`), as in a program; those bases are per opener.
+- **What is linked.** The library file is the C of the library alone: our own RomTag (right after a `moveq #-1,d0; rts` at the start of
+  the file, so running it as a command returns at once), init, open, close, expunge and vector entries, no C startup code and no C
+  library (`-nostartfiles -nostdlib`; `memcpy`, `memset`, `memmove` and `memcmp`, which gcc may call for struct copies, are our own).
+  Only libgcc is linked, for 64-bit maths; it is under the GPL 3 with the GCC Runtime Library Exception, which puts no condition on
+  the library's own licence. ramlib on Kickstart 3.1 did not find a RomTag 470 bytes into the code hunk, so the RomTag comes first.
+- **Not covered yet:** AROS, AmigaOS 4 and MorphOS libraries; callers written in other languages (the `.fd` file is there, but no C
+  header or proto file is written, and no C program was tried); `esharp addr` for library code (the `.map` and `.o` are written, but it
+  was not tried); the hardware test pack. See docs/STATUS.md for what was run.
 
 ## The language subset
 
@@ -857,7 +967,7 @@ the Grim Reaper's `Function()+0x…`; every build writes `obj/<target>/<name>.ma
 
 ```
 esharp new [--library] <name> [--source [dir] | --package [version]]   new hello-world project (csproj, .vscode); --library: an E# library with a demo program and a local feed
-esharp build [path] [options]      check the subset, emit C, run the target C compiler
+esharp build [path] [options]      check the subset, emit C, run the target C compiler (an EsOutputType AmigaLibrary project: a .library, .fd and binding)
 esharp run [path] [options]        build and run (m68k in FS-UAE, os4 in the VM, sdl on the desktop)
 esharp test [path] [options]       run on the host; with --target m68k|os4|aros|aros-i386|sdl also on the target, and compare
 esharp assets [dir|assets.json] [--force]   PNG, ILBM and WAV to Assets.g.cs

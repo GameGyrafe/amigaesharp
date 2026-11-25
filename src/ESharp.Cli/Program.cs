@@ -17,7 +17,8 @@ Usage:
                                     Create a new hello-world project. Its csproj references the AmigaESharp.Sdk package
                                     at this tool's version (--package), or, with --source or when this esharp runs from an
                                     E# checkout, that checkout's projects (for contributors; ESHARP_ROOT names one)
-  esharp build [path] [options]     Check the subset, emit C, and run the target C compiler
+  esharp build [path] [options]     Check the subset, emit C, and run the target C compiler (a project whose csproj sets
+                                    EsOutputType AmigaLibrary: an Amiga shared library, its .fd file and C# binding; m68k)
   esharp run [path] [options]       Build for m68k and run it in FS-UAE (or --target sdl: run it through SDL;
                                     --target os4: run it in the AmigaOS 4.1 QEMU VM named by ESHARP_OS4_VM)
   esharp assets [dir|assets.json] [--force]
@@ -213,6 +214,20 @@ Targets:
         var repo = SourceTree.HostSide();
         if (repo == null) return Fail("cannot find the E# host libraries (the host folder next to esharp.dll) or an E# source tree; reinstall AmigaESharp.Tool or set ESHARP_ROOT to a checkout");
         var baseDir = Directory.Exists(path) ? path : Path.GetDirectoryName(Path.GetFullPath(path)) ?? ".";
+
+        // E# Amiga libraries the program names in esharp.include (issue #154): on the host their code is part of the program, called through the binding.
+        try
+        {
+            if (AmigaLibraryStep.Read(baseDir) is { } self)
+                return Fail($"{baseDir} is an Amiga shared library ({self.Options.Name}); test a program that names its folder in esharp.include");
+            foreach (var r in AmigaLibraryStep.Referenced(path))
+            {
+                var binding = AmigaLibraryStep.WriteBinding(r, Path.Combine(baseDir, "obj", "host", "esharp-amigalib"));
+                if (binding == null) return Fail($"the library {r.Options.Name} does not compile");
+                files.Add(binding);
+            }
+        }
+        catch (InvalidDataException e) { return Fail(e.Message); }
 
         // E# library packages: the host run references their DLLs (the HOST build each package carries).
         if (PackageStep.Load(path, out var packages) is { } packageError) return Fail(packageError);
@@ -446,6 +461,7 @@ Targets:
         string? cc = null, cflags = null, docker = null, toolchain = null, sysrootOption = null;
         bool anyVersion = false;
         LastLocalCompiler = null;
+        var passthrough = new List<string>();   // the options a library this program uses is built with too
 
         for (var i = 0; i < args.Length; i++)
         {
@@ -454,8 +470,8 @@ Targets:
                 case "-o" when i + 1 < args.Length: outDir = args[++i]; break;
                 case "--emit-only": emitOnly = true; break;
                 case "--allow-float": allowFloat = true; break;
-                case "--debug": debug = true; break;
-                case "--trace": trace = true; break;
+                case "--debug": debug = true; passthrough.Add(args[i]); break;
+                case "--trace": trace = true; passthrough.Add(args[i]); break;
                 case "--from-source": fromSource = true; break;
                 case "--chip-budget" when i + 1 < args.Length:
                     chipBudget = ParseSize(args[++i]);
@@ -469,13 +485,15 @@ Targets:
                     break;
                 case "--docker":
                     docker = i + 1 < args.Length && !args[i + 1].StartsWith("-") ? args[++i] : "";
+                    passthrough.Add("--docker");
+                    if (docker.Length > 0) passthrough.Add(docker);
                     break;
-                case "--cc" when i + 1 < args.Length: cc = args[++i]; break;
-                case "--cflags" when i + 1 < args.Length: cflags = args[++i]; break;
+                case "--cc" when i + 1 < args.Length: cc = args[++i]; passthrough.Add("--cc"); passthrough.Add(cc); break;
+                case "--cflags" when i + 1 < args.Length: cflags = args[++i]; passthrough.Add("--cflags"); passthrough.Add(cflags); break;
                 // An empty value counts as not given (a VS Code task passes --toolchain ${config:esharp.toolchain} as it is).
-                case "--toolchain" when i + 1 < args.Length: toolchain = args[++i]; break;
-                case "--sysroot" when i + 1 < args.Length: sysrootOption = args[++i]; break;
-                case "--any-cc-version": anyVersion = true; break;
+                case "--toolchain" when i + 1 < args.Length: toolchain = args[++i]; passthrough.Add("--toolchain"); passthrough.Add(toolchain); break;
+                case "--sysroot" when i + 1 < args.Length: sysrootOption = args[++i]; passthrough.Add("--sysroot"); passthrough.Add(sysrootOption); break;
+                case "--any-cc-version": anyVersion = true; passthrough.Add(args[i]); break;
                 case "--toolchain" or "--sysroot": return Fail($"{args[i]} needs a folder");
                 default:
                     if (args[i].StartsWith("-")) return Fail($"unknown option '{args[i]}'");
@@ -491,6 +509,34 @@ Targets:
 
         var files = CollectSources(path);
         if (files.Count == 0) return Fail($"no .cs files found in '{path}'");
+
+        // Amiga shared libraries (issue #154): this project may be one (EsOutputType AmigaLibrary), or a program that names one in esharp.include.
+        var projectDir = Directory.Exists(path) ? path : Path.GetDirectoryName(Path.GetFullPath(path)) ?? ".";
+        AmigaLibraryStep.Project? libraryProject;
+        List<AmigaLibraryStep.Project> libraryRefs;
+        try
+        {
+            libraryProject = AmigaLibraryStep.Read(projectDir);
+            libraryRefs = libraryProject == null ? AmigaLibraryStep.Referenced(path) : new List<AmigaLibraryStep.Project>();
+        }
+        catch (InvalidDataException e) { return Fail(e.Message); }
+        if (libraryProject != null && target != Targets.M68k)
+            return Fail($"{projectDir} is an Amiga shared library (EsOutputType AmigaLibrary, {libraryProject.Options.Name}): it builds for --target m68k only so far " +
+                        "(AROS and AmigaOS 4 later); a program that names its folder in esharp.include also builds for the host and sdl, with the library's code compiled in");
+        if (libraryRefs.Count > 0 && target.IsAmiga && target != Targets.M68k)
+            return Fail($"this program uses the E# Amiga library {string.Join(", ", libraryRefs.Select(r => r.Options.Name))} (esharp.include), which builds for m68k only so far; " +
+                        "build the program for m68k, sdl or the host");
+        var bindingDir = Path.Combine(outDir ?? Path.Combine(projectDir, "obj", target.Name), "esharp-amigalib");
+        foreach (var r in libraryRefs)
+        {
+            // On an Amiga target the program calls the .library; elsewhere the library's code is part of the program. The binding serves both.
+            if (target.IsAmiga) files.RemoveAll(f => AmigaLibraryStep.Contains(r, f));
+            var binding = AmigaLibraryStep.WriteBinding(r, bindingDir);
+            if (binding == null) return Fail($"the library {r.Options.Name} does not compile");
+            files.Add(binding);
+            Console.WriteLine($"Library {r.Options.Name} {r.Options.Version}.{r.Options.Revision} ({r.Dir}): " +
+                              (target.IsAmiga ? "called through its binding" : "its code compiled into the program, through its binding") + $" {Path.GetFileName(binding)}");
+        }
 
         // E# library packages from the project's restore (obj/project.assets.json), compiled with the program.
         if (PackageStep.Load(path, out var packages) is { } packageError) return Fail(packageError);
@@ -513,6 +559,7 @@ Targets:
             Defines = options.Defines, AllowFloat = options.AllowFloat, BoundsChecks = options.BoundsChecks, ChipBudget = options.ChipBudget,
             CFileName = options.CFileName, TargetName = options.TargetName, Packages = options.Packages, AllowCopyleft = options.AllowCopyleft,
             SdkVersion = options.SdkVersion, UseBinaries = !fromSource, Stamp = PackageBinaries.Stamp(SourceTree.ToolVersion),
+            AmigaLibrary = libraryProject?.Options,
         });
 
         foreach (var d in result.Diagnostics)
@@ -532,6 +579,15 @@ Targets:
         var cFile = Path.Combine(outDir, name + ".c");
         File.WriteAllText(cFile, result.C!);
         Console.WriteLine($"Wrote {cFile}");
+        if (result.AmigaLibrary is { } library)
+        {
+            // The .fd file and the C# binding beside the .library (an E# program that names this folder in esharp.include gets the binding itself).
+            var fd = Path.Combine(outDir, libraryProject!.Options.Stem + "_lib.fd");
+            var bindingFile = Path.Combine(outDir, libraryProject.Options.Binding + ".cs");
+            File.WriteAllText(fd, library.Fd);
+            File.WriteAllText(bindingFile, library.Binding);
+            Console.WriteLine($"Wrote {fd} and {bindingFile} ({library.Functions.Count} function(s), {libraryProject.Options.IdString})");
+        }
         // The packages' C (esharp-native/<id>/), written fresh each build so a file a package no longer has is not compiled.
         var nativeSources = new List<string>();
         try
@@ -590,7 +646,7 @@ Targets:
         // --cflags replaces the target's flags; a --sysroot in them wins over the toolchain's.
         if (cflags != null && cflags.Contains("--sysroot")) sysroot = null;
         cflags ??= target.CFlags;
-        var exe = Path.Combine(outDir, name);
+        var exe = Path.Combine(outDir, libraryProject?.Options.Name ?? name);
 
         // The compiler runs in the output directory with relative file names, inside the container (mounted at /work) or here,
         // so a local build passes the compiler the same command line as a Docker build (and gives the same bytes).
@@ -606,12 +662,15 @@ Targets:
             // not one merged variable (the pinned m68k gcc 6.5 defaults to -fcommon).
             var native = withNative && (nativeSources.Count > 0 || archives.Count > 0);
             if (native) compilerArgs.Add(PackageNatives.CFlags);
+            // An Amiga library: no C startup and no C library; its own RomTag starts the file (CEmitter.AmigaLibrary.cs), libgcc is linked for 64-bit maths.
+            if (libraryProject != null && link) compilerArgs.AddRange(new[] { "-nostartfiles", "-nostdlib" });
             compilerArgs.AddRange(new[] { "-o", outFile, name + ".c" });
             if (native) compilerArgs.AddRange(nativeSources);
             // The packages' binaries after the program's C (the linker takes from an archive what the objects before it need, and the
             // archives' own references to the platform code are already defined by then), before the system libraries.
             if (withNative && link) compilerArgs.AddRange(archives);
             if (link) compilerArgs.AddRange(target.Libs.Split(' ', StringSplitOptions.RemoveEmptyEntries));
+            if (link && libraryProject != null) compilerArgs.Add("-lgcc");
 
             ProcessStartInfo psi;
             if (target.PkgConfig.Length > 0)
@@ -661,12 +720,27 @@ Targets:
         // ELF targets: <name>.debug is the same program linked with -g (gcc's code does not change with -g).
         var addrFlags = target.IsM68k ? new[] { "-fno-reorder-functions" } : Array.Empty<string>();
         // The map has a fixed name while linking (a comma in the project name would split the -Wl option), then takes the exe's.
-        if (Compile(target.IsM68k ? addrFlags.Append("-Wl,-Map,esharp-link.map").ToArray() : addrFlags, name, link: true) != 0) return 1;
+        if (Compile(target.IsM68k ? addrFlags.Append("-Wl,-Map,esharp-link.map").ToArray() : addrFlags, Path.GetFileName(exe), link: true) != 0) return 1;
         if (target.IsM68k && MoveLinkMap(outDir, exe) != 0) return 1;
         if (target.IsM68k && Compile(addrFlags.Concat(new[] { "-g", "-c" }).ToArray(), name + ".o", link: false, withNative: false) != 0) return 1;
         if (target.IsAmiga && !target.IsM68k && Compile(new[] { "-g", "-gdwarf-4" }, name + ".debug", link: true) != 0) return 1;   // DWARF 4: the os4 binutils read no 5
 
         Console.WriteLine($"Built {exe}");
+        // The E# libraries the program uses, built for the target with the same toolchain and put next to the program (FS-UAE copies them to LIBS:).
+        foreach (var r in libraryRefs.Where(_ => target.IsM68k))
+        {
+            Console.WriteLine($"Building the library {r.Options.Name} ({r.Dir}):");
+            if (Build(passthrough.Prepend(r.Dir).Concat(new[] { "--target", target.Name }).ToArray(), out var libraryFile) != 0 || libraryFile == null)
+                return Fail($"the library {r.Options.Name} did not build");
+            try { File.Copy(libraryFile, Path.Combine(outDir, Path.GetFileName(libraryFile)), true); }
+            catch (Exception e) when (e is IOException or UnauthorizedAccessException) { return Fail("library: " + e.Message); }
+            Console.WriteLine($"Copied {r.Options.Name} next to the program");
+        }
+        if (libraryProject != null)
+        {
+            builtExe = exe;
+            return 0;
+        }
         try
         {
             if (IconStep.Write(Directory.Exists(path) ? path : null, outDir, name, target.IsAmiga) is { } icon) Console.WriteLine($"Wrote {icon}");
@@ -811,6 +885,8 @@ Targets:
         if (MuiDrawer(muiOption, workbenchOption, out var muiDrawer, out var workbench) is { } muiError) return Fail(muiError);
         var rc = Build(buildArgs.ToArray(), out var exe);
         if (rc != 0 || exe == null) return rc;
+        if (exe.EndsWith(".library", StringComparison.OrdinalIgnoreCase))
+            return Fail($"{exe} is an Amiga shared library, not a program: run a program that names its folder in esharp.include (samples/amigalibdemo uses samples/amigalib)");
         if (Os4Vm.ProgramArgsError(programArgs) is { } argsError) return Fail(argsError);
         return FsUae.Run(exe, headless, TimeSpan.FromSeconds(timeout), kickstart, model, fsuae, screenshot, input, serial, programArgs, muiDrawer, workbench);
     }

@@ -1,0 +1,11 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- Read by esharp build (literal values only); not used to compile the sample. EsOutputType AmigaLibrary makes
+       obj/m68k/amigalib.library, amigalib_lib.fd and the C# binding AmigalibLibrary.cs (docs/GUIDE.md, "Amiga shared libraries"). -->
+  <PropertyGroup>
+    <EsOutputType>AmigaLibrary</EsOutputType>
+    <EsLibraryName>amigalib.library</EsLibraryName>
+    <EsLibraryVersion>1</EsLibraryVersion>
+    <EsLibraryRevision>2</EsLibraryRevision>
+    <EsLibraryDate>25.11.2026</EsLibraryDate>
+  </PropertyGroup>
+</Project>

@@ -197,3 +197,31 @@ public sealed class EsLibraryAttribute : Attribute
 
     public string Id { get; }
 }
+
+/// <summary>
+/// A function of an Amiga shared library built from E# (a project with <c>EsOutputType</c> <c>AmigaLibrary</c>, issue #154): a public
+/// static method whose parameters and result are plain values (integers up to 32 bits, <c>bool</c>, <c>string</c>, pointers to those,
+/// to <c>void</c> or to the library's structs). <c>esharp build</c> gives each one a vector of the <c>.library</c> in declaration order
+/// (file by file, by path; the first at offset -30), passes data in d0-d7 and pointers in a0-a3, and writes them into the <c>.fd</c>
+/// file and the C# binding. E# objects, arrays, delegates and 64-bit values do not cross the library boundary (ES0131).
+/// In a program build (host, sdl) the attribute changes nothing.
+/// </summary>
+[AttributeUsage(AttributeTargets.Method)]
+public sealed class LibraryFunctionAttribute : Attribute
+{
+}
+
+/// <summary>
+/// A <c>static extern</c> method that calls the library vector at <paramref name="offset"/> (negative, as in an <c>.fd</c> file's bias:
+/// -30, -36, ...) of the library base it gets as its first parameter, with the other parameters in the registers named in
+/// <paramref name="registers"/> (comma separated, <c>"d0,d1,a0"</c>), and the result from d0. The bindings that <c>esharp build</c> writes
+/// for an E# <c>.library</c> use it, so each opener's base is passed explicitly. m68k only for now (ES0099 elsewhere).
+/// </summary>
+[AttributeUsage(AttributeTargets.Method)]
+public sealed class LibraryCallAttribute : Attribute
+{
+    public LibraryCallAttribute(int offset, string registers) { Offset = offset; Registers = registers; }
+
+    public int Offset { get; }
+    public string Registers { get; }
+}

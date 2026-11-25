@@ -32,5 +32,8 @@ public sealed class CompileResult
     /// <summary>The packages' binaries the program links instead of their sources (for the C compiler command, after the program's C).</summary>
     public System.Collections.Generic.IReadOnlyList<PackageBinary> Linked { get; init; } = System.Array.Empty<PackageBinary>();
 
+    /// <summary>An Amiga library build: its .fd file, C# binding and function table.</summary>
+    public AmigaLibraryOutput? AmigaLibrary { get; init; }
+
     public bool Success => C != null && !Diagnostics.Any(d => d.Severity == DiagnosticSeverity.Error);
 }
