@@ -26,5 +26,11 @@ public sealed class CompileResult
     /// </summary>
     public System.Collections.Generic.IReadOnlyList<NativeOutput> Native { get; init; } = System.Array.Empty<NativeOutput>();
 
+    /// <summary>Library mode: what the binary's manifest records (init function, generic copies, runtime pieces, library bases).</summary>
+    public LibraryBuildInfo? Library { get; init; }
+
+    /// <summary>The packages' binaries the program links instead of their sources (for the C compiler command, after the program's C).</summary>
+    public System.Collections.Generic.IReadOnlyList<PackageBinary> Linked { get; init; } = System.Array.Empty<PackageBinary>();
+
     public bool Success => C != null && !Diagnostics.Any(d => d.Severity == DiagnosticSeverity.Error);
 }

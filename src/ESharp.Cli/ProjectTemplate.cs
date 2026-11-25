@@ -216,7 +216,9 @@ public static class Program
     <!-- The E# source tree. Set ESHARP_ROOT or edit this line if you move it. -->
     <ESharpRoot Condition=""'$(ESharpRoot)' == '' and '$(ESHARP_ROOT)' != ''"">$(ESHARP_ROOT)</ESharpRoot>
     <ESharpRoot Condition=""'$(ESharpRoot)' == ''"">{rootValue}</ESharpRoot>
-    <EsMinSdkVersion>{version}</EsMinSdkVersion>";
+    <EsMinSdkVersion>{version}</EsMinSdkVersion>
+    <!-- The esharp that builds the binaries at dotnet pack: the checkout's. -->
+    <EsCommand Condition=""'$(EsCommand)' == ''"">dotnet run --project ""$(ESharpRoot)/src/ESharp.Cli"" --</EsCommand>";
         var import = root == null ? "" : @"
   <!-- The library step of the Sdk (a package brings it by itself). -->
   <Import Project=""$(ESharpRoot)/src/ESharp.Sdk/buildTransitive/AmigaESharp.Sdk.targets"" />
@@ -239,6 +241,10 @@ public static class Program
     <EsTargets>m68k;os4;morphos;aros;aros-i386;sdl</EsTargets>
     <!-- Platform-level features the library uses: AmigaLib, Native, InlineAsm, Interrupt, HookEntry, NativeC. None here. -->
     <EsFeatures></EsFeatures>
+    <!-- dotnet pack also builds the library for every target in EsTargets into a binary in the package, which programs link instead of
+         compiling the sources (they still ship). That needs each target's toolchain: its Docker image, or ESHARP_TOOLCHAIN_<TARGET>.
+         false: no binaries, sources only. -->
+    <EsPrecompile>true</EsPrecompile>
 
     <IsPackable>true</IsPackable>
     <!-- CHANGE THIS: your own package id (Company.Library). Ids that start with AmigaESharp are reserved on nuget.org for the official packages. -->
@@ -349,7 +355,8 @@ reserved on nuget.org for the official packages.
 ## Try it
 
 ```bash
-dotnet pack {name} -o feed              # {id} {LibraryVersion}: the DLL carries the C# sources and the manifest
+dotnet pack {name} -o feed              # {id} {LibraryVersion}: the DLL carries the C# sources and the manifest, and a binary per target
+                                        # (each target's toolchain needed; -p:EsPrecompile=false for sources only)
 dotnet restore {name}.Demo              # restores the library from ./feed
 esharp test {name}.Demo                 # the host run: 3 ok
 esharp test {name}.Demo --target m68k --docker <image> --kickstart <rom>    # also on the Amiga (needs Docker and FS-UAE)

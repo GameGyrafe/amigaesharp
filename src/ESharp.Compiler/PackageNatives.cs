@@ -61,7 +61,7 @@ public static class PackageNatives
         if (parts.Length != 2 || !Folders.Contains(parts[0], StringComparer.Ordinal))
             return $"C files go in native/common/ or native/<target>/ ({string.Join(", ", Folders.Skip(1))}), one level deep";
         if (!FileName.IsMatch(parts[1]))
-            return "only C source (.c) and headers (.h) with plain file names are accepted; prebuilt code (object files, archives, libraries) is refused";
+            return "only C source (.c) and headers (.h) with plain file names are accepted; prebuilt code (object files, archives, libraries) is refused (a package's only binaries are those the E# pack step builds from its sources, in esharp-bin/<target>/ beside the DLL)";
         if (parts[1].StartsWith("esharp_", StringComparison.OrdinalIgnoreCase))
             return "file names starting with esharp_ are the build's own (it writes " + PrototypeHeader + ")";
         if (all != null && all.FirstOrDefault(o => o.Split('/') is [_, var other] && other != parts[1] && string.Equals(other, parts[1], StringComparison.OrdinalIgnoreCase)) is { } clash)

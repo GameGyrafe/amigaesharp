@@ -21,7 +21,12 @@ internal static class Monomorphizer
 {
     private const int MaxRounds = 16;
 
-    public sealed record Result(CSharpCompilation Compilation, HashSet<SyntaxTree> User, List<Diagnostic> Errors);
+    /// <summary>
+    /// The expanded compilation. <paramref name="MadeTypes"/> and <paramref name="MadeMethods"/> are the names of the copies (Pair__int,
+    /// Pick__int): a precompiled package lists the C names of the copies it holds, and a program's build tells its own copies apart by them.
+    /// </summary>
+    public sealed record Result(CSharpCompilation Compilation, HashSet<SyntaxTree> User, List<Diagnostic> Errors,
+        IReadOnlyCollection<string> MadeTypes, IReadOnlyCollection<string> MadeMethods);
 
     private sealed class Use
     {
@@ -41,6 +46,8 @@ internal static class Monomorphizer
     public static Result Expand(CSharpCompilation compilation, HashSet<SyntaxTree> user, CSharpParseOptions parse)
     {
         var made = new HashSet<string>(StringComparer.Ordinal);
+        var madeTypes = new HashSet<string>(StringComparer.Ordinal);
+        var madeMethods = new HashSet<string>(StringComparer.Ordinal);
         var errors = new List<Diagnostic>();
 
         for (var round = 0; round < MaxRounds; round++)
@@ -90,6 +97,7 @@ internal static class Monomorphizer
 
                     if (made.Add(key))
                     {
+                        (key[0] == 'T' ? madeTypes : madeMethods).Add(newName);
                         var defTree = def.SyntaxTree;
                         if (!instances.TryGetValue(defTree, out var il)) instances[defTree] = il = new List<Instance>();
                         il.Add(new Instance
@@ -101,7 +109,7 @@ internal static class Monomorphizer
                 }
             }
 
-            if (!any) return new Result(compilation, user, errors);
+            if (!any) return new Result(compilation, user, errors, madeTypes, madeMethods);
 
             // Build the new tree for every tree that has uses to rewrite or declarations to copy.
             var touched = uses.Keys.Concat(instances.Keys).Distinct().ToList();
@@ -119,7 +127,7 @@ internal static class Monomorphizer
         }
 
         errors.Add(Diagnostic.Create(Descriptors.GenericDepth, Location.None, "(unknown)"));
-        return new Result(compilation, user, errors);
+        return new Result(compilation, user, errors, madeTypes, madeMethods);
     }
 
     // ------------------------------------------------------------------ analysis helpers

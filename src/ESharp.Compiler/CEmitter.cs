@@ -194,6 +194,7 @@ internal sealed partial class CEmitter
         if (type == null || GetAttribute(type, "LibraryBaseAttribute") is not { } a) return null;
         string lib = (string)a.ConstructorArguments[0].Value!, name = (string)a.ConstructorArguments[1].Value!, ctype = (string)a.ConstructorArguments[2].Value!;
         _bases[name] = ctype;
+        _baseLibs[name] = lib;
         // muimaster.library: no header (the MUI SDK's are not used); the emitter defines its calls itself (MuiMasterCalls).
         if (lib == "muimaster") _usesMuiMaster = true;
         else _headers.Add($"proto/{lib}.h");
@@ -257,7 +258,8 @@ internal sealed partial class CEmitter
         foreach (var c in heapClasses.Where(IsPoly)) EmitCvt(c);
         foreach (var c in heapClasses.Where(IsPoly))
         {
-            Line($"static __attribute__((unused)) const struct {CvtName(c)} {TypeName(c)}_vt;");
+            // Split builds: one table per class in the whole link (its address is the type id), defined by the object that owns the class.
+            Line(Split.Active ? $"extern const struct {CvtName(c)} {TypeName(c)}_vt;" : $"static __attribute__((unused)) const struct {CvtName(c)} {TypeName(c)}_vt;");
             _usesAlloc = true;
             Line($"static __attribute__((unused)) {TypeName(c)} *{TypeName(c)}_alloc(void) {{ {TypeName(c)} *o = ES_NEW({TypeName(c)}); o->{VtPath(c)} = (const struct {CvtName(RootClass(c))} *)&{TypeName(c)}_vt; return o; }}");
         }
@@ -274,7 +276,7 @@ internal sealed partial class CEmitter
         foreach (var ev in staticEvents)
         {
             _usesClosures = true;
-            Line($"static es_event {StaticEventName(ev)};");
+            Line(IsExternal(ev) ? $"extern es_event {StaticEventName(ev)};" : $"{Storage}es_event {StaticEventName(ev)};");
         }
         if (fields.Count + staticProps.Count + staticEvents.Count > 0) Line("");
 
@@ -289,26 +291,45 @@ internal sealed partial class CEmitter
         methods.AddRange(reachable.Where(m => m.MethodKind == MethodKind.LocalFunction));
         methods.AddRange(reachable.Where(m => m.MethodKind == MethodKind.AnonymousFunction)
             .GroupBy(m => FuncName(m)).Select(g => g.First()));
-        _staticConstructors.AddRange(methods.Where(m => m.MethodKind == MethodKind.StaticConstructor));
+        // Split builds: functions another object defines are declared only (a lambda or local function only its own function calls).
+        methods.RemoveAll(m => IsExternal(m) && m.MethodKind is MethodKind.AnonymousFunction or MethodKind.LocalFunction);
+        _staticConstructors.AddRange(methods.Where(m => m.MethodKind == MethodKind.StaticConstructor && !IsExternal(m)));
         foreach (var m in methods)
         {
             Line(Prototype(m) + ";");
             if (m.MethodKind == MethodKind.Constructor && IsHeapClass(m.ContainingType)) Line(InitPrototype(m) + ";");
         }
-        foreach (var c in _fieldInitClasses) Line($"static void {FieldInitName(c)}({TypeName(c)} *{ThisName});");
+        foreach (var c in _fieldInitClasses) Line($"{Storage}void {FieldInitName(c)}({TypeName(c)} *{ThisName});");
         if (methods.Count > 0 || _fieldInitClasses.Count > 0) Line("");
         CheckBodilessAsm(reachable);
         EmitInterruptDeclarations(methods);
         EmitHookDeclarations(methods);
-        foreach (var c in heapClasses.Where(IsPoly)) EmitVtInstance(c, reachable);
+        foreach (var c in heapClasses.Where(c => IsPoly(c) && !IsExternal(c))) EmitVtInstance(c, reachable);
         foreach (var c in heapClasses)
             foreach (var i in interfaces.Where(i => c.AllInterfaces.Contains(i, SymbolEqualityComparer.Default)))
                 EmitVtable(i, c);
 
-        foreach (var c in _fieldInitClasses) EmitFieldInit(c);
-        foreach (var m in methods) EmitMethod(m);
+        foreach (var c in _fieldInitClasses.Where(c => !IsExternal(c))) EmitFieldInit(c);
+        foreach (var m in methods.Where(m => !IsExternal(m))) EmitMethod(m);
 
-        EmitMain();
+        // Program mode: what the binaries' code needs of the runtime and the library bases they use (the program defines them).
+        foreach (var binary in Split.InitOrder)
+        {
+            UseRuntime(binary.Runtime);
+            foreach (var b in binary.Bases)
+            {
+                _bases[b.Name] = b.CType;
+                if (b.Lib == "muimaster") _usesMuiMaster = true;
+                else if (b.Lib.Length > 0) _headers.Add($"proto/{b.Lib}.h");
+            }
+        }
+        if (Split.Library)
+        {
+            EmitLibraryInit();
+            LibraryInfo = new LibraryBuildInfo(Split.InitName, LibraryInstances(types), RuntimeUses(),
+                _bases.Select(b => new PackageBase(_baseLibs.TryGetValue(b.Key, out var l) ? l : "", b.Key, b.Value)).ToList());
+        }
+        else EmitMain();
         EmitInterruptEntries();
         EmitHookEntries();
 
@@ -350,13 +371,13 @@ internal sealed partial class CEmitter
             result.AppendLine("#include <dos/obsolete.h>");
             result.AppendLine("#endif");
         }
-        foreach (var (name, type) in _bases) result.AppendLine($"{type} *es_{name};");
+        if (!Split.Library) foreach (var (name, type) in _bases) result.AppendLine($"{type} *es_{name};");   // a package's binary uses the program's
         // libauto (-lauto) opens the interface of the usual libraries at start-up on AmigaOS 4, but it has none for
         // cybergraphics.library, which may be absent anyway: SetBase gets "main" version 1 itself and drops it again.
         if (_bases.ContainsKey("CyberGfxBase"))
         {
             result.AppendLine("#if defined(__amigaos4__)");
-            result.AppendLine("struct CyberGfxIFace *ICyberGfx;");
+            result.AppendLine(Split.Library ? "extern struct CyberGfxIFace *ICyberGfx;" : "struct CyberGfxIFace *ICyberGfx;");
             result.AppendLine("static void es_setbase_CyberGfxBase(struct Library *lib)");
             result.AppendLine("{");
             result.AppendLine("    if (ICyberGfx != NULL) { DropInterface((struct Interface *)ICyberGfx); ICyberGfx = NULL; }");
@@ -587,7 +608,15 @@ internal sealed partial class CEmitter
             result.AppendLine("    return *a == *b;");
             result.AppendLine("}");
         }
-        if (UsesArgs)
+        if (UsesArgs && Split.Library)
+        {
+            // A package's binary reads the program's command line (main fills it in, from the Workbench tool types too).
+            result.AppendLine("extern int es_argc;");
+            result.AppendLine("extern char **es_argv;");
+            result.AppendLine("static __attribute__((unused)) int32_t es_args_count(void) { return es_argc > 1 ? (int32_t)es_argc - 1 : 0; }");
+            result.AppendLine("static __attribute__((unused)) const char *es_args_get(int32_t i) { return i >= 0 && i < es_args_count() ? es_argv[i + 1] : NULL; }");
+        }
+        else if (UsesArgs)
         {
             // Args: main keeps argc/argv; argument 0 is the program name, so Args counts from 1.
             // A Workbench start has argc 0 and argv pointing at the WBStartup message (the C startup code of every Amiga target does this):
@@ -817,7 +846,11 @@ internal sealed partial class CEmitter
         // Non-Amiga targets: [Native] calls named es_std_* are standard C (stdio, stdlib, time), es_sdl_* need SDL 3. The C runtime is
         // pasted in whole (its functions are static and marked unused), so a program that only prints needs no SDL at all.
         var usesSdl = _natives.Any(n => n.StartsWith("es_sdl_", StringComparison.Ordinal));
-        if (usesSdl || _natives.Any(n => n.StartsWith("es_std_", StringComparison.Ordinal)))
+        if (Split.Library && (usesSdl || _natives.Any(n => n.StartsWith("es_std_", StringComparison.Ordinal))))
+            // The C runtime of the sdl target keeps state (the window, the input, the sounds) in static variables: one copy, the program's.
+            _diagnostics.Add(Diagnostic.Create(Descriptors.PackageNotPrecompilable, Location.None,
+                "its code calls the C runtime of the platform layer directly ([Native] " + string.Join(", ", _natives.Where(n => n.StartsWith("es_sdl_", StringComparison.Ordinal) || n.StartsWith("es_std_", StringComparison.Ordinal)).OrderBy(n => n, StringComparer.Ordinal)) + "), which keeps its state in the program"));
+        else if (usesSdl || _natives.Any(n => n.StartsWith("es_std_", StringComparison.Ordinal)))
         {
             result.Append(LibrarySources.CRuntime("es_std.h"));
             if (usesSdl) result.Append(LibrarySources.CRuntime("es_sdl.h"));
@@ -829,7 +862,7 @@ internal sealed partial class CEmitter
             result.AppendLine();
         }
         result.Append(body);
-        return ResolveLineResets(result.ToString(), _cFileName);
+        return ResolveLineResets(SplitRuntimeLinkage(result.ToString()), _cFileName);
     }
 
     /// <summary>Each reset marker becomes a #line that gives the following line its own number in the C file.</summary>
@@ -1253,6 +1286,11 @@ static __attribute__((unused)) int32_t MUI_DeleteCustomClass(void *mcc)
                     case IMethodSymbol m: Add(m); break;
                     case IFieldSymbol or IPropertySymbol: _usedSymbols.Add(member); break;
                 }
+        // Split builds: the table of a class that a package's binary defines has every slot filled (the program may call any of them through
+        // it), and the binary and the program both reach those implementations (the program defines the platform's).
+        foreach (var t in types.Where(t => IsHeapClass(t) && IsSplitOwnedClass(t)))
+            foreach (var def in AllSlots(t))
+                if (FinalImpl(t, def) is { } impl && DeclaresBody(impl)) Add(impl);
         var walkedFields = new HashSet<ISymbol>(SymbolEqualityComparer.Default);
 
         while (true)
@@ -1774,7 +1812,7 @@ static __attribute__((unused)) int32_t MUI_DeleteCustomClass(void *mcc)
             var slotPath = string.Concat(Enumerable.Repeat("es_base.", depth - Depth(def.ContainingType))) + VSlot(def);
             inits.Add($".{slotPath} = {thunk}");
         }
-        Line($"static __attribute__((unused)) const struct {CvtName(c)} {TypeName(c)}_vt = {{ {string.Join(", ", inits)} }};");
+        Line($"{(Split.Active ? "" : "static __attribute__((unused)) ")}const struct {CvtName(c)} {TypeName(c)}_vt = {{ {string.Join(", ", inits)} }};");
         Line("");
     }
 
@@ -1890,7 +1928,7 @@ static __attribute__((unused)) int32_t MUI_DeleteCustomClass(void *mcc)
 
     private void EmitFieldInit(INamedTypeSymbol c)
     {
-        Line($"static void {FieldInitName(c)}({TypeName(c)} *{ThisName})");
+        Line($"{Storage}void {FieldInitName(c)}({TypeName(c)} *{ThisName})");
         Line("{");
         _indent++;
         _this = ThisKind.Pointer;
@@ -1949,10 +1987,16 @@ static __attribute__((unused)) int32_t MUI_DeleteCustomClass(void *mcc)
         // Chip RAM is a 68k-only concept in the C dialect: PowerPC systems allocate chip memory
         // at run time instead, so the attribute is a no-op there.
         if (f.IsVolatile) text = f.Type is IArrayTypeSymbol ? "volatile " + text : VolatileDecl(f, decl);   // shared with an interrupt server
+        if (IsExternal(f))
+        {
+            // Split builds: defined (and initialized) by the object that owns it.
+            Line(f.Type is IArrayTypeSymbol arrType ? $"extern {(f.IsVolatile ? "volatile " : "")}{ArrayDeclarator(arrType, FieldName(f), init, decl, withItems: false)};" : $"extern {text};");
+            return;
+        }
         if (HasAttribute(f, "ChipRamAttribute") && IsDefined("M68K"))
             text = "__chip " + text;
         if (deferred) _deferredStatics.Add((f, FieldName(f), init!));
-        Line(f.Type is IArrayTypeSymbol || init == null || deferred ? $"static {text};" : $"static {text} = {Expr(init, top: true)};");
+        Line(f.Type is IArrayTypeSymbol || init == null || deferred ? $"{Storage}{text};" : $"{Storage}{text} = {Expr(init, top: true)};");
     }
 
     /// <summary>The element list of an array creation (<c>new T[] { ... }</c>, <c>{ ... }</c>), or null for <c>new T[N]</c>.</summary>
@@ -1992,9 +2036,11 @@ static __attribute__((unused)) int32_t MUI_DeleteCustomClass(void *mcc)
     }
 
     /// <summary>The start-up assignments of <see cref="_deferredStatics"/>: declaration order, except that a field another one reads is set first.</summary>
-    private void EmitDeferredStatics()
+    private readonly HashSet<ISymbol> _deferredDone = new(SymbolEqualityComparer.Default);
+
+    private void EmitDeferredStatics(Func<ISymbol, bool>? which = null)
     {
-        var done = new HashSet<ISymbol>(SymbolEqualityComparer.Default);
+        var done = _deferredDone;
         var byField = new Dictionary<ISymbol, (ISymbol Symbol, string Target, ExpressionSyntax Init)>(SymbolEqualityComparer.Default);
         foreach (var d in _deferredStatics) byField[d.Symbol] = d;
         void Emit((ISymbol Symbol, string Target, ExpressionSyntax Init) d)
@@ -2008,7 +2054,8 @@ static __attribute__((unused)) int32_t MUI_DeleteCustomClass(void *mcc)
             }
             else Line($"{d.Target} = {Expr(d.Init, top: true)};");
         }
-        foreach (var d in _deferredStatics) Emit(d);
+        foreach (var d in _deferredStatics)
+            if (which == null || which(d.Symbol)) Emit(d);
     }
 
     // volatile on a pointer or reference field must qualify the pointer itself ("T * volatile x"), not what it points at.
@@ -2023,13 +2070,14 @@ static __attribute__((unused)) int32_t MUI_DeleteCustomClass(void *mcc)
         var decl = (PropertyDeclarationSyntax)p.DeclaringSyntaxReferences.First().GetSyntax();
         var name = $"{TypeName(p.ContainingType)}_{p.Name}";
         var text = Decl(p.Type, name, decl);
+        if (IsExternal(p)) { Line($"extern {text};"); return; }
         if (decl.Initializer != null && !IsCConstant(decl.Initializer.Value))
         {
             _deferredStatics.Add((p, name, decl.Initializer.Value));
-            Line($"static {text};");
+            Line($"{Storage}{text};");
             return;
         }
-        Line(decl.Initializer == null ? $"static {text};" : $"static {text} = {Expr(decl.Initializer.Value, top: true)};");
+        Line(decl.Initializer == null ? $"{Storage}{text};" : $"{Storage}{text} = {Expr(decl.Initializer.Value, top: true)};");
     }
 
     private string Prototype(IMethodSymbol m)
@@ -2047,6 +2095,9 @@ static __attribute__((unused)) int32_t MUI_DeleteCustomClass(void *mcc)
             _ => Unsupported(node, "this kind of ref parameter"),
         }));
         var ps = parts.Count == 0 ? "void" : string.Join(", ", parts);
+        // Split builds: a lambda's name comes from its place in the file, which a generic copy added to a package's file moves; only its
+        // own object uses it, so it is static there (two objects can then not define the same name).
+        var linkage = Split.Active && m.MethodKind == MethodKind.AnonymousFunction ? "static __attribute__((unused)) " : "";
         // A constructor is a function that builds and returns the struct.
         var ret = m.MethodKind == MethodKind.Constructor ? m.ContainingType : m.ReturnType;
         if (m.ReturnsByRef || m.ReturnsByRefReadonly)
@@ -2054,9 +2105,9 @@ static __attribute__((unused)) int32_t MUI_DeleteCustomClass(void *mcc)
             // ref T F(...)  ->  T *F(...): the function returns the address of the place.
             if (m.MethodKind is not (MethodKind.Ordinary or MethodKind.LocalFunction) || m.IsVirtual || m.IsAbstract || m.IsOverride || ret is IArrayTypeSymbol)
                 Unsupported(node, "ref return from a property, indexer, lambda, virtual or abstract member, or of an array type");
-            return Decl(ret, "*" + FuncName(m) + "(" + ps + ")", node);
+            return linkage + Decl(ret, "*" + FuncName(m) + "(" + ps + ")", node);
         }
-        return Decl(ret, FuncName(m) + "(" + ps + ")", node);
+        return linkage + Decl(ret, FuncName(m) + "(" + ps + ")", node);
     }
 
     /// <summary>A class constructor is two functions: NAME allocates and calls NAME_init, which runs the body on an existing object (so a derived constructor can run it for its base part).</summary>
@@ -2303,6 +2354,7 @@ ADD2SET(es_aros_wbstart, PROGRAM_ENTRIES, -50)
             Line("}");
             Line("");
         }
+        foreach (var binary in Split.InitOrder) Line($"void {binary.Init}(void);   /* in the binary of package {binary.Id} {binary.Version} */");
         if (IsDefined("AMIGA")) foreach (var l in ArosWorkbenchStart.Split('\n')) Line(l.TrimEnd('\r'));
         Line(UsesArgs ? "int main(int argc, char **argv)" : "int main(void)");
         Line("{");
@@ -2318,8 +2370,22 @@ ADD2SET(es_aros_wbstart, PROGRAM_ENTRIES, -50)
         if ((_usesBounds || _usesAlloc) && _atExit.Count > 0) Line("es_exit_hook = es_run_atexit;");
         // Static field initializers that are not C constants, then the static constructors, run once at start-up, in the order the types
         // appear (C# runs them lazily, before a type is first used).
-        EmitDeferredStatics();
-        foreach (var cctor in _staticConstructors) Line(FuncName(cctor) + "();");
+        if (Split.InitOrder.Count > 0)
+        {
+            // With precompiled packages: the platform's first (the packages' code may use it), then each package's (its init function, in
+            // the package's binary), then the program's own and those of the packages compiled from source.
+            bool Platform(ISymbol s) => s.OriginalDefinition.DeclaringSyntaxReferences.All(r => !_user.Contains(r.SyntaxTree));
+            EmitDeferredStatics(Platform);
+            foreach (var cctor in _staticConstructors.Where(Platform)) Line(FuncName(cctor) + "();");
+            foreach (var binary in Split.InitOrder) Line(binary.Init + "();");
+            EmitDeferredStatics(s => !Platform(s));
+            foreach (var cctor in _staticConstructors.Where(c => !Platform(c))) Line(FuncName(cctor) + "();");
+        }
+        else
+        {
+            EmitDeferredStatics();
+            foreach (var cctor in _staticConstructors) Line(FuncName(cctor) + "();");
+        }
         // [AtExit] methods of the classes the program used run after the entry point returns, in the order they were reached.
         if (entry.ReturnsVoid)
         {

@@ -31,7 +31,7 @@ run, unit tested and debugged on the PC.
 | `src/ESharp.Platform` | The platform layer: `Video`, `Input`, `Sound`, `Dos`, `Mem`, `Heap`, collections, `Gui`, BOOPSI, MUI, IFF, fonts, and the `[AmigaLib]` bindings. Parsed together with user code, with the symbols below choosing the implementation. `Layout.g.cs` holds struct offsets measured per target. |
 | `src/ESharp.Target.Host` | Managed fakes for tests (`HostConsole`, `HostMem`, a fake chip RAM budget). Built with `HOST`. |
 | `src/ESharp.Assets` | The PNG and IFF ILBM readers, PNG writer, colour reduction and dithering, planar packing, WAV and 8SVX reading, the `assets.json` to `Assets.g.cs` generator with an incremental `Sync` and the Workbench icon writers. |
-| `src/ESharp.Cli` | The `esharp` command: `new`, `build`, `run`, `test`, `assets`, `addr`, `os4vm`, `doctor` (`Doctor.cs`). Where a local compiler comes from (`--toolchain`, `ESHARP_TOOLCHAIN_*`, PATH; version check) is `Toolchain.cs`; Docker builds pass the same command line. The FS-UAE, SDL, host and AmigaOS 4.1 VM harnesses live here, plus the project template (`ProjectTemplate.cs`). Packs the dotnet tool **AmigaESharp.Tool**. |
+| `src/ESharp.Cli` | The `esharp` command: `new`, `build`, `run`, `test`, `assets`, `addr`, `os4vm`, `doctor` (`Doctor.cs`), `precompile` and `verify-package` (`Precompile.cs`). Where a local compiler comes from (`--toolchain`, `ESHARP_TOOLCHAIN_*`, PATH; version check) is `Toolchain.cs`; Docker builds pass the same command line. The FS-UAE, SDL, host and AmigaOS 4.1 VM harnesses live here, plus the project template (`ProjectTemplate.cs`). Packs the dotnet tool **AmigaESharp.Tool**. |
 | `src/ESharp.Sdk` | Packaging only: **AmigaESharp.Sdk** (Runtime, Platform and Target.Host in `lib/net10.0`, the analyzer in `analyzers/dotnet/cs`, and `buildTransitive/AmigaESharp.Sdk.targets`, the step that makes a class library with `EsLibrary=true` an E# library). |
 | `tests/ESharp.Compiler.Tests` | The unit tests (xUnit). |
 | `samples/` | Programs that double as feature demos and tests (`ok NAME` / `FAIL NAME` lines). |
@@ -48,7 +48,8 @@ as assemblies (`host/` next to `esharp.dll`, and in the Sdk package).
 
 1. **Parse** the user files, the sources of the E# library packages (`CompileOptions.Packages`, under `<package Id Version>/`
    paths) and the embedded Runtime and Platform sources with Roslyn, with the target's preprocessor symbols. Package files
-   count as program files from here on: the same C# errors, subset rules and emission (all of their code is emitted).
+   count as program files from here on: the same C# errors, subset rules and emission (all of their code is emitted, or declared
+   only when the package's precompiled binary for the target is linked: "Precompiled binaries" below).
 2. **C# errors** in user code are reported as they are (a compilation that does not compile is not translated).
 3. **Subset rules** run through `SubsetAnalyzer`: errors such as exceptions, LINQ beyond what is turned into loops, floating
    point without `--allow-float`, async, dynamic, reflection, structs holding references, 64-bit maths on a 68020, a library
@@ -197,6 +198,26 @@ compiler embedding Runtime and Platform (`LibrarySources.cs`). The pieces:
   `.c` files to the compiler command after the program's C (Docker or local toolchain alike; not to the `-c` object for
   `esharp addr`). No include path is added, so `#include "x.h"` reaches only the package's own folder.
 
+- **Precompiled binaries** (issue #154). A split build: the package's code in one object, the program's in another, linked.
+  `CEmitter.Split.cs` holds the plan. *Library mode* (`CompileOptions.LibraryBuild`, run by `esharp precompile` for each target, which
+  the Sdk's `EsPackBinaries` target calls at `dotnet pack` through `EsCommand`): no program sources and no entry point; the emitter
+  defines what is declared in the package's trees (functions, static fields with external linkage, class tables `X_vt`, field
+  initializers `X_finit`, the generic copies the package makes) and declares the rest, and `main` becomes `es_pkginit_<id>()` (its static
+  initializers and constructors). `CompileResult.Library` records the generic copies' C names (`Monomorphizer.Result.MadeTypes` /
+  `MadeMethods` tell a copy from other code), the runtime pieces the code uses and its library bases. `Precompile.BuildBinary` compiles
+  that C and the package's C files (`-c`, fixed names, in `/work` with Docker) and archives them with `ar rcsD`; `PackageBinaries`
+  writes `binary.json` (stamp: tool version + the compiler assembly's MVID). *Program mode* (`EsCompiler.ChooseBinaries`: a binary for
+  `PackageBinaries.BinaryTarget(target)` with this stamp and `Config`, else ES0124): `IsExternal` is true for a symbol of a linked
+  package's tree unless it belongs to a generic copy the binary does not list; those are declared only, the rest is emitted as before,
+  and `main` calls the init functions after the platform's static initializers. Both modes compute the same reachable set for the
+  package (its whole code is a root, as program code is; in a split build every slot of a package class's table is reached), so the
+  program defines every platform function and runtime variable a binary refers to; the runtime's state (`SplitRuntimeLinkage`) gets
+  external linkage in the program and is `extern` in a binary, and lambdas are `static`. `PackageBinaries.ReadFolder` checks the binaries
+  beside a restored DLL (listed files, SHA-256, archive members: GNU/BSD ar and the Amiga hunk library that m68k-amigaos-ar writes, the
+  package's id, version and sources) and `StrayPrebuilt` refuses any other prebuilt file (ES0118). `Program.Build` copies the archives
+  to `obj/<target>/esharp-bin/<id>/` and puts them after the program's C. `esharp verify-package` rebuilds each binary with
+  `BuildBinary` and compares bytes.
+
 Tests: `PackageTests.cs` (in-memory packages, generated C built and run with the host gcc, every check; a package whose
 `Assets.g.cs` comes from `AssetBuilder`, its chip data checked in the C and the chip report and read back by the program) and
 `PackageRoundTripTests.cs` (the samples/packages projects: dotnet pack, restore from a local feed, build, host run, m68k
@@ -204,7 +225,12 @@ build with the image; the library's asset checks ESL005, ESL011, ESL012 and the 
 `Checksum`: ESL006, ESL014, ESL015, the embedded C and the package C in the m68k build; the `[EsLibrary]` and `[Extensible]` metadata
 of the packed DLL, `dotnet build` of the game with its class derived from `Tween.Mover` and ES0117 from both `dotnet build` and
 `esharp build` for a class derived from a class without the attribute); `PackageTests.cs` also builds a package's
-C with the program's C under the host gcc and runs it, and checks a mismatched C definition fails to compile; `tools/package-smoke.sh` repeats it with the packed AmigaESharp.Sdk.
+C with the program's C under the host gcc and runs it, and checks a mismatched C definition fails to compile; `tools/package-smoke.sh` repeats it with the packed AmigaESharp.Sdk (and, with an m68k image, packs a library with binaries, links it and runs verify-package).
+`PrecompiledTests.cs` builds a package's library-mode C with the host gcc into an archive, links the program-mode C with it and runs it
+(the same output as the source build; generic copies over a program type; a binary from another E# or configuration falls back with
+ES0124; the binary folder checks); `PrecompiledRoundTripTests.cs` packs Tween and Checksum with binaries through the Sdk step (sdl with
+the host gcc, m68k when its image is present), links them into TweenDemo, and runs verify-package (pass, and fail on a tampered binary)
+and two precompiles in different folders (same bytes).
 
 ## Packaging
 

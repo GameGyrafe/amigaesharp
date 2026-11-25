@@ -109,8 +109,16 @@ public sealed class EsPackage
     /// <summary>The C files and headers the package carries (all folders; <see cref="PackageNatives.Select"/> picks a target's).</summary>
     public IReadOnlyList<NativeFile> Native { get; init; } = Array.Empty<NativeFile>();
 
+    /// <summary>The precompiled binaries beside the package DLL (<c>esharp-bin/&lt;target&gt;/</c>, checked by <see cref="PackageBinaries.ReadFolder"/>).</summary>
+    public IReadOnlyList<PackageBinary> Binaries { get; init; } = Array.Empty<PackageBinary>();
+
     /// <summary>The licence expression: the manifest's, else the one of the package's nuspec (set by the loader).</summary>
     public string License { get; init; } = "";
+
+    /// <summary>The same package with these binaries (and the problems found with them added).</summary>
+    public EsPackage WithBinaries(IReadOnlyList<PackageBinary> binaries, IEnumerable<string>? moreProblems = null) =>
+        new(Id, Version, Manifest, Sources, DllPath, Problems.Concat(moreProblems ?? Array.Empty<string>()).ToList())
+            { License = License, Native = Native, Binaries = binaries };
 
     /// <summary>Prefix of the paths the package's files are parsed under: diagnostics and #line directives show the package id and version.</summary>
     public string PathPrefix => $"<package {Id} {Version}>/";
@@ -378,8 +386,14 @@ public static class PackageLoader
                     if (!File.Exists(dll)) { errors.Add($"package {id} {version}: {dll} is missing (run dotnet restore again)"); continue; }
                     var package = PackageReader.ReadDll(dll, id, version);
                     if (package == null) continue;
-                    if (package.License.Length == 0 && NuspecLicense(packageDir, id) is { } nuspecLicense)
-                        package = new EsPackage(package.Id, package.Version, package.Manifest, package.Sources, package.DllPath, package.Problems) { License = nuspecLicense, Native = package.Native };
+                    var license = package.License.Length == 0 && NuspecLicense(packageDir, id) is { } nuspecLicense ? nuspecLicense : package.License;
+                    // Precompiled binaries (issue #154) beside the DLL; any other prebuilt code in the package is refused.
+                    var problems = package.Problems.ToList();
+                    var binaries = PackageBinaries.ReadFolder(Path.GetDirectoryName(dll)!, package, problems);
+                    foreach (var stray in PackageBinaries.StrayPrebuilt(packageDir, Path.GetDirectoryName(dll)!, binaries))
+                        problems.Add($"it carries the prebuilt file '{stray}', which is not a binary the E# pack step built and listed (esharp-bin/<target>/binary.json); hand-made objects are refused");
+                    package = new EsPackage(package.Id, package.Version, package.Manifest, package.Sources, package.DllPath, problems)
+                        { License = license, Native = package.Native, Binaries = binaries };   // (problems include the package's own)
                     result.Add(package);
                     break;   // the first DLL with a manifest is the package
                 }

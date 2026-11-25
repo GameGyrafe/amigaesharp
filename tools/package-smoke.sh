@@ -143,8 +143,9 @@ cat > smokelib/assets.json <<'EOF2'
 EOF2
 "$esharp" assets smokelib
 grep -q 'TickLength = 4' smokelib/Assets.g.cs
-dotnet pack smokelib -o libfeed -nologo
-dotnet pack smokelib -o libfeed -nologo -p:Version=1.0.1 -p:PackageLicenseExpression=GPL-3.0-only
+# Sources only here (EsPrecompile=false); the precompiled binaries (#154) are tried at the end, when an m68k image is given.
+dotnet pack smokelib -o libfeed -nologo -p:EsPrecompile=false
+dotnet pack smokelib -o libfeed -nologo -p:Version=1.0.1 -p:PackageLicenseExpression=GPL-3.0-only -p:EsPrecompile=false
 "$esharp" new uselib
 sed -i.orig "s|<PackageReference Include=\"AmigaESharp.Sdk\" Version=\"$version\" />|&<PackageReference Include=\"ESharpSmoke.Lib\" Version=\"1.0.0\" />|" uselib/uselib.csproj
 grep -q 'Include="ESharpSmoke.Lib"' uselib/uselib.csproj
@@ -195,5 +196,16 @@ if [ -n "$image" ]; then
   "$esharp" build uselib --target m68k --docker "$image" | tee libm68k.log
   grep -q 'compiled with the program' libm68k.log
   test -s uselib/obj/m68k/uselib
+  # Precompiled binaries (#154): the pack step runs the installed esharp; m68k in the image, sdl with this machine's gcc.
+  ESHARP_TOOLCHAIN_SDL=/usr dotnet pack smokelib -o libfeed -nologo -p:Version=1.0.2 "-p:EsCommand=$esharp" "-p:EsPrecompileArgs=--image m68k=$image" | tee binpack.log
+  grep -q 'Precompiled ESharpSmoke.Lib 1.0.2 for m68k' binpack.log
+  unzip -l libfeed/ESharpSmoke.Lib.1.0.2.nupkg | grep -q 'lib/net10.0/esharp-bin/m68k/library.a'
+  sed -i.orig 's|Include="ESharpSmoke.Lib" Version="1.0.1"|Include="ESharpSmoke.Lib" Version="1.0.2"|' uselib/uselib.csproj
+  dotnet restore uselib
+  "$esharp" build uselib --target m68k --docker "$image" | tee libbin.log
+  grep -q 'Package ESharpSmoke.Lib 1.0.2: linked from its precompiled m68k binary' libbin.log
+  test -s uselib/obj/m68k/uselib
+  ESHARP_TOOLCHAIN_SDL=/usr "$esharp" verify-package libfeed/ESharpSmoke.Lib.1.0.2.nupkg --image "m68k=$image" | tee verify.log
+  grep -q '^VERIFIED' verify.log
 fi
 echo "package smoke test passed ($version)"
