@@ -223,10 +223,37 @@ it is built: docs/ARCHITECTURE.md, "Precompiled binaries".
   `[Interrupt]` or `[HookEntry]` methods or MUI custom classes as binaries, `esharp addr` in binary code (not mapped), real hardware.
   `.library` (part 3 of #154): see "Amiga shared libraries from E#" (m68k).
 
+## File requester on every target: `FileRequester` (part of issue #155, step 3)
+
+`FileRequester.Open(title, drawer, file, pattern)` and `FileRequester.Save(...)` (`src/ESharp.Platform/FileRequester.cs`) return the chosen
+path or null (cancel, no asl.library, no desktop). How to use it: docs/GUIDE.md, "Platform APIs". `Asl` stays the Amiga-level API (ES0102 on sdl);
+`Asl.Pick(title, drawer, file, pattern, save)` is new and `Asl.PickFile` calls it. Fonts as assets are still to come, so #155 stays open.
+
+- **Amiga (m68k, os4, morphos, aros).** asl.library: `ASLFR_TitleText`, `InitialDrawer`, `InitialFile`, `InitialPattern` + `DoPatterns`
+  (when a pattern is given), `DoSaveMode`, and the `Video` window when one is open. The path is drawer and file joined with dos.library
+  `AddPart` (new binding, LVO -882; null when no file name is chosen or the path does not fit in 255 bytes, never the bare drawer), copied into the program's buffer before the requester is freed. The new tag values and `fr_Drawer`/`fr_File`
+  offsets are in `Layout.g.cs` (`tools/BindGen/structs.txt`; the tag values are the same on every target).
+- **sdl.** `es_sdl_file_dialog` in `es_sdl.h`: `SDL_ShowFileDialogWithProperties` (open or save, no multiple selection, the title, the start
+  folder and file, the game's window as parent). The callback only copies the path and sets a flag (it may run on another thread); the caller pumps events
+  and waits. `#?.png` and `#?.(png|jpg)` become the filter `png` / `png;jpg`, other patterns show all files. With the dummy or offscreen video driver
+  (headless runs) it returns null at once and prints the reason to standard error instead of waiting for a callback that never comes.
+- **Host.** `FileRequester.HostPick` is the scripted answer (null until set), with the arguments of the last call recorded.
+- **Sample** `samples/filereq`: writes `RAM:filereq-hello.txt` on the Amiga, prints SHOT, shows Open (Save with `SAVE`) starting in `RAM:`/`/tmp` with that name and the pattern `#?.txt`,
+  and checks the result against `EXPECT=path` (default: a cancel).
+
+**Verified (2026-11-26, Linux dev host):**
+- `dotnet test`: 829 passed, 2 skipped, 0 failed (831). New: `FileRequesterTests` (the Amiga platform code with host gcc against a fake asl.library: the tags passed, drawer and file joined with AddPart, strings copied before the requester is freed, cancel; the host fake) and `SdlTargetTests.FileRequester_returns_null_without_hanging_when_headless_in_the_image`.
+- A1200, Kickstart 3.1 (40.069) in FS-UAE with the Workbench 3.1 disk's Libs as `LIBS:` (`--mui 3.8 --workbench`): the requester is drawn with its title, drawer, file and pattern gadgets and four buttons (checked with a screenshot, character map); a scripted click on Cancel gives "result: cancelled" (2 ok), a click on OK gives "picked RAM:filereq-hello.txt" (2 ok), Return in the file gadget too, and `SAVE` with OK picks the same (2 ok). Without `LIBS:` there is no asl.library and the sample reports a cancel. Re-run after the empty-name and overflow fix (review of #167): OK still picks "RAM:filereq-hello.txt" (2 ok). Null for an empty name and for a path that does not fit is checked with host gcc against the fake asl.library only, not in an emulator.
+- sdl in the esharp-sdl image, headless (offscreen video): `esharp run` prints "result: cancelled", 1 ok, no hang, and "SDL: no file dialog without a desktop (video driver offscreen)" on stderr; `esharp test samples/filereq --target sdl`: host and SDL agree (1 ok, 0 FAIL).
+- `--target os4` and `--target aros` build the sample (the C compiles; the warnings are the existing ones in `Asl` and `Files`).
+
+**Not verified:** an SDL file dialog on a real desktop (Linux needs a desktop portal or zenity for it; the Xvfb here has none), Windows and macOS, Wayland, the filter for patterns other than the extension forms,
+the requester on AmigaOS 4.1 (VM not run), hosted AROS (the sample ran and printed SHOT; the requester did not return to a scripted key in the one try, so not verified), Kickstart 3.0, MorphOS, real hardware, a requester on a `Video` screen (the code path is the one `Asl.PickFile` already had).
+
 ## SDL joystick and a portable message box (part of issue #155)
 
 The first step of #155 (SDL versions of the Amiga-only APIs): `Joystick` on SDL game pads, and a new message box,
-`Requester.Show`, on every target. The file requester and fonts as assets are later steps (IFF in E# is the section above). How to use both:
+`Requester.Show`, on every target. The file requester (see "File requester on every target") and fonts as assets are later steps (IFF in E# is the section above). How to use both:
 docs/GUIDE.md, "Platform APIs".
 
 - **Joystick on SDL.** `Joystick.cs` is no longer `#if !SDL`; the Amiga branch (lowlevel.library) is unchanged, the host

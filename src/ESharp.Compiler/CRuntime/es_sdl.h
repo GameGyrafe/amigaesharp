@@ -752,6 +752,76 @@ static __attribute__((unused)) int32_t es_sdl_message_box(const char *title, con
     return chosen >= 0 && chosen < n ? chosen : -1;
 }
 
+/* ---- file dialog (FileRequester.cs) ----
+   SDL's file dialogs are asynchronous: the callback may run on another thread, so it only copies the path and sets a flag, and the
+   caller pumps events until it is set. pattern is AmigaDOS style ("#?.png", "#?.(png|jpg)", "#?"); the filter is the extension list.
+   Returns the length of the path written to path, or -1 for cancel, an error, or no dialog (headless: the dummy and offscreen
+   drivers have no desktop to show one on). */
+typedef struct { volatile int done; int ok; char path[1024]; } EsSdlFileResult;
+
+static void SDLCALL es_sdl_file_cb(void *user, const char *const *list, int filter)
+{
+    EsSdlFileResult *r = (EsSdlFileResult *)user;
+    (void)filter;
+    if (list == NULL) fprintf(stderr, "SDL: file dialog failed (%s)\n", SDL_GetError());
+    else if (list[0] != NULL) { SDL_strlcpy(r->path, list[0], sizeof r->path); r->ok = 1; }
+    SDL_MemoryBarrierRelease();
+    r->done = 1;
+}
+
+static __attribute__((unused)) int32_t es_sdl_file_dialog(const char *title, const char *drawer, const char *file, const char *pattern,
+                                                          bool save, uint8_t *path, int32_t capacity)
+{
+    char location[1100], extensions[256];
+    SDL_DialogFileFilter filter;
+    EsSdlFileResult r;
+    int32_t n;
+    if (!es_sdl_init(SDL_INIT_VIDEO)) return -1;
+    const char *driver = SDL_GetCurrentVideoDriver();
+    if (driver == NULL || strcmp(driver, "dummy") == 0 || strcmp(driver, "offscreen") == 0)
+    {
+        fprintf(stderr, "SDL: no file dialog without a desktop (video driver %s)\n", driver != NULL ? driver : "none");
+        return -1;
+    }
+    /* "#?.png" and "#?.(png|jpg)" become "png" and "png;jpg"; anything else shows all files. */
+    extensions[0] = 0;
+    if (pattern != NULL && strncmp(pattern, "#?.", 3) == 0)
+    {
+        const char *e = pattern + 3;
+        size_t k = 0;
+        if (*e == '(') e++;
+        for (; *e != 0 && *e != ')' && k < sizeof extensions - 1; e++)
+            if (*e == '#' || *e == '?' || *e == '*' || *e == '~' || *e == '[' || *e == ']') { k = 0; break; }
+            else extensions[k++] = *e == '|' ? ';' : *e;
+        extensions[k] = 0;
+    }
+    filter.name = extensions[0] != 0 ? pattern : "All files";
+    filter.pattern = extensions[0] != 0 ? extensions : "*";
+    SDL_snprintf(location, sizeof location, "%s%s%s", drawer != NULL ? drawer : "",
+        drawer != NULL && drawer[0] != 0 && drawer[strlen(drawer) - 1] != '/' && file != NULL && file[0] != 0 ? "/" : "", file != NULL ? file : "");
+    SDL_zero(r);
+    SDL_PropertiesID props = SDL_CreateProperties();
+    SDL_SetPointerProperty(props, SDL_PROP_FILE_DIALOG_FILTERS_POINTER, &filter);
+    SDL_SetNumberProperty(props, SDL_PROP_FILE_DIALOG_NFILTERS_NUMBER, 1);
+    SDL_SetPointerProperty(props, SDL_PROP_FILE_DIALOG_WINDOW_POINTER, es_sdl_win);
+    if (location[0] != 0) SDL_SetStringProperty(props, SDL_PROP_FILE_DIALOG_LOCATION_STRING, location);
+    SDL_SetBooleanProperty(props, SDL_PROP_FILE_DIALOG_MANY_BOOLEAN, false);
+    SDL_SetStringProperty(props, SDL_PROP_FILE_DIALOG_TITLE_STRING, title != NULL ? title : "");
+    SDL_ShowFileDialogWithProperties(save ? SDL_FILEDIALOG_SAVEFILE : SDL_FILEDIALOG_OPENFILE, es_sdl_file_cb, &r, props);
+    while (!r.done)
+    {
+        SDL_PumpEvents();
+        SDL_Delay(10);
+    }
+    SDL_MemoryBarrierAcquire();
+    SDL_DestroyProperties(props);
+    if (!r.ok) return -1;
+    n = (int32_t)strlen(r.path);
+    if (n >= capacity) return -1;
+    memcpy(path, r.path, (size_t)n + 1);
+    return n;
+}
+
 /* ---- sound: four voices, each an SDL audio stream of signed 8-bit mono at the sample's rate, fed from a callback ---- */
 
 typedef struct { const int8_t *data; int32_t len, pos, cycles; bool active; } EsSdlVoice;

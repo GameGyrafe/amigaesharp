@@ -56,5 +56,6 @@ internal static unsafe class Crt
     [Native] public static extern void es_sdl_joy_virtual_detach(int id);
     [Native] public static extern void es_sdl_joy_virtual_key(int raw, bool down);
     [Native] public static extern int es_sdl_message_box(string title, string text, string buttons);
+    [Native] public static extern int es_sdl_file_dialog(string title, string drawer, string file, string pattern, bool save, byte* path, int capacity);
 }
 #endif

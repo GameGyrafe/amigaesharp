@@ -30,6 +30,10 @@ public static class Dos
     /// <summary>dos.library DateStamp(), LVO -192: fills a struct DateStamp (days since 1978, minute of the day, ticks of the minute). See <see cref="Date.Now"/>.</summary>
     [AmigaLib("dos", -192)]
     public static extern unsafe void* DateStamp(void* date);
+
+    /// <summary>dos.library AddPart(), LVO -882: appends <paramref name="file"/> to the path in <paramref name="dir"/> (a buffer of <paramref name="size"/> bytes), adding the '/' when the path needs one.</summary>
+    [AmigaLib("dos", -882)]
+    public static extern unsafe int AddPart(byte* dir, byte* file, uint size);
 #elif SDL
     public static int PutStr(string str) { return Crt.es_std_putstr(str); }
 

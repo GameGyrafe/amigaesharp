@@ -368,6 +368,35 @@ public static class P
         Assert.Equal(32, output.Split('\n').Count(l => l.StartsWith("ok ")));
     }
 
+    /// <summary>
+    /// FileRequester on SDL in the esharp-sdl image, headless (offscreen video, no desktop): there is no file dialog, so Open and Save
+    /// return null at once instead of waiting for a callback that never comes (the run would hang otherwise and be killed by the harness).
+    /// </summary>
+    [Fact]
+    public void FileRequester_returns_null_without_hanging_when_headless_in_the_image()
+    {
+        if (!HasSdlImage()) return;
+        const string src = @"
+public static class P
+{
+    static void Check(bool ok, string name) { Dos.PutStr(ok ? ""ok "" : ""FAIL ""); Dos.PutStr(name); Dos.PutStr(""\n""); }
+
+    [EntryPoint]
+    public static void Main()
+    {
+        Check(Video.Open(64, 32, 3), ""open"");
+        Check(FileRequester.Open(""E#"", ""/tmp"", ""x.png"", ""#?.png"") == null, ""headless: Open is a cancel"");
+        Check(FileRequester.Save(""E#"", """", """", ""#?.(png|jpg)"") == null, ""headless: Save is a cancel"");
+        Video.Close();
+        Check(FileRequester.Open(""E#"", ""/tmp"", """", """") == null, ""and without a window"");
+    }
+}";
+        var (exit, output) = BuildAndRunInImage(src, null);
+        Assert.True(exit == 0, output);
+        Assert.DoesNotContain("FAIL", output);
+        Assert.Equal(4, output.Split('\n').Count(l => l.StartsWith("ok ")));
+    }
+
     private static bool HasSdlImage()
     {
         try

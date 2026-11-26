@@ -110,7 +110,12 @@ public static class P
             // Output and Flush (Dos.FlushOutput), and the error output the AROS branch of the generated C writes its messages to.
             "static inline void *ErrorOutput(void) { return stderr; }\nstatic inline void *Output(void) { return stdout; }\n" +
             "static inline long FPuts(void *f, const void *s) { return fputs((const char *)s, (FILE *)f) < 0; }\n" +
-            "static inline long Flush(void *f) { return fflush((FILE *)f) == 0; }\n");
+            "static inline long Flush(void *f) { return fflush((FILE *)f) == 0; }\n" +
+            // AddPart (FileRequester): appends a file name to a path, with a '/' unless the path is empty or ends with ':' or '/'.
+            "#include <string.h>\n" +
+            "static inline long AddPart(unsigned char *dir, const unsigned char *file, uint32_t size) {\n" +
+            "  size_t n = strlen((const char *)dir), f = strlen((const char *)file);\n  int sep = n > 0 && dir[n - 1] != ':' && dir[n - 1] != '/';\n" +
+            "  if (n + sep + f + 1 > size) return 0;\n  if (sep) dir[n++] = '/';\n  memcpy(dir + n, file, f + 1);\n  return 1;\n}\n");
         // A tiny exec.library: AllocVec/FreeVec on calloc, with a 2 MB "chip" pool tracked by flags.
         File.WriteAllText(Path.Combine(dir, "proto", "exec.h"),
             "#pragma once\n#include <stdlib.h>\n#include <stdint.h>\n#include <stddef.h>\n" +
