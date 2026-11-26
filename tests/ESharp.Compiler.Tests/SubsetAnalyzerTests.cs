@@ -44,6 +44,15 @@ public class SubsetAnalyzerTests
     }
 
     [Theory]
+    [InlineData("struct S { public static int[] Table = { 1, 2, 3 }; public int V; }")]
+    [InlineData("struct S<T> { public static int[] Table = { 1, 2, 3 }; public static object O = new object(); public T V; }")]
+    [InlineData("class K { } struct S { public static K Shared = new K(); public const string Name = \"n\"; }")]
+    public void Static_reference_fields_in_structs_are_allowed(string members)
+    {
+        Assert.DoesNotContain("ES0010", ErrorIds(Compile(Program(members))));
+    }
+
+    [Theory]
     [InlineData("static int[] F() { return null; }")]
     [InlineData("static void F(int[] a) { }")]
     [InlineData("static void F(int n) { int[] a = new int[n]; }")]

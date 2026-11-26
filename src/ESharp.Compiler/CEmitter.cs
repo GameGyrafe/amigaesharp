@@ -3229,6 +3229,9 @@ ADD2SET(es_aros_wbstart, PROGRAM_ENTRIES, -50)
                 }
                 if (a.IsKind(SyntaxKind.CoalesceAssignmentExpression)) return CoalesceAssignment(a);
                 if (Model(a).GetSymbolInfo(a.Left).Symbol is IEventSymbol assignedEvent) return EventAssignment(a, assignedEvent);
+                if ((a.IsKind(SyntaxKind.AddAssignmentExpression) || a.IsKind(SyntaxKind.SubtractAssignmentExpression))
+                    && Model(a).GetTypeInfo(a.Left).Type is INamedTypeSymbol { TypeKind: TypeKind.Delegate } compoundDelegate)
+                    return DelegateCompound(a, compoundDelegate, top);
                 if (a.IsKind(SyntaxKind.SimpleAssignmentExpression) && Model(a).GetSymbolInfo(a.Left).Symbol is ILocalSymbol { Type.TypeKind: TypeKind.Delegate } assignedLocal)
                     CheckBorrowedCopy(assignedLocal, a.Right, a);
                 if (WrittenProperty(a.Left) is { } wp) return PropertyAssignment(wp, a);
@@ -3345,6 +3348,10 @@ ADD2SET(es_aros_wbstart, PROGRAM_ENTRIES, -50)
         if (isEquality && (leftType is INamedTypeSymbol { IsTupleType: true } || rightType is INamedTypeSymbol { IsTupleType: true }))
             return Unsupported(b, "== and != on tuples; compare the elements");
 
+        // d + x and d - x on delegates (a new multicast value nobody owns yet): not done; += and -= on a variable are.
+        if ((b.IsKind(SyntaxKind.AddExpression) || b.IsKind(SyntaxKind.SubtractExpression)) && Model(b).GetTypeInfo(b).Type?.TypeKind == TypeKind.Delegate)
+            return Unsupported(b, $"binary {b.OperatorToken.Text} on delegates (the combined delegate would have no owner to free it); use d {b.OperatorToken.Text}= x on a variable that owns its delegates");
+
         // string == string compares the characters (C# semantics), not the addresses; against the null constant it is a pointer test.
         if (isEquality && leftType?.SpecialType == SpecialType.System_String && rightType?.SpecialType == SpecialType.System_String
             && !IsNullConstant(b.Left) && !IsNullConstant(b.Right))
@@ -3400,6 +3407,29 @@ ADD2SET(es_aros_wbstart, PROGRAM_ENTRIES, -50)
             string Side(ExpressionSyntax x) => x is LiteralExpressionSyntax l && l.IsKind(SyntaxKind.NullLiteralExpression) ? "NULL"
                 : IsInterfaceType(Model(x).GetTypeInfo(x).Type) ? $"{Expr(x)}.obj"
                 : IsDelegate(Model(x).GetTypeInfo(x).Type) || Model(x).GetTypeInfo(x) is { Type: null, ConvertedType.TypeKind: TypeKind.Delegate } ? $"{Expr(x)}.fn" : Expr(x);
+            var ltype = Model(b).GetTypeInfo(b.Left);
+            var rtype = Model(b).GetTypeInfo(b.Right);
+            var dtype = (IsDelegate(ltype.Type) ? ltype.Type : IsDelegate(rtype.Type) ? rtype.Type : null) as INamedTypeSymbol;
+            if (dtype?.DelegateInvokeMethod is { } inv && !IsNullConstant(b.Left) && !IsNullConstant(b.Right))
+            {
+                // Same function and same environment; two multicast delegates are equal when their entries are (their function is one trampoline).
+                var neg = b.IsKind(SyntaxKind.NotEqualsExpression) ? "!" : "";
+                var dt = CType(dtype, b);
+                string cmp2;
+                if (!Split.Active && !LibMode && !inv.ReturnsByRef && !inv.ReturnsByRefReadonly && !inv.Parameters.Any(p => p.RefKind != RefKind.None))
+                {
+                    _usesClosures = true;
+                    _usesMulticast = true;
+                    MulticastHelpers(dtype, inv, dt, b);
+                    cmp2 = $"{neg}{dt}_eq({Expr(b.Left, top: true)}, {Expr(b.Right, top: true)})";
+                }
+                else
+                {
+                    var (x, y) = ($"_dq{++_temp}", $"_dq{++_temp}");
+                    cmp2 = $"{neg}({{ {dt} {x} = {Expr(b.Left, top: true)}; {dt} {y} = {Expr(b.Right, top: true)}; {x}.fn == {y}.fn && {x}.env == {y}.env; }})";
+                }
+                return top ? cmp2 : $"({cmp2})";
+            }
             var cmp = $"{Side(b.Left)} {b.OperatorToken.Text} {Side(b.Right)}";
             return top ? cmp : $"({cmp})";
         }

@@ -83,6 +83,326 @@ Check(Heap.LiveClosures() == base0, ""freeing the closures frees their frames"")
     }
 
     [Fact]
+    public void Compound_assignment_on_a_delegate_is_multicast_as_in_dotnet()
+    {
+        if (!HasGcc) return;
+        const string members = @"
+static int log;
+static void Note(int d) { log = log * 10 + d; }
+static void A() { Note(1); }
+static void B() { Note(2); }
+static void C() { Note(3); }
+static int One() { Note(1); return 1; }
+static int Two() { Note(2); return 2; }
+static System.Action Field;
+static System.Action Auto { get; set; }
+static System.Func<int, int> Mul;
+class Holder { public System.Action H; public System.Action P { get; set; } }
+static void AddTo(ref System.Action r) { }
+";
+        const string body = @"
+int base0 = Heap.LiveClosures();
+System.Action a = A;
+a += B;
+a += C;
+log = 0; a();
+Check(log == 123, ""+= calls in order"");
+a -= B;
+log = 0; a();
+Check(log == 13, ""-= removes one"");
+a += A; a += B; a += A;
+log = 0; a();
+Check(log == 13121, ""the same method twice"");
+a -= A;
+log = 0; a();
+Check(log == 1312, ""-= removes the last match"");
+a -= C; a -= B; a -= A; a -= B;
+log = 0; a();
+Check(log == 1, ""one entry left"");
+a -= A;
+Check(a == null, ""removing the last one leaves null"");
+a -= A;
+Check(a == null, ""removing from null is a no-op"");
+a += null;
+Check(a == null, ""adding null is a no-op"");
+a += A; a += null; a -= null;
+log = 0; a();
+Check(log == 1, ""null operands change nothing"");
+a -= A;
+
+int n = 0;
+System.Action c = () => n += 1;
+c += () => n += 10;
+c += () => n += 100;
+c();
+Check(n == 111, ""capturing lambdas run in order"");
+System.Action keep = () => n += 1000;
+c += keep;
+c();
+Check(n == 1222, ""a kept variable is added"");
+c -= keep;
+c();
+Check(n == 1333, ""-= of the variable removes it"");
+Heap.Free(ref keep);
+Check(Heap.LiveClosures() > base0, ""entries still hold closures"");
+Heap.Free(ref c);
+Check(c == null, ""Heap.Free nulls a multicast delegate"");
+Check(Heap.LiveClosures() == base0, ""nothing leaks"");
+
+System.Func<int> f = One;
+f += Two;
+log = 0;
+Check(f() == 2 && log == 12, ""a Func gives the last result"");
+f -= Two;
+log = 0;
+Check(f() == 1 && log == 1, ""after -= the first one is a plain delegate again"");
+f -= One;
+Check(f == null, ""Func back to null"");
+
+Field += A; Field += B;
+log = 0; Field();
+Check(log == 12, ""a static field"");
+Field -= A;
+log = 0; Field();
+Check(log == 2, ""-= on a static field"");
+Field -= B;
+Check(Field == null, ""static field null again"");
+Auto += A; Auto += C;
+log = 0; Auto();
+Check(log == 13, ""a static auto-property"");
+Auto -= A; Auto -= C;
+Check(Auto == null, ""auto-property null again"");
+
+Holder h = new Holder();
+int hits = 0;
+h.H += () => hits += 1;
+h.H += () => hits += 2;
+h.H += A;
+log = 0; h.H();
+Check(hits == 3 && log == 1, ""an instance field"");
+h.P += B; h.P += C;
+log = 0; h.P();
+Check(log == 23, ""an instance auto-property"");
+Heap.Free(ref h.H);
+Check(h.H == null, ""freed field"");
+h.P -= B; h.P -= C;
+Check(h.P == null, ""auto-property back to null"");
+Heap.Free(ref h);
+
+Mul += x => x * 2;
+Mul += x => x + 1;
+Check(Mul(5) == 6, ""arguments reach every entry and the last result wins"");
+Heap.Free(ref Mul);
+
+System.Action m = A;
+m += B;
+m += C;
+System.Action both = A;
+both += B;
+both += both;
+log = 0; both();
+Check(log == 1212, ""a multicast delegate added to itself"");
+log = 0; m();
+Check(log == 123, ""another multicast delegate is not changed"");
+System.Action sub = A;
+sub += B;
+both -= sub;
+log = 0; both();
+Check(log == 12, ""-= of a multicast delegate removes the run"");
+Heap.Free(ref both); Heap.Free(ref m); Heap.Free(ref sub);
+Check(Heap.LiveClosures() == base0, ""still nothing leaks"");
+";
+        var (code, output) = Run(members, body);
+        Assert.Equal(OkLines("+= calls in order", "-= removes one", "the same method twice", "-= removes the last match", "one entry left",
+            "removing the last one leaves null", "removing from null is a no-op", "adding null is a no-op", "null operands change nothing",
+            "capturing lambdas run in order", "a kept variable is added", "-= of the variable removes it", "entries still hold closures",
+            "Heap.Free nulls a multicast delegate", "nothing leaks", "a Func gives the last result",
+            "after -= the first one is a plain delegate again", "Func back to null", "a static field", "-= on a static field",
+            "static field null again", "a static auto-property", "auto-property null again", "an instance field", "an instance auto-property",
+            "freed field", "auto-property back to null", "arguments reach every entry and the last result wins",
+            "a multicast delegate added to itself", "another multicast delegate is not changed",
+            "-= of a multicast delegate removes the run", "still nothing leaks"), output);
+        Assert.Equal(0, code);
+    }
+
+    [Theory]
+    [InlineData("static void F(ref System.Action r) { r += () => { }; }", "")]
+    [InlineData("class H { System.Action _a; public System.Action P { get { return _a; } set { _a = value; } } }", "H h = new H(); h.P += () => { };")]
+    [InlineData("delegate void D(ref int x); static void F(D d) { d += Inc; } static void Inc(ref int x) { x++; }", "")]
+    public void Compound_assignment_on_a_delegate_that_cannot_be_done_is_ES0099(string members, string body)
+    {
+        var r = Compile(Program(members, body));
+        Assert.Contains("ES0099", ErrorIds(r));
+    }
+
+    [Theory]
+    [InlineData("static System.Action S; static void B() { }", "S = () => { }; System.Action d = S; d += B;", "given a copy of another delegate")]
+    [InlineData("static System.Action F = () => { }; static void B() { }", "System.Action d = null; d = F; d += B;", "given a copy of another delegate")]
+    [InlineData("static void B() { } static void Q1(System.Action p) { p += B; }", "", "borrowed delegate parameter")]
+    [InlineData("static void B() { } static void Q2(System.Action s) { System.Action d = s; d -= B; }", "", "given a copy of another delegate")]
+    [InlineData("static void B() { } static System.Action H; static void Q3([Owned] System.Action s) { H = s; H += B; }", "", "given a copy of another delegate")]
+    [InlineData("static System.Action S = () => { }; static void B() { } static void GetOut(out System.Action o) { o = S; }", "System.Action d; GetOut(out d); d += B;", "given a copy of another delegate")]
+    [InlineData("static System.Action S = () => { }; static void B() { } static void GetOut(out System.Action o) { o = S; }", "GetOut(out System.Action d); d += B;", "given a copy of another delegate")]
+    [InlineData("static System.Action S = () => { }; static void B() { } static void Set(ref System.Action r) { r = S; }", "System.Action d = null; Set(ref d); d += B;", "given a copy of another delegate")]
+    [InlineData("static System.Action S = () => { }; static void B() { }", "System.Action d = null; d ??= S; d += B;", "given a copy of another delegate")]
+    [InlineData("static System.Action S = () => { }; static void B() { }", "if (S is System.Action d) { d += B; }", "given a copy of another delegate")]
+    [InlineData("static System.Action S = () => { }; static void B() { }", "switch (S) { case System.Action d: d += B; break; }", "given a copy of another delegate")]
+    [InlineData("static System.Action S = () => { }; static void B() { }", "System.Action d = null; ref System.Action r = ref d; r = S; d += B;", "given a copy of another delegate")]
+    [InlineData("static System.Action S = () => { }; static void B() { }", "System.Action d = null; int i; (d, i) = (S, 1); d += B;", "given a copy of another delegate")]
+    public void Compound_assignment_on_a_delegate_that_shares_or_borrows_a_reference_is_ES0099(string members, string body, string message)
+    {
+        var r = Compile(Program(members, body));
+        Assert.Contains(r.Diagnostics, d => d.Id == "ES0099" && d.Severity == Microsoft.CodeAnalysis.DiagnosticSeverity.Error && d.GetMessage().Contains(message));
+    }
+
+    [Theory]
+    [InlineData("static void A() { } static void B() { }", "System.Action d = A; System.Action e = d + B; e();", "binary + on delegates")]
+    [InlineData("static void A() { } static void B() { }", "System.Action d = A; d += B; System.Action e = d - B; e();", "binary - on delegates")]
+    [InlineData("static void A() { } static void B() { }", "System.Action d = A; d += (System.Action)A + B;", "binary + on delegates")]
+    public void Binary_plus_and_minus_on_delegates_are_ES0099(string members, string body, string message)
+    {
+        var r = Compile(Program(members, body));
+        Assert.Contains(r.Diagnostics, d => d.Id == "ES0099" && d.Severity == Microsoft.CodeAnalysis.DiagnosticSeverity.Error && d.GetMessage().Contains(message));
+    }
+
+    [Fact]
+    public void A_multicast_local_given_to_an_owned_parameter_or_a_setter_hands_its_list_over()
+    {
+        if (!HasGcc) return;
+        const string members = @"
+static int log;
+static void A() { log = log * 10 + 1; }
+static void B() { log = log * 10 + 2; }
+static void Take([Owned] System.Action a) { a(); Heap.Free(ref a); }
+static System.Action _held;
+static System.Action Held { get { return _held; } set { _held = value; } }
+static void M1() { System.Action d = A; d += B; Take(d); }
+static void M2() { int k = 0; System.Action d = () => k++; d += B; Take(d); }
+static void M3() { System.Action d = A; d += B; d += A; d -= A; Held = d; }
+static void M4() { System.Action d = A; d += B; Take(d); d = null; }
+static void M5() { System.Action d = A; d += B; Take(d); Heap.Free(ref d); }
+";
+        const string body = @"
+int base0 = Heap.LiveClosures();
+log = 0; M1();
+Check(log == 12 && Heap.LiveClosures() == base0, ""a method-group multicast moves to an [Owned] parameter"");
+log = 0; M2();
+Check(log == 2 && Heap.LiveClosures() == base0, ""a multicast with a lambda moves too"");
+M3();
+log = 0; Held();
+Check(log == 12, ""a multicast moves to a setter"");
+Heap.Free(ref _held);
+Check(Heap.LiveClosures() == base0, ""and the setter's owner frees it"");
+log = 0; M4();
+Check(log == 12 && Heap.LiveClosures() == base0, ""set to null after the hand-over"");
+log = 0; M5();
+Check(log == 12 && Heap.LiveClosures() == base0, ""freed after the hand-over: the callee had its own reference"");
+";
+        var (code, output) = Run(members, body);
+        Assert.Equal(OkLines("a method-group multicast moves to an [Owned] parameter", "a multicast with a lambda moves too", "a multicast moves to a setter",
+            "and the setter's owner frees it", "set to null after the hand-over", "freed after the hand-over: the callee had its own reference"), output);
+        Assert.Equal(0, code);
+    }
+
+    [Fact]
+    public void Compound_assignment_after_owned_values_through_coalescing_and_Heap_Free_runs_clean()
+    {
+        if (!HasGcc) return;
+        const string members = @"
+static int log;
+static void A() { log = log * 10 + 1; }
+static void B() { log = log * 10 + 2; }
+static void C() { log = log * 10 + 3; }
+";
+        const string body = @"
+int base0 = Heap.LiveClosures();
+int n = 0;
+System.Action d = null;
+d ??= () => n++;
+d ??= A;
+d += B;
+log = 0; d();
+Check(n == 1 && log == 2, ""??= with a lambda, then +="");
+Heap.Free(ref d);
+d += A;
+d += C;
+log = 0; d();
+Check(log == 13, ""+= again after Heap.Free(ref d)"");
+d -= A;
+d += B;
+log = 0; d();
+Check(log == 32, ""-= then += on the same variable"");
+Heap.Free(ref d);
+Check(Heap.LiveClosures() == base0, ""nothing leaks"");
+";
+        var (code, output) = Run(members, body);
+        Assert.Equal(OkLines("??= with a lambda, then +=", "+= again after Heap.Free(ref d)", "-= then += on the same variable", "nothing leaks"), output);
+        Assert.Equal(0, code);
+    }
+
+    [Fact]
+    public void Delegate_equality_compares_the_function_and_the_environment_and_multicast_entries()
+    {
+        if (!HasGcc) return;
+        const string members = @"
+static void A() { }
+static void B() { }
+static void C() { }
+";
+        const string body = @"
+int base0 = Heap.LiveClosures();
+System.Action x = A; x += B;
+System.Action y = A; y += C;
+Check(x != y && !(x == y), ""multicast delegates with different entries differ"");
+System.Action z = A; z += B;
+Check(x == z && !(x != z), ""multicast delegates with the same entries are equal"");
+System.Action p = A;
+Check(p == A && p != B, ""a method group against a delegate"");
+int n = 0;
+System.Action l1 = () => n++, l2 = () => n++;
+Check(l1 != l2 && l1 == l1, ""two lambdas with their own closures differ"");
+Check(x != p && p != null, ""multicast against plain, and null"");
+Heap.Free(ref x); Heap.Free(ref y); Heap.Free(ref z); Heap.Free(ref l1); Heap.Free(ref l2);
+Check(Heap.LiveClosures() == base0, ""nothing leaks"");
+";
+        var (code, output) = Run(members, body);
+        Assert.Equal(OkLines("multicast delegates with different entries differ", "multicast delegates with the same entries are equal",
+            "a method group against a delegate", "two lambdas with their own closures differ", "multicast against plain, and null", "nothing leaks"), output);
+        Assert.Equal(0, code);
+    }
+
+    [Fact]
+    public void Static_fields_of_reference_type_in_structs_are_allowed_and_initialised()
+    {
+        if (!HasGcc) return;
+        const string members = @"
+struct Table<T> { public static int[] Squares = { 1, 4, 9 }; public static string Name = ""tbl""; public int V; public static int Total; public T X; }
+struct Plain { public static int[] Values = { 5, 6 }; public static System.Action Hook; public int V; }
+class Box { public int N = 7; }
+struct WithBox { public static Box Shared = new Box(); public int V; }
+static void Hit() { Table<int>.Total += 1; }
+";
+        const string body = @"
+Check(Table<int>.Squares[2] == 9 && Table<int>.Squares.Length == 3, ""a static array in a generic struct"");
+Check(Table<int>.Name == ""tbl"", ""a static string in a generic struct"");
+Check(Plain.Values[1] == 6, ""a static array in a struct"");
+Plain.Hook += Hit; Plain.Hook += Hit;
+Plain.Hook();
+Check(Table<int>.Total == 2, ""a static delegate in a struct, with +="");
+Plain.Hook -= Hit; Plain.Hook -= Hit;
+Check(Plain.Hook == null, ""and -="");
+WithBox.Shared.N++;
+Check(WithBox.Shared.N == 8, ""a static class instance in a struct"");
+Plain p = new Plain(); p.V = 3;
+Check(p.V == 3, ""the struct itself is still a value"");
+";
+        var (code, output) = Run(members, body);
+        Assert.Equal(OkLines("a static array in a generic struct", "a static string in a generic struct", "a static array in a struct",
+            "a static delegate in a struct, with +=", "and -=", "a static class instance in a struct", "the struct itself is still a value"), output);
+        Assert.Equal(0, code);
+    }
+
+    [Fact]
     public void Frames_are_dropped_on_return_break_and_continue()
     {
         if (!HasGcc) return;
@@ -1484,6 +1804,15 @@ internal static class ClosuresExpected
         "the removed handler is gone and the added one runs",
         "a static event",
         "Heap.Free on an event drops every handler",
+        "+= on a local delegate calls in order",
+        "-= removes the last match of a kept variable",
+        "-= removes the other one",
+        "Heap.Free on a multicast delegate",
+        "method groups are added too",
+        "removing the last entry leaves null",
+        "a field and an auto-property",
+        "a Func gives the last result",
+        "a static array and a static delegate in a struct",
         "every stored closure was freed",
     };
 }

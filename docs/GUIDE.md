@@ -457,6 +457,21 @@ attributes (`[EntryPoint]`, `[AmigaLib]`, `[ChipRam]`, ...) and a small intrinsi
   reference-counted heap closures that you free with `Heap.Free` (`Heap.LiveClosures` is the leak check). A delegate given to an
   `[Owned]` parameter or a property setter is the callee's to free; if it is a field, or a local you use again or free, the callee
   takes a reference of its own, so you still free yours.
+- `d += x` and `d -= x` on a delegate that is not an event (a local, parameter, field, static or auto-property; `Action`, `Func`,
+  your own delegate types without `ref`/`out` parameters) are multicast as in dotnet: calls run in order, a `Func` gives the last
+  result, `-=` removes the last matching entry, and removing the last one leaves `null`. `d` owns its closures: `Heap.Free(ref d)`
+  releases them all, and `+=` and `-=` drop the reference of the value they replace, so the variable must own it: a variable that is
+  ever given a copy of another delegate (`d = e`, `d = Field`, `d ??= e`, a parameter, a call that may return one) or that may be
+  written some other way (passed as `ref` or `out`, taken by `ref`, a deconstruction, declared by a pattern or `out var`) is ES0099
+  for `+=`/`-=`, and so is a parameter that is not `[Owned]`. The other direction is not checked: a copy of `d` (`e = d`,
+  `Field = d`) shares d's reference, as any delegate copy in E# does, so do not use it after `d += x` or `d -= x` (that releases
+  the list the copy points at, a use after free); call `d` itself, or copy it again after the change. A kept variable you add
+  (`d += h`) keeps its own reference, so free it too. Given to an `[Owned]` parameter or a setter at its last use, `d` hands
+  its whole list over, as a lambda local does. `==` and `!=` on delegates compare the function and the closure; multicast
+  delegates are equal when their entries are.
+  Not supported (ES0099): binary `d + x` and `d - x` (use `+=`/`-=` on a variable), a property with accessors, a `ref` variable,
+  a delegate type with `ref`/`out` parameters, and precompiled packages and Amiga libraries. A static field of reference type
+  in a struct is allowed (ES0010 is about instance fields: a value holding a reference).
 - User classes that derive from a platform class marked `[Extensible]` (so far `GtWindow`, see `samples/guiclass`) or from
   an `[Extensible]` class of an E# library package (see "Classes to derive from" under [Libraries](#libraries-e-packages)).
 - Slow or opt-in: `long`/`ulong` (software 64-bit, rule ES0100 on the 68020), `float`/`double` (off by default, ES0003; `--allow-float`).

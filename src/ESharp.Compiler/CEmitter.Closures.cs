@@ -201,6 +201,10 @@ internal sealed partial class CEmitter
             case EqualsValueClauseSyntax { Parent: PropertyDeclarationSyntax }:
                 return new Site(SiteKind.Kept);
             case AssignmentExpressionSyntax a when a.Left == node:
+                // d += x and d -= x on a delegate that is not an event rebuild d (multicast): it owns its closures, so it is a heap value.
+                if ((a.IsKind(SyntaxKind.AddAssignmentExpression) || a.IsKind(SyntaxKind.SubtractAssignmentExpression))
+                    && Model(a).GetSymbolInfo(a.Left).Symbol is not IEventSymbol)
+                    return new Site(SiteKind.Kept);
                 return new Site(SiteKind.Borrowed);   // written, not read
             case AssignmentExpressionSyntax a when a.Right == node:
                 if (a.IsKind(SyntaxKind.SimpleAssignmentExpression) || a.IsKind(SyntaxKind.CoalesceAssignmentExpression))
@@ -215,6 +219,8 @@ internal sealed partial class CEmitter
                     if (a.IsKind(SyntaxKind.AddAssignmentExpression)) return new Site(SiteKind.Kept);
                     if (a.IsKind(SyntaxKind.SubtractAssignmentExpression)) return new Site(SiteKind.Borrowed);   // only compared
                 }
+                else if (a.IsKind(SyntaxKind.AddAssignmentExpression)) return new Site(SiteKind.Kept);   // d += x: d takes a reference to x
+                else if (a.IsKind(SyntaxKind.SubtractAssignmentExpression)) return new Site(SiteKind.Borrowed);   // only compared
                 return new Site(SiteKind.Unknown);
             case ReturnStatementSyntax or ArrowExpressionClauseSyntax or LambdaExpressionSyntax or InitializerExpressionSyntax:
                 return new Site(SiteKind.Kept);
@@ -494,7 +500,7 @@ internal sealed partial class CEmitter
             };
             if (loopBody != null && (decl == null || !loopBody.Span.Contains(decl.Span))) return false;
         }
-        if (decl is VariableDeclaratorSyntax { Initializer: { } init } && !FreshValue(init.Value, new HashSet<IMethodSymbol>(SymbolEqualityComparer.Default))) return false;
+        if (decl is VariableDeclaratorSyntax { Initializer: { } init } && !OwnedValue(v, init.Value)) return false;
         foreach (var u in fn.DescendantNodes().OfType<IdentifierNameSyntax>())
         {
             if (u == at || u.Identifier.Text != v.Name || !SymbolEqualityComparer.Default.Equals(Model(u).GetSymbolInfo(u).Symbol, v)) continue;
@@ -505,8 +511,10 @@ internal sealed partial class CEmitter
             var node = ValueSite(u, out var parent);
             if (parent is AssignmentExpressionSyntax set && set.Left == node)
             {
-                if (set.IsKind(SyntaxKind.SimpleAssignmentExpression) && FreshValue(set.Right, new HashSet<IMethodSymbol>(SymbolEqualityComparer.Default))) continue;
-                return false;   // an alias, a compound assignment or ??= (which also reads it)
+                if (set.IsKind(SyntaxKind.SimpleAssignmentExpression) && OwnedValue(v, set.Right)) continue;
+                // d += x / d -= x on a variable that owns its list (it rebuilds it, still owned), before the hand-over: the list moves.
+                if (IsOwnedCompound(set, v) && (other || u.SpanStart < at.SpanStart)) continue;
+                return false;   // an alias, a compound assignment that does not own, one after the hand-over, or ??= (which also reads it)
             }
             if (other) continue;   // another branch of the same if, ?: or switch: it never runs together with the hand-over
             if (u.SpanStart > at.SpanStart) return false;   // read after the hand-over: the callee may have freed it by then
@@ -518,6 +526,35 @@ internal sealed partial class CEmitter
             return false;
         }
         return true;
+    }
+
+    /// <summary>
+    /// A value <paramref name="v"/> owns once given it: new (FreshValue), or, for a multicast target (a variable with an owned += or
+    /// -=), also a method group or anything else <see cref="NewOrEmptyValue"/> accepts, as the += check does.
+    /// </summary>
+    private bool OwnedValue(ISymbol v, ExpressionSyntax value) =>
+        FreshValue(value, new HashSet<IMethodSymbol>(SymbolEqualityComparer.Default)) || IsCompoundTarget(v) && NewOrEmptyValue(value);
+
+    /// <summary>True when <paramref name="set"/> is d += x or d -= x on the delegate variable <paramref name="v"/> (not an event) and v owns every value it holds (the check of <see cref="CheckCompoundTarget"/>).</summary>
+    private bool IsOwnedCompound(AssignmentExpressionSyntax set, ISymbol v) =>
+        (set.IsKind(SyntaxKind.AddAssignmentExpression) || set.IsKind(SyntaxKind.SubtractAssignmentExpression))
+        && Model(set).GetSymbolInfo(set.Left).Symbol is not IEventSymbol && OwnsAllValues(v);
+
+    private bool IsCompoundTarget(ISymbol v)
+    {
+        var fn = v.DeclaringSyntaxReferences.FirstOrDefault()?.GetSyntax();
+        var scope = fn == null ? null : FunctionOf(fn) ?? fn;
+        return scope != null && scope.DescendantNodes().OfType<AssignmentExpressionSyntax>().Any(a =>
+            (a.IsKind(SyntaxKind.AddAssignmentExpression) || a.IsKind(SyntaxKind.SubtractAssignmentExpression))
+            && SymbolEqualityComparer.Default.Equals(Model(a).GetSymbolInfo(a.Left).Symbol, v)) && OwnsAllValues(v);
+    }
+
+    private bool OwnsAllValues(ISymbol v)
+    {
+        var type = v switch { ILocalSymbol l => l.Type, IParameterSymbol p => p.Type, _ => null };
+        if (type?.TypeKind != TypeKind.Delegate || IsBorrowedParameter(v)) return false;
+        if (!_ownsValues.TryGetValue(v, out var owns)) _ownsValues[v] = owns = AllValuesFresh(v);
+        return owns;
     }
 
     private enum CaptureKind { None, Borrowed, Kept }
@@ -593,13 +630,14 @@ internal sealed partial class CEmitter
             var anyValue = false;
             if (vd.Initializer != null)
             {
-                if (!FreshValue(vd.Initializer.Value, new HashSet<IMethodSymbol>(SymbolEqualityComparer.Default))) return;   // an alias: owns nothing
+                if (!OwnedValue(v, vd.Initializer.Value)) return;   // an alias: owns nothing
                 anyValue = !IsNullConstant(vd.Initializer.Value);
             }
             foreach (var set in fn.DescendantNodes().OfType<AssignmentExpressionSyntax>())
                 if (set.Left is IdentifierNameSyntax l && l.Identifier.Text == v.Name && SymbolEqualityComparer.Default.Equals(Model(l).GetSymbolInfo(l).Symbol, v))
                 {
-                    if (!set.IsKind(SyntaxKind.SimpleAssignmentExpression) || !FreshValue(set.Right, new HashSet<IMethodSymbol>(SymbolEqualityComparer.Default))) return;
+                    if (IsOwnedCompound(set, v)) { anyValue |= set.IsKind(SyntaxKind.AddAssignmentExpression) && !IsNullConstant(set.Right); continue; }
+                    if (!set.IsKind(SyntaxKind.SimpleAssignmentExpression) || !OwnedValue(v, set.Right)) return;
                     anyValue |= !IsNullConstant(set.Right);
                 }
             if (!anyValue) return;
@@ -945,6 +983,176 @@ internal sealed partial class CEmitter
         return $"({{ {dt} {t} = {value}; es_event_add(&({place}), (void (*)(void)){t}.fn, {(fresh ? $"{t}.env" : $"es_closure_retain({t}.env)")}); }})";
     }
 
+    /// <summary>
+    /// <c>d += x</c> and <c>d -= x</c> on a delegate that is not an event (a local, parameter, field, static or auto-property), as in
+    /// dotnet: d becomes a multicast delegate, { trampoline, es_mc } where the es_mc is a reference-counted list of { fn, env } that owns
+    /// one reference per entry (the events' es_dg and closure references). Invoking it calls every entry in order and gives the last
+    /// result; -= removes the last matching entry (or the last matching run, for a multicast operand), and removing the last entry
+    /// leaves null. The old value's reference is dropped, so d must own its closure, as Heap.Free(ref d) assumes; Heap.Free(ref d)
+    /// then releases the entries.
+    /// </summary>
+    private string DelegateCompound(AssignmentExpressionSyntax a, INamedTypeSymbol del, bool top)
+    {
+        var invoke = del.DelegateInvokeMethod;
+        if (invoke == null) return Unsupported(a, "+= or -= on this delegate");
+        if (Split.Active || LibMode) return Unsupported(a, "+= or -= on a delegate that is not an event in a precompiled package or an Amiga library (the multicast trampoline must be one function per program)");
+        if (invoke.ReturnsByRef || invoke.ReturnsByRefReadonly || invoke.Parameters.Any(p => p.RefKind != RefKind.None))
+            return Unsupported(a, "+= or -= on a delegate type with ref or out parameters or a ref return");
+        if (WrittenProperty(a.Left) != null) return Unsupported(a, "+= or -= on a property with accessors; use an auto-property, a field or a local");
+        if (IsRefVariable(Model(a).GetSymbolInfo(a.Left).Symbol) != null)
+            return Unsupported(a, "+= or -= on a ref, out or in delegate variable");
+        if (!RequireSimple(a.Left, "+= or -= on a delegate")) return "0";
+        if (!CheckCompoundTarget(a)) return "0";
+        _usesClosures = true;
+        _usesMulticast = true;
+        var dt = CType(del, a);
+        var (add, sub) = MulticastHelpers(del, invoke, dt, a);
+        var l = Expr(a.Left);
+        string call;
+        if (IsNullConstant(a.Right)) return "((void)0)";   // adding or removing null changes nothing
+        if (a.IsKind(SyntaxKind.SubtractAssignmentExpression)) call = $"{sub}({l}, {Expr(a.Right, top: true)})";
+        else
+        {
+            if (IsFreshDelegate(a.Right) is not bool fresh) return "0";
+            call = $"{add}({l}, {Expr(a.Right, top: true)}, {(fresh ? 1 : 0)})";
+        }
+        var s = $"{l} = {call}";
+        return top ? s : $"({s})";
+    }
+
+    private bool _usesMulticast;
+
+    private readonly Dictionary<ISymbol, bool> _ownsValues = new(SymbolEqualityComparer.Default);
+
+    /// <summary>
+    /// += and -= drop the reference of the value they replace, so the variable must own it: a borrowed parameter does not (the es_mc frame
+    /// would leak, and Heap.Free is refused), and a variable that was ever given a copy of another delegate (a variable, a field, a parameter,
+    /// a call that may return one) shares that owner's reference, so dropping it frees the other owner's closure.
+    /// </summary>
+    private bool CheckCompoundTarget(AssignmentExpressionSyntax a)
+    {
+        var sym = Model(a).GetSymbolInfo(a.Left).Symbol;
+        if (IsBorrowedParameter(sym))
+        {
+            ReportOnce(a, $"+= or -= on the borrowed delegate parameter '{sym!.Name}' (the new value could not be freed); mark the parameter [Owned]");
+            return false;
+        }
+        if (sym is not (ILocalSymbol or IParameterSymbol or IFieldSymbol or IPropertySymbol))
+        {
+            ReportOnce(a, "+= or -= on this kind of delegate variable (only a local, parameter, field or auto-property whose every value is a new lambda, a method or null)");
+            return false;
+        }
+        if (!_ownsValues.TryGetValue(sym, out var owns))
+            _ownsValues[sym] = owns = AllValuesFresh(sym);
+        if (!owns)
+            ReportOnce(a, $"+= or -= on '{sym.Name}', which is also given a copy of another delegate (a variable, field, parameter or a call that may return one): that copy shares the other owner's reference, which += would drop; give it only lambdas, methods or null, or build the list in a variable of its own");
+        return owns;
+    }
+
+    /// <summary>
+    /// True when every value <paramref name="sym"/> is given is new or holds no closure (a lambda, a method group, null, a call that returns
+    /// a new lambda): through =, ??=, an initializer or a parameter default. Any other way of writing it is taken as a copy that it does not
+    /// own: a ref or out argument (except Heap.Free), a ref to it (ref local, ref return, ref conditional), a deconstruction, and a variable
+    /// declared by a pattern or an out var.
+    /// </summary>
+    private bool AllValuesFresh(ISymbol sym)
+    {
+        foreach (var r in sym.DeclaringSyntaxReferences)
+            if (r.GetSyntax() is SingleVariableDesignationSyntax) return false;   // is Action d, case Action d, out Action d, var (d, x)
+        bool Is(SemanticModel model, ExpressionSyntax e) => SymbolEqualityComparer.Default.Equals(model.GetSymbolInfo(Strip(e)).Symbol, sym);
+        foreach (var tree in _compilation.SyntaxTrees)
+        {
+            var model = Model(tree);
+            foreach (var n in tree.GetRoot().DescendantNodes())
+            {
+                ExpressionSyntax? value = null;
+                switch (n)
+                {
+                    case AssignmentExpressionSyntax asg when asg.IsKind(SyntaxKind.SimpleAssignmentExpression) || asg.IsKind(SyntaxKind.CoalesceAssignmentExpression):
+                        if (asg.Left is TupleExpressionSyntax or DeclarationExpressionSyntax)
+                        {
+                            if (asg.Left.DescendantNodes().OfType<ExpressionSyntax>().Any(x => Is(model, x))) return false;
+                        }
+                        else if (Is(model, asg.Left)) value = asg.Right;
+                        break;
+                    case ArgumentSyntax arg when arg.RefKindKeyword.IsKind(SyntaxKind.RefKeyword) || arg.RefKindKeyword.IsKind(SyntaxKind.OutKeyword):
+                        if (Is(model, arg.Expression) && !IsHeapFreeArgument(arg)) return false;
+                        break;
+                    case RefExpressionSyntax re:
+                        if (Is(model, re.Expression)) return false;
+                        break;
+                    case VariableDeclaratorSyntax { Initializer: { } init } vd:
+                        if (SymbolEqualityComparer.Default.Equals(model.GetDeclaredSymbol(vd), sym)) value = init.Value;
+                        break;
+                    case PropertyDeclarationSyntax { Initializer: { } pinit } pd:
+                        if (SymbolEqualityComparer.Default.Equals(model.GetDeclaredSymbol(pd), sym)) value = pinit.Value;
+                        break;
+                    case ParameterSyntax { Default: { } def } ps:
+                        if (SymbolEqualityComparer.Default.Equals(model.GetDeclaredSymbol(ps), sym)) value = def.Value;
+                        break;
+                }
+                if (value != null && !NewOrEmptyValue(value)) return false;
+            }
+        }
+        return true;
+    }
+
+    private bool NewOrEmptyValue(ExpressionSyntax e)
+    {
+        e = Strip(e);
+        switch (e)
+        {
+            case LambdaExpressionSyntax:
+                return true;
+            case ExpressionSyntax when IsNullConstant(e):
+                return true;
+            case InvocationExpressionSyntax inv:
+                return IsFreshCall(inv, new HashSet<IMethodSymbol>(SymbolEqualityComparer.Default));
+            case CastExpressionSyntax c:
+                return NewOrEmptyValue(c.Expression);
+            case ConditionalExpressionSyntax c:
+                return NewOrEmptyValue(c.WhenTrue) && NewOrEmptyValue(c.WhenFalse);
+            case BinaryExpressionSyntax { RawKind: (int)SyntaxKind.CoalesceExpression } b:
+                return NewOrEmptyValue(b.Left) && NewOrEmptyValue(b.Right);
+            case SwitchExpressionSyntax sw:
+                return sw.Arms.All(arm => NewOrEmptyValue(arm.Expression));
+            case ObjectCreationExpressionSyntax { ArgumentList.Arguments.Count: 1 } oc:
+                return NewOrEmptyValue(oc.ArgumentList.Arguments[0].Expression);
+            default:
+                // A method group (a name or member access that is a method, not a variable): its environment is null.
+                return Model(e).GetSymbolInfo(e).Symbol is IMethodSymbol;
+        }
+    }
+
+    /// <summary>The functions that add to and remove from a multicast delegate of type <paramref name="dt"/> (and its trampoline), written once per type.</summary>
+    private (string Add, string Sub) MulticastHelpers(INamedTypeSymbol del, IMethodSymbol invoke, string dt, SyntaxNode at)
+    {
+        string mc = dt + "_mc", add = dt + "_add", sub = dt + "_sub";
+        var key = "ES_zmc_" + dt;
+        if (_spans.ContainsKey(key)) return (add, sub);
+        var ps = invoke.Parameters.Select((p, i) => Decl(p.Type, $"a{i}", at)).Prepend("void *env").ToList();
+        var args = string.Join(", ", invoke.Parameters.Select((_, i) => $"a{i}"));
+        var comma = args.Length == 0 ? "" : ", ";
+        var isVoid = invoke.ReturnType.SpecialType == SpecialType.System_Void;
+        var ft = $"__typeof__((({dt} *)0)->fn)";
+        var sb = new StringBuilder();
+        sb.Append($"static __attribute__((unused)) {Decl(invoke.ReturnType, $"{mc}({string.Join(", ", ps)})", at)}\n{{\n");
+        sb.Append("    es_mc *m = (es_mc *)env;\n    m->h.rc++;\n");
+        sb.Append($"    for (int32_t i = 0; i < m->n - 1; i++) (({ft})m->items[i].fn)(m->items[i].env{comma}{args});\n");
+        if (isVoid)
+            sb.Append($"    (({ft})m->items[m->n - 1].fn)(m->items[m->n - 1].env{comma}{args});\n    es_frame_release(m);\n");
+        else
+            sb.Append($"    {Decl(invoke.ReturnType, "r", at)} = (({ft})m->items[m->n - 1].fn)(m->items[m->n - 1].env{comma}{args});\n    es_frame_release(m);\n    return r;\n");
+        sb.Append("}\n");
+        sb.Append($"static __attribute__((unused)) {dt} {add}({dt} cur, {dt} v, int fresh)\n{{\n");
+        sb.Append($"    es_vfn f = (es_vfn)cur.fn;\n    es_dg_add((es_vfn){mc}, &f, &cur.env, (es_vfn)v.fn, v.env, fresh);\n    cur.fn = ({ft})f;\n    return cur;\n}}\n");
+        sb.Append($"static __attribute__((unused)) int {dt}_eq({dt} a, {dt} b)\n{{\n    return es_dg_eq((es_vfn){mc}, (es_vfn)a.fn, a.env, (es_vfn)b.fn, b.env);\n}}\n");
+        sb.Append($"static __attribute__((unused)) {dt} {sub}({dt} cur, {dt} v)\n{{\n");
+        sb.Append($"    es_vfn f = (es_vfn)cur.fn;\n    es_dg_sub((es_vfn){mc}, &f, &cur.env, (es_vfn)v.fn, v.env);\n    cur.fn = ({ft})f;\n    return cur;\n}}\n");
+        _spans[key] = sb.ToString();
+        return (add, sub);
+    }
+
     /// <summary>Raising an event: every handler in order, on a snapshot of the count (handlers added meanwhile wait for the next raise; removals are deferred).</summary>
     private string EventRaise(IEventSymbol ev, ExpressionSyntax callee, ArgumentListSyntax args, IMethodSymbol invoke, SyntaxNode at)
     {
@@ -1077,6 +1285,94 @@ internal sealed partial class CEmitter
             "}",
             "static __attribute__((unused)) uint32_t es_event_begin(es_event *e) { e->busy++; return ++e->stamp; }",
             "static __attribute__((unused)) void es_event_end(es_event *e) { if (--e->busy == 0 && e->live != e->count) es_event_compact(e); }",
+        }) result.AppendLine(line);
+        if (_usesMulticast)
+            foreach (var line in new[]
+        {
+            "/* Multicast delegates (d += x on a delegate that is not an event): { trampoline, es_mc }, the es_mc a reference-counted frame holding",
+            "   one reference per entry. It never changes once built: += and -= make a new one and drop the old. */",
+            "typedef void (*es_vfn)(void);",
+            "typedef struct { es_frame h; int32_t n; es_dg items[1]; } es_mc;",
+            "static __attribute__((unused)) void es_mc_fini(es_frame *f)",
+            "{",
+            "    es_mc *m = (es_mc *)f;",
+            "    for (int32_t i = 0; i < m->n; i++) es_closure_release(m->items[i].env);",
+            "}",
+            "static __attribute__((unused)) es_dg *es_mc_items(es_vfn tramp, es_vfn fn, void *env, es_dg *one, int32_t *n)",
+            "{",
+            "    if (fn == tramp) { es_mc *m = (es_mc *)env; *n = m->n; return m->items; }",
+            "    one->fn = fn; one->env = env; one->dead = 0; *n = 1;",
+            "    return one;",
+            "}",
+            "static __attribute__((unused)) es_mc *es_mc_new(int32_t n)",
+            "{",
+            "    es_mc *m = (es_mc *)es_frame_new(sizeof(es_mc) + (size_t)(n > 1 ? n - 1 : 0) * sizeof(es_dg), NULL);",
+            "    m->h.fini = es_mc_fini;",
+            "    es_closures_live++;   /* the reference of the delegate that holds it */",
+            "    return m;",
+            "}",
+            "static __attribute__((unused)) void es_mc_push(es_mc *m, const es_dg *d)",
+            "{",
+            "    m->items[m->n].fn = d->fn; m->items[m->n].env = es_closure_retain(d->env); m->items[m->n].dead = 0;",
+            "    m->n++;",
+            "}",
+            "/* cur += v: v hands over its reference when fresh, else the entries take their own. The old value's reference is dropped. */",
+            "static __attribute__((unused)) void es_dg_add(es_vfn tramp, es_vfn *cfn, void **cenv, es_vfn vfn, void *venv, int fresh)",
+            "{",
+            "    es_dg c1, v1; int32_t nc, nv;",
+            "    if (vfn == NULL) return;",
+            "    if (*cfn == NULL) { if (!fresh) es_closure_retain(venv); *cfn = vfn; *cenv = venv; return; }",
+            "    es_dg *ci = es_mc_items(tramp, *cfn, *cenv, &c1, &nc);",
+            "    es_dg *vi = es_mc_items(tramp, vfn, venv, &v1, &nv);",
+            "    es_mc *m = es_mc_new(nc + nv);",
+            "    for (int32_t i = 0; i < nc; i++) es_mc_push(m, &ci[i]);",
+            "    for (int32_t i = 0; i < nv; i++) es_mc_push(m, &vi[i]);",
+            "    es_closure_release(*cenv);",
+            "    if (fresh) es_closure_release(venv);",
+            "    *cfn = tramp; *cenv = m;",
+            "}",
+            "static __attribute__((unused)) int es_dg_eq(es_vfn tramp, es_vfn afn, void *aenv, es_vfn bfn, void *benv)",
+            "{",
+            "    es_dg a1, b1; int32_t na, nb;",
+            "    if (afn != bfn) return 0;",
+            "    if (aenv == benv) return 1;",
+            "    if (afn != tramp) return 0;",
+            "    es_dg *ai = es_mc_items(tramp, afn, aenv, &a1, &na);",
+            "    es_dg *bi = es_mc_items(tramp, bfn, benv, &b1, &nb);",
+            "    if (na != nb) return 0;",
+            "    for (int32_t i = 0; i < na; i++) if (ai[i].fn != bi[i].fn || ai[i].env != bi[i].env) return 0;",
+            "    return 1;",
+            "}",
+            "/* cur -= v: the last entry (or run of entries) equal to v goes; no match changes nothing; nothing left is null. */",
+            "static __attribute__((unused)) void es_dg_sub(es_vfn tramp, es_vfn *cfn, void **cenv, es_vfn vfn, void *venv)",
+            "{",
+            "    es_dg c1, v1; int32_t nc, nv, k;",
+            "    if (vfn == NULL || *cfn == NULL) return;",
+            "    es_dg *ci = es_mc_items(tramp, *cfn, *cenv, &c1, &nc);",
+            "    es_dg *vi = es_mc_items(tramp, vfn, venv, &v1, &nv);",
+            "    for (k = nc - nv; k >= 0; k--)",
+            "    {",
+            "        int32_t j;",
+            "        for (j = 0; j < nv; j++) if (ci[k + j].fn != vi[j].fn || ci[k + j].env != vi[j].env) break;",
+            "        if (j == nv) break;",
+            "    }",
+            "    if (k < 0) return;",
+            "    int32_t rest = nc - nv;",
+            "    if (rest == 0) { es_closure_release(*cenv); *cfn = NULL; *cenv = NULL; return; }",
+            "    if (rest == 1)",
+            "    {",
+            "        const es_dg *keep = &ci[k == 0 ? nv : 0];",
+            "        es_vfn kf = keep->fn;",
+            "        void *ke = es_closure_retain(keep->env);",
+            "        es_closure_release(*cenv);",
+            "        *cfn = kf; *cenv = ke;",
+            "        return;",
+            "    }",
+            "    es_mc *m = es_mc_new(rest);",
+            "    for (int32_t i = 0; i < nc; i++) if (i < k || i >= k + nv) es_mc_push(m, &ci[i]);",
+            "    es_closure_release(*cenv);",
+            "    *cfn = tramp; *cenv = m;",
+            "}",
         }) result.AppendLine(line);
     }
 }

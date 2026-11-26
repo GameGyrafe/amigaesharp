@@ -72,6 +72,24 @@ public static class Bus
     public static void Clear() { Heap.Free(ref Changed); }
 }
 
+// += and -= on a delegate that is not an event (issue #164): a multicast delegate, as in dotnet. The variable owns its closures
+// (Heap.Free(ref d) releases them), -= drops the entry it removes, and a value the caller keeps gets its own reference.
+public class Chain
+{
+    public Action? Steps;
+    public Action? Auto { get; set; }
+    public static Func<int>? Last;
+}
+
+// A static field of reference type in a struct is not part of the value (issue #164): ES0010 allows it.
+public struct Lookup
+{
+    public static int[] Primes = { 2, 3, 5, 7 };
+    public static Action? OnUse;
+    public int Index;
+    public int Get() { OnUse?.Invoke(); return Primes[Index]; }
+}
+
 public static class Program
 {
     static void Check(bool ok, string name)
@@ -100,6 +118,7 @@ public static class Program
     static Button shared = null!;
 
     static void Note(int digit) { log = log * 10 + digit; }
+    static void Hit() { log = log * 10 + 9; }
 
     [EntryPoint]
     public static void Main()
@@ -226,6 +245,64 @@ public static class Program
         Bus.Clear();
         Bus.Set(8);
         Check(last == 7 && Bus.Quiet, "Heap.Free on an event drops every handler");
+
+        // += and -= on delegates that are not events.
+        log = 0;
+        Action m = () => Note(1);
+        m += () => Note(2);
+        m += () => Note(3);
+        m();
+        Check(log == 123, "+= on a local delegate calls in order");
+        Action dup = () => Note(4);
+        m += dup;
+        m += dup;
+        m -= dup;
+        log = 0;
+        m();
+        Check(log == 1234, "-= removes the last match of a kept variable");
+        m -= dup;
+        log = 0;
+        m();
+        Check(log == 123, "-= removes the other one");
+        Heap.Free(ref dup);
+        Heap.Free(ref m);
+        Check(m == null, "Heap.Free on a multicast delegate");
+
+        Action one = Program.Hit;
+        one += Program.Hit;
+        log = 0;
+        one();
+        Check(log == 99, "method groups are added too");
+        one -= Program.Hit;
+        one -= Program.Hit;
+        Check(one == null, "removing the last entry leaves null");
+
+        Chain ch = new Chain();
+        int total = 0;
+        ch.Steps += () => total += 1;
+        ch.Steps += () => total += 10;
+        ch.Auto += () => total += 100;
+        ch.Auto += () => total += 1000;
+        ch.Steps!();
+        ch.Auto!();
+        Check(total == 1111, "a field and an auto-property");
+        Heap.Free(ref ch.Steps);
+        Action? auto = ch.Auto;
+        ch.Auto = null;
+        Heap.Free(ref auto);
+        Chain.Last += () => 1;
+        Chain.Last += () => 2;
+        Check(Chain.Last!() == 2, "a Func gives the last result");
+        Heap.Free(ref Chain.Last);
+        Heap.Free(ref ch);
+
+        Lookup l = new Lookup();
+        l.Index = 2;
+        int used = 0;
+        Lookup.OnUse += () => used++;
+        Lookup.OnUse += () => used += 10;
+        Check(l.Get() == 5 && used == 11, "a static array and a static delegate in a struct");
+        Heap.Free(ref Lookup.OnUse);
 
         b.Dispose();
         Heap.Free(ref b);

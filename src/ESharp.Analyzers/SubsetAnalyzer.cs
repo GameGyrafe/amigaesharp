@@ -460,6 +460,8 @@ public sealed partial class SubsetAnalyzer : DiagnosticAnalyzer
         var decl = (StructDeclarationSyntax)c.Node;
         foreach (var field in decl.Members.OfType<FieldDeclarationSyntax>())
         {
+            // A static field is not part of a value: it is one variable of the program, so its type may be a reference type.
+            if (field.Modifiers.Any(m => m.IsKind(SyntaxKind.StaticKeyword) || m.IsKind(SyntaxKind.ConstKeyword))) continue;
             var typeInfo = c.SemanticModel.GetTypeInfo(field.Declaration.Type, c.CancellationToken).Type;
             if (typeInfo is { IsReferenceType: true } && typeInfo.SpecialType != SpecialType.System_String)
             {
