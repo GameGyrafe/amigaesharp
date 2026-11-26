@@ -561,7 +561,7 @@ starts in (`"RAM:"` on the Amiga, `"/tmp"` on sdl; empty is the default), `file`
 (`"#?"`, `"#?.png"`, `"#?.(png|jpg)"`; empty is all files; sdl turns the extension forms into a filter and shows all files for other patterns).
 The returned string is only valid until the next call: copy it to keep it. On the Amiga targets it is asl.library (`Asl.Pick`, which `Asl`
 keeps as the Amiga-level API), on the `Video` screen when one is open, else on Workbench; asl.library is on the Workbench disk, so without it
-the result is null. The path is drawer and file joined with dos.library AddPart. On SDL it is `SDL_ShowOpenFileDialog` /
+the result is null. The path is drawer and file joined with dos.library AddPart; null too when no file name was chosen (OK with the name empty) or the path does not fit in 255 bytes. On SDL it is `SDL_ShowOpenFileDialog` /
 `SDL_ShowSaveFileDialog` (asynchronous: the call pumps events until the dialog answers). Without a desktop (headless, offscreen or dummy
 video) there is no dialog: the result is null at once and the reason goes to standard error. On the host, `FileRequester.HostPick` presets the
 answer (null, a cancel, until then) and `HostLastTitle`, `HostLastDrawer`, `HostLastFile`, `HostLastPattern`, `HostLastSave`, `HostShown` record the call.

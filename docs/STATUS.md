@@ -224,7 +224,7 @@ path or null (cancel, no asl.library, no desktop). How to use it: docs/GUIDE.md,
 
 - **Amiga (m68k, os4, morphos, aros).** asl.library: `ASLFR_TitleText`, `InitialDrawer`, `InitialFile`, `InitialPattern` + `DoPatterns`
   (when a pattern is given), `DoSaveMode`, and the `Video` window when one is open. The path is drawer and file joined with dos.library
-  `AddPart` (new binding, LVO -882), copied into the program's buffer before the requester is freed. The new tag values and `fr_Drawer`/`fr_File`
+  `AddPart` (new binding, LVO -882; null when no file name is chosen or the path does not fit in 255 bytes, never the bare drawer), copied into the program's buffer before the requester is freed. The new tag values and `fr_Drawer`/`fr_File`
   offsets are in `Layout.g.cs` (`tools/BindGen/structs.txt`; the tag values are the same on every target).
 - **sdl.** `es_sdl_file_dialog` in `es_sdl.h`: `SDL_ShowFileDialogWithProperties` (open or save, no multiple selection, the title, the start
   folder and file, the game's window as parent). The callback only copies the path and sets a flag (it may run on another thread); the caller pumps events
@@ -236,7 +236,7 @@ path or null (cancel, no asl.library, no desktop). How to use it: docs/GUIDE.md,
 
 **Verified (2026-11-26, Linux dev host):**
 - `dotnet test`: 829 passed, 2 skipped, 0 failed (831). New: `FileRequesterTests` (the Amiga platform code with host gcc against a fake asl.library: the tags passed, drawer and file joined with AddPart, strings copied before the requester is freed, cancel; the host fake) and `SdlTargetTests.FileRequester_returns_null_without_hanging_when_headless_in_the_image`.
-- A1200, Kickstart 3.1 (40.069) in FS-UAE with the Workbench 3.1 disk's Libs as `LIBS:` (`--mui 3.8 --workbench`): the requester is drawn with its title, drawer, file and pattern gadgets and four buttons (checked with a screenshot, character map); a scripted click on Cancel gives "result: cancelled" (2 ok), a click on OK gives "picked RAM:filereq-hello.txt" (2 ok), Return in the file gadget too, and `SAVE` with OK picks the same (2 ok). Without `LIBS:` there is no asl.library and the sample reports a cancel.
+- A1200, Kickstart 3.1 (40.069) in FS-UAE with the Workbench 3.1 disk's Libs as `LIBS:` (`--mui 3.8 --workbench`): the requester is drawn with its title, drawer, file and pattern gadgets and four buttons (checked with a screenshot, character map); a scripted click on Cancel gives "result: cancelled" (2 ok), a click on OK gives "picked RAM:filereq-hello.txt" (2 ok), Return in the file gadget too, and `SAVE` with OK picks the same (2 ok). Without `LIBS:` there is no asl.library and the sample reports a cancel. Re-run after the empty-name and overflow fix (review of #167): OK still picks "RAM:filereq-hello.txt" (2 ok). Null for an empty name and for a path that does not fit is checked with host gcc against the fake asl.library only, not in an emulator.
 - sdl in the esharp-sdl image, headless (offscreen video): `esharp run` prints "result: cancelled", 1 ok, no hang, and "SDL: no file dialog without a desktop (video driver offscreen)" on stderr; `esharp test samples/filereq --target sdl`: host and SDL agree (1 ok, 0 FAIL).
 - `--target os4` and `--target aros` build the sample (the C compiles; the warnings are the existing ones in `Asl` and `Files`).
 

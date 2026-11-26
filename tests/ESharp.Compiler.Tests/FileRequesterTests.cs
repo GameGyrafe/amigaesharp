@@ -66,12 +66,14 @@ static inline __attribute__((unused)) int32_t AslRequest(void *req, void *tags)
         }
     }
     printf(""[title '%s' drawer '%s' file '%s' pattern '%s' patterns %d save %d window %d]\n"", title, drawer, file, pattern, patterns, save, window);
-    static const char *answers[][2] = { { ""RAM:"", ""a.txt"" }, { ""Work:Stuff/"", """" }, { ""Work:Stuff"", ""b.png"" }, { ""RAM:x/"", ""c"" } };
-    static const int ok[] = { 1, 1, 1, 0 };
+    static const char *answers[][2] = { { ""RAM:"", ""a.txt"" }, { ""Work:Stuff/"", """" }, { ""Work:Stuff"", ""b.png"" }, { ""RAM:x/"", ""c"" }, { ""RAM:"", ""x"" }, { ""RAM:"", ""x"" } };
+    static const int ok[] = { 1, 1, 1, 0, 1, 1 };
     int n = shim_calls++;
     if (!ok[n]) return 0;
-    *(char **)(r + 16) = strdup(answers[n][0]);
-    *(char **)(r + 8) = strdup(answers[n][1]);
+    if (n == 4) { char *l = malloc(301); memset(l, 'd', 300); l[300] = 0; *(char **)(r + 16) = l; }        /* drawer too long */
+    else if (n == 5) { char *l = malloc(252); memset(l, 'd', 251); l[251] = 0; *(char **)(r + 16) = l; }   /* drawer fits, the file does not */
+    else *(char **)(r + 16) = strdup(answers[n][0]);
+    *(char **)(r + 8) = n == 5 ? strdup(""abcdefgh"") : strdup(answers[n][1]);
     return 1;
 }
 ";
@@ -121,7 +123,11 @@ Dos.PutStr(b == null ? ""null\n"" : $""{b}\n"");
 string? d = FileRequester.Open(""Again"", """", """", ""#?.(png|jpg)"");
 Dos.PutStr(d == null ? ""null\n"" : $""{d}\n"");
 string? e = FileRequester.Open(""Cancel"", ""RAM:x"", ""c"", """");
-Dos.PutStr(e == null ? ""null\n"" : $""{e}\n"");"), HostC);
+Dos.PutStr(e == null ? ""null\n"" : $""{e}\n"");
+string? g = FileRequester.Open(""Long"", """", """", """");
+Dos.PutStr(g == null ? ""null\n"" : $""{g.Length}\n"");
+string? h = FileRequester.Open(""Long2"", """", """", """");
+Dos.PutStr(h == null ? ""null\n"" : $""{h.Length}\n"");"), HostC);
         Assert.Contains("AllocAslRequest(", c);
         Assert.Contains("AddPart(", c);
         if (!HasGcc) return;
@@ -129,9 +135,11 @@ Dos.PutStr(e == null ? ""null\n"" : $""{e}\n"");"), HostC);
         Assert.True(code == 0, output);
         Assert.Equal(
             "[title 'Pick' drawer 'RAM:' file 'x.txt' pattern '#?.txt' patterns 1 save 0 window 0]\nRAM:a.txt\n" +       // no '/' after a volume
-            "[title 'Save' drawer 'Work:' file '' pattern '' patterns 0 save 1 window 0]\nWork:Stuff/\n" +                 // no file name: the drawer
+            "[title 'Save' drawer 'Work:' file '' pattern '' patterns 0 save 1 window 0]\nnull\n" +                          // no file name: null, not the drawer
             "[title 'Again' drawer '' file '' pattern '#?.(png|jpg)' patterns 1 save 0 window 0]\nWork:Stuff/b.png\n" +    // '/' added in a drawer
-            "[title 'Cancel' drawer 'RAM:x' file 'c' pattern '' patterns 0 save 0 window 0]\nnull\n",                     // cancel
+            "[title 'Cancel' drawer 'RAM:x' file 'c' pattern '' patterns 0 save 0 window 0]\nnull\n" +                    // cancel
+            "[title 'Long' drawer '' file '' pattern '' patterns 0 save 0 window 0]\nnull\n" +                            // drawer longer than the buffer
+            "[title 'Long2' drawer '' file '' pattern '' patterns 0 save 0 window 0]\nnull\n",                            // AddPart does not fit
             output.Replace("\r\n", "\n"));
     }
 

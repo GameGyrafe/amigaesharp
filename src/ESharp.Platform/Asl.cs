@@ -62,7 +62,7 @@ public static unsafe class Asl
 
     /// <summary>
     /// Shows a file requester titled <paramref name="title"/>, starting in <paramref name="drawer"/> (for example <c>"RAM:"</c>), and waits.
-    /// Returns the chosen path (drawer and file name joined), or null if the user cancelled or asl.library is missing.
+    /// Returns the chosen path (drawer and file name joined), or null if the user cancelled, asl.library is missing, no file name was given, or the path does not fit in 255 bytes.
     /// The string is only valid until the next call.
     /// </summary>
     public static string? PickFile(string title, string drawer)
@@ -73,7 +73,7 @@ public static unsafe class Asl
     /// <summary>
     /// The general call behind <see cref="PickFile"/> and <see cref="FileRequester"/>: <paramref name="file"/> is the file name the requester
     /// starts with and <paramref name="pattern"/> an AmigaDOS pattern such as <c>"#?.png"</c> (both may be empty), and
-    /// <paramref name="save"/> asks for a name to write (save mode) rather than a file to read. The path is drawer and file joined with dos.library AddPart.
+    /// <paramref name="save"/> asks for a name to write (save mode) rather than a file to read. The path is drawer and file joined with dos.library AddPart; no file name or a path that does not fit gives null.
     /// The string is only valid until the next call.
     /// </summary>
     public static string? Pick(string title, string drawer, string file, string pattern, bool save)
@@ -103,13 +103,17 @@ public static unsafe class Asl
             byte* d = *(byte**)(r + Layout.FrDrawer);
             byte* f = *(byte**)(r + Layout.FrFile);
             // The requester owns drawer and file: copy them out (into _path) before it is freed.
-            fixed (byte* p = _path)
+            // No file name (OK pressed with the name cleared, or in save mode) or a path that does not fit: null, never the bare drawer.
+            if (f != null && f[0] != 0)
             {
-                int n = 0;
-                if (d != null) for (; d[n] != 0 && n < 254; n++) p[n] = d[n];
-                p[n] = 0;
-                if (f != null && f[0] != 0) Dos.AddPart(p, f, 256);
-                result = Cast.PtrToString(p);
+                fixed (byte* p = _path)
+                {
+                    int n = 0;
+                    if (d != null) for (; d[n] != 0 && n < 254; n++) p[n] = d[n];
+                    p[n] = 0;
+                    bool fits = d == null || d[n] == 0;
+                    if (fits && Dos.AddPart(p, f, 256) != 0) result = Cast.PtrToString(p);
+                }
             }
         }
         AslLib.FreeAslRequest(req);
