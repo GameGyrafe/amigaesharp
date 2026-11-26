@@ -500,7 +500,7 @@ internal sealed partial class CEmitter
             };
             if (loopBody != null && (decl == null || !loopBody.Span.Contains(decl.Span))) return false;
         }
-        if (decl is VariableDeclaratorSyntax { Initializer: { } init } && !FreshValue(init.Value, new HashSet<IMethodSymbol>(SymbolEqualityComparer.Default))) return false;
+        if (decl is VariableDeclaratorSyntax { Initializer: { } init } && !OwnedValue(v, init.Value)) return false;
         foreach (var u in fn.DescendantNodes().OfType<IdentifierNameSyntax>())
         {
             if (u == at || u.Identifier.Text != v.Name || !SymbolEqualityComparer.Default.Equals(Model(u).GetSymbolInfo(u).Symbol, v)) continue;
@@ -511,8 +511,10 @@ internal sealed partial class CEmitter
             var node = ValueSite(u, out var parent);
             if (parent is AssignmentExpressionSyntax set && set.Left == node)
             {
-                if (set.IsKind(SyntaxKind.SimpleAssignmentExpression) && FreshValue(set.Right, new HashSet<IMethodSymbol>(SymbolEqualityComparer.Default))) continue;
-                return false;   // an alias, a compound assignment or ??= (which also reads it)
+                if (set.IsKind(SyntaxKind.SimpleAssignmentExpression) && OwnedValue(v, set.Right)) continue;
+                // d += x / d -= x on a variable that owns its list (it rebuilds it, still owned), before the hand-over: the list moves.
+                if (IsOwnedCompound(set, v) && (other || u.SpanStart < at.SpanStart)) continue;
+                return false;   // an alias, a compound assignment that does not own, one after the hand-over, or ??= (which also reads it)
             }
             if (other) continue;   // another branch of the same if, ?: or switch: it never runs together with the hand-over
             if (u.SpanStart > at.SpanStart) return false;   // read after the hand-over: the callee may have freed it by then
@@ -524,6 +526,35 @@ internal sealed partial class CEmitter
             return false;
         }
         return true;
+    }
+
+    /// <summary>
+    /// A value <paramref name="v"/> owns once given it: new (FreshValue), or, for a multicast target (a variable with an owned += or
+    /// -=), also a method group or anything else <see cref="NewOrEmptyValue"/> accepts, as the += check does.
+    /// </summary>
+    private bool OwnedValue(ISymbol v, ExpressionSyntax value) =>
+        FreshValue(value, new HashSet<IMethodSymbol>(SymbolEqualityComparer.Default)) || IsCompoundTarget(v) && NewOrEmptyValue(value);
+
+    /// <summary>True when <paramref name="set"/> is d += x or d -= x on the delegate variable <paramref name="v"/> (not an event) and v owns every value it holds (the check of <see cref="CheckCompoundTarget"/>).</summary>
+    private bool IsOwnedCompound(AssignmentExpressionSyntax set, ISymbol v) =>
+        (set.IsKind(SyntaxKind.AddAssignmentExpression) || set.IsKind(SyntaxKind.SubtractAssignmentExpression))
+        && Model(set).GetSymbolInfo(set.Left).Symbol is not IEventSymbol && OwnsAllValues(v);
+
+    private bool IsCompoundTarget(ISymbol v)
+    {
+        var fn = v.DeclaringSyntaxReferences.FirstOrDefault()?.GetSyntax();
+        var scope = fn == null ? null : FunctionOf(fn) ?? fn;
+        return scope != null && scope.DescendantNodes().OfType<AssignmentExpressionSyntax>().Any(a =>
+            (a.IsKind(SyntaxKind.AddAssignmentExpression) || a.IsKind(SyntaxKind.SubtractAssignmentExpression))
+            && SymbolEqualityComparer.Default.Equals(Model(a).GetSymbolInfo(a.Left).Symbol, v)) && OwnsAllValues(v);
+    }
+
+    private bool OwnsAllValues(ISymbol v)
+    {
+        var type = v switch { ILocalSymbol l => l.Type, IParameterSymbol p => p.Type, _ => null };
+        if (type?.TypeKind != TypeKind.Delegate || IsBorrowedParameter(v)) return false;
+        if (!_ownsValues.TryGetValue(v, out var owns)) _ownsValues[v] = owns = AllValuesFresh(v);
+        return owns;
     }
 
     private enum CaptureKind { None, Borrowed, Kept }
@@ -599,13 +630,14 @@ internal sealed partial class CEmitter
             var anyValue = false;
             if (vd.Initializer != null)
             {
-                if (!FreshValue(vd.Initializer.Value, new HashSet<IMethodSymbol>(SymbolEqualityComparer.Default))) return;   // an alias: owns nothing
+                if (!OwnedValue(v, vd.Initializer.Value)) return;   // an alias: owns nothing
                 anyValue = !IsNullConstant(vd.Initializer.Value);
             }
             foreach (var set in fn.DescendantNodes().OfType<AssignmentExpressionSyntax>())
                 if (set.Left is IdentifierNameSyntax l && l.Identifier.Text == v.Name && SymbolEqualityComparer.Default.Equals(Model(l).GetSymbolInfo(l).Symbol, v))
                 {
-                    if (!set.IsKind(SyntaxKind.SimpleAssignmentExpression) || !FreshValue(set.Right, new HashSet<IMethodSymbol>(SymbolEqualityComparer.Default))) return;
+                    if (IsOwnedCompound(set, v)) { anyValue |= set.IsKind(SyntaxKind.AddAssignmentExpression) && !IsNullConstant(set.Right); continue; }
+                    if (!set.IsKind(SyntaxKind.SimpleAssignmentExpression) || !OwnedValue(v, set.Right)) return;
                     anyValue |= !IsNullConstant(set.Right);
                 }
             if (!anyValue) return;

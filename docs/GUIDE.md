@@ -466,11 +466,12 @@ attributes (`[EntryPoint]`, `[AmigaLib]`, `[ChipRam]`, ...) and a small intrinsi
   for `+=`/`-=`, and so is a parameter that is not `[Owned]`. The other direction is not checked: a copy of `d` (`e = d`,
   `Field = d`) shares d's reference, as any delegate copy in E# does, so do not use it after `d += x` or `d -= x` (that releases
   the list the copy points at, a use after free); call `d` itself, or copy it again after the change. A kept variable you add
-  (`d += h`) keeps its own reference, so free it too. `==` and `!=` on delegates compare the function and the closure; multicast
+  (`d += h`) keeps its own reference, so free it too. Given to an `[Owned]` parameter or a setter at its last use, `d` hands
+  its whole list over, as a lambda local does. `==` and `!=` on delegates compare the function and the closure; multicast
   delegates are equal when their entries are.
   Not supported (ES0099): binary `d + x` and `d - x` (use `+=`/`-=` on a variable), a property with accessors, a `ref` variable,
-  a delegate type with `ref`/`out` parameters, and precompiled packages and Amiga libraries. A static field of reference type in a struct is allowed (ES0010 is about instance
-  fields: a value holding a reference).
+  a delegate type with `ref`/`out` parameters, and precompiled packages and Amiga libraries. A static field of reference type
+  in a struct is allowed (ES0010 is about instance fields: a value holding a reference).
 - User classes that derive from a platform class marked `[Extensible]` (so far `GtWindow`, see `samples/guiclass`) or from
   an `[Extensible]` class of an E# library package (see "Classes to derive from" under [Libraries](#libraries-e-packages)).
 - Slow or opt-in: `long`/`ulong` (software 64-bit, rule ES0100 on the 68020), `float`/`double` (off by default, ES0003; `--allow-float`).

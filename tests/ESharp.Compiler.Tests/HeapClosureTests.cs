@@ -236,33 +236,72 @@ Check(Heap.LiveClosures() == base0, ""still nothing leaks"");
     }
 
     [Theory]
-    [InlineData("static System.Action S; static void B() { }", "S = () => { }; System.Action d = S; d += B;")]
-    [InlineData("static System.Action F = () => { }; static void B() { }", "System.Action d = null; d = F; d += B;")]
-    [InlineData("static void B() { } static void Q1(System.Action p) { p += B; }", "")]
-    [InlineData("static void B() { } static void Q2(System.Action s) { System.Action d = s; d -= B; }", "")]
-    [InlineData("static void B() { } static System.Action H; static void Q3([Owned] System.Action s) { H = s; H += B; }", "")]
-    [InlineData("static System.Action S = () => { }; static void B() { } static void GetOut(out System.Action o) { o = S; }", "System.Action d; GetOut(out d); d += B;")]
-    [InlineData("static System.Action S = () => { }; static void B() { } static void GetOut(out System.Action o) { o = S; }", "GetOut(out System.Action d); d += B;")]
-    [InlineData("static System.Action S = () => { }; static void B() { } static void Set(ref System.Action r) { r = S; }", "System.Action d = null; Set(ref d); d += B;")]
-    [InlineData("static System.Action S = () => { }; static void B() { }", "System.Action d = null; d ??= S; d += B;")]
-    [InlineData("static System.Action S = () => { }; static void B() { }", "if (S is System.Action d) { d += B; }")]
-    [InlineData("static System.Action S = () => { }; static void B() { }", "switch (S) { case System.Action d: d += B; break; }")]
-    [InlineData("static System.Action S = () => { }; static void B() { }", "System.Action d = null; ref System.Action r = ref d; r = S; d += B;")]
-    [InlineData("static System.Action S = () => { }; static void B() { }", "System.Action d = null; int i; (d, i) = (S, 1); d += B;")]
-    public void Compound_assignment_on_a_delegate_that_shares_or_borrows_a_reference_is_ES0099(string members, string body)
+    [InlineData("static System.Action S; static void B() { }", "S = () => { }; System.Action d = S; d += B;", "given a copy of another delegate")]
+    [InlineData("static System.Action F = () => { }; static void B() { }", "System.Action d = null; d = F; d += B;", "given a copy of another delegate")]
+    [InlineData("static void B() { } static void Q1(System.Action p) { p += B; }", "", "borrowed delegate parameter")]
+    [InlineData("static void B() { } static void Q2(System.Action s) { System.Action d = s; d -= B; }", "", "given a copy of another delegate")]
+    [InlineData("static void B() { } static System.Action H; static void Q3([Owned] System.Action s) { H = s; H += B; }", "", "given a copy of another delegate")]
+    [InlineData("static System.Action S = () => { }; static void B() { } static void GetOut(out System.Action o) { o = S; }", "System.Action d; GetOut(out d); d += B;", "given a copy of another delegate")]
+    [InlineData("static System.Action S = () => { }; static void B() { } static void GetOut(out System.Action o) { o = S; }", "GetOut(out System.Action d); d += B;", "given a copy of another delegate")]
+    [InlineData("static System.Action S = () => { }; static void B() { } static void Set(ref System.Action r) { r = S; }", "System.Action d = null; Set(ref d); d += B;", "given a copy of another delegate")]
+    [InlineData("static System.Action S = () => { }; static void B() { }", "System.Action d = null; d ??= S; d += B;", "given a copy of another delegate")]
+    [InlineData("static System.Action S = () => { }; static void B() { }", "if (S is System.Action d) { d += B; }", "given a copy of another delegate")]
+    [InlineData("static System.Action S = () => { }; static void B() { }", "switch (S) { case System.Action d: d += B; break; }", "given a copy of another delegate")]
+    [InlineData("static System.Action S = () => { }; static void B() { }", "System.Action d = null; ref System.Action r = ref d; r = S; d += B;", "given a copy of another delegate")]
+    [InlineData("static System.Action S = () => { }; static void B() { }", "System.Action d = null; int i; (d, i) = (S, 1); d += B;", "given a copy of another delegate")]
+    public void Compound_assignment_on_a_delegate_that_shares_or_borrows_a_reference_is_ES0099(string members, string body, string message)
     {
         var r = Compile(Program(members, body));
-        Assert.Contains("ES0099", ErrorIds(r));
+        Assert.Contains(r.Diagnostics, d => d.Id == "ES0099" && d.Severity == Microsoft.CodeAnalysis.DiagnosticSeverity.Error && d.GetMessage().Contains(message));
     }
 
     [Theory]
-    [InlineData("static void A() { } static void B() { }", "System.Action d = A; System.Action e = d + B; e();")]
-    [InlineData("static void A() { } static void B() { }", "System.Action d = A; d += B; System.Action e = d - B; e();")]
-    [InlineData("static void A() { } static void B() { }", "System.Action d = A; d += (System.Action)A + B;")]
-    public void Binary_plus_and_minus_on_delegates_are_ES0099(string members, string body)
+    [InlineData("static void A() { } static void B() { }", "System.Action d = A; System.Action e = d + B; e();", "binary + on delegates")]
+    [InlineData("static void A() { } static void B() { }", "System.Action d = A; d += B; System.Action e = d - B; e();", "binary - on delegates")]
+    [InlineData("static void A() { } static void B() { }", "System.Action d = A; d += (System.Action)A + B;", "binary + on delegates")]
+    public void Binary_plus_and_minus_on_delegates_are_ES0099(string members, string body, string message)
     {
         var r = Compile(Program(members, body));
-        Assert.Contains("ES0099", ErrorIds(r));
+        Assert.Contains(r.Diagnostics, d => d.Id == "ES0099" && d.Severity == Microsoft.CodeAnalysis.DiagnosticSeverity.Error && d.GetMessage().Contains(message));
+    }
+
+    [Fact]
+    public void A_multicast_local_given_to_an_owned_parameter_or_a_setter_hands_its_list_over()
+    {
+        if (!HasGcc) return;
+        const string members = @"
+static int log;
+static void A() { log = log * 10 + 1; }
+static void B() { log = log * 10 + 2; }
+static void Take([Owned] System.Action a) { a(); Heap.Free(ref a); }
+static System.Action _held;
+static System.Action Held { get { return _held; } set { _held = value; } }
+static void M1() { System.Action d = A; d += B; Take(d); }
+static void M2() { int k = 0; System.Action d = () => k++; d += B; Take(d); }
+static void M3() { System.Action d = A; d += B; d += A; d -= A; Held = d; }
+static void M4() { System.Action d = A; d += B; Take(d); d = null; }
+static void M5() { System.Action d = A; d += B; Take(d); Heap.Free(ref d); }
+";
+        const string body = @"
+int base0 = Heap.LiveClosures();
+log = 0; M1();
+Check(log == 12 && Heap.LiveClosures() == base0, ""a method-group multicast moves to an [Owned] parameter"");
+log = 0; M2();
+Check(log == 2 && Heap.LiveClosures() == base0, ""a multicast with a lambda moves too"");
+M3();
+log = 0; Held();
+Check(log == 12, ""a multicast moves to a setter"");
+Heap.Free(ref _held);
+Check(Heap.LiveClosures() == base0, ""and the setter's owner frees it"");
+log = 0; M4();
+Check(log == 12 && Heap.LiveClosures() == base0, ""set to null after the hand-over"");
+log = 0; M5();
+Check(log == 12 && Heap.LiveClosures() == base0, ""freed after the hand-over: the callee had its own reference"");
+";
+        var (code, output) = Run(members, body);
+        Assert.Equal(OkLines("a method-group multicast moves to an [Owned] parameter", "a multicast with a lambda moves too", "a multicast moves to a setter",
+            "and the setter's owner frees it", "set to null after the hand-over", "freed after the hand-over: the callee had its own reference"), output);
+        Assert.Equal(0, code);
     }
 
     [Fact]
