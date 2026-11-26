@@ -134,6 +134,9 @@ public static class Layout
     public const uint AslFrTitleText = 2148007937u;
     public const uint AslFrInitialDrawer = 2148007945u;
     public const uint AslFrInitialFile = 2148007944u;
+    public const uint AslFrInitialPattern = 2148007946u;
+    public const uint AslFrDoPatterns = 2148007982u;
+    public const uint AslFrDoSaveMode = 2148007980u;
     public const int FrFile = 8;
     public const int FrDrawer = 16;
     public const int ScreenFont = 64;
@@ -380,6 +383,9 @@ public static class Layout
     public const uint AslFrTitleText = 2148007937u;
     public const uint AslFrInitialDrawer = 2148007945u;
     public const uint AslFrInitialFile = 2148007944u;
+    public const uint AslFrInitialPattern = 2148007946u;
+    public const uint AslFrDoPatterns = 2148007982u;
+    public const uint AslFrDoSaveMode = 2148007980u;
     public const int FrFile = 4;
     public const int FrDrawer = 8;
     public const int ScreenFont = 44;
@@ -626,6 +632,9 @@ public static class Layout
     public const uint AslFrTitleText = 2148007937u;
     public const uint AslFrInitialDrawer = 2148007945u;
     public const uint AslFrInitialFile = 2148007944u;
+    public const uint AslFrInitialPattern = 2148007946u;
+    public const uint AslFrDoPatterns = 2148007982u;
+    public const uint AslFrDoSaveMode = 2148007980u;
     public const int FrFile = 4;
     public const int FrDrawer = 8;
     public const int ScreenFont = 40;

@@ -484,7 +484,7 @@ classes called `Window` or `List`); see `samples/names`.
 `src/ESharp.Platform` is parsed together with your code. The same public signatures exist on every target; the
 implementation is chosen with `#if AMIGA` / `#elif SDL` / `#else` (the dotnet host fake). Amiga-only classes (Gui, Asl,
 Fonts, BOOPSI, MUI and the raw library bindings such as `LowLevel`) do not exist on `sdl`: using them is error `ES0102`.
-`Joystick`, the message box `Requester` and `Iff` exist on every target (below).
+`Joystick`, the message box `Requester`, the file requester `FileRequester` and `Iff` exist on every target (below).
 
 | Area | Classes | Sample |
 |---|---|---|
@@ -493,6 +493,7 @@ Fonts, BOOPSI, MUI and the raw library bindings such as `LowLevel`) do not exist
 | Graphics | `Video` (screens, blits, palettes, double buffer, AGA 24-bit palettes, RTG), `Font`, `Frame`/`FrameTimer` | `screen`, `aga`, `dbuffer`, `rtg`, `timing` |
 | Input and time | `Input` (mouse, keyboard), `Keys` (keymap), `Joystick` (lowlevel; SDL gamepads), `Clock` (timer) | `cards`, `keys`, `controls` |
 | Message box | `Requester.Show` (EasyRequest; SDL_ShowMessageBox) | `requester` |
+| File requester | `FileRequester.Open`/`Save` (asl.library; SDL file dialogs) | `filereq` |
 | Sound | `Sample`, `Sound` (audio.device) | `sound`, `assets` |
 | Utility | `Date`, `Strings` (case-insensitive text, utility.library), `Rng`, `Deck` | `dates`, `cards` |
 | Files and formats | `Iff` (E# code; iffparse.library when it is there on the Amiga), `Fonts` (diskfont), `Asl` (file requester) | `iff`, `fonts`, `asl` |
@@ -552,6 +553,22 @@ presets the answer (the last button until then). `Requester.Count(buttons)` give
 
 ```csharp
 if (Requester.Show("Cards", "Quit the game?", "Quit|Play on") == 0) return;
+```
+
+**File requester.** `FileRequester.Open(title, drawer, file, pattern)` asks for a file to read and `FileRequester.Save(...)` for a name to
+write; both wait and return the chosen path, or null when the user cancels or no requester can be shown. `drawer` is the folder it
+starts in (`"RAM:"` on the Amiga, `"/tmp"` on sdl; empty is the default), `file` the name it starts with and `pattern` an AmigaDOS pattern
+(`"#?"`, `"#?.png"`, `"#?.(png|jpg)"`; empty is all files; sdl turns the extension forms into a filter and shows all files for other patterns).
+The returned string is only valid until the next call: copy it to keep it. On the Amiga targets it is asl.library (`Asl.Pick`, which `Asl`
+keeps as the Amiga-level API), on the `Video` screen when one is open, else on Workbench; asl.library is on the Workbench disk, so without it
+the result is null. The path is drawer and file joined with dos.library AddPart. On SDL it is `SDL_ShowOpenFileDialog` /
+`SDL_ShowSaveFileDialog` (asynchronous: the call pumps events until the dialog answers). Without a desktop (headless, offscreen or dummy
+video) there is no dialog: the result is null at once and the reason goes to standard error. On the host, `FileRequester.HostPick` presets the
+answer (null, a cancel, until then) and `HostLastTitle`, `HostLastDrawer`, `HostLastFile`, `HostLastPattern`, `HostLastSave`, `HostShown` record the call.
+
+```csharp
+string? path = FileRequester.Open("Load picture", "RAM:", "", "#?.png");
+if (path == null) return;
 ```
 
 Hardware facts: 2 MB of chip RAM is the baseline; `[ChipRam]` is a no-op on PowerPC (chip memory is allocated at run time

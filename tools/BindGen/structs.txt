@@ -183,6 +183,9 @@ AslFrWindow = value ASLFR_Window
 AslFrTitleText = value ASLFR_TitleText
 AslFrInitialDrawer = value ASLFR_InitialDrawer
 AslFrInitialFile = value ASLFR_InitialFile
+AslFrInitialPattern = value ASLFR_InitialPattern
+AslFrDoPatterns = value ASLFR_DoPatterns
+AslFrDoSaveMode = value ASLFR_DoSaveMode
 FrFile = FileRequester.fr_File
 FrDrawer = FileRequester.fr_Drawer
 

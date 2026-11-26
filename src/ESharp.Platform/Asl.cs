@@ -60,19 +60,23 @@ public static unsafe class Asl
         return true;
     }
 
-    private static int Append(byte* dest, int at, byte* text)
-    {
-        if (text == null) return at;
-        for (int i = 0; text[i] != 0 && at < 254; i++) dest[at++] = text[i];
-        return at;
-    }
-
     /// <summary>
     /// Shows a file requester titled <paramref name="title"/>, starting in <paramref name="drawer"/> (for example <c>"RAM:"</c>), and waits.
     /// Returns the chosen path (drawer and file name joined), or null if the user cancelled or asl.library is missing.
     /// The string is only valid until the next call.
     /// </summary>
     public static string? PickFile(string title, string drawer)
+    {
+        return Pick(title, drawer, "", "", false);
+    }
+
+    /// <summary>
+    /// The general call behind <see cref="PickFile"/> and <see cref="FileRequester"/>: <paramref name="file"/> is the file name the requester
+    /// starts with and <paramref name="pattern"/> an AmigaDOS pattern such as <c>"#?.png"</c> (both may be empty), and
+    /// <paramref name="save"/> asks for a name to write (save mode) rather than a file to read. The path is drawer and file joined with dos.library AddPart.
+    /// The string is only valid until the next call.
+    /// </summary>
+    public static string? Pick(string title, string drawer, string file, string pattern, bool save)
     {
         if (!Open()) return null;
         // Intuition draws the requester into the screen's own bitmap, which is not on display while double buffered (and the next
@@ -84,6 +88,13 @@ public static unsafe class Asl
         TagList w = new TagList();
         w.Add(Layout.AslFrTitleText, Cast.StringToPtr(title));
         w.Add(Layout.AslFrInitialDrawer, Cast.StringToPtr(drawer));
+        if (Cast.StringToPtr(file)[0] != 0) w.Add(Layout.AslFrInitialFile, Cast.StringToPtr(file));
+        if (Cast.StringToPtr(pattern)[0] != 0)
+        {
+            w.Add(Layout.AslFrInitialPattern, Cast.StringToPtr(pattern));
+            w.Add(Layout.AslFrDoPatterns, true);
+        }
+        if (save) w.Add(Layout.AslFrDoSaveMode, true);
         if (Video.IsOpen()) w.Add(Layout.AslFrWindow, Video.Window);
         nuint* t = w.End();
         if (t != null && AslLib.AslRequest(req, t) != 0)
@@ -91,12 +102,13 @@ public static unsafe class Asl
             byte* r = (byte*)req;
             byte* d = *(byte**)(r + Layout.FrDrawer);
             byte* f = *(byte**)(r + Layout.FrFile);
+            // The requester owns drawer and file: copy them out (into _path) before it is freed.
             fixed (byte* p = _path)
             {
-                int n = Append(p, 0, d);
-                if (n > 0 && p[n - 1] != ':' && p[n - 1] != '/' && f != null && f[0] != 0) p[n++] = (byte)'/';
-                n = Append(p, n, f);
+                int n = 0;
+                if (d != null) for (; d[n] != 0 && n < 254; n++) p[n] = d[n];
                 p[n] = 0;
+                if (f != null && f[0] != 0) Dos.AddPart(p, f, 256);
                 result = Cast.PtrToString(p);
             }
         }
@@ -111,7 +123,10 @@ public static unsafe class Asl
     public static string? HostPick;
 
     /// <summary>Host: the title and drawer of the last <see cref="PickFile"/> call.</summary>
-    public static string? HostLastTitle, HostLastDrawer;
+    public static string? HostLastTitle, HostLastDrawer, HostLastFile, HostLastPattern;
+
+    /// <summary>Host: whether the last <see cref="Pick"/> call asked for save mode.</summary>
+    public static bool HostLastSave;
 
     public static bool Open() { return HostAvailable; }
 
@@ -121,9 +136,17 @@ public static unsafe class Asl
 
     public static string? PickFile(string title, string drawer)
     {
+        return Pick(title, drawer, "", "", false);
+    }
+
+    public static string? Pick(string title, string drawer, string file, string pattern, bool save)
+    {
         if (!HostAvailable) return null;
         HostLastTitle = title;
         HostLastDrawer = drawer;
+        HostLastFile = file;
+        HostLastPattern = pattern;
+        HostLastSave = save;
         return HostPick;
     }
 #endif
