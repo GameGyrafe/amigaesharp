@@ -976,8 +976,8 @@ internal sealed partial class CEmitter
         var (add, sub) = MulticastHelpers(del, invoke, dt, a);
         var l = Expr(a.Left);
         string call;
-        if (IsNullConstant(a.Right)) call = l;
-        else if (a.IsKind(SyntaxKind.SubtractAssignmentExpression)) call = $"{sub}({l}, {Expr(a.Right, top: true)})";
+        if (IsNullConstant(a.Right)) return "((void)0)";   // adding or removing null changes nothing
+        if (a.IsKind(SyntaxKind.SubtractAssignmentExpression)) call = $"{sub}({l}, {Expr(a.Right, top: true)})";
         else
         {
             if (IsFreshDelegate(a.Right) is not bool fresh) return "0";
