@@ -201,6 +201,10 @@ internal sealed partial class CEmitter
             case EqualsValueClauseSyntax { Parent: PropertyDeclarationSyntax }:
                 return new Site(SiteKind.Kept);
             case AssignmentExpressionSyntax a when a.Left == node:
+                // d += x and d -= x on a delegate that is not an event rebuild d (multicast): it owns its closures, so it is a heap value.
+                if ((a.IsKind(SyntaxKind.AddAssignmentExpression) || a.IsKind(SyntaxKind.SubtractAssignmentExpression))
+                    && Model(a).GetSymbolInfo(a.Left).Symbol is not IEventSymbol)
+                    return new Site(SiteKind.Kept);
                 return new Site(SiteKind.Borrowed);   // written, not read
             case AssignmentExpressionSyntax a when a.Right == node:
                 if (a.IsKind(SyntaxKind.SimpleAssignmentExpression) || a.IsKind(SyntaxKind.CoalesceAssignmentExpression))
@@ -215,6 +219,8 @@ internal sealed partial class CEmitter
                     if (a.IsKind(SyntaxKind.AddAssignmentExpression)) return new Site(SiteKind.Kept);
                     if (a.IsKind(SyntaxKind.SubtractAssignmentExpression)) return new Site(SiteKind.Borrowed);   // only compared
                 }
+                else if (a.IsKind(SyntaxKind.AddAssignmentExpression)) return new Site(SiteKind.Kept);   // d += x: d takes a reference to x
+                else if (a.IsKind(SyntaxKind.SubtractAssignmentExpression)) return new Site(SiteKind.Borrowed);   // only compared
                 return new Site(SiteKind.Unknown);
             case ReturnStatementSyntax or ArrowExpressionClauseSyntax or LambdaExpressionSyntax or InitializerExpressionSyntax:
                 return new Site(SiteKind.Kept);
@@ -945,6 +951,72 @@ internal sealed partial class CEmitter
         return $"({{ {dt} {t} = {value}; es_event_add(&({place}), (void (*)(void)){t}.fn, {(fresh ? $"{t}.env" : $"es_closure_retain({t}.env)")}); }})";
     }
 
+    /// <summary>
+    /// <c>d += x</c> and <c>d -= x</c> on a delegate that is not an event (a local, parameter, field, static or auto-property), as in
+    /// dotnet: d becomes a multicast delegate, { trampoline, es_mc } where the es_mc is a reference-counted list of { fn, env } that owns
+    /// one reference per entry (the events' es_dg and closure references). Invoking it calls every entry in order and gives the last
+    /// result; -= removes the last matching entry (or the last matching run, for a multicast operand), and removing the last entry
+    /// leaves null. The old value's reference is dropped, so d must own its closure, as Heap.Free(ref d) assumes; Heap.Free(ref d)
+    /// then releases the entries.
+    /// </summary>
+    private string DelegateCompound(AssignmentExpressionSyntax a, INamedTypeSymbol del, bool top)
+    {
+        var invoke = del.DelegateInvokeMethod;
+        if (invoke == null) return Unsupported(a, "+= or -= on this delegate");
+        if (Split.Active || LibMode) return Unsupported(a, "+= or -= on a delegate that is not an event in a precompiled package or an Amiga library (the multicast trampoline must be one function per program)");
+        if (invoke.ReturnsByRef || invoke.ReturnsByRefReadonly || invoke.Parameters.Any(p => p.RefKind != RefKind.None))
+            return Unsupported(a, "+= or -= on a delegate type with ref or out parameters or a ref return");
+        if (WrittenProperty(a.Left) != null) return Unsupported(a, "+= or -= on a property with accessors; use an auto-property, a field or a local");
+        if (IsRefVariable(Model(a).GetSymbolInfo(a.Left).Symbol) != null)
+            return Unsupported(a, "+= or -= on a ref, out or in delegate variable");
+        if (!RequireSimple(a.Left, "+= or -= on a delegate")) return "0";
+        _usesClosures = true;
+        _usesMulticast = true;
+        var dt = CType(del, a);
+        var (add, sub) = MulticastHelpers(del, invoke, dt, a);
+        var l = Expr(a.Left);
+        string call;
+        if (IsNullConstant(a.Right)) call = l;
+        else if (a.IsKind(SyntaxKind.SubtractAssignmentExpression)) call = $"{sub}({l}, {Expr(a.Right, top: true)})";
+        else
+        {
+            if (IsFreshDelegate(a.Right) is not bool fresh) return "0";
+            call = $"{add}({l}, {Expr(a.Right, top: true)}, {(fresh ? 1 : 0)})";
+        }
+        var s = $"{l} = {call}";
+        return top ? s : $"({s})";
+    }
+
+    private bool _usesMulticast;
+
+    /// <summary>The functions that add to and remove from a multicast delegate of type <paramref name="dt"/> (and its trampoline), written once per type.</summary>
+    private (string Add, string Sub) MulticastHelpers(INamedTypeSymbol del, IMethodSymbol invoke, string dt, SyntaxNode at)
+    {
+        string mc = dt + "_mc", add = dt + "_add", sub = dt + "_sub";
+        var key = "ES_zmc_" + dt;
+        if (_spans.ContainsKey(key)) return (add, sub);
+        var ps = invoke.Parameters.Select((p, i) => Decl(p.Type, $"a{i}", at)).Prepend("void *env").ToList();
+        var args = string.Join(", ", invoke.Parameters.Select((_, i) => $"a{i}"));
+        var comma = args.Length == 0 ? "" : ", ";
+        var isVoid = invoke.ReturnType.SpecialType == SpecialType.System_Void;
+        var ft = $"__typeof__((({dt} *)0)->fn)";
+        var sb = new StringBuilder();
+        sb.Append($"static __attribute__((unused)) {Decl(invoke.ReturnType, $"{mc}({string.Join(", ", ps)})", at)}\n{{\n");
+        sb.Append("    es_mc *m = (es_mc *)env;\n    m->h.rc++;\n");
+        sb.Append($"    for (int32_t i = 0; i < m->n - 1; i++) (({ft})m->items[i].fn)(m->items[i].env{comma}{args});\n");
+        if (isVoid)
+            sb.Append($"    (({ft})m->items[m->n - 1].fn)(m->items[m->n - 1].env{comma}{args});\n    es_frame_release(m);\n");
+        else
+            sb.Append($"    {Decl(invoke.ReturnType, "r", at)} = (({ft})m->items[m->n - 1].fn)(m->items[m->n - 1].env{comma}{args});\n    es_frame_release(m);\n    return r;\n");
+        sb.Append("}\n");
+        sb.Append($"static __attribute__((unused)) {dt} {add}({dt} cur, {dt} v, int fresh)\n{{\n");
+        sb.Append($"    es_vfn f = (es_vfn)cur.fn;\n    es_dg_add((es_vfn){mc}, &f, &cur.env, (es_vfn)v.fn, v.env, fresh);\n    cur.fn = ({ft})f;\n    return cur;\n}}\n");
+        sb.Append($"static __attribute__((unused)) {dt} {sub}({dt} cur, {dt} v)\n{{\n");
+        sb.Append($"    es_vfn f = (es_vfn)cur.fn;\n    es_dg_sub((es_vfn){mc}, &f, &cur.env, (es_vfn)v.fn, v.env);\n    cur.fn = ({ft})f;\n    return cur;\n}}\n");
+        _spans[key] = sb.ToString();
+        return (add, sub);
+    }
+
     /// <summary>Raising an event: every handler in order, on a snapshot of the count (handlers added meanwhile wait for the next raise; removals are deferred).</summary>
     private string EventRaise(IEventSymbol ev, ExpressionSyntax callee, ArgumentListSyntax args, IMethodSymbol invoke, SyntaxNode at)
     {
@@ -1077,6 +1149,82 @@ internal sealed partial class CEmitter
             "}",
             "static __attribute__((unused)) uint32_t es_event_begin(es_event *e) { e->busy++; return ++e->stamp; }",
             "static __attribute__((unused)) void es_event_end(es_event *e) { if (--e->busy == 0 && e->live != e->count) es_event_compact(e); }",
+        }) result.AppendLine(line);
+        if (_usesMulticast)
+            foreach (var line in new[]
+        {
+            "/* Multicast delegates (d += x on a delegate that is not an event): { trampoline, es_mc }, the es_mc a reference-counted frame holding",
+            "   one reference per entry. It never changes once built: += and -= make a new one and drop the old. */",
+            "typedef void (*es_vfn)(void);",
+            "typedef struct { es_frame h; int32_t n; es_dg items[1]; } es_mc;",
+            "static __attribute__((unused)) void es_mc_fini(es_frame *f)",
+            "{",
+            "    es_mc *m = (es_mc *)f;",
+            "    for (int32_t i = 0; i < m->n; i++) es_closure_release(m->items[i].env);",
+            "}",
+            "static __attribute__((unused)) es_dg *es_mc_items(es_vfn tramp, es_vfn fn, void *env, es_dg *one, int32_t *n)",
+            "{",
+            "    if (fn == tramp) { es_mc *m = (es_mc *)env; *n = m->n; return m->items; }",
+            "    one->fn = fn; one->env = env; one->dead = 0; *n = 1;",
+            "    return one;",
+            "}",
+            "static __attribute__((unused)) es_mc *es_mc_new(int32_t n)",
+            "{",
+            "    es_mc *m = (es_mc *)es_frame_new(sizeof(es_mc) + (size_t)(n > 1 ? n - 1 : 0) * sizeof(es_dg), NULL);",
+            "    m->h.fini = es_mc_fini;",
+            "    es_closures_live++;   /* the reference of the delegate that holds it */",
+            "    return m;",
+            "}",
+            "static __attribute__((unused)) void es_mc_push(es_mc *m, const es_dg *d)",
+            "{",
+            "    m->items[m->n].fn = d->fn; m->items[m->n].env = es_closure_retain(d->env); m->items[m->n].dead = 0;",
+            "    m->n++;",
+            "}",
+            "/* cur += v: v hands over its reference when fresh, else the entries take their own. The old value's reference is dropped. */",
+            "static __attribute__((unused)) void es_dg_add(es_vfn tramp, es_vfn *cfn, void **cenv, es_vfn vfn, void *venv, int fresh)",
+            "{",
+            "    es_dg c1, v1; int32_t nc, nv;",
+            "    if (vfn == NULL) return;",
+            "    if (*cfn == NULL) { if (!fresh) es_closure_retain(venv); *cfn = vfn; *cenv = venv; return; }",
+            "    es_dg *ci = es_mc_items(tramp, *cfn, *cenv, &c1, &nc);",
+            "    es_dg *vi = es_mc_items(tramp, vfn, venv, &v1, &nv);",
+            "    es_mc *m = es_mc_new(nc + nv);",
+            "    for (int32_t i = 0; i < nc; i++) es_mc_push(m, &ci[i]);",
+            "    for (int32_t i = 0; i < nv; i++) es_mc_push(m, &vi[i]);",
+            "    es_closure_release(*cenv);",
+            "    if (fresh) es_closure_release(venv);",
+            "    *cfn = tramp; *cenv = m;",
+            "}",
+            "/* cur -= v: the last entry (or run of entries) equal to v goes; no match changes nothing; nothing left is null. */",
+            "static __attribute__((unused)) void es_dg_sub(es_vfn tramp, es_vfn *cfn, void **cenv, es_vfn vfn, void *venv)",
+            "{",
+            "    es_dg c1, v1; int32_t nc, nv, k;",
+            "    if (vfn == NULL || *cfn == NULL) return;",
+            "    es_dg *ci = es_mc_items(tramp, *cfn, *cenv, &c1, &nc);",
+            "    es_dg *vi = es_mc_items(tramp, vfn, venv, &v1, &nv);",
+            "    for (k = nc - nv; k >= 0; k--)",
+            "    {",
+            "        int32_t j;",
+            "        for (j = 0; j < nv; j++) if (ci[k + j].fn != vi[j].fn || ci[k + j].env != vi[j].env) break;",
+            "        if (j == nv) break;",
+            "    }",
+            "    if (k < 0) return;",
+            "    int32_t rest = nc - nv;",
+            "    if (rest == 0) { es_closure_release(*cenv); *cfn = NULL; *cenv = NULL; return; }",
+            "    if (rest == 1)",
+            "    {",
+            "        const es_dg *keep = &ci[k == 0 ? nv : 0];",
+            "        es_vfn kf = keep->fn;",
+            "        void *ke = es_closure_retain(keep->env);",
+            "        es_closure_release(*cenv);",
+            "        *cfn = kf; *cenv = ke;",
+            "        return;",
+            "    }",
+            "    es_mc *m = es_mc_new(rest);",
+            "    for (int32_t i = 0; i < nc; i++) if (i < k || i >= k + nv) es_mc_push(m, &ci[i]);",
+            "    es_closure_release(*cenv);",
+            "    *cfn = tramp; *cenv = m;",
+            "}",
         }) result.AppendLine(line);
     }
 }

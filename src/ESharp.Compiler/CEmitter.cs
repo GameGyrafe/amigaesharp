@@ -3229,6 +3229,9 @@ ADD2SET(es_aros_wbstart, PROGRAM_ENTRIES, -50)
                 }
                 if (a.IsKind(SyntaxKind.CoalesceAssignmentExpression)) return CoalesceAssignment(a);
                 if (Model(a).GetSymbolInfo(a.Left).Symbol is IEventSymbol assignedEvent) return EventAssignment(a, assignedEvent);
+                if ((a.IsKind(SyntaxKind.AddAssignmentExpression) || a.IsKind(SyntaxKind.SubtractAssignmentExpression))
+                    && Model(a).GetTypeInfo(a.Left).Type is INamedTypeSymbol { TypeKind: TypeKind.Delegate } compoundDelegate)
+                    return DelegateCompound(a, compoundDelegate, top);
                 if (a.IsKind(SyntaxKind.SimpleAssignmentExpression) && Model(a).GetSymbolInfo(a.Left).Symbol is ILocalSymbol { Type.TypeKind: TypeKind.Delegate } assignedLocal)
                     CheckBorrowedCopy(assignedLocal, a.Right, a);
                 if (WrittenProperty(a.Left) is { } wp) return PropertyAssignment(wp, a);
