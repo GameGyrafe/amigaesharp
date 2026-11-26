@@ -241,10 +241,64 @@ Check(Heap.LiveClosures() == base0, ""still nothing leaks"");
     [InlineData("static void B() { } static void Q1(System.Action p) { p += B; }", "")]
     [InlineData("static void B() { } static void Q2(System.Action s) { System.Action d = s; d -= B; }", "")]
     [InlineData("static void B() { } static System.Action H; static void Q3([Owned] System.Action s) { H = s; H += B; }", "")]
+    [InlineData("static System.Action S = () => { }; static void B() { } static void GetOut(out System.Action o) { o = S; }", "System.Action d; GetOut(out d); d += B;")]
+    [InlineData("static System.Action S = () => { }; static void B() { } static void GetOut(out System.Action o) { o = S; }", "GetOut(out System.Action d); d += B;")]
+    [InlineData("static System.Action S = () => { }; static void B() { } static void Set(ref System.Action r) { r = S; }", "System.Action d = null; Set(ref d); d += B;")]
+    [InlineData("static System.Action S = () => { }; static void B() { }", "System.Action d = null; d ??= S; d += B;")]
+    [InlineData("static System.Action S = () => { }; static void B() { }", "if (S is System.Action d) { d += B; }")]
+    [InlineData("static System.Action S = () => { }; static void B() { }", "switch (S) { case System.Action d: d += B; break; }")]
+    [InlineData("static System.Action S = () => { }; static void B() { }", "System.Action d = null; ref System.Action r = ref d; r = S; d += B;")]
+    [InlineData("static System.Action S = () => { }; static void B() { }", "System.Action d = null; int i; (d, i) = (S, 1); d += B;")]
     public void Compound_assignment_on_a_delegate_that_shares_or_borrows_a_reference_is_ES0099(string members, string body)
     {
         var r = Compile(Program(members, body));
         Assert.Contains("ES0099", ErrorIds(r));
+    }
+
+    [Theory]
+    [InlineData("static void A() { } static void B() { }", "System.Action d = A; System.Action e = d + B; e();")]
+    [InlineData("static void A() { } static void B() { }", "System.Action d = A; d += B; System.Action e = d - B; e();")]
+    [InlineData("static void A() { } static void B() { }", "System.Action d = A; d += (System.Action)A + B;")]
+    public void Binary_plus_and_minus_on_delegates_are_ES0099(string members, string body)
+    {
+        var r = Compile(Program(members, body));
+        Assert.Contains("ES0099", ErrorIds(r));
+    }
+
+    [Fact]
+    public void Compound_assignment_after_owned_values_through_coalescing_and_Heap_Free_runs_clean()
+    {
+        if (!HasGcc) return;
+        const string members = @"
+static int log;
+static void A() { log = log * 10 + 1; }
+static void B() { log = log * 10 + 2; }
+static void C() { log = log * 10 + 3; }
+";
+        const string body = @"
+int base0 = Heap.LiveClosures();
+int n = 0;
+System.Action d = null;
+d ??= () => n++;
+d ??= A;
+d += B;
+log = 0; d();
+Check(n == 1 && log == 2, ""??= with a lambda, then +="");
+Heap.Free(ref d);
+d += A;
+d += C;
+log = 0; d();
+Check(log == 13, ""+= again after Heap.Free(ref d)"");
+d -= A;
+d += B;
+log = 0; d();
+Check(log == 32, ""-= then += on the same variable"");
+Heap.Free(ref d);
+Check(Heap.LiveClosures() == base0, ""nothing leaks"");
+";
+        var (code, output) = Run(members, body);
+        Assert.Equal(OkLines("??= with a lambda, then +=", "+= again after Heap.Free(ref d)", "-= then += on the same variable", "nothing leaks"), output);
+        Assert.Equal(0, code);
     }
 
     [Fact]

@@ -3348,6 +3348,10 @@ ADD2SET(es_aros_wbstart, PROGRAM_ENTRIES, -50)
         if (isEquality && (leftType is INamedTypeSymbol { IsTupleType: true } || rightType is INamedTypeSymbol { IsTupleType: true }))
             return Unsupported(b, "== and != on tuples; compare the elements");
 
+        // d + x and d - x on delegates (a new multicast value nobody owns yet): not done; += and -= on a variable are.
+        if ((b.IsKind(SyntaxKind.AddExpression) || b.IsKind(SyntaxKind.SubtractExpression)) && Model(b).GetTypeInfo(b).Type?.TypeKind == TypeKind.Delegate)
+            return Unsupported(b, $"binary {b.OperatorToken.Text} on delegates (the combined delegate would have no owner to free it); use d {b.OperatorToken.Text}= x on a variable that owns its delegates");
+
         // string == string compares the characters (C# semantics), not the addresses; against the null constant it is a pointer test.
         if (isEquality && leftType?.SpecialType == SpecialType.System_String && rightType?.SpecialType == SpecialType.System_String
             && !IsNullConstant(b.Left) && !IsNullConstant(b.Right))

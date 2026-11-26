@@ -1017,30 +1017,47 @@ internal sealed partial class CEmitter
         return owns;
     }
 
-    /// <summary>True when every plain assignment to or initializer of <paramref name="sym"/> gives a value that is new or holds no closure (a lambda, a method group, null, a call that returns a new lambda).</summary>
+    /// <summary>
+    /// True when every value <paramref name="sym"/> is given is new or holds no closure (a lambda, a method group, null, a call that returns
+    /// a new lambda): through =, ??=, an initializer or a parameter default. Any other way of writing it is taken as a copy that it does not
+    /// own: a ref or out argument (except Heap.Free), a ref to it (ref local, ref return, ref conditional), a deconstruction, and a variable
+    /// declared by a pattern or an out var.
+    /// </summary>
     private bool AllValuesFresh(ISymbol sym)
     {
+        foreach (var r in sym.DeclaringSyntaxReferences)
+            if (r.GetSyntax() is SingleVariableDesignationSyntax) return false;   // is Action d, case Action d, out Action d, var (d, x)
+        bool Is(SemanticModel model, ExpressionSyntax e) => SymbolEqualityComparer.Default.Equals(model.GetSymbolInfo(Strip(e)).Symbol, sym);
         foreach (var tree in _compilation.SyntaxTrees)
         {
             var model = Model(tree);
             foreach (var n in tree.GetRoot().DescendantNodes())
             {
                 ExpressionSyntax? value = null;
-                if (n is AssignmentExpressionSyntax asg && asg.IsKind(SyntaxKind.SimpleAssignmentExpression))
+                switch (n)
                 {
-                    if (SymbolEqualityComparer.Default.Equals(model.GetSymbolInfo(asg.Left).Symbol, sym)) value = asg.Right;
-                }
-                else if (n is VariableDeclaratorSyntax { Initializer: { } init } vd)
-                {
-                    if (SymbolEqualityComparer.Default.Equals(model.GetDeclaredSymbol(vd), sym)) value = init.Value;
-                }
-                else if (n is PropertyDeclarationSyntax { Initializer: { } pinit } pd)
-                {
-                    if (SymbolEqualityComparer.Default.Equals(model.GetDeclaredSymbol(pd), sym)) value = pinit.Value;
-                }
-                else if (n is ParameterSyntax { Default: { } def } ps)
-                {
-                    if (SymbolEqualityComparer.Default.Equals(model.GetDeclaredSymbol(ps), sym)) value = def.Value;
+                    case AssignmentExpressionSyntax asg when asg.IsKind(SyntaxKind.SimpleAssignmentExpression) || asg.IsKind(SyntaxKind.CoalesceAssignmentExpression):
+                        if (asg.Left is TupleExpressionSyntax or DeclarationExpressionSyntax)
+                        {
+                            if (asg.Left.DescendantNodes().OfType<ExpressionSyntax>().Any(x => Is(model, x))) return false;
+                        }
+                        else if (Is(model, asg.Left)) value = asg.Right;
+                        break;
+                    case ArgumentSyntax arg when arg.RefKindKeyword.IsKind(SyntaxKind.RefKeyword) || arg.RefKindKeyword.IsKind(SyntaxKind.OutKeyword):
+                        if (Is(model, arg.Expression) && !IsHeapFreeArgument(arg)) return false;
+                        break;
+                    case RefExpressionSyntax re:
+                        if (Is(model, re.Expression)) return false;
+                        break;
+                    case VariableDeclaratorSyntax { Initializer: { } init } vd:
+                        if (SymbolEqualityComparer.Default.Equals(model.GetDeclaredSymbol(vd), sym)) value = init.Value;
+                        break;
+                    case PropertyDeclarationSyntax { Initializer: { } pinit } pd:
+                        if (SymbolEqualityComparer.Default.Equals(model.GetDeclaredSymbol(pd), sym)) value = pinit.Value;
+                        break;
+                    case ParameterSyntax { Default: { } def } ps:
+                        if (SymbolEqualityComparer.Default.Equals(model.GetDeclaredSymbol(ps), sym)) value = def.Value;
+                        break;
                 }
                 if (value != null && !NewOrEmptyValue(value)) return false;
             }
