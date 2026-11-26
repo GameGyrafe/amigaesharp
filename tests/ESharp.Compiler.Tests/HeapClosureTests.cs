@@ -235,6 +235,49 @@ Check(Heap.LiveClosures() == base0, ""still nothing leaks"");
         Assert.Contains("ES0099", ErrorIds(r));
     }
 
+    [Theory]
+    [InlineData("static System.Action S; static void B() { }", "S = () => { }; System.Action d = S; d += B;")]
+    [InlineData("static System.Action F = () => { }; static void B() { }", "System.Action d = null; d = F; d += B;")]
+    [InlineData("static void B() { } static void Q1(System.Action p) { p += B; }", "")]
+    [InlineData("static void B() { } static void Q2(System.Action s) { System.Action d = s; d -= B; }", "")]
+    [InlineData("static void B() { } static System.Action H; static void Q3([Owned] System.Action s) { H = s; H += B; }", "")]
+    public void Compound_assignment_on_a_delegate_that_shares_or_borrows_a_reference_is_ES0099(string members, string body)
+    {
+        var r = Compile(Program(members, body));
+        Assert.Contains("ES0099", ErrorIds(r));
+    }
+
+    [Fact]
+    public void Delegate_equality_compares_the_function_and_the_environment_and_multicast_entries()
+    {
+        if (!HasGcc) return;
+        const string members = @"
+static void A() { }
+static void B() { }
+static void C() { }
+";
+        const string body = @"
+int base0 = Heap.LiveClosures();
+System.Action x = A; x += B;
+System.Action y = A; y += C;
+Check(x != y && !(x == y), ""multicast delegates with different entries differ"");
+System.Action z = A; z += B;
+Check(x == z && !(x != z), ""multicast delegates with the same entries are equal"");
+System.Action p = A;
+Check(p == A && p != B, ""a method group against a delegate"");
+int n = 0;
+System.Action l1 = () => n++, l2 = () => n++;
+Check(l1 != l2 && l1 == l1, ""two lambdas with their own closures differ"");
+Check(x != p && p != null, ""multicast against plain, and null"");
+Heap.Free(ref x); Heap.Free(ref y); Heap.Free(ref z); Heap.Free(ref l1); Heap.Free(ref l2);
+Check(Heap.LiveClosures() == base0, ""nothing leaks"");
+";
+        var (code, output) = Run(members, body);
+        Assert.Equal(OkLines("multicast delegates with different entries differ", "multicast delegates with the same entries are equal",
+            "a method group against a delegate", "two lambdas with their own closures differ", "multicast against plain, and null", "nothing leaks"), output);
+        Assert.Equal(0, code);
+    }
+
     [Fact]
     public void Static_fields_of_reference_type_in_structs_are_allowed_and_initialised()
     {

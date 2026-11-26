@@ -460,8 +460,10 @@ attributes (`[EntryPoint]`, `[AmigaLib]`, `[ChipRam]`, ...) and a small intrinsi
 - `d += x` and `d -= x` on a delegate that is not an event (a local, parameter, field, static or auto-property; `Action`, `Func`,
   your own delegate types without `ref`/`out` parameters) are multicast as in dotnet: calls run in order, a `Func` gives the last
   result, `-=` removes the last matching entry, and removing the last one leaves `null`. `d` owns its closures: `Heap.Free(ref d)`
-  releases them all, and `+=` and `-=` drop the reference of the value they replace, so do not keep a second copy of `d` (`e = d`
-  shares one reference) and use it after `d += x`. A kept variable you add (`d += h`) keeps its own reference, so free it too.
+  releases them all, and `+=` and `-=` drop the reference of the value they replace, so the variable must own it: a variable that is
+  ever given a copy of another delegate (`d = e`, `d = Field`, a parameter, a call that may return one) is ES0099 for `+=`/`-=`, and
+  so is a parameter that is not `[Owned]`. A kept variable you add (`d += h`) keeps its own reference, so free it too. `==` and `!=`
+  on delegates compare the function and the closure; multicast delegates are equal when their entries are.
   Not supported (ES0099): a property with accessors, a `ref` variable, a delegate type with `ref`/`out` parameters, and
   precompiled packages and Amiga libraries. A static field of reference type in a struct is allowed (ES0010 is about instance
   fields: a value holding a reference).

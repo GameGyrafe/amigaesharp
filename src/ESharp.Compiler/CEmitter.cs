@@ -3403,6 +3403,29 @@ ADD2SET(es_aros_wbstart, PROGRAM_ENTRIES, -50)
             string Side(ExpressionSyntax x) => x is LiteralExpressionSyntax l && l.IsKind(SyntaxKind.NullLiteralExpression) ? "NULL"
                 : IsInterfaceType(Model(x).GetTypeInfo(x).Type) ? $"{Expr(x)}.obj"
                 : IsDelegate(Model(x).GetTypeInfo(x).Type) || Model(x).GetTypeInfo(x) is { Type: null, ConvertedType.TypeKind: TypeKind.Delegate } ? $"{Expr(x)}.fn" : Expr(x);
+            var ltype = Model(b).GetTypeInfo(b.Left);
+            var rtype = Model(b).GetTypeInfo(b.Right);
+            var dtype = (IsDelegate(ltype.Type) ? ltype.Type : IsDelegate(rtype.Type) ? rtype.Type : null) as INamedTypeSymbol;
+            if (dtype?.DelegateInvokeMethod is { } inv && !IsNullConstant(b.Left) && !IsNullConstant(b.Right))
+            {
+                // Same function and same environment; two multicast delegates are equal when their entries are (their function is one trampoline).
+                var neg = b.IsKind(SyntaxKind.NotEqualsExpression) ? "!" : "";
+                var dt = CType(dtype, b);
+                string cmp2;
+                if (!Split.Active && !LibMode && !inv.ReturnsByRef && !inv.ReturnsByRefReadonly && !inv.Parameters.Any(p => p.RefKind != RefKind.None))
+                {
+                    _usesClosures = true;
+                    _usesMulticast = true;
+                    MulticastHelpers(dtype, inv, dt, b);
+                    cmp2 = $"{neg}{dt}_eq({Expr(b.Left, top: true)}, {Expr(b.Right, top: true)})";
+                }
+                else
+                {
+                    var (x, y) = ($"_dq{++_temp}", $"_dq{++_temp}");
+                    cmp2 = $"{neg}({{ {dt} {x} = {Expr(b.Left, top: true)}; {dt} {y} = {Expr(b.Right, top: true)}; {x}.fn == {y}.fn && {x}.env == {y}.env; }})";
+                }
+                return top ? cmp2 : $"({cmp2})";
+            }
             var cmp = $"{Side(b.Left)} {b.OperatorToken.Text} {Side(b.Right)}";
             return top ? cmp : $"({cmp})";
         }

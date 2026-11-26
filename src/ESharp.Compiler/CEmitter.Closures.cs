@@ -970,6 +970,7 @@ internal sealed partial class CEmitter
         if (IsRefVariable(Model(a).GetSymbolInfo(a.Left).Symbol) != null)
             return Unsupported(a, "+= or -= on a ref, out or in delegate variable");
         if (!RequireSimple(a.Left, "+= or -= on a delegate")) return "0";
+        if (!CheckCompoundTarget(a)) return "0";
         _usesClosures = true;
         _usesMulticast = true;
         var dt = CType(del, a);
@@ -988,6 +989,91 @@ internal sealed partial class CEmitter
     }
 
     private bool _usesMulticast;
+
+    private readonly Dictionary<ISymbol, bool> _ownsValues = new(SymbolEqualityComparer.Default);
+
+    /// <summary>
+    /// += and -= drop the reference of the value they replace, so the variable must own it: a borrowed parameter does not (the es_mc frame
+    /// would leak, and Heap.Free is refused), and a variable that was ever given a copy of another delegate (a variable, a field, a parameter,
+    /// a call that may return one) shares that owner's reference, so dropping it frees the other owner's closure.
+    /// </summary>
+    private bool CheckCompoundTarget(AssignmentExpressionSyntax a)
+    {
+        var sym = Model(a).GetSymbolInfo(a.Left).Symbol;
+        if (IsBorrowedParameter(sym))
+        {
+            ReportOnce(a, $"+= or -= on the borrowed delegate parameter '{sym!.Name}' (the new value could not be freed); mark the parameter [Owned]");
+            return false;
+        }
+        if (sym is not (ILocalSymbol or IParameterSymbol or IFieldSymbol or IPropertySymbol))
+        {
+            ReportOnce(a, "+= or -= on this kind of delegate variable (only a local, parameter, field or auto-property whose every value is a new lambda, a method or null)");
+            return false;
+        }
+        if (!_ownsValues.TryGetValue(sym, out var owns))
+            _ownsValues[sym] = owns = AllValuesFresh(sym);
+        if (!owns)
+            ReportOnce(a, $"+= or -= on '{sym.Name}', which is also given a copy of another delegate (a variable, field, parameter or a call that may return one): that copy shares the other owner's reference, which += would drop; give it only lambdas, methods or null, or build the list in a variable of its own");
+        return owns;
+    }
+
+    /// <summary>True when every plain assignment to or initializer of <paramref name="sym"/> gives a value that is new or holds no closure (a lambda, a method group, null, a call that returns a new lambda).</summary>
+    private bool AllValuesFresh(ISymbol sym)
+    {
+        foreach (var tree in _compilation.SyntaxTrees)
+        {
+            var model = Model(tree);
+            foreach (var n in tree.GetRoot().DescendantNodes())
+            {
+                ExpressionSyntax? value = null;
+                if (n is AssignmentExpressionSyntax asg && asg.IsKind(SyntaxKind.SimpleAssignmentExpression))
+                {
+                    if (SymbolEqualityComparer.Default.Equals(model.GetSymbolInfo(asg.Left).Symbol, sym)) value = asg.Right;
+                }
+                else if (n is VariableDeclaratorSyntax { Initializer: { } init } vd)
+                {
+                    if (SymbolEqualityComparer.Default.Equals(model.GetDeclaredSymbol(vd), sym)) value = init.Value;
+                }
+                else if (n is PropertyDeclarationSyntax { Initializer: { } pinit } pd)
+                {
+                    if (SymbolEqualityComparer.Default.Equals(model.GetDeclaredSymbol(pd), sym)) value = pinit.Value;
+                }
+                else if (n is ParameterSyntax { Default: { } def } ps)
+                {
+                    if (SymbolEqualityComparer.Default.Equals(model.GetDeclaredSymbol(ps), sym)) value = def.Value;
+                }
+                if (value != null && !NewOrEmptyValue(value)) return false;
+            }
+        }
+        return true;
+    }
+
+    private bool NewOrEmptyValue(ExpressionSyntax e)
+    {
+        e = Strip(e);
+        switch (e)
+        {
+            case LambdaExpressionSyntax:
+                return true;
+            case ExpressionSyntax when IsNullConstant(e):
+                return true;
+            case InvocationExpressionSyntax inv:
+                return IsFreshCall(inv, new HashSet<IMethodSymbol>(SymbolEqualityComparer.Default));
+            case CastExpressionSyntax c:
+                return NewOrEmptyValue(c.Expression);
+            case ConditionalExpressionSyntax c:
+                return NewOrEmptyValue(c.WhenTrue) && NewOrEmptyValue(c.WhenFalse);
+            case BinaryExpressionSyntax { RawKind: (int)SyntaxKind.CoalesceExpression } b:
+                return NewOrEmptyValue(b.Left) && NewOrEmptyValue(b.Right);
+            case SwitchExpressionSyntax sw:
+                return sw.Arms.All(arm => NewOrEmptyValue(arm.Expression));
+            case ObjectCreationExpressionSyntax { ArgumentList.Arguments.Count: 1 } oc:
+                return NewOrEmptyValue(oc.ArgumentList.Arguments[0].Expression);
+            default:
+                // A method group (a name or member access that is a method, not a variable): its environment is null.
+                return Model(e).GetSymbolInfo(e).Symbol is IMethodSymbol;
+        }
+    }
 
     /// <summary>The functions that add to and remove from a multicast delegate of type <paramref name="dt"/> (and its trampoline), written once per type.</summary>
     private (string Add, string Sub) MulticastHelpers(INamedTypeSymbol del, IMethodSymbol invoke, string dt, SyntaxNode at)
@@ -1011,6 +1097,7 @@ internal sealed partial class CEmitter
         sb.Append("}\n");
         sb.Append($"static __attribute__((unused)) {dt} {add}({dt} cur, {dt} v, int fresh)\n{{\n");
         sb.Append($"    es_vfn f = (es_vfn)cur.fn;\n    es_dg_add((es_vfn){mc}, &f, &cur.env, (es_vfn)v.fn, v.env, fresh);\n    cur.fn = ({ft})f;\n    return cur;\n}}\n");
+        sb.Append($"static __attribute__((unused)) int {dt}_eq({dt} a, {dt} b)\n{{\n    return es_dg_eq((es_vfn){mc}, (es_vfn)a.fn, a.env, (es_vfn)b.fn, b.env);\n}}\n");
         sb.Append($"static __attribute__((unused)) {dt} {sub}({dt} cur, {dt} v)\n{{\n");
         sb.Append($"    es_vfn f = (es_vfn)cur.fn;\n    es_dg_sub((es_vfn){mc}, &f, &cur.env, (es_vfn)v.fn, v.env);\n    cur.fn = ({ft})f;\n    return cur;\n}}\n");
         _spans[key] = sb.ToString();
@@ -1194,6 +1281,18 @@ internal sealed partial class CEmitter
             "    es_closure_release(*cenv);",
             "    if (fresh) es_closure_release(venv);",
             "    *cfn = tramp; *cenv = m;",
+            "}",
+            "static __attribute__((unused)) int es_dg_eq(es_vfn tramp, es_vfn afn, void *aenv, es_vfn bfn, void *benv)",
+            "{",
+            "    es_dg a1, b1; int32_t na, nb;",
+            "    if (afn != bfn) return 0;",
+            "    if (aenv == benv) return 1;",
+            "    if (afn != tramp) return 0;",
+            "    es_dg *ai = es_mc_items(tramp, afn, aenv, &a1, &na);",
+            "    es_dg *bi = es_mc_items(tramp, bfn, benv, &b1, &nb);",
+            "    if (na != nb) return 0;",
+            "    for (int32_t i = 0; i < na; i++) if (ai[i].fn != bi[i].fn || ai[i].env != bi[i].env) return 0;",
+            "    return 1;",
             "}",
             "/* cur -= v: the last entry (or run of entries) equal to v goes; no match changes nothing; nothing left is null. */",
             "static __attribute__((unused)) void es_dg_sub(es_vfn tramp, es_vfn *cfn, void **cenv, es_vfn vfn, void *venv)",
