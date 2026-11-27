@@ -497,8 +497,9 @@ attributes (`[EntryPoint]`, `[AmigaLib]`, `[ChipRam]`, ...) and a small intrinsi
   of the path before `d` must be `this`, a local, a parameter or a field). Any other read, such as `e = d`, passing `d` to a call,
   a property pattern `{ F: var e }` or an operator, makes every `+=`/`-=` on it ES0099, also when it comes after the last `+=`
   (the message names the read's line). "Runs no code" means literals, locals, parameters, fields, auto-properties, built-in
-  operators, `?:`, `??`, lambdas and method groups. Not checked: a `+=` on a shared field from an interrupt server or another
-  task, using a copy after `Heap.Free(ref d)`, and `ref` locals. A kept variable you add
+  operators and conversions (not user-defined ones), `?:`, `??`, lambdas and method groups. Not checked: a `+=` on a shared
+  field from an interrupt server or another task, using a copy after `Heap.Free(ref d)`, `ref` locals, and a `-=` that removes
+  the running delegate from inside its own call (`d -= d` in a closure that `d` holds alone frees it while it runs). A kept variable you add
   (`d += h`) keeps its own reference, so free it too. Given to an `[Owned]` parameter or a setter at its last use, `d` hands
   its whole list over, as a lambda local does. `==` and `!=` on delegates compare the function and the closure; multicast
   delegates are equal when their entries are.

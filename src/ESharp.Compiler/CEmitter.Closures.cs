@@ -1076,17 +1076,32 @@ internal sealed partial class CEmitter
         SyntaxNode? fn = null;
         if (d is ILocalSymbol { RefKind: RefKind.None } or IParameterSymbol { RefKind: RefKind.None }) FrameScopeOf(d, out fn);
         var nodes = fn != null ? fn.DescendantNodes() : _compilation.SyntaxTrees.SelectMany(t => t.GetRoot().DescendantNodes());
+        // A copy is named first; a read refused only because a neighbouring argument or operand runs code is named when there is no copy.
+        IdentifierNameSyntax? runsCode = null;
         foreach (var u in nodes.OfType<IdentifierNameSyntax>())
         {
-            if (!Reads(u, d) || SafeRead(u, d)) continue;
-            var line = u.GetLocation().GetLineSpan();
-            return $"+= or -= on '{d.Name}', which is also read at {System.IO.Path.GetFileName(line.Path)} line {line.StartLinePosition.Line + 1} ('{ReadText(u)}') in a way that may copy it: "
+            if (!Reads(u, d)) continue;
+            _impureSeen = false;
+            if (SafeRead(u, d)) continue;
+            if (_impureSeen) { runsCode ??= u; continue; }
+            return Where(u) + " in a way that may copy it: "
                 + "a copy shares the list's pointer, which += or -= releases, so using the copy afterwards would read freed memory. "
                 + $"A delegate variable that has += or -= may only be {(fn != null ? "" : "(anywhere in the program) ")}called (with arguments that run no code), compared, "
                 + "assigned, added to or removed from a delegate or event, freed with Heap.Free, given to an [Owned] parameter or a setter with a body, "
                 + "or moved into a local by 'x = v;' directly followed by 'v = null;'; build the list in a variable that is only used that way";
         }
+        if (runsCode != null)
+            return Where(runsCode) + " next to an argument or operand that runs code (a call, a property with a body, a user-defined operator or conversion, an assignment): "
+                + $"C evaluates '{d.Name}' and that code in either order, so a += or -= the code makes could free the list '{d.Name}' was read as; "
+                + "evaluate the argument or operand into a local first";
         return null;
+    }
+
+    private string Where(IdentifierNameSyntax u)
+    {
+        var line = u.GetLocation().GetLineSpan();
+        var d = Model(u).GetSymbolInfo(u).Symbol!;
+        return $"+= or -= on '{d.Name}', which is also read at {System.IO.Path.GetFileName(line.Path)} line {line.StartLinePosition.Line + 1} ('{ReadText(u)}')";
     }
 
     private static string ReadText(IdentifierNameSyntax u)
@@ -1124,9 +1139,11 @@ internal sealed partial class CEmitter
                 if (!ValueDiscarded(a)) return false;
                 if (a.IsKind(SyntaxKind.SimpleAssignmentExpression) || a.IsKind(SyntaxKind.CoalesceAssignmentExpression)) return true;
                 return IsCompoundOn(a, d) && Pure(a.Right);
-            // A call of d, d.Invoke(...) or d?.Invoke(...): the multicast trampoline holds its own reference to the list while the
-            // entries run, so a += / -= made by an entry cannot free it under the call. The arguments must run no code, because C may
-            // load d before it evaluates them.
+            // A call of d, d.Invoke(...) or d?.Invoke(...): a multicast value is called through the trampoline, which holds its own
+            // reference to the list while the entries run, so a += / -= made by an entry cannot free the list under the call. The
+            // arguments must run no code, because C may load d before it evaluates them. Not covered (as before this check): a single
+            // closure is called as d.fn(d.env) with no reference held, so a -= that empties d from inside its own call (d -= d) frees
+            // the running closure; d += x inside the call is safe (the add retains the entries before it releases the old value).
             case InvocationExpressionSyntax inv when inv.Expression == outer:
                 return inv.ArgumentList.Arguments.All(x => x.RefKindKeyword.IsKind(SyntaxKind.None) && Pure(x.Expression));
             case MemberAccessExpressionSyntax { Name.Identifier.Text: "Invoke", Parent: InvocationExpressionSyntax inv2 } m when m.Expression == outer && inv2.Expression == m:
@@ -1235,11 +1252,21 @@ internal sealed partial class CEmitter
     /// </summary>
     private bool Pure(ExpressionSyntax e)
     {
+        // A user-defined conversion the context applies (an argument, an operand, the operand of +=) is not part of e's own operation.
+        var pure = !Model(e).GetConversion(e).IsUserDefined;
         e = Strip(e);   // a parenthesized expression has no operation of its own
-        if (Model(e).GetSymbolInfo(e).Symbol is INamespaceOrTypeSymbol) return true;
-        var op = Model(e).GetOperation(e);
-        return op != null && PureOp(op);
+        if (pure && !Model(e).GetConversion(e).IsUserDefined)
+        {
+            if (Model(e).GetSymbolInfo(e).Symbol is INamespaceOrTypeSymbol) return true;
+            var op = Model(e).GetOperation(e);
+            pure = op != null && PureOp(op);
+        }
+        else pure = false;
+        if (!pure) _impureSeen = true;
+        return pure;
     }
+
+    private bool _impureSeen;
 
     private static bool PureOp(IOperation op) => op switch
     {

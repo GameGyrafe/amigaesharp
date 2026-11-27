@@ -358,14 +358,28 @@ Check(Heap.LiveClosures() == base0, ""still nothing leaks"");
     // Passing the variable to a call is a copy now, also where no += can run inside the call (the earlier run tests).
     [InlineData("static void Use(System.Action a) { a(); }", "System.Action d = A; Use(d); d += B; Use(d);")]
     [InlineData("static void Use(System.Action a) { a(); }", "Fld2 = A; Fld2 += B; Use(Fld2); Fld2 += B; Use(Fld2);")]
-    // A call of the variable whose arguments run code: C may load the variable before the arguments.
-    [InlineData("static System.Action<int> G; static int Grow() { G += (int x) => { }; return 1; }", "G = (int x) => { }; G += (int x) => { }; G(Grow());")]
-    // A += / -= whose operand runs code: C may load the old list before the operand.
-    [InlineData("static System.Action Make() { Fld += B; return A; }", "Fld = A; Fld += Make();")]
     public void A_delegate_passed_to_a_call_is_ES0099(string members, string body)
     {
         var r = Compile(Program(CopyMembers + members, body));
         Assert.Single(r.Diagnostics, d => d.Id == "ES0099" && d.Severity == Microsoft.CodeAnalysis.DiagnosticSeverity.Error && d.GetMessage().Contains(Copied));
+    }
+
+    private const string ConversionMembers = "public class Bx { public static implicit operator int(Bx b) { Fld += B; return 1; } public static implicit operator System.Action(Bx b) { Fld += B; return A; } }";
+
+    [Theory]
+    // A call of the variable whose arguments run code: C may load the variable before the arguments.
+    [InlineData("static System.Action<int> G; static int Grow() { G += (int x) => { }; return 1; }", "G = (int x) => { }; G += (int x) => { }; G(Grow());")]
+    // A += / -= whose operand runs code: C may load the old list before the operand.
+    [InlineData("static System.Action Make() { Fld += B; return A; }", "Fld = A; Fld += Make();")]
+    // A user-defined implicit conversion that the argument, operand or += applies runs code too.
+    [InlineData(ConversionMembers, "System.Action<int> F1 = (int x) => { }; F1 += (int x) => { }; Bx bx = new Bx(); F1(bx);")]
+    [InlineData(ConversionMembers, "System.Action<int, int> F2 = (int x, int y) => { }; F2 += (int x, int y) => { }; Bx bx = new Bx(); F2(3, bx);")]
+    [InlineData(ConversionMembers, "Fld = A; Fld += B; Bx bx = new Bx(); Fld += bx;")]
+    [InlineData(ConversionMembers, "System.Action d = A; d += B; Bx bx = new Bx(); bool same = bx == d; if (same) log = 1;")]
+    public void A_read_next_to_an_argument_or_operand_that_runs_code_is_ES0099(string members, string body)
+    {
+        var r = Compile(Program(CopyMembers + members, body));
+        Assert.Single(r.Diagnostics, d => d.Id == "ES0099" && d.Severity == Microsoft.CodeAnalysis.DiagnosticSeverity.Error && d.GetMessage().Contains("an argument or operand that runs code"));
     }
 
     private const string Review3Members = @"
