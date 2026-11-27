@@ -257,7 +257,7 @@ Check(Heap.LiveClosures() == base0, ""still nothing leaks"");
 
     private const string CopyMembers = "static int log; static void A() { log = log * 10 + 1; } static void B() { log = log * 10 + 2; } static System.Action Fld; static System.Action Fld2 = A; static void Take(out System.Action o) { o = null; }";
 
-    private const string Copied = "which is also copied";
+    private const string Copied = "in a way that may copy it";
 
     [Theory]
     [InlineData("System.Action d = A; System.Action e = d; d += B; e();")]
@@ -350,16 +350,63 @@ Check(Heap.LiveClosures() == base0, ""still nothing leaks"");
     }
 
     [Theory]
-    [InlineData("static void Use(System.Action a) { Fld += B; a(); }", "Fld = A; Fld += B; Use(Fld);", "'Fld' is passed to a call, and a += or -= on 'Fld' in another method")]
-    [InlineData("static void Use(System.Action a) { Fld -= B; a(); }", "Fld = A; Fld += B; Use(Fld);", "'Fld' is passed to a call, and a += or -= on 'Fld' in another method")]
-    [InlineData("static void Use(in System.Action a) { Fld += B; a(); }", "Fld = A; Fld += B; Use(in Fld);", "'Fld' is passed to a call, and a += or -= on 'Fld' in another method")]
-    [InlineData("class H { public System.Action X; public void Run(System.Action a) { X += B; a(); } }", "var h = new H(); h.X = A; h.X += B; h.Run(h.X);", "'X' is passed to a call")]
-    [InlineData("static void Use(System.Action a, System.Action g) { g(); a(); }", "System.Action d = A; d += B; Use(d, () => { d += B; });", "'d' is passed to a call, and a += or -= on 'd' in a lambda or local function")]
-    public void A_delegate_passed_to_a_call_that_can_release_it_is_ES0099(string members, string body, string message)
+    [InlineData("static void Use(System.Action a) { Fld += B; a(); }", "Fld = A; Fld += B; Use(Fld);")]
+    [InlineData("static void Use(System.Action a) { Fld -= B; a(); }", "Fld = A; Fld += B; Use(Fld);")]
+    [InlineData("static void Use(in System.Action a) { Fld += B; a(); }", "Fld = A; Fld += B; Use(in Fld);")]
+    [InlineData("class H { public System.Action X; public void Run(System.Action a) { X += B; a(); } }", "var h = new H(); h.X = A; h.X += B; h.Run(h.X);")]
+    [InlineData("static void Use(System.Action a, System.Action g) { g(); a(); }", "System.Action d = A; d += B; Use(d, () => { d += B; });")]
+    // Passing the variable to a call is a copy now, also where no += can run inside the call (the earlier run tests).
+    [InlineData("static void Use(System.Action a) { a(); }", "System.Action d = A; Use(d); d += B; Use(d);")]
+    [InlineData("static void Use(System.Action a) { a(); }", "Fld2 = A; Fld2 += B; Use(Fld2); Fld2 += B; Use(Fld2);")]
+    // A call of the variable whose arguments run code: C may load the variable before the arguments.
+    [InlineData("static System.Action<int> G; static int Grow() { G += (int x) => { }; return 1; }", "G = (int x) => { }; G += (int x) => { }; G(Grow());")]
+    // A += / -= whose operand runs code: C may load the old list before the operand.
+    [InlineData("static System.Action Make() { Fld += B; return A; }", "Fld = A; Fld += Make();")]
+    public void A_delegate_passed_to_a_call_is_ES0099(string members, string body)
     {
         var r = Compile(Program(CopyMembers + members, body));
-        var found = r.Diagnostics.Where(d => d.Id == "ES0099" && d.Severity == Microsoft.CodeAnalysis.DiagnosticSeverity.Error && d.GetMessage().Contains(message)).ToList();
-        Assert.Single(found);
+        Assert.Single(r.Diagnostics, d => d.Id == "ES0099" && d.Severity == Microsoft.CodeAnalysis.DiagnosticSeverity.Error && d.GetMessage().Contains(Copied));
+    }
+
+    private const string Review3Members = @"
+static void C() { log = log * 10 + 3; }
+public class Box { public System.Action F; }
+public class Outer { public Box In; }
+public class Box2 { public System.Action Q { get; set; } }
+static System.Action Keep;
+static void Look(Box b) { if (b is { F: var e }) Keep = e; }
+static void Grow(Box b) { b.F += B; }
+static Box2 b1 = new Box2(), b2 = new Box2(); static int n;
+static Box2 Cur { get { n++; return n == 1 ? b1 : b2; } }
+static Box keep = new Box();
+static Box Fresh { get { Box r = keep; keep = new Box(); return r; } }
+public class Bx { public static int operator +(Bx b, System.Action a) { Fld += C; a(); return 1; } }
+static System.Action Hook;
+public class Bh { public static int operator +(Bh b, System.Action a) { Hook(); a(); return 1; } }
+public class Bs { public Bs(System.Action a) { Fld += C; a(); } }
+public class Dv : Bs { public Dv() : base(Fld) { } }
+public class Bs2 { public Bs2(System.Action a, int k) { Fld += C; a(); } public Bs2() : this(Fld, 1) { } }
+";
+
+    [Theory]
+    // Property patterns copy the delegate.
+    [InlineData("Box b = new Box(); b.F = A; b.F += B; if (b is { F: var e }) { b.F += C; e(); }")]
+    [InlineData("Box b = new Box(); b.F = A; b.F += B; System.Action e = b switch { { F: var f } => f, _ => null }; b.F += C; e();")]
+    [InlineData("Box b = new Box(); b.F = A; b.F += B; switch (b) { case { F: System.Action e }: b.F += C; e(); break; }")]
+    [InlineData("Outer o = new Outer(); o.In = new Box(); o.In.F = A; o.In.F += B; if (o is { In.F: var e }) { o.In.F += C; e(); }")]
+    [InlineData("Box b = new Box(); b.F = A; b.F += B; Look(b); Grow(b); Keep();")]
+    // The move only follows this, types, locals, parameters and fields: a property link may run code or answer with another object.
+    [InlineData("b1.Q = A; b1.Q += B; System.Action x = Cur.Q; Cur.Q = null; b1.Q += C; x();")]
+    [InlineData("keep.F = A; keep.F += B; Box first = keep; System.Action x = Fresh.F; Fresh.F = null; first.F += C; x();")]
+    // Calls that are not written as an invocation: user-defined operators and constructor initializers.
+    [InlineData("Fld = A; Fld += B; int k = new Bx() + Fld;")]
+    [InlineData("System.Action d = A; d += B; Hook = () => d += C; int k = new Bh() + d;")]
+    [InlineData("Fld = A; Fld += B; new Dv();")]
+    [InlineData("Fld = A; Fld += B; new Bs2();")]
+    public void The_shapes_of_re_review_3_are_ES0099(string body)
+    {
+        var r = Compile(Program(CopyMembers + Review3Members, body));
+        Assert.Contains(r.Diagnostics, d => d.Id == "ES0099" && d.Severity == Microsoft.CodeAnalysis.DiagnosticSeverity.Error && d.GetMessage().Contains(Copied));
     }
 
     [Fact]
@@ -379,8 +426,9 @@ static void AddB() => Fld += B;
 static void M9() { System.Action d = A; d += B; d += d; d(); Heap.Free(ref d); }
 static void M10() { System.Action d = A; d += B; d -= d; if (d == null) log = 7; }
 static void M11() { System.Action d = A; d += B; d += (log == 0 ? d : A); d(); Heap.Free(ref d); }
-static void Use(System.Action a) { a(); }
-static void M12() { System.Action d = A; Use(d); d += B; Use(d); Heap.Free(ref d); }
+public class Box { public System.Action F; }
+static void M12() { Box o = new Box(); o.F = A; o.F += B; System.Action x = o.F; o.F = null; o.F += B; x(); o.F(); Heap.Free(ref x); Heap.Free(ref o.F); Heap.Free(ref o); }
+static void M16() { System.Action d = A; d += B; if (d != null && !(d is null)) d.Invoke(); d?.Invoke(); Heap.Free(ref d); }
 static void M13() { System.Action d = A; System.Action add = () => d += B; add(); add(); d(); Heap.Free(ref d); Heap.Free(ref add); }
 static void M14() { System.Action d = A; for (int i = 0; i < 2; i++, d += B) { } d(); Heap.Free(ref d); }
 static void M15() { System.Action d = A; d += B; System.Action x = d; d = null; d += B; x(); d(); Heap.Free(ref x); Heap.Free(ref d); }
@@ -390,8 +438,8 @@ int base0 = Heap.LiveClosures();
 log = 0; M9(); Check(log == 1212, ""d += d"");
 log = 0; M10(); Check(log == 7, ""d -= d"");
 log = 0; M11(); Check(log == 1212, ""d += (c ? d : A)"");
-log = 0; M12(); Check(log == 112, ""d passed to a call before and after its +="");
-log = 0; Fld2 = A; Fld2 += B; Use(Fld2); Fld2 += B; Use(Fld2); Heap.Free(ref Fld2); Check(log == 12122, ""a field passed to a call in the one method that adds to it"");
+log = 0; M12(); Check(log == 122, ""a move through a local's field"");
+log = 0; M16(); Check(log == 1212, ""null tests, Invoke and ?.Invoke"");
 log = 0; Fld = A; AddB(); AddB(); Fld(); Heap.Free(ref Fld); Check(log == 122, ""a += in an expression-bodied void method"");
 log = 0; M13(); Check(log == 122, ""a += as the body of a void lambda"");
 log = 0; M14(); Check(log == 122, ""a += in a for incrementor"");
@@ -399,8 +447,9 @@ log = 0; M15(); Check(log == 122, ""a move (copy, then null the source) before a
 Check(Heap.LiveClosures() == base0, ""nothing leaks"");
 ";
         var (code, output) = Run(members, body);
-        Assert.Equal(OkLines("d += d", "d -= d", "d += (c ? d : A)", "d passed to a call before and after its +=",
-            "a field passed to a call in the one method that adds to it", "a += in an expression-bodied void method", "a += as the body of a void lambda",
+
+        Assert.Equal(OkLines("d += d", "d -= d", "d += (c ? d : A)", "a move through a local's field",
+            "null tests, Invoke and ?.Invoke", "a += in an expression-bodied void method", "a += as the body of a void lambda",
             "a += in a for incrementor", "a move (copy, then null the source) before a +=", "nothing leaks"), output);
         Assert.Equal(0, code);
     }

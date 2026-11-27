@@ -5,6 +5,7 @@ using System.Text;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
 using Microsoft.CodeAnalysis.CSharp.Syntax;
+using Microsoft.CodeAnalysis.Operations;
 
 namespace ESharp.Compiler;
 
@@ -1058,13 +1059,11 @@ internal sealed partial class CEmitter
     private readonly HashSet<ISymbol> _copyReported = new(SymbolEqualityComparer.Default);
 
     /// <summary>
-    /// += and -= release the list the variable pointed at, so a copy of the variable (<c>e = d</c>, <c>Field = d</c>, an initializer, a
-    /// tuple element, a pattern variable, <c>new Action(d)</c>, a returned value, the used value of an assignment or of a += / -=) must
-    /// not outlive them. The check is flow-insensitive per variable, so that it is obviously sound: when the variable is copied anywhere
-    /// it can be read (its function for a local or parameter, the whole program for a field, static or property), every += / -= on it is
-    /// refused, also when the copy is taken after the last one. One read that is not a copy is refused too: the variable passed to a
-    /// call while a += / -= on it can run inside that call.
-    /// Returns the message, or null.
+    /// += and -= release the list the variable pointed at, so any other holder of the list's pointer would be left with freed memory.
+    /// The check is a whitelist, sound by construction: every read of a variable that has a += / -= (in its own function for a local
+    /// or parameter, anywhere in the program for a field, static or property) must be one of the forms <see cref="SafeRead"/> accepts.
+    /// Any other read, of any syntax (a pattern, an operator, an argument, a constructor initializer, a form E# supports later), may copy
+    /// the pointer, and makes every += / -= on the variable ES0099. Returns the message, or null.
     /// </summary>
     private string? CopyOutlivesCompound(ISymbol d)
     {
@@ -1076,139 +1075,106 @@ internal sealed partial class CEmitter
     {
         SyntaxNode? fn = null;
         if (d is ILocalSymbol { RefKind: RefKind.None } or IParameterSymbol { RefKind: RefKind.None }) FrameScopeOf(d, out fn);
-        var nodes = (fn != null ? fn.DescendantNodes() : _compilation.SyntaxTrees.SelectMany(t => t.GetRoot().DescendantNodes())).ToList();
-        var copies = CopiesOf(d, nodes);
-        // A += / -= whose value is used (Action e = (d += A), (d += A) == null) hands out a copy of the new list too.
-        foreach (var x in nodes)
-            if (IsCompoundOn(x, d) && !ValueDiscarded((AssignmentExpressionSyntax)x)) copies.Add((x, null));
-        if (copies.Count > 0)
+        var nodes = fn != null ? fn.DescendantNodes() : _compilation.SyntaxTrees.SelectMany(t => t.GetRoot().DescendantNodes());
+        foreach (var u in nodes.OfType<IdentifierNameSyntax>())
         {
-            var at = copies.OrderBy(c => c.At.SyntaxTree.FilePath, System.StringComparer.Ordinal).ThenBy(c => c.At.SpanStart).First().At;
-            var line = at.GetLocation().GetLineSpan();
-            return $"+= or -= on '{d.Name}', which is also copied ({System.IO.Path.GetFileName(line.Path)} line {line.StartLinePosition.Line + 1}: an assignment, initializer, tuple element, pattern variable, returned value or the used value of an assignment or += / -=): a copy shares the list's reference, which += or -= releases, so using the copy afterwards would read freed memory; E# refuses += and -= on any delegate variable that is copied {(fn != null ? "in its function" : "anywhere in the program")}, even after the last += or -=; call '{d.Name}' itself instead of a copy, or build the list in a variable that is never copied";
+            if (!Reads(u, d) || SafeRead(u, d)) continue;
+            var line = u.GetLocation().GetLineSpan();
+            return $"+= or -= on '{d.Name}', which is also read at {System.IO.Path.GetFileName(line.Path)} line {line.StartLinePosition.Line + 1} ('{ReadText(u)}') in a way that may copy it: "
+                + "a copy shares the list's pointer, which += or -= releases, so using the copy afterwards would read freed memory. "
+                + $"A delegate variable that has += or -= may only be {(fn != null ? "" : "(anywhere in the program) ")}called (with arguments that run no code), compared, "
+                + "assigned, added to or removed from a delegate or event, freed with Heap.Free, given to an [Owned] parameter or a setter with a body, "
+                + "or moved into a local by 'x = v;' directly followed by 'v = null;'; build the list in a variable that is only used that way";
         }
-        return BorrowDuringCall(d, fn, nodes);
-    }
-
-    /// <summary>
-    /// True when the value of the += / -= is thrown away: an expression statement, a for initializer or incrementor, or the expression
-    /// body of a void method, accessor, local function or lambda.
-    /// </summary>
-    private bool ValueDiscarded(AssignmentExpressionSyntax x)
-    {
-        switch (x.Parent)
-        {
-            case ExpressionStatementSyntax:
-                return true;
-            case ForStatementSyntax f:
-                return f.Incrementors.Contains(x) || f.Initializers.Contains(x);
-            case ArrowExpressionClauseSyntax { Parent: { } owner }:
-                return Model(owner).GetDeclaredSymbol(owner) is IMethodSymbol { ReturnsVoid: true };
-            case LambdaExpressionSyntax lam when lam.Body == x:
-                return Model(lam).GetSymbolInfo(lam).Symbol is IMethodSymbol { ReturnsVoid: true };
-            default:
-                return false;
-        }
-    }
-
-    private bool IsCompoundOn(SyntaxNode n, ISymbol d) =>
-        n is AssignmentExpressionSyntax x && (x.IsKind(SyntaxKind.AddAssignmentExpression) || x.IsKind(SyntaxKind.SubtractAssignmentExpression))
-        && SymbolEqualityComparer.Default.Equals(Model(x).GetSymbolInfo(x.Left).Symbol, d);
-
-    private bool Reads(SyntaxNode n, ISymbol d) =>
-        n is IdentifierNameSyntax u && u.Identifier.Text == d.Name && SymbolEqualityComparer.Default.Equals(Model(u).GetSymbolInfo(u).Symbol, d);
-
-    /// <summary>
-    /// A read of d that is not a copy but can still outlive the list: d passed to a call (a borrowed parameter) while a += / -= on d can
-    /// run inside that call (from a lambda, a local function or, for a field, another method). (A += / -= whose value is used next to
-    /// another read of d, <c>Call(d, d += B)</c>, is a copy and refused before this.) Returns the message, or null.
-    /// </summary>
-    private string? BorrowDuringCall(ISymbol d, SyntaxNode? fn, List<SyntaxNode> nodes)
-    {
-        var sites = nodes.Where(n => IsCompoundOn(n, d)).Cast<AssignmentExpressionSyntax>().ToList();
-        if (sites.Count == 0) return null;
-        var args = new List<(SyntaxNode At, ISymbol? Dest)>();
-        foreach (var r in nodes)
-        {
-            if (!Reads(r, d)) continue;
-            SyntaxNode expr = r.Parent is MemberAccessExpressionSyntax ma && ma.Name == r ? ma : r;
-            var node = ValueSite(expr, out var parent);
-            if (parent is ArgumentSyntax arg && arg.Expression == node && !arg.RefKindKeyword.IsKind(SyntaxKind.RefKeyword) && !arg.RefKindKeyword.IsKind(SyntaxKind.OutKeyword)
-                && arg.Parent?.Parent is InvocationExpressionSyntax or ObjectCreationExpressionSyntax or ImplicitObjectCreationExpressionSyntax
-                && !(arg.Parent?.Parent is ObjectCreationExpressionSyntax oc && Model(oc).GetTypeInfo(oc).Type?.TypeKind == TypeKind.Delegate))
-                args.Add((r, null));
-        }
-        if (args.Count == 0) return null;
-        const string why = "the parameter borrows the list, which that += or -= releases, so using it afterwards in the call would read freed memory; do the += or -= where the call cannot reach it, or pass a delegate of its own";
-        if (fn != null)
-        {
-            foreach (var x in sites)
-                if (Nested(x, fn))
-                    return $"'{d.Name}' is passed to a call, and a += or -= on '{d.Name}' in a lambda or local function (line {x.GetLocation().GetLineSpan().StartLinePosition.Line + 1}) may run during that call: {why}";
-            return null;
-        }
-        if (OnlyFunctionOf(d, args) == null)
-            return $"'{d.Name}' is passed to a call, and a += or -= on '{d.Name}' in another method, lambda or local function may run during that call (this check cannot follow a field, static or property across methods): {why}";
         return null;
     }
 
+    private static string ReadText(IdentifierNameSyntax u)
+    {
+        SyntaxNode n = u.Parent is MemberAccessExpressionSyntax ma && ma.Name == u ? ma : u;
+        if (n.Parent is ExpressionSyntax or ArgumentSyntax or SubpatternSyntax) n = n.Parent;
+        var t = n.ToString();
+        return t.Length > 60 ? t[..60] + "..." : t;
+    }
+
+    private bool Reads(SyntaxNode n, ISymbol d) =>
+        n is IdentifierNameSyntax u && u.Identifier.Text == d.Name
+        && SymbolEqualityComparer.Default.Equals(Model(u).GetSymbolInfo(u).Symbol?.OriginalDefinition, d.OriginalDefinition);
+
+    private bool IsCompoundOn(SyntaxNode n, ISymbol d) =>
+        n is AssignmentExpressionSyntax x && (x.IsKind(SyntaxKind.AddAssignmentExpression) || x.IsKind(SyntaxKind.SubtractAssignmentExpression))
+        && SymbolEqualityComparer.Default.Equals(Model(x).GetSymbolInfo(x.Left).Symbol?.OriginalDefinition, d.OriginalDefinition);
+
     /// <summary>
-    /// For a field, static or property passed to calls: the one method that holds every += / -= on it (not in a lambda or local
-    /// function) and every such call, when nothing can run in between from outside: a plain method with no attributes (but
-    /// [EntryPoint]) that nothing calls (the entry point, say), so it cannot be re-entered through a call, a delegate or an override.
-    /// Null otherwise.
+    /// The whitelist of reads of a delegate variable d that has a += / -=. <paramref name="u"/> is the name (alone or as the last link
+    /// of <c>a.b.d</c>); its receiver links are reads of other variables and are checked for them.
     /// </summary>
-    private SyntaxNode? OnlyFunctionOf(ISymbol d, List<(SyntaxNode At, ISymbol? Dest)> uses)
+    private bool SafeRead(IdentifierNameSyntax u, ISymbol d)
     {
-        SyntaxNode? only = null;
-        foreach (var tree in _compilation.SyntaxTrees)
-            foreach (var x in tree.GetRoot().DescendantNodes().OfType<AssignmentExpressionSyntax>())
-            {
-                if (!(x.IsKind(SyntaxKind.AddAssignmentExpression) || x.IsKind(SyntaxKind.SubtractAssignmentExpression))) continue;
-                if (!SymbolEqualityComparer.Default.Equals(Model(x).GetSymbolInfo(x.Left).Symbol, d)) continue;
-                var f = FunctionOf(x);
-                if (f is not MethodDeclarationSyntax || only != null && only != f) return null;
-                only = f;
-            }
-        if (only == null) return null;
-        foreach (var (at, _) in uses) if (FunctionOf(at) != only) return null;
-        var m = Model(only).GetDeclaredSymbol(only) as IMethodSymbol;
-        if (m == null || m.GetAttributes().Any(at => at.AttributeClass?.Name != "EntryPointAttribute") || m.IsVirtual || m.IsOverride || m.IsAbstract || m.ExplicitInterfaceImplementations.Length > 0) return null;
-        if (m.ContainingType.AllInterfaces.Any(i => i.GetMembers().Any(im => SymbolEqualityComparer.Default.Equals(m.ContainingType.FindImplementationForInterfaceMember(im), m)))) return null;
-        foreach (var tree in _compilation.SyntaxTrees)
-            foreach (var id in tree.GetRoot().DescendantNodes().OfType<SimpleNameSyntax>())
-                if (id.Identifier.Text == m.Name && SymbolEqualityComparer.Default.Equals(Model(id).GetSymbolInfo(id).Symbol?.OriginalDefinition, m.OriginalDefinition)) return null;
-        return only;
-    }
-
-    private bool Nested(SyntaxNode n, SyntaxNode fn)
-    {
-        for (var anc = n.Parent; anc != null && anc != fn; anc = anc.Parent)
-            if (IsFunctionNode(anc)) return true;
-        return false;
-    }
-
-    /// <summary>The places where the delegate variable <paramref name="d"/> is read and the copy lives on in a variable, field or other store.</summary>
-    private List<(SyntaxNode At, ISymbol? Dest)> CopiesOf(ISymbol d, IEnumerable<SyntaxNode> nodes)
-    {
-        var result = new List<(SyntaxNode, ISymbol?)>();
-        foreach (var u in nodes.OfType<IdentifierNameSyntax>())
+        ExpressionSyntax read = u.Parent is MemberAccessExpressionSyntax { RawKind: (int)SyntaxKind.SimpleMemberAccessExpression } ma && ma.Name == u ? ma : u;
+        var outer = read;
+        while (outer.Parent is ParenthesizedExpressionSyntax or PostfixUnaryExpressionSyntax { RawKind: (int)SyntaxKind.SuppressNullableWarningExpression })
+            outer = (ExpressionSyntax)outer.Parent;
+        switch (outer.Parent)
         {
-            if (u.Identifier.Text != d.Name || !SymbolEqualityComparer.Default.Equals(Model(u).GetSymbolInfo(u).Symbol, d)) continue;
-            if (CopyAt(u) is { } c && !IsMove(u)) result.Add(c);
+            // A write: d = x, d ??= x (also a null test) and d += x / d -= x as the target, when the value of the assignment is thrown
+            // away (else that value is a copy). The compound itself releases the old list and builds the new one; its operand must run no
+            // code, because C evaluates the old pointer and the operand in either order (a call that does d += y in between would free it).
+            case AssignmentExpressionSyntax a when a.Left == outer:
+                if (!ValueDiscarded(a)) return false;
+                if (a.IsKind(SyntaxKind.SimpleAssignmentExpression) || a.IsKind(SyntaxKind.CoalesceAssignmentExpression)) return true;
+                return IsCompoundOn(a, d) && Pure(a.Right);
+            // A call of d, d.Invoke(...) or d?.Invoke(...): the multicast trampoline holds its own reference to the list while the
+            // entries run, so a += / -= made by an entry cannot free it under the call. The arguments must run no code, because C may
+            // load d before it evaluates them.
+            case InvocationExpressionSyntax inv when inv.Expression == outer:
+                return inv.ArgumentList.Arguments.All(x => x.RefKindKeyword.IsKind(SyntaxKind.None) && Pure(x.Expression));
+            case MemberAccessExpressionSyntax { Name.Identifier.Text: "Invoke", Parent: InvocationExpressionSyntax inv2 } m when m.Expression == outer && inv2.Expression == m:
+                return inv2.ArgumentList.Arguments.All(x => x.RefKindKeyword.IsKind(SyntaxKind.None) && Pure(x.Expression));
+            case ConditionalAccessExpressionSyntax { WhenNotNull: InvocationExpressionSyntax { Expression: MemberBindingExpressionSyntax { Name.Identifier.Text: "Invoke" } } inv3 } ca when ca.Expression == outer:
+                return inv3.ArgumentList.Arguments.All(x => x.RefKindKeyword.IsKind(SyntaxKind.None) && Pure(x.Expression));
+            // A null test (d == null, d != null) or a delegate comparison (d == e, d != e): the built-in operator compares the pointer or
+            // the entries while it runs and keeps nothing; the other operand must run no code, because C evaluates both in either order.
+            case BinaryExpressionSyntax b when (b.IsKind(SyntaxKind.EqualsExpression) || b.IsKind(SyntaxKind.NotEqualsExpression))
+                && Model(b).GetSymbolInfo(b).Symbol is not IMethodSymbol { MethodKind: MethodKind.UserDefinedOperator }:
+                return IsNullConstant(b.Left == outer ? b.Right : b.Left) || Pure(b.Left == outer ? b.Right : b.Left);
+            case IsPatternExpressionSyntax ip when ip.Expression == outer
+                && (ip.Pattern is ConstantPatternSyntax cp && IsNullConstant(cp.Expression)
+                    || ip.Pattern is UnaryPatternSyntax { Pattern: ConstantPatternSyntax cp2 } up && up.OperatorToken.IsKind(SyntaxKind.NotKeyword) && IsNullConstant(cp2.Expression)):
+                return true;
+            // Heap.Free(ref d) releases the list (a copy used after it is not checked, as for any delegate).
+            case ArgumentSyntax arg when arg.Expression == outer && arg.RefKindKeyword.IsKind(SyntaxKind.RefKeyword) && IsHeapFreeArgument(arg):
+                return true;
+            // An [Owned] parameter takes a reference of its own (or the whole list at the variable's last use, see MovesAt), so a later
+            // += / -= on d cannot free it. The rest of the call must run no code, because C evaluates the arguments in any order.
+            case ArgumentSyntax arg when arg.Expression == outer && IsHandoverSite(outer, arg):
+                return arg.Parent is ArgumentListSyntax { Parent: InvocationExpressionSyntax call } list
+                    && list.Arguments.All(x => x == arg || x.RefKindKeyword.IsKind(SyntaxKind.None) && Pure(x.Expression))
+                    && (call.Expression is not MemberAccessExpressionSyntax recv || Pure(recv.Expression));
+            // A setter with a body takes a reference of its own in the same way, when the value of the assignment is thrown away.
+            case AssignmentExpressionSyntax a when a.Right == outer && IsHandoverSite(outer, a):
+                return ValueDiscarded(a) && (a.Left is not MemberAccessExpressionSyntax target || Pure(target.Expression));
+            // The operand of a += / -= on a delegate variable or an event, d itself included (d += d, g -= d, E += d, d += (c ? d : x)):
+            // the add and remove helpers take references of their own to the operand's entries while they run and keep no pointer to
+            // its list. The value must be thrown away and the operand must run no code (C evaluates it and the target in either order).
+            default:
+                var node = ValueSite(outer, out var parent);
+                if (parent is AssignmentExpressionSyntax self && self.Right == node
+                    && (self.IsKind(SyntaxKind.AddAssignmentExpression) || self.IsKind(SyntaxKind.SubtractAssignmentExpression)))
+                    return ValueDiscarded(self) && Pure(self.Right);
+                return IsMove(read, outer);
         }
-        return result;
     }
 
     /// <summary>
-    /// A move, not a copy: <c>Action x = P;</c> (or <c>x = P;</c>) into a local, directly followed in the same block by <c>P = null;</c>
-    /// on the same plain variable path (identifiers, <c>this</c> and member accesses only). Nothing runs in between, so the list then has
-    /// one owner, the local, and a later += / -= on P starts from null and cannot release it (the way to free an auto-property's list).
+    /// A move, not a copy: <c>Action x = P;</c> (or <c>x = P;</c>) into a local, directly followed in the same block by <c>P = null;</c>,
+    /// where every link of P before the variable is <c>this</c>, a type, a local, a parameter or a field (no property or call, which could
+    /// run code or answer with another object). The list then has one owner, the local, and a later += / -= on P starts from null
+    /// (the way to free an auto-property's list). A += from an interrupt or another task between the two statements is not checked.
     /// </summary>
-    private bool IsMove(IdentifierNameSyntax u)
+    private bool IsMove(ExpressionSyntax read, ExpressionSyntax outer)
     {
-        ExpressionSyntax read = u.Parent is MemberAccessExpressionSyntax ma && ma.Name == u ? ma : u;
-        if (!IsPlainPath(read)) return false;
+        if (outer != read || !PlainLinks(read)) return false;
         StatementSyntax? stmt = null;
         if (read.Parent is EqualsValueClauseSyntax { Parent: VariableDeclaratorSyntax { Parent: VariableDeclarationSyntax { Variables.Count: 1, Parent: LocalDeclarationStatementSyntax ld } } vd }
             && Model(vd).GetDeclaredSymbol(vd) is ILocalSymbol { RefKind: RefKind.None })
@@ -1223,59 +1189,74 @@ internal sealed partial class CEmitter
             && clear.Right.IsKind(SyntaxKind.NullLiteralExpression) && SyntaxFactory.AreEquivalent(clear.Left, read);
     }
 
-    private static bool IsPlainPath(ExpressionSyntax e) => e switch
+    /// <summary>The links of <c>a.b.d</c> before d: this, a type, or a local, parameter or field (recursively).</summary>
+    private bool PlainLinks(ExpressionSyntax read)
     {
-        IdentifierNameSyntax or ThisExpressionSyntax => true,
-        MemberAccessExpressionSyntax { RawKind: (int)SyntaxKind.SimpleMemberAccessExpression } m => IsPlainPath(m.Expression),
-        _ => false,
-    };
-
-    /// <summary>Whether the read of a delegate variable at <paramref name="u"/> copies it: the node and the local it lands in (null: somewhere else).</summary>
-    private (SyntaxNode At, ISymbol? Dest)? CopyAt(IdentifierNameSyntax u)
-    {
-        SyntaxNode expr = u.Parent is MemberAccessExpressionSyntax ma && ma.Name == u ? ma : u;
-        while (true)
+        if (read is IdentifierNameSyntax) return true;
+        if (read is not MemberAccessExpressionSyntax { RawKind: (int)SyntaxKind.SimpleMemberAccessExpression } m) return false;
+        for (var e = m.Expression; ; )
         {
-            var node = ValueSite(expr, out var parent);
-            switch (parent)
-            {
-                case ArgumentSyntax { Parent: BaseArgumentListSyntax { Parent: ObjectCreationExpressionSyntax oc } } arg
-                    when arg.Expression == node && Model(oc).GetTypeInfo(oc).Type?.TypeKind == TypeKind.Delegate:
-                    expr = oc;   // new Action(d) is a copy
-                    continue;
-                case BinaryExpressionSyntax { RawKind: (int)SyntaxKind.AsExpression } asx when asx.Left == node:
-                    expr = asx;
-                    continue;
-                case ArgumentSyntax { Parent: TupleExpressionSyntax }:
-                case InitializerExpressionSyntax:
-                case ReturnStatementSyntax:
-                case ArrowExpressionClauseSyntax:
-                case YieldStatementSyntax:
-                    return (u, null);
-                case SimpleLambdaExpressionSyntax sl when sl.Body == node:
-                case ParenthesizedLambdaExpressionSyntax pl when pl.Body == node:
-                    return (u, null);
-                case IsPatternExpressionSyntax ip when ip.Expression == node && ip.Pattern.DescendantNodesAndSelf().OfType<SingleVariableDesignationSyntax>().Any():
-                    return (u, null);
-                case SwitchStatementSyntax sw when sw.Expression == node && sw.Sections.Any(sec => sec.Labels.Any(l => l.DescendantNodes().OfType<SingleVariableDesignationSyntax>().Any())):
-                case SwitchExpressionSyntax se when se.GoverningExpression == node && se.Arms.Any(arm => arm.Pattern.DescendantNodesAndSelf().OfType<SingleVariableDesignationSyntax>().Any()):
-                    return (u, null);
-                case EqualsValueClauseSyntax { Parent: VariableDeclaratorSyntax vd }:
-                    return (u, Model(vd).GetDeclaredSymbol(vd) is ILocalSymbol { RefKind: RefKind.None } l && vd.Parent?.Parent is LocalDeclarationStatementSyntax ? l : null);
-                case EqualsValueClauseSyntax:
-                    return (u, null);
-                case AssignmentExpressionSyntax a when a.Right == node && (a.IsKind(SyntaxKind.SimpleAssignmentExpression) || a.IsKind(SyntaxKind.CoalesceAssignmentExpression)):
-                {
-                    var left = Model(a).GetSymbolInfo(a.Left).Symbol;
-                    if (left is IPropertySymbol ps && IsHandoverSetter(ps)) return null;   // the setter takes its own reference
-                    if (a.Parent is not ExpressionStatementSyntax) return (u, null);   // the value of the assignment is used: not followed
-                    return (u, left is ILocalSymbol { RefKind: RefKind.None } or IParameterSymbol { RefKind: RefKind.None } ? left : null);
-                }
-                default:
-                    return null;
-            }
+            if (e is ThisExpressionSyntax) return true;
+            var sym = Model(e).GetSymbolInfo(e).Symbol;
+            if (sym is INamespaceOrTypeSymbol) return true;
+            if (e is IdentifierNameSyntax) return sym is ILocalSymbol { RefKind: RefKind.None } or IParameterSymbol { RefKind: RefKind.None } or IFieldSymbol;
+            if (e is MemberAccessExpressionSyntax { RawKind: (int)SyntaxKind.SimpleMemberAccessExpression } inner && sym is IFieldSymbol) { e = inner.Expression; continue; }
+            return false;
         }
     }
+
+    /// <summary>
+    /// True when the value of the assignment is thrown away: an expression statement, a for initializer or incrementor, an object
+    /// initializer entry, or the expression body of a void method, accessor, local function or lambda.
+    /// </summary>
+    private bool ValueDiscarded(AssignmentExpressionSyntax x)
+    {
+        switch (x.Parent)
+        {
+            case ExpressionStatementSyntax:
+                return true;
+            case ForStatementSyntax f:
+                return f.Incrementors.Contains(x) || f.Initializers.Contains(x);
+            case InitializerExpressionSyntax { RawKind: (int)SyntaxKind.ObjectInitializerExpression }:
+                return true;
+            case ArrowExpressionClauseSyntax { Parent: { } owner }:
+                return Model(owner).GetDeclaredSymbol(owner) is IMethodSymbol { ReturnsVoid: true };
+            case LambdaExpressionSyntax lam when lam.Body == x:
+                return Model(lam).GetSymbolInfo(lam).Symbol is IMethodSymbol { ReturnsVoid: true };
+            default:
+                return false;
+        }
+    }
+
+    /// <summary>
+    /// An expression that runs no code of the program: literals, locals, parameters, this, fields and auto-properties, built-in
+    /// operators and conversions, ?: and ??, and lambdas or method groups (made, not called). Anything else (a call, a property with a
+    /// body, a user-defined operator or conversion, an assignment, an object creation, a pattern) is not pure.
+    /// </summary>
+    private bool Pure(ExpressionSyntax e)
+    {
+        e = Strip(e);   // a parenthesized expression has no operation of its own
+        if (Model(e).GetSymbolInfo(e).Symbol is INamespaceOrTypeSymbol) return true;
+        var op = Model(e).GetOperation(e);
+        return op != null && PureOp(op);
+    }
+
+    private static bool PureOp(IOperation op) => op switch
+    {
+        IAnonymousFunctionOperation or IMethodReferenceOperation => true,
+        IDelegateCreationOperation dc => PureOp(dc.Target),
+        ILiteralOperation or ILocalReferenceOperation or IParameterReferenceOperation or IInstanceReferenceOperation or IDefaultValueOperation
+            or ITypeOfOperation or ISizeOfOperation => true,
+        IFieldReferenceOperation f => f.Instance == null || PureOp(f.Instance),
+        IPropertyReferenceOperation p => IsAutoProperty(p.Property) && p.Arguments.Length == 0 && (p.Instance == null || PureOp(p.Instance)),
+        IBinaryOperation b => b.OperatorMethod == null && PureOp(b.LeftOperand) && PureOp(b.RightOperand),
+        IUnaryOperation un => un.OperatorMethod == null && PureOp(un.Operand),
+        IConversionOperation c => c.OperatorMethod == null && PureOp(c.Operand),
+        IConditionalOperation c => PureOp(c.Condition) && PureOp(c.WhenTrue) && (c.WhenFalse == null || PureOp(c.WhenFalse)),
+        ICoalesceOperation c => PureOp(c.Value) && PureOp(c.WhenNull),
+        IParenthesizedOperation p => PureOp(p.Operand),
+        _ => false,
+    };
 
     /// <summary>
     /// True when every value <paramref name="sym"/> is given is new or holds no closure (a lambda, a method group, null, a call that returns
