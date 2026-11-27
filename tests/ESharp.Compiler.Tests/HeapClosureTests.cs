@@ -257,43 +257,80 @@ Check(Heap.LiveClosures() == base0, ""still nothing leaks"");
 
     private const string CopyMembers = "static int log; static void A() { log = log * 10 + 1; } static void B() { log = log * 10 + 2; } static System.Action Fld; static System.Action Fld2 = A; static void Take(out System.Action o) { o = null; }";
 
+    private const string Copied = "which is also copied";
+
     [Theory]
-    [InlineData("System.Action d = A; System.Action e = d; d += B; e();", "is a copy of 'd'")]
-    [InlineData("System.Action d = A; System.Action e = null; e = d; d -= B; e();", "is a copy of 'd'")]
-    [InlineData("System.Action d = null; d ??= A; System.Action e = null; e ??= d; d += B; e();", "is a copy of 'd'")]
-    [InlineData("System.Action d = A; System.Action e = (System.Action)d; System.Action f = e; d += B; f();", "is a copy of")]
-    [InlineData("System.Action d = A; System.Action e = new System.Action(d); d += B; e();", "is a copy of 'd'")]
-    [InlineData("System.Action d = A; System.Action e = d as System.Action; d += B; e();", "is a copy of 'd'")]
-    [InlineData("System.Action d = A; System.Action e = true ? d : null; d += B; e();", "is a copy of 'd'")]
-    [InlineData("System.Action d = A; System.Action e = d; for (int i = 0; i < 2; i++) { e(); d += B; }", "is a copy of 'd'")]
-    [InlineData("System.Action d = A; System.Action e = d; d += B; System.Action g = () => e(); g();", "is a copy of 'd'")]
-    [InlineData("System.Action d = A; Fld = d; d += B;", "something this check cannot follow")]
-    [InlineData("System.Action d = A; System.Action[] arr = { d }; d += B; arr[0]();", "something this check cannot follow")]
-    [InlineData("System.Action d = A; Take(out Fld); Fld = d; d -= B; Fld();", "something this check cannot follow")]
-    [InlineData("System.Action d = A; if (d is System.Action f) { d += B; f(); }", "something this check cannot follow")]
-    [InlineData("System.Action d = A; Fld = d; for (int i = 0; i < 2; i++) { d += B; }", "something this check cannot follow")]
-    [InlineData("Fld = A; System.Action e = Fld; Fld += B; e();", "is a copy of 'Fld'")]
-    [InlineData("System.Action d = A; System.Action f = null; System.Action e = null; e = f = d; d += B; e();", "something this check cannot follow")]
-    [InlineData("System.Action d = A; System.Action f = null; System.Action e = (f = d); d += B; e();", "something this check cannot follow")]
-    [InlineData("System.Action d = A; System.Action f = null; System.Action e = true ? (f = d) : null; d += B; e();", "something this check cannot follow")]
-    [InlineData("System.Action d = A; System.Action e = (d += A); d += B; e();", "something this check cannot follow")]
-    [InlineData("System.Func<System.Action> g = null; System.Action d = A; g = () => d; var e = g(); d += B; e();", "something this check cannot follow")]
-    [InlineData("System.Action d = A; d += B; System.Action e = null; d += (e = d); e();", "something this check cannot follow")]
-    [InlineData("System.Action d = A; d += B; System.Action e = null; d -= (e ??= d); e();", "something this check cannot follow")]
-    [InlineData("System.Action d = A; d += B; d -= (Fld = d); Fld();", "something this check cannot follow")]
-    [InlineData("System.Action d = A; System.Action e = null; d -= (e = d); e();", "something this check cannot follow")]
-    [InlineData("System.Action d = A; d += B; System.Action e = null; d += e = d; e();", "something this check cannot follow")]
-    [InlineData("System.Action d = A; d += B; System.Action e = null; System.Action f = null; d -= (e = (f = d)); f();", "something this check cannot follow")]
-    [InlineData("System.Action d = A; d += B; System.Action e = null; d -= (true ? (e = d) : null); e();", "something this check cannot follow")]
-    [InlineData("System.Action d = A; d += B; System.Action[] arr = new System.Action[1]; d -= (arr[0] = d); arr[0]();", "something this check cannot follow")]
-    [InlineData("System.Action d = A; d += B; System.Action e = null; d -= (d is System.Action f ? (e = f) : null); e();", "something this check cannot follow")]
-    [InlineData("System.Action d = A; d += B; System.Action e = null; d += (e = d) == null ? A : B; e();", "something this check cannot follow")]
-    [InlineData("Fld = A; Fld += B; System.Action e = null; Fld -= (e = Fld); e();", "something this check cannot follow")]
-    [InlineData("System.Action d = A; d += B; bool same = (d += B) == d;", "used as a value in an expression that also reads 'd'")]
-    public void A_copy_used_after_compound_assignment_on_the_original_is_ES0099(string body, string message)
+    [InlineData("System.Action d = A; System.Action e = d; d += B; e();")]
+    [InlineData("System.Action d = A; System.Action e = null; e = d; d -= B; e();")]
+    [InlineData("System.Action d = null; d ??= A; System.Action e = null; e ??= d; d += B; e();")]
+    [InlineData("System.Action d = A; System.Action e = (System.Action)d; System.Action f = e; d += B; f();")]
+    [InlineData("System.Action d = A; System.Action e = new System.Action(d); d += B; e();")]
+    [InlineData("System.Action d = A; System.Action e = d as System.Action; d += B; e();")]
+    [InlineData("System.Action d = A; System.Action e = true ? d : null; d += B; e();")]
+    [InlineData("System.Action d = A; System.Action e = d; for (int i = 0; i < 2; i++) { e(); d += B; }")]
+    [InlineData("System.Action d = A; System.Action e = d; d += B; System.Action g = () => e(); g();")]
+    [InlineData("System.Action d = A; Fld = d; d += B;")]
+    [InlineData("System.Action d = A; System.Action[] arr = { d }; d += B; arr[0]();")]
+    [InlineData("System.Action d = A; Take(out Fld); Fld = d; d -= B; Fld();")]
+    [InlineData("System.Action d = A; if (d is System.Action f) { d += B; f(); }")]
+    [InlineData("System.Action d = A; Fld = d; for (int i = 0; i < 2; i++) { d += B; }")]
+    [InlineData("Fld = A; System.Action e = Fld; Fld += B; e();")]
+    [InlineData("System.Action d = A; System.Action f = null; System.Action e = null; e = f = d; d += B; e();")]
+    [InlineData("System.Action d = A; System.Action f = null; System.Action e = (f = d); d += B; e();")]
+    [InlineData("System.Action d = A; System.Action f = null; System.Action e = true ? (f = d) : null; d += B; e();")]
+    [InlineData("System.Action d = A; System.Action e = (d += A); d += B; e();")]
+    [InlineData("System.Func<System.Action> g = null; System.Action d = A; g = () => d; var e = g(); d += B; e();")]
+    [InlineData("System.Action d = A; d += B; System.Action e = null; d += (e = d); e();")]
+    [InlineData("System.Action d = A; d += B; System.Action e = null; d -= (e ??= d); e();")]
+    [InlineData("System.Action d = A; d += B; d -= (Fld = d); Fld();")]
+    [InlineData("System.Action d = A; System.Action e = null; d -= (e = d); e();")]
+    [InlineData("System.Action d = A; d += B; System.Action e = null; d += e = d; e();")]
+    [InlineData("System.Action d = A; d += B; System.Action e = null; System.Action f = null; d -= (e = (f = d)); f();")]
+    [InlineData("System.Action d = A; d += B; System.Action e = null; d -= (true ? (e = d) : null); e();")]
+    [InlineData("System.Action d = A; d += B; System.Action[] arr = new System.Action[1]; d -= (arr[0] = d); arr[0]();")]
+    [InlineData("System.Action d = A; d += B; System.Action e = null; d -= (d is System.Action f ? (e = f) : null); e();")]
+    [InlineData("System.Action d = A; d += B; System.Action e = null; d += (e = d) == null ? A : B; e();")]
+    [InlineData("Fld = A; Fld += B; System.Action e = null; Fld -= (e = Fld); e();")]
+    [InlineData("System.Action d = A; d += B; bool same = (d += B) == d;")]
+    // Copies taken after the last += or never used afterwards: refused too, the rule is flow-insensitive.
+    [InlineData("System.Action d = A; d += B; System.Action e = d; e();")]
+    [InlineData("System.Action d = A; System.Action e = d; e(); d += B;")]
+    [InlineData("System.Action d = A; System.Action e = d; e(); d += B; e = null;")]
+    [InlineData("System.Action d = A; System.Action e = null; if (log == 0) { e = d; e(); } else { d += B; }")]
+    [InlineData("System.Action d = A; d += B; if (d is System.Action f) f();")]
+    [InlineData("System.Action d = A; d += B; System.Action x = d; log = 1; d = null; d += B; x();")]
+    [InlineData("System.Action d = A; d += B; System.Action x = d; d = A; d += B; x();")]
+    [InlineData("System.Action d = A; d += B; System.Action x = (log == 0 ? d : null); d = null; d += B; x();")]
+    [InlineData("Fld = A; Fld += B; System.Action ef = Fld; ef();")]
+    [InlineData("for (int i = 0; i < 2; i++) { System.Action d = A; System.Action e = d; e(); d += B; }")]
+    public void A_compound_assignment_on_a_delegate_that_is_copied_is_ES0099(string body)
     {
         var r = Compile(Program(CopyMembers, body));
-        Assert.Contains(r.Diagnostics, d => d.Id == "ES0099" && d.Severity == Microsoft.CodeAnalysis.DiagnosticSeverity.Error && d.GetMessage().Contains(message));
+        Assert.Contains(r.Diagnostics, d => d.Id == "ES0099" && d.Severity == Microsoft.CodeAnalysis.DiagnosticSeverity.Error && d.GetMessage().Contains(Copied));
+    }
+
+    private const string ReviewMembers = "static void C() { log = log * 10 + 3; } static void Call2(System.Action a, System.Action b) { a(); } static void Run(System.Action a, bool x) { a(); } class H2 { public H2(System.Action a, bool b) { a(); } } static void Ab(bool x) { log = log * 10 + 1; } static void Bb(bool x) { log = log * 10 + 2; }";
+
+    [Theory]
+    // A copy or a += / -= in a switch section's when guard runs before the later sections.
+    [InlineData("int k = 0; System.Action d = A; d += B; System.Action e = null; switch (k) { case 0 when (e = d) == null: break; default: d += C; e(); break; }")]
+    [InlineData("int k = 0; System.Action d = A; d += B; System.Action e = d; switch (k) { case 0 when (d += C) == null: break; default: e(); break; }")]
+    [InlineData("int k = 0; System.Action d = A; d += B; System.Action e = d; switch (k) { case 0 when (d -= B) == null: break; case 0: e(); break; }")]
+    [InlineData("int k = 0; Fld = A; Fld += B; System.Action e = null; switch (k) { case 0 when (e = Fld) == null: break; default: Fld += C; e(); break; }")]
+    [InlineData("int k = 0; Fld = A; Fld += B; System.Action e = Fld; switch (k) { case 0 when (Fld += C) == null: break; default: e(); break; }")]
+    [InlineData("int k = 0; Fld = A; Fld += B; System.Action e = Fld; switch (k) { case 0 when (Fld -= B) == null: break; case 0: e(); break; }")]
+    // A copy passed in an earlier argument than a += / -= in the same call: every argument is evaluated before the callee runs.
+    [InlineData("System.Action d = A; d += B; System.Action e = d; Call2(e, d += C);")]
+    [InlineData("System.Action d = A; d += B; System.Action e = d; Run(e, (d += C) == null);")]
+    [InlineData("System.Action d = A; d += B; System.Action e = d; new H2(e, (d += C) == null);")]
+    [InlineData("System.Action d = A; d += B; System.Action e = d; System.Action f = e; Call2(f, d -= B);")]
+    [InlineData("System.Action<bool> d = Ab; d += Bb; System.Action<bool> e = d; e((d += Bb) == null);")]
+    [InlineData("Fld = A; Fld += B; System.Action e = Fld; Run(e, (Fld += C) == null);")]
+    [InlineData("System.Action d = A; d += B; Call2(d, d += B);")]
+    public void The_shapes_of_re_review_2_are_ES0099(string body)
+    {
+        var r = Compile(Program(CopyMembers + ReviewMembers, body));
+        Assert.Contains(r.Diagnostics, d => d.Id == "ES0099" && d.Severity == Microsoft.CodeAnalysis.DiagnosticSeverity.Error && d.GetMessage().Contains(Copied));
     }
 
     [Theory]
@@ -302,10 +339,14 @@ Check(Heap.LiveClosures() == base0, ""still nothing leaks"");
     [InlineData("static System.Action Prop => Fld;", "Fld = A; Fld += A; var e = Prop; Fld += B; e();")]
     [InlineData("static System.Func<int> FI; static System.Func<int> GetI() => FI; static int One() => 1;", "FI = One; FI += One; var e = GetI(); FI += One; e();")]
     [InlineData("class C { public System.Action X; public System.Action Get() => X; }", "var c = new C(); c.X = A; c.X += A; var e = c.Get(); c.X += B; e();")]
-    public void A_copy_returned_from_a_method_or_property_is_ES0099(string members, string body)
+    [InlineData("static void Other() { Fld += B; }", "Fld = A; Other(); System.Action e = Fld; e();")]
+    [InlineData("static void Other() { Fld += B; System.Action e = Fld; e(); }", "Other();")]
+    [InlineData("static void Other() { Fld += B; Fld += B; System.Action e = () => { }; e = Fld; } static void Third() { Fld -= B; }", "")]
+    [InlineData("static void Pp([Owned] System.Action d) { System.Action e = d; d += B; e(); }", "")]
+    public void A_copy_returned_or_taken_in_another_method_or_a_parameter_is_ES0099(string members, string body)
     {
         var r = Compile(Program(CopyMembers + members, body));
-        Assert.Contains(r.Diagnostics, d => d.Id == "ES0099" && d.Severity == Microsoft.CodeAnalysis.DiagnosticSeverity.Error);
+        Assert.Contains(r.Diagnostics, d => d.Id == "ES0099" && d.Severity == Microsoft.CodeAnalysis.DiagnosticSeverity.Error && d.GetMessage().Contains(Copied));
     }
 
     [Theory]
@@ -314,8 +355,6 @@ Check(Heap.LiveClosures() == base0, ""still nothing leaks"");
     [InlineData("static void Use(in System.Action a) { Fld += B; a(); }", "Fld = A; Fld += B; Use(in Fld);", "'Fld' is passed to a call, and a += or -= on 'Fld' in another method")]
     [InlineData("class H { public System.Action X; public void Run(System.Action a) { X += B; a(); } }", "var h = new H(); h.X = A; h.X += B; h.Run(h.X);", "'X' is passed to a call")]
     [InlineData("static void Use(System.Action a, System.Action g) { g(); a(); }", "System.Action d = A; d += B; Use(d, () => { d += B; });", "'d' is passed to a call, and a += or -= on 'd' in a lambda or local function")]
-    [InlineData("static void Call2(System.Action a, System.Action b) { a(); b(); }", "System.Action d = A; d += B; Call2(d, d += B);", "used as a value in an expression that also reads 'd'")]
-    [InlineData("static void Call2(System.Action a, System.Action b) { a(); b(); }", "System.Action d = A; d += B; Call2(d, d -= B);", "used as a value in an expression that also reads 'd'")]
     public void A_delegate_passed_to_a_call_that_can_release_it_is_ES0099(string members, string body, string message)
     {
         var r = Compile(Program(CopyMembers + members, body));
@@ -324,77 +363,45 @@ Check(Heap.LiveClosures() == base0, ""still nothing leaks"");
     }
 
     [Fact]
-    public void The_copy_check_reports_once_per_variable()
+    public void The_copy_check_reports_once_per_variable_and_names_the_copy()
     {
-        var r = Compile(Program(CopyMembers, "System.Action d = A; System.Action e = d; d += B; d += A; d -= B; e();"));
-        Assert.Single(r.Diagnostics, d => d.Id == "ES0099" && d.GetMessage().Contains("is a copy of 'd'"));
+        var r = Compile(Program(CopyMembers, "System.Action d = A;\nSystem.Action e = d; d += B; d += A; d -= B; e();"));
+        var found = Assert.Single(r.Diagnostics, d => d.Id == "ES0099" && d.GetMessage().Contains(Copied));
+        Assert.Contains("line ", found.GetMessage());
     }
 
     [Fact]
-    public void A_field_copy_is_refused_when_another_method_can_run_the_compound_assignment()
-    {
-        // Two methods add to the field, or the method is called: the order cannot be followed, so every copy is refused.
-        foreach (var (extra, body) in new[]
-        {
-            ("static void Other() { Fld += B; }", "Fld = A; Other(); System.Action e = Fld; e();"),
-            ("static void Other() { Fld += B; System.Action e = Fld; e(); }", "Other();"),
-            ("static void Other() { Fld += B; System.Action e = Fld; e(); } static void Cb(System.Action f) { f(); }", "Cb(Other);"),
-            ("static void Other() { Fld += B; Fld += B; System.Action e = () => { }; e = Fld; } static void Third() { Fld -= B; }", ""),
-        })
-        {
-            var r = Compile(Program(CopyMembers + extra, body));
-            Assert.Contains(r.Diagnostics, d => d.Id == "ES0099" && d.GetMessage().Contains("this check cannot follow a field"));
-        }
-    }
-
-    [Fact]
-    public void A_copy_used_after_compound_assignment_in_a_parameter_is_ES0099()
-    {
-        var r = Compile(Program(CopyMembers + " static void Pp([Owned] System.Action d) { System.Action e = d; d += B; e(); }", ""));
-        Assert.Contains(r.Diagnostics, d => d.Id == "ES0099" && d.GetMessage().Contains("is a copy of 'd'"));
-    }
-
-    [Fact]
-    public void Copies_taken_after_the_last_compound_assignment_or_never_used_afterwards_run_clean()
+    public void Compound_assignments_without_copies_run_clean()
     {
         if (!HasGcc) return;
         const string members = CopyMembers + @"
-static void C() { log = log * 10 + 3; }
-static void M1() { System.Action d = A; d += B; System.Action e = d; e(); Heap.Free(ref d); }
-static void M2() { System.Action d = A; System.Action e = d; e(); d += B; d += C; Heap.Free(ref d); }
-static void M3() { System.Action d = A; System.Action e = d; e(); d += B; e = null; Heap.Free(ref d); }
-static void M4() { System.Action d = A; d += B; System.Action e = d; bool same = e == d; d -= B; if (!same) log = 99; Heap.Free(ref d); }
-static void M5(bool c) { System.Action d = A; System.Action e = null; if (c) { e = d; e(); } else { d += B; } Heap.Free(ref d); }
-static void M7() { System.Action d = A; d += B; if (d is System.Action f) f(); Heap.Free(ref d); }
-static void M8() { for (int i = 0; i < 2; i++) { System.Action d = A; System.Action e = d; e(); d += B; Heap.Free(ref d); } }
+static void AddB() => Fld += B;
 static void M9() { System.Action d = A; d += B; d += d; d(); Heap.Free(ref d); }
 static void M10() { System.Action d = A; d += B; d -= d; if (d == null) log = 7; }
 static void M11() { System.Action d = A; d += B; d += (log == 0 ? d : A); d(); Heap.Free(ref d); }
 static void Use(System.Action a) { a(); }
 static void M12() { System.Action d = A; Use(d); d += B; Use(d); Heap.Free(ref d); }
+static void M13() { System.Action d = A; System.Action add = () => d += B; add(); add(); d(); Heap.Free(ref d); Heap.Free(ref add); }
+static void M14() { System.Action d = A; for (int i = 0; i < 2; i++, d += B) { } d(); Heap.Free(ref d); }
+static void M15() { System.Action d = A; d += B; System.Action x = d; d = null; d += B; x(); d(); Heap.Free(ref x); Heap.Free(ref d); }
 ";
         const string body = @"
 int base0 = Heap.LiveClosures();
-log = 0; M1(); Check(log == 12, ""a copy taken after the last +="");
-log = 0; M2(); Check(log == 1, ""a copy used before the +="");
-log = 0; M3(); Check(log == 1, ""a copy never used afterwards"");
-log = 0; M4(); Check(log == 0, ""a copy taken after += and not used after -="");
-log = 0; M5(true); M5(false); Check(log == 1, ""the copy and the += on different branches"");
-log = 0; M7(); Check(log == 12, ""a pattern variable taken after the last +="");
-log = 0; Fld = A; Fld += B; System.Action ef = Fld; ef(); Heap.Free(ref Fld); Check(log == 12, ""a field copy taken after the last += in a method nothing calls"");
-log = 0; M8(); Check(log == 11, ""a copy per iteration of a loop that declares both"");
 log = 0; M9(); Check(log == 1212, ""d += d"");
 log = 0; M10(); Check(log == 7, ""d -= d"");
 log = 0; M11(); Check(log == 1212, ""d += (c ? d : A)"");
 log = 0; M12(); Check(log == 112, ""d passed to a call before and after its +="");
 log = 0; Fld2 = A; Fld2 += B; Use(Fld2); Fld2 += B; Use(Fld2); Heap.Free(ref Fld2); Check(log == 12122, ""a field passed to a call in the one method that adds to it"");
+log = 0; Fld = A; AddB(); AddB(); Fld(); Heap.Free(ref Fld); Check(log == 122, ""a += in an expression-bodied void method"");
+log = 0; M13(); Check(log == 122, ""a += as the body of a void lambda"");
+log = 0; M14(); Check(log == 122, ""a += in a for incrementor"");
+log = 0; M15(); Check(log == 122, ""a move (copy, then null the source) before a +="");
 Check(Heap.LiveClosures() == base0, ""nothing leaks"");
 ";
         var (code, output) = Run(members, body);
-        Assert.Equal(OkLines("a copy taken after the last +=", "a copy used before the +=", "a copy never used afterwards", "a copy taken after += and not used after -=",
-            "the copy and the += on different branches", "a pattern variable taken after the last +=", "a field copy taken after the last += in a method nothing calls",
-            "a copy per iteration of a loop that declares both", "d += d", "d -= d", "d += (c ? d : A)", "d passed to a call before and after its +=",
-            "a field passed to a call in the one method that adds to it", "nothing leaks"), output);
+        Assert.Equal(OkLines("d += d", "d -= d", "d += (c ? d : A)", "d passed to a call before and after its +=",
+            "a field passed to a call in the one method that adds to it", "a += in an expression-bodied void method", "a += as the body of a void lambda",
+            "a += in a for incrementor", "a move (copy, then null the source) before a +=", "nothing leaks"), output);
         Assert.Equal(0, code);
     }
 
