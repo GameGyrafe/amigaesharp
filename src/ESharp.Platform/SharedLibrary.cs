@@ -8,14 +8,36 @@ namespace ESharp.Platform;
 
 /// <summary>
 /// Opening an E# Amiga shared library (a project with EsOutputType AmigaLibrary, issue #154) through its generated binding. On the Amiga
-/// targets an opener is exec's OpenLibrary, whose base the binding's vector calls pass in a6. On the host and on sdl the library's code is
-/// compiled into the program and the binding calls it directly; the host then keeps each opener's static fields apart (Enter and Leave
-/// swap them in and out around a call), so the program sees what it sees on the Amiga. sdl does not yet: there every opener shares one
-/// copy of the library's data.
+/// targets an opener is exec's OpenLibrary, whose base the binding's vector calls pass (in a6 on m68k, as the AROS ABI passes a base on
+/// AROS); on AmigaOS 4 an opener is the library's main interface, which the library clones for each opener, and the calls go through
+/// it. On the host and on sdl the library's code is compiled into the program and the binding calls it directly; the host then keeps
+/// each opener's static fields apart (Enter and Leave swap them in and out around a call), so the program sees what it sees on the
+/// Amiga. sdl does not yet: there every opener shares one copy of the library's data.
 /// </summary>
 public static unsafe class SharedLibrary
 {
-#if AMIGA
+#if AMIGAOS4
+    /// <summary>
+    /// exec OpenLibrary, then the library's main interface (GetInterface "main" 1): the opener's interface, which the library made for this
+    /// opener alone, or null when the library is missing or older than <paramref name="version"/>. The binding's calls go through it.
+    /// </summary>
+    public static void* Open(string name, int version, int libraryVersion, string types)
+    {
+        return OpenMain(name, version);
+    }
+
+    /// <summary>DropInterface of the opener's interface (its data goes with it), then CloseLibrary.</summary>
+    public static void Close(void* library)
+    {
+        if (library != null) CloseMain(library);
+    }
+
+    [Native("es_lib_open_main")]
+    private static extern void* OpenMain(string name, int version);
+
+    [Native("es_lib_close_main")]
+    private static extern void CloseMain(void* main);
+#elif AMIGA
     /// <summary>exec OpenLibrary: the opener's base, or null when the library is missing or older than <paramref name="version"/>.</summary>
     public static void* Open(string name, int version, int libraryVersion, string types)
     {
@@ -26,6 +48,8 @@ public static unsafe class SharedLibrary
     {
         if (library != null) Exec.CloseLibrary(library);
     }
+#endif
+#if AMIGA
 
     /// <summary>The open count of the library in exec's list (found by name, under Forbid), or -1 when it is not in memory.</summary>
     public static int OpenCount(string name) { return OpenCountOf(name); }
@@ -44,7 +68,8 @@ public static unsafe class SharedLibrary
 
     /// <summary>
     /// Asks exec to expunge the libraries nobody has open: an allocation larger than any Amiga's memory, which exec answers by flushing
-    /// unused libraries (each one's Expunge) before it fails.
+    /// unused libraries (each one's Expunge) before it fails. AmigaOS 4 does not: there a library nobody has open stays in memory (use
+    /// <see cref="ExpungeWhenClosed"/> while it is open).
     /// </summary>
     public static void FlushUnused()
     {

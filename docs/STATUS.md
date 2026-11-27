@@ -12,11 +12,12 @@ The minimum system is now an **Amiga 1200: 68020, AGA, 2 MB chip RAM, Kickstart 
 
 ## Amiga shared libraries from E# (issue #154, part 3)
 
-A project with `EsOutputType` `AmigaLibrary` builds an AmigaOS shared library: `esharp build` writes `obj/m68k/<name>.library`, a
+A project with `EsOutputType` `AmigaLibrary` builds an AmigaOS shared library: `esharp build` writes `obj/<target>/<name>.library`, a
 `.fd` file and a C# binding, and an E# program that names the library's folder in `esharp.include` opens it with OpenLibrary and calls
 it through the binding. Each opener has its own copy of the library's E# data (the maintainer's decision). How to use it:
 docs/GUIDE.md, "Amiga shared libraries (.library)"; how it is built: docs/ARCHITECTURE.md, "Amiga shared libraries". m68k AmigaOS 3.x
-only; AROS and AmigaOS 4 later.
+first (below), then AROS x86-64 and AmigaOS 4 (2026-11-27, see "AROS x86-64 and AmigaOS 4" further down). MorphOS, AROS i386 and
+per-opener data on sdl are not done (ES0134 for a library build for MorphOS, AROS i386 or sdl; no invalid output).
 
 - **Exported functions:** public static methods marked `[LibraryFunction]` (new attribute), plain values only (integers up to 32 bits,
   `bool`, `string`, pointers to numbers, void, pointers and structs of fields); anything else is ES0130-ES0133 or ES0135. Vectors in
@@ -67,7 +68,63 @@ only; AROS and AmigaOS 4 later.
   Found on the way: a memory flush (FlushUnused) while the library is open does not reach its Expunge on Kickstart 3.1, so the delayed
   expunge is asked for with RemLibrary.
   Text output only, no screenshots.
-- **Not verified:** AROS, AmigaOS 4 and MorphOS libraries (not built: `esharp build` stops for them), per-opener data on sdl (not done),
+- **AROS x86-64 and AmigaOS 4 (2026-11-27):** the same project and binding, `--target aros` and `--target os4`.
+  - **AROS:** a C `struct Resident` (LDDemon finds it in the loaded file), RTF_AUTOINIT with a table of function addresses (AROS's jump
+    table holds addresses, 8 bytes each; vector -30 is LVO 5), init with AROS_UFH3 and open, close, expunge and every function with the
+    AROS_LH macros of the AROS headers in the toolchain image, so the base comes as the AROS ABI passes it (x86-64: an ordinary
+    argument after the others). Per opener a copy of the base with the data after it, as on m68k; r15 (callee-saved) is the global
+    register that points at it. The program calls with AROS_LC through its opener's jump table. Found on the way: the program-side
+    open count read `SysBase->LibList` through the SDK's `struct ExecBase` and got the memory list on the hosted nightly (the running
+    AROS has more before LibList than the headers say), so on AROS the library list is now found from exec's own node in it (the
+    ln_Pred chain ends at the list header), not through the struct.
+  - **AmigaOS 4:** a `struct Resident` with RTF_NATIVE | RTF_AUTOINIT whose CreateLibrary tags give the base size, the init function
+    and two interfaces: the manager `__library` (Open, Close, Expunge) and `main` (Obtain, Release, Expunge, Clone, then the library
+    functions). `main` is IFLF_PRIVATE: each opener's GetInterface gets its own clone (made by our Clone with MakeInterface, IFLF_CLONED
+    and IFLF_CLONE_EXPUNGE), whose data area (MIT_DataSize) holds the opener's data; r14 points at it inside the library. The binding's
+    `Open` is OpenLibrary plus GetInterface(`main`, 1), `Base` is that interface, every call goes through its function table with it as
+    Self, and `Close` is DropInterface (the clone and its data go in its Expunge) plus CloseLibrary. Found on the way: DeleteInterface
+    calls the interface's Expunge, so our Expunge clears the clone flags before it calls DeleteInterface (it recursed until the stack ran
+    out before). For the same reason a clone gets IFLF_CLONED and IFLF_CLONE_EXPUNGE only once its data is set up: a clone whose data
+    area is too small, or whose memory pool cannot be made, is deleted without tearing down data that was never made (review of #169;
+    the host test `The_AmigaOS_4_library_clones_and_expunges_its_main_interface_as_exec_would_call_it` runs the AmigaOS 4 C on x86-64
+    against a stand-in for exec's interface calls, both failure paths included). The library links no libauto: it opens dos (and graphics, intuition when used) and their main
+    interfaces itself.
+  - Only the facts (macro names, struct and tag names, vector order) were taken from the AROS and AmigaOS 4 headers in the toolchain
+    image; no SDK or autodoc text is in the repository.
+  - **Verified (Linux x86-64):** `esharp test samples/amigalibdemo --target aros --docker esharp-amiga-toolchain` (hosted AROS x86-64 in
+    the esharp-aros-hosted image, nightly 20261114): host 32 ok, 0 FAIL, 4 skipped; AROS 36 ok, 0 FAIL, return code 0, 0 traps, "Host
+    and AROS agree on every check": every check the m68k run has, among them two openers with their own data, every function, the
+    expunge on a memory flush and the delayed one with the free memory exactly as before, the open count, and a second process making
+    20000 calls with its own opener while the first made 2100. `tools/aros-hosted/aros-hosted.sh amigalibdemo --docker
+    esharp-aros-hosted` (copies the library into the fresh tree's Libs): the same ok lines.
+    `ESHARP_OS4_VM=<vm> esharp test samples/amigalibdemo --target os4 --docker esharp-amiga-toolchain` (AmigaOS 4.1 in the QEMU
+    pegasos2 VM): host 32 ok, 4 skipped; OS4 33 ok, 0 FAIL, 3 skipped, return code 0, "Host and OS4 agree on every check" (three runs
+    in a row with the final code). In one earlier run the library was no longer in memory after both processes had closed it (open
+    count -1 instead of 0): something in AmigaOS 4 had asked it to expunge while they had it open, so it went at their last Close (our
+    Expunge marks LIBF_DELEXP then). The demo accepts -1 there on AmigaOS 4 and prints the count when it is not 0. The manager's Open
+    and Close count under Forbid, as two tasks may open and close at the same time.
+    Skipped on OS4, with the reason printed: "expunged when nobody has it open" and the two exact free-memory checks. AmigaOS 4 did
+    not expunge a library nobody had open on a failed `AllocVec` (2 GB, 4 GB or the free memory plus 4 KB), nor after `C:Avail FLUSH`,
+    and bullet.library (open count 0) stayed in memory too, so `FlushUnused` cannot expunge there; the demo's warm-up and the delayed
+    expunge use `ExpungeWhenClosed` instead, which works ("expunged at the last close" ok). AvailMem on AmigaOS 4 moved by about 220 KB
+    between two points of the run on its own, so an exact before and after says nothing there. The m68k run is unchanged: with
+    Kickstart 3.1 (40.069), A1200, host 32 ok + 4 skipped, Amiga 36 ok, 0 FAIL, "Host and Amiga agree"; the m68k library's C, the
+    `.library`, the `.fd`, the binding and the demo's executable are byte for byte what main builds.
+  - `dotnet test`: 861 passed, 2 skipped (the SDK-backed BindGen test and the OS4 VM test), 0 failed.
+  - Tests: `AmigaLibraryTests` builds the library for every target (ES0134 with the reason for aros-i386, morphos and sdl, and no C),
+    checks the AROS and AmigaOS 4 C (Resident, AROS_LH entries and LVOs, the interfaces and their tags, r15 and r14), runs the AROS and
+    AmigaOS 4 library C's openers with the host gcc, and runs the AROS part itself on the x86-64 host against a stand-in of the few AROS
+    headers it includes (gcc on Linux x86-64 only: a global register variable needs gcc): what InitResident does with the Resident
+    (MakeLibrary from the init table, init), two openers through LVO 1, the functions through their LVOs with the base after the
+    arguments, close, an expunge while open (LIBF_DELEXP) and the delayed expunge at the last close giving the segment list back with
+    every block and pool freed. The program side: AROS_LC with the LVO, the AmigaOS 4 call through the interface's table, ES0099 for
+    MorphOS. `AmigaLibraryCliTests`: emit-only builds of the library and the demo for aros and os4, refusals for aros-i386 and morphos.
+    CI's toolchain job builds the demo and its library for m68k, aros and os4.
+  - **Not verified on AROS and AmigaOS 4:** a library that calls graphics or intuition (only dos was used), `[LibraryBase]` classes in
+    a library, callers that are not E# programs, `esharp addr` on library code, native AROS (not hosted) and real AmigaOS 4 hardware,
+    AmigaOS 4 versions other than the VM's, and whether AmigaOS 4 unloads the segment list our last Close returns (the free memory
+    could not be compared exactly there). On AROS i386 and MorphOS a library is not built (ES0134).
+- **Not verified:** MorphOS and AROS i386 libraries (not built: ES0134), per-opener data on sdl (not done),
   callers that are not E# programs (C or assembler with the `.fd` file: not tried; no C header or proto file is written), real hardware,
   `esharp addr` on library code, a library with `[LibraryBase]` classes (bases per opener) or with graphics or intuition calls in the
   emulator, very large per-opener data, and the hardware test pack (the demo is not in it).
@@ -2069,7 +2126,7 @@ Open work as of 2026-11-14 (the GitHub issues are the live list; the v1 tracker 
 - **Windows (#11):** CI now runs a `windows` job (windows-latest, PR head): `dotnet test` (439 passed, 2 skipped, 0 failed; the runner has a MinGW gcc, so the generated-C tests run there and only the Docker/VM/SDK-dependent tests skip), emit-only builds of `samples/hello` and `samples/cards`, `esharp test samples/linq`, a clean `git status` afterwards, and a package round trip against the PR's own packages (`dotnet pack`, install the tool from the folder into a tool path, a nuget.config with the local feed, version and PackageReference checked, NU1603 fails the step, `esharp new`, `dotnet run`, `esharp test`, `esharp build --emit-only`). A `.gitattributes` keeps the working tree LF (the runner has `core.autocrlf=true`), and the native test output is read CRLF-tolerant. Still needs a person on a real Windows machine: Docker Desktop with `--docker` builds, FS-UAE for Windows, VS Code, and Windows with a different (or no) C compiler. `tools/aros-hosted` is Linux-only. macOS was checked, see "VS Code support".
 - **Bindings (#19, #40):** GadTools wrappers (v1), the BOOPSI core with hooks (#40 part 1, see "BOOPSI core and hooks") and the MUI wrappers on it (#40 part 2, see "MUI wrappers") are done. MUI custom classes (#93, see "MUI custom classes") are done too. Open: ReAction (last, if at all).
 - **Display design (not implemented):** [design/DISPLAY.md](design/DISPLAY.md) proposes logical coordinates with an integer scale, mode choice that follows the Workbench's monitor family (MODE option, asl screen-mode requester), 256 colours with a shared palette, a gradient pen (copper on AGA), window mode on the Workbench and multi-scale art. Nothing in it is built or verified yet; it waits for the maintainer's approval.
-- **v2:** AROS i386 (#4: toolchain, target and hosted runs done, see "AROS i386"; the MUI crashes on hosted i386 were an AROS bug, worked around (#105); open: native pc-i386), E# library source packages on NuGet (#31: parts 1 to 4 done, see "E# library packages, part 1", "part 2: assets in packages", "part 3: C files and headers in packages" and "part 4: classes derived from package classes"; the `AmigaESharp.*` id prefix is reserved on nuget.org for the maintainer's account since 2026-11-24, so #31 is done; the library project template `esharp new --library` is done, see "Library project template"; the later pieces from its proposal are in #154: precompiled per-target binaries are done, see "Precompiled per-target libraries in E# packages"; the m68k `.library` is done, see "Amiga shared libraries from E#", open: AROS and AmigaOS 4 libraries and per-opener data on sdl), user classes deriving from platform classes (#42: done for `GtWindow`, see "Classes derived from platform classes"). Capturing lambdas stored in fields and events (#41): done (PR #83), see "Heap closures and events".
+- **v2:** AROS i386 (#4: toolchain, target and hosted runs done, see "AROS i386"; the MUI crashes on hosted i386 were an AROS bug, worked around (#105); open: native pc-i386), E# library source packages on NuGet (#31: parts 1 to 4 done, see "E# library packages, part 1", "part 2: assets in packages", "part 3: C files and headers in packages" and "part 4: classes derived from package classes"; the `AmigaESharp.*` id prefix is reserved on nuget.org for the maintainer's account since 2026-11-24, so #31 is done; the library project template `esharp new --library` is done, see "Library project template"; the later pieces from its proposal are in #154: precompiled per-target binaries are done, see "Precompiled per-target libraries in E# packages"; the `.library` for m68k, AROS x86-64 and AmigaOS 4 is done, see "Amiga shared libraries from E#", open: per-opener data on sdl, and MorphOS and AROS i386 libraries), user classes deriving from platform classes (#42: done for `GtWindow`, see "Classes derived from platform classes"). Capturing lambdas stored in fields and events (#41): done (PR #83), see "Heap closures and events".
 - **Local toolchains (#122):** part 1 done (configuration, `esharp doctor`, VS Code tasks, a local m68k build in CI; see
   "Local toolchains, part 1"). Open: macOS and Windows by hand, and whether os4, morphos and AROS get a local route
   ([design/TOOLCHAINS.md](design/TOOLCHAINS.md) has the options; the maintainer picks).

@@ -59,6 +59,11 @@ fi
 bin="$root/samples/$s/obj/$target/$s"; [ -f "$bin" ] || { echo "build it first: esharp build samples/$s --target $target --docker <image>"; exit 1; }
 cd "$A" || exit 1
 cp "$bin" "./$s"; chmod +x "$s"
+# E# Amiga libraries the program uses (esharp build puts them next to it, issue #154): into LIBS: of the fresh copy.
+for l in "$(dirname "$bin")"/*.library; do
+  [ -f "$l" ] || continue
+  if [ -n "${AROS_HOSTED_COPY:-}" ]; then cp "$l" Libs/; else echo "note: $l is not copied into your AROS tree; put it in its Libs drawer yourself"; fi
+done
 if [ -n "$files" ] || [ "$wanderer" = 1 ]; then
   rm -rf ESTest; mkdir ESTest
   [ -n "$files" ] && cp -a "$files/." ESTest/

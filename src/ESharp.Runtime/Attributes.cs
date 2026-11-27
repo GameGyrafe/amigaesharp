@@ -215,7 +215,9 @@ public sealed class LibraryFunctionAttribute : Attribute
 /// A <c>static extern</c> method that calls the library vector at <paramref name="offset"/> (negative, as in an <c>.fd</c> file's bias:
 /// -30, -36, ...) of the library base it gets as its first parameter, with the other parameters in the registers named in
 /// <paramref name="registers"/> (comma separated, <c>"d0,d1,a0"</c>), and the result from d0. The bindings that <c>esharp build</c> writes
-/// for an E# <c>.library</c> use it, so each opener's base is passed explicitly. m68k only for now (ES0099 elsewhere).
+/// for an E# <c>.library</c> use it, so each opener's base is passed explicitly. On AROS x86-64 the call goes through the base's jump
+/// table (vector -30 is LVO 5) and on AmigaOS 4 the first parameter is the opener's main interface, called through its function table;
+/// the registers then only matter to m68k. ES0099 on MorphOS and AROS i386.
 /// </summary>
 [AttributeUsage(AttributeTargets.Method)]
 public sealed class LibraryCallAttribute : Attribute

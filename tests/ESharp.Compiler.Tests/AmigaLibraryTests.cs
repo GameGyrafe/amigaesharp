@@ -215,6 +215,420 @@ int main(void)
         Assert.Equal("add 15 16 12\nboxed 2 1\ntable 12 22 12\npoint 13 4 made 50 49\neven 1 0 name t len 5 fresh 5\nagain 10 0\n", output);
     }
 
+    private static CompileResult CompileLibraryFor(TargetInfo target, string source = Lib) =>
+        EsCompiler.Compile(new[] { new SourceFile("lib.cs", source) }, new CompileOptions { Defines = target.Defines, TargetName = target.Name, AmigaLibrary = Options });
+
+    [Fact]
+    public void A_library_builds_for_m68k_AROS_x86_64_and_AmigaOS_4_and_says_why_not_elsewhere()
+    {
+        foreach (var t in new[] { Targets.M68k, Targets.Aros, Targets.Os4 })
+            Assert.True(CompileLibraryFor(t).Success, t.Name + ": " + string.Join("\n", CompileLibraryFor(t).Diagnostics));
+        foreach (var (t, why) in new[] { (Targets.ArosI386, "AROS i386"), (Targets.MorphOs, "MorphOS"), (Targets.Sdl, "sdl has no shared libraries") })
+        {
+            var r = CompileLibraryFor(t);
+            Assert.False(r.Success);
+            Assert.Null(r.C);   // no half-made library
+            Assert.Contains(r.Diagnostics, d => d.Id == "ES0134" && d.GetMessage().Contains(why));
+        }
+    }
+
+    [Fact]
+    public void The_AROS_library_C_has_a_Resident_AROS_LH_entries_and_r15_for_the_openers_data()
+    {
+        var r = CompileLibraryFor(Targets.Aros);
+        Assert.True(r.Success, string.Join("\n", r.Diagnostics));
+        var c = r.C!;
+        Assert.DoesNotContain("_es_lib_romtag:", c);   // no m68k RomTag asm
+        Assert.Contains("register struct es_rt *es_d __asm__(\"r15\");", c);
+        Assert.Contains("static const struct Resident es_lib_romtag __attribute__((used)) =", c);
+        Assert.Contains("RTC_MATCHWORD, &es_lib_romtag, (APTR)(&es_lib_romtag + 1), RTF_AUTOINIT, 3, NT_LIBRARY, 0,", c);
+        Assert.Contains("static AROS_LH1(struct Library *, es_lib_open, AROS_LHA(ULONG, version, D0), struct es_lib_head *, base, 1, EsLib)", c);
+        Assert.Contains("static AROS_LH2(void, es_lib_entry_Move, AROS_LHA(uintptr_t, p, A0), AROS_LHA(uintptr_t, dx, D0), struct es_lib_head *, es_base, 8, EsLib)", c);
+        Assert.Contains("(APTR)AROS_SLIB_ENTRY(es_lib_entry_Add, EsLib, 5),", c);
+        Assert.DoesNotContain("__asm(\"a6\")", c);
+        // The m68k C is not touched by the other targets' code.
+        var m68k = CompileLibraryFor(Targets.M68k).C!;
+        Assert.DoesNotContain("r15", m68k);
+        Assert.DoesNotContain("AROS_LH", m68k);
+    }
+
+    [Fact]
+    public void The_AmigaOS_4_library_C_has_a_manager_and_a_private_main_interface_cloned_per_opener()
+    {
+        var r = CompileLibraryFor(Targets.Os4);
+        Assert.True(r.Success, string.Join("\n", r.Diagnostics));
+        var c = r.C!;
+        Assert.Contains("register struct es_rt *es_d __asm__(\"r14\");", c);
+        Assert.Contains("RTF_NATIVE | RTF_AUTOINIT, 3, NT_LIBRARY, 0,", c);
+        Assert.Contains("{ MIT_Name, (Tag)\"__library\" }", c);
+        Assert.Contains("{ MIT_Name, (Tag)\"main\" }, { MIT_VectorTable, (Tag)es_lib_main_vectors }, { MIT_Version, 1 }, { MIT_Flags, IFLF_PRIVATE },", c);
+        Assert.Contains("(APTR)es_lib_obtain, (APTR)es_lib_release, (APTR)es_lib_iface_expunge, (APTR)es_lib_clone,", c);
+        Assert.Contains("static uintptr_t es_lib_entry_Add(struct Interface *es_self, uintptr_t step)   /* slot 4 */", c);
+        Assert.Contains("es_lib_call_Add(ES_IFACE_DATA(es_self), (int32_t)step)", c);
+        Assert.Contains("int32_t _start(void) { return -1; }", c);
+        Assert.Contains("{ CLT_DataSize, sizeof(struct es_lib_head) }, { CLT_InitFunc, (Tag)es_lib_init }, { CLT_Interfaces, (Tag)es_lib_interfaces }", c);
+    }
+
+    [Fact]
+    public void The_AROS_and_AmigaOS_4_library_C_keeps_each_openers_data_apart_on_the_host()
+    {
+        if (!HasGcc) return;
+        foreach (var t in new[] { Targets.Aros, Targets.Os4 })
+        {
+            var c = CompileLibraryFor(t).C!;
+            // The same openers as the m68k C's host test, through the C entries every target's vectors use.
+            const string main = @"
+#include <stdio.h>
+#include <stdlib.h>
+int main(void)
+{
+    void *a = calloc(1, ES_LIB_DATA_SIZE), *b = calloc(1, ES_LIB_DATA_SIZE);
+    if (a == NULL || b == NULL || !es_lib_data_init(a) || !es_lib_data_init(b)) return 1;
+    int a1 = es_lib_call_Add(a, 5);
+    int a2 = es_lib_call_Add(a, 1);
+    int b1 = es_lib_call_Add(b, 2);
+    printf(""add %d %d %d made %d %d\n"", a1, a2, b1, es_lib_call_MadeCount(a), es_lib_call_MadeCount(b));
+    es_lib_data_fini(a);
+    es_lib_data_fini(b);
+    free(a);
+    free(b);
+    return 0;
+}
+";
+            var (code, output) = HasSanitizers ? RunSanitized(c + main) : RunWithHostGcc(c + main);
+            Assert.True(code == 0, t.Name + ": " + output);
+            Assert.Equal("add 15 16 12 made 49 49\n", output);
+        }
+    }
+
+    /// <summary>
+    /// A stand-in for the few AROS headers the library's C includes, enough to run its AROS part on an x86-64 host: the AROS_LH and
+    /// AROS_UFH macros as AROS x86-64 has them (a plain C function, the base after the arguments), the structs it uses, and exec's
+    /// memory and list calls on calloc, counted, so the test sees that every allocation is given back.
+    /// </summary>
+    private const string ArosShim = """
+#pragma once
+#include <stdint.h>
+#include <stdlib.h>
+#include <string.h>
+typedef uint8_t UBYTE; typedef int8_t BYTE; typedef uint16_t UWORD; typedef uint32_t ULONG; typedef uintptr_t IPTR;
+typedef void *APTR; typedef void *BPTR; typedef const unsigned char *CONST_STRPTR;
+#define BNULL ((BPTR)0)
+struct Node { struct Node *ln_Succ, *ln_Pred; UBYTE ln_Type; BYTE ln_Pri; char *ln_Name; };
+struct Library { struct Node lib_Node; UBYTE lib_Flags, lib_pad; UWORD lib_NegSize, lib_PosSize, lib_Version, lib_Revision; APTR lib_IdString; ULONG lib_Sum; UWORD lib_OpenCnt; };
+struct Resident { UWORD rt_MatchWord; const struct Resident *rt_MatchTag; APTR rt_EndSkip; UBYTE rt_Flags, rt_Version, rt_Type; BYTE rt_Pri;
+                  CONST_STRPTR rt_Name, rt_IdString; APTR rt_Init; UWORD rt_Revision; void *rt_Tags; };
+struct ExecBase { struct Library LibNode; };
+#define RTC_MATCHWORD 0x4AFC
+#define RTF_AUTOINIT (1 << 7)
+#define NT_LIBRARY 9
+#define LIBF_CHANGED (1 << 1)
+#define LIBF_SUMUSED (1 << 2)
+#define LIBF_DELEXP (1 << 3)
+#define MEMF_PUBLIC 1UL
+#define MEMF_CLEAR 0x10000UL
+#define AROS_SLIB_ENTRY(n, s, o) s##_##o##_##n
+#define AROS_LHA(type, name, reg) type name
+#define AROS_LH0(t, n, bt, bn, o, s) t AROS_SLIB_ENTRY(n, s, o)(bt bn) {
+#define AROS_LH1(t, n, a1, bt, bn, o, s) t AROS_SLIB_ENTRY(n, s, o)(a1, bt bn) {
+#define AROS_LH2(t, n, a1, a2, bt, bn, o, s) t AROS_SLIB_ENTRY(n, s, o)(a1, a2, bt bn) {
+#define AROS_LIBFUNC_INIT {
+#define AROS_LIBFUNC_EXIT }}
+#define AROS_UFHA(type, name, reg) type name
+#define AROS_UFH3(t, n, a1, a2, a3) t n(a1, a2, a3) {
+#define AROS_USERFUNC_INIT {
+#define AROS_USERFUNC_EXIT }}
+/* The library's own memcpy and friends (it links no C library) are renamed here, so the host's stay in use. */
+#define memcpy es_shim_memcpy
+#define memmove es_shim_memmove
+#define memset es_shim_memset
+#define memcmp es_shim_memcmp
+static int shim_blocks, shim_pools;
+static inline APTR AllocMem(IPTR size, ULONG flags) { (void)flags; void *p = calloc(1, size); if (p != NULL) shim_blocks++; return p; }
+static inline void FreeMem(APTR p, IPTR size) { (void)size; if (p != NULL) { shim_blocks--; free(p); } }
+static inline void CopyMem(const void *s, void *d, IPTR n) { const char *a = (const char *)s; char *b = (char *)d; while (n--) *b++ = *a++; }
+static inline void Remove(struct Node *n) { if (n->ln_Pred != NULL) n->ln_Pred->ln_Succ = n->ln_Succ; if (n->ln_Succ != NULL) n->ln_Succ->ln_Pred = n->ln_Pred; n->ln_Succ = n->ln_Pred = NULL; }
+struct shim_block { struct shim_block *next; };
+struct shim_pool { struct shim_block *blocks; };
+static inline APTR CreatePool(ULONG flags, IPTR puddle, IPTR thresh) { (void)flags; (void)puddle; (void)thresh; shim_pools++; return calloc(1, sizeof(struct shim_pool)); }
+static inline APTR AllocPooled(APTR pool, IPTR size)
+{ struct shim_block *b = (struct shim_block *)calloc(1, 16 + size); if (b == NULL) return NULL; b->next = ((struct shim_pool *)pool)->blocks; ((struct shim_pool *)pool)->blocks = b; return (char *)b + 16; }
+static inline void FreePooled(APTR pool, APTR mem, IPTR size) { (void)pool; (void)mem; (void)size; /* freed with the pool */ }
+static inline void DeletePool(APTR pool)
+{ struct shim_block *b = ((struct shim_pool *)pool)->blocks; while (b != NULL) { struct shim_block *n = b->next; free(b); b = n; } free(pool); shim_pools--; }
+static inline void Alert(ULONG n) { (void)n; abort(); }
+static inline ULONG Wait(ULONG s) { (void)s; abort(); }
+static inline struct Library *OpenLibrary(CONST_STRPTR name, ULONG v) { (void)name; (void)v; return NULL; }
+static inline void CloseLibrary(struct Library *l) { (void)l; }
+""";
+
+    [Fact]
+    public void The_AROS_library_works_through_its_jump_table_as_exec_would_call_it()
+    {
+        // AROS's library calls on a host x86-64 (the AROS x86-64 ABI is the host's): a global register variable needs gcc, and r15 x86-64.
+        if (!HasGcc || Cc.Contains("clang", StringComparison.Ordinal) || !OperatingSystem.IsLinux()
+            || System.Runtime.InteropServices.RuntimeInformation.ProcessArchitecture != System.Runtime.InteropServices.Architecture.X64) return;
+        var c = "#define __AROS__ 1\n" + CompileLibraryFor(Targets.Aros).C!;
+        const string main = @"
+#include <stdio.h>
+typedef uintptr_t (*es_f1)(uintptr_t, struct Library *);
+typedef uintptr_t (*es_f0)(struct Library *);
+#define LVO(lib, n) (((void **)(lib))[-(n)])
+int main(void)
+{
+    /* What InitResident does with an RTF_AUTOINIT Resident: MakeLibrary from the init table, then the init function. */
+    const struct Resident *res = &es_lib_romtag;
+    if (res->rt_MatchWord != RTC_MATCHWORD || res->rt_MatchTag != res || !(res->rt_Flags & RTF_AUTOINIT) || res->rt_Type != NT_LIBRARY) return 2;
+    const IPTR *init = (const IPTR *)res->rt_Init;
+    void **vectors = (void **)init[1];
+    int count = 0;
+    while (vectors[count] != (void *)-1) count++;
+    IPTR neg = ((IPTR)count * sizeof(void *) + 15) & ~(IPTR)15;
+    char *mem = (char *)AllocMem(neg + init[0], MEMF_PUBLIC | MEMF_CLEAR);
+    struct Library *base = (struct Library *)(mem + neg);
+    for (int i = 0; i < count; i++) LVO(base, i + 1) = vectors[i];
+    base->lib_NegSize = (UWORD)neg;
+    base->lib_PosSize = (UWORD)init[0];
+    struct Node list = { NULL, NULL, 0, 0, NULL };
+    base->lib_Node.ln_Pred = &list;
+    list.ln_Succ = &base->lib_Node;
+    base = ((struct Library *(*)(void *, BPTR, struct ExecBase *))init[3])(base, (BPTR)0x1234, NULL);
+    if (base == NULL || strcmp(base->lib_Node.ln_Name, ""test.library"") != 0 || base->lib_Version != 3 || base->lib_Revision != 7) return 3;
+    printf(""%d vectors, id %s"", count, (const char *)base->lib_IdString);
+
+    /* Two openers (LVO 1), each a copy of the base with its own data; the functions from LVO 5 on, the base after the arguments. */
+    struct Library *a = ((struct Library *(*)(ULONG, struct Library *))LVO(base, 1))(3, base);
+    struct Library *b = ((struct Library *(*)(ULONG, struct Library *))LVO(base, 1))(3, base);
+    printf(""opens %d, own bases %d\n"", base->lib_OpenCnt, a != b && a != base);
+    int a1 = (int)((es_f1)LVO(a, 5))(5, a);
+    int a2 = (int)((es_f1)LVO(a, 5))((uintptr_t)(intptr_t)-30, a);
+    int b1 = (int)((es_f1)LVO(b, 5))(2, b);
+    int even = (int)((es_f1)LVO(b, 9))(4, b);
+    const char *name = (const char *)((es_f0)LVO(a, 10))(a);
+    int len = (int)((es_f1)LVO(a, 11))((uintptr_t)""amiga"", a);
+    printf(""add %d %d %d even %d name %s len %d made %d %d\n"", a1, a2, b1, even, name, len, (int)((es_f0)LVO(a, 12))(a), (int)((es_f0)LVO(b, 12))(b));
+
+    /* Close a (LVO 2); an expunge (LVO 3) while b is open only marks it; b's close then expunges and gives the segment list back. */
+    BPTR seg = ((BPTR (*)(struct Library *))LVO(a, 2))(a);
+    printf(""after close %d %p\n"", base->lib_OpenCnt, seg);
+    seg = ((BPTR (*)(struct Library *, struct Library *))LVO(base, 3))(NULL, base);
+    printf(""expunge while open %p delexp %d\n"", seg, (base->lib_Flags & LIBF_DELEXP) != 0);
+    seg = ((BPTR (*)(struct Library *))LVO(b, 2))(b);
+    printf(""last close %p, in the list %d, blocks %d, pools %d\n"", seg, list.ln_Succ != NULL, shim_blocks, shim_pools);
+    return 0;
+}
+";
+        var headers = new Dictionary<string, string> { ["exec/types.h"] = ArosShim };
+        foreach (var h in new[] { "exec/libraries.h", "exec/execbase.h", "exec/memory.h", "exec/nodes.h", "exec/resident.h", "aros/libcall.h", "aros/asmcall.h" })
+            headers[h] = "#pragma once\n#include <exec/types.h>\n";
+        var (code, output) = RunWithHostGcc(c + main, headers);
+        Assert.True(code == 0, output);
+        Assert.Equal("13 vectors, id test.library 3.7 (25.11.2026)\nopens 2, own bases 1\n" +
+                     "add 15 -15 12 even 1 name t len 5 made 49 49\n" +
+                     "after close 1 (nil)\nexpunge while open (nil) delexp 1\nlast close 0x1234, in the list 0, blocks 0, pools 0\n", output);
+    }
+
+    /// <summary>
+    /// A stand-in for the few AmigaOS 4 headers the library's C includes, enough to run its AmigaOS 4 part on an x86-64 host (r14 is
+    /// an x86-64 register too): the structs it uses with the shim's own constant values, interfaces made from tag lists (the vectors after
+    /// the interface data, MIT_DataSize bytes in front), DeleteInterface that calls the interface's Expunge first (as the library's code
+    /// expects), and memory pools. Every interface and pool is counted; deleting an interface that is not live, or freeing a pool that
+    /// was never made, is reported. Two switches make the next MakeInterface give too small a data area or the next pool fail.
+    /// </summary>
+    private const string Os4Shim = """
+#pragma once
+#include <stdint.h>
+#include <stdlib.h>
+#include <stdio.h>
+#include <stdarg.h>
+#include <string.h>
+typedef uint8_t UBYTE; typedef int8_t BYTE; typedef uint16_t UWORD; typedef uint32_t ULONG; typedef uint32_t uint32; typedef int32_t int32;
+typedef void *APTR; typedef const void *CONST_APTR; typedef const unsigned char *CONST_STRPTR; typedef uintptr_t Tag;
+struct TagItem { Tag ti_Tag; uintptr_t ti_Data; };
+#define TAG_DONE 0
+struct Node { struct Node *ln_Succ, *ln_Pred; UBYTE ln_Type; BYTE ln_Pri; char *ln_Name; };
+struct Library { struct Node lib_Node; UBYTE lib_Flags, lib_pad; UWORD lib_NegSize, lib_PosSize, lib_Version, lib_Revision; APTR lib_IdString; ULONG lib_Sum; UWORD lib_OpenCnt; };
+struct InterfaceData { struct Library *LibBase; uint32 RefCount, Version, Flags, NegativeSize; };
+struct Interface { struct InterfaceData Data; APTR v[]; };
+struct LibraryManagerInterface { struct InterfaceData Data; APTR v[]; };
+struct ExecIFace { struct InterfaceData Data; uint32 (*Obtain)(void); uint32 (*Release)(void); };
+struct Resident { UWORD rt_MatchWord; const struct Resident *rt_MatchTag; APTR rt_EndSkip; UBYTE rt_Flags, rt_Version, rt_Type; BYTE rt_Pri;
+                  CONST_STRPTR rt_Name, rt_IdString; APTR rt_Init; };
+#define RTC_MATCHWORD 0x4AFC
+#define RTF_AUTOINIT (1 << 7)
+#define RTF_NATIVE (1 << 5)
+#define NT_LIBRARY 9
+#define LIBF_CHANGED (1 << 1)
+#define LIBF_SUMUSED (1 << 2)
+#define LIBF_DELEXP (1 << 3)
+#define MEMF_SHARED 1UL
+#define MEMF_CLEAR 0x10000UL
+#define MIT_Name 101
+#define MIT_VectorTable 102
+#define MIT_Version 103
+#define MIT_Flags 104
+#define MIT_DataSize 105
+#define IFLF_PRIVATE 1
+#define IFLF_CLONED 2
+#define IFLF_CLONE_EXPUNGE 4
+#define CLT_DataSize 201
+#define CLT_InitFunc 202
+#define CLT_Interfaces 203
+#define ASOT_MEMPOOL 7
+#define ASOPOOL_MFlags 301
+#define ASOPOOL_Puddle 302
+#define ASOPOOL_Threshold 303
+/* The library's own memcpy and friends (it links no C library) are renamed here, so the host's stay in use; so is its _start. */
+#define memcpy es_shim_memcpy
+#define memmove es_shim_memmove
+#define memset es_shim_memset
+#define memcmp es_shim_memcmp
+#define _start es_shim_start
+#define Forbid() ((void)0)
+#define Permit() ((void)0)
+#define SHIM_MAX 16
+static struct Interface *shim_ifaces[SHIM_MAX]; static void *shim_pools[SHIM_MAX];
+static int shim_live_ifaces, shim_live_pools, shim_bad, shim_small_data, shim_no_pool;
+static struct Interface *shim_lib_ifaces[2];
+static inline uintptr_t shim_tag(const struct TagItem *t, Tag tag) { for (; t->ti_Tag != TAG_DONE; t++) if (t->ti_Tag == tag) return t->ti_Data; return 0; }
+static inline struct Interface *MakeInterface(struct Library *lib, const struct TagItem *tags)
+{
+    APTR *vec = (APTR *)shim_tag(tags, MIT_VectorTable);
+    int n = 0;
+    while (vec[n] != (APTR)-1) n++;
+    uint32 data = ((uint32)shim_tag(tags, MIT_DataSize) + 15) & ~15u;
+    if (shim_small_data) { shim_small_data = 0; data = 16; }
+    unsigned char *mem = (unsigned char *)malloc(data + sizeof(struct Interface) + (size_t)n * sizeof(APTR));
+    if (mem == NULL) return NULL;
+    for (uint32 i = 0; i < data; i++) mem[i] = 0xAA;   /* not cleared, as the real memory need not be */
+    struct Interface *i = (struct Interface *)(mem + data);
+    i->Data.LibBase = lib; i->Data.RefCount = 0; i->Data.Version = (uint32)shim_tag(tags, MIT_Version);
+    i->Data.Flags = (uint32)shim_tag(tags, MIT_Flags); i->Data.NegativeSize = data;
+    for (int k = 0; k < n; k++) i->v[k] = vec[k];
+    for (int k = 0; k < SHIM_MAX; k++) if (shim_ifaces[k] == NULL) { shim_ifaces[k] = i; shim_live_ifaces++; return i; }
+    abort();
+}
+static inline void DeleteInterface(struct Interface *i)
+{
+    int k = 0;
+    while (k < SHIM_MAX && shim_ifaces[k] != i) k++;
+    if (k == SHIM_MAX) { printf("delete of an interface that is not live\n"); shim_bad++; return; }
+    if (i->v[2] != NULL) ((APTR (*)(struct Interface *))i->v[2])(i);   /* its Expunge */
+    k = 0;
+    while (k < SHIM_MAX && shim_ifaces[k] != i) k++;
+    if (k == SHIM_MAX) { printf("interface deleted by its own Expunge, then again\n"); shim_bad++; return; }
+    shim_ifaces[k] = NULL; shim_live_ifaces--;
+    free((char *)i - i->Data.NegativeSize);
+}
+static inline void DropInterface(struct Interface *i)
+{
+    if (--i->Data.RefCount == 0 && (i->Data.Flags & IFLF_CLONE_EXPUNGE)) ((APTR (*)(struct Interface *))i->v[2])(i);
+}
+struct shim_block { struct shim_block *next; };
+struct shim_pool { struct shim_block *blocks; };
+static inline APTR AllocSysObjectTags(uint32 type, ...)
+{
+    if (type != ASOT_MEMPOOL || shim_no_pool) { shim_no_pool = 0; return NULL; }
+    struct shim_pool *p = (struct shim_pool *)calloc(1, sizeof *p);
+    for (int k = 0; k < SHIM_MAX; k++) if (shim_pools[k] == NULL) { shim_pools[k] = p; shim_live_pools++; return p; }
+    abort();
+}
+static inline void FreeSysObject(uint32 type, APTR pool)
+{
+    int k = 0;
+    while (k < SHIM_MAX && (type != ASOT_MEMPOOL || shim_pools[k] != pool)) k++;
+    if (k == SHIM_MAX) { printf("free of a pool that was never made\n"); shim_bad++; return; }
+    struct shim_block *b = ((struct shim_pool *)pool)->blocks;
+    while (b != NULL) { struct shim_block *n = b->next; free(b); b = n; }
+    free(pool); shim_pools[k] = NULL; shim_live_pools--;
+}
+static inline APTR AllocPooled(APTR pool, ULONG size)
+{ struct shim_block *b = (struct shim_block *)calloc(1, 16 + size); if (b == NULL) return NULL; b->next = ((struct shim_pool *)pool)->blocks; ((struct shim_pool *)pool)->blocks = b; return (char *)b + 16; }
+static inline void FreePooled(APTR pool, APTR mem, ULONG size) { (void)pool; (void)mem; (void)size; /* freed with the pool */ }
+static inline void Remove(struct Node *n) { if (n->ln_Pred != NULL) n->ln_Pred->ln_Succ = n->ln_Succ; if (n->ln_Succ != NULL) n->ln_Succ->ln_Pred = n->ln_Pred; n->ln_Succ = n->ln_Pred = NULL; }
+static inline void DeleteLibrary(struct Library *lib) { for (int k = 0; k < 2; k++) DeleteInterface(shim_lib_ifaces[k]); free(lib); }
+static inline void Alert(ULONG n) { (void)n; abort(); }
+static inline ULONG Wait(ULONG s) { (void)s; abort(); }
+static uint32 shim_exec_count(void) { return 1; }
+static struct ExecIFace shim_exec = { { NULL, 0, 1, 0, 0 }, shim_exec_count, shim_exec_count };
+""";
+
+    [Fact]
+    public void The_AmigaOS_4_library_clones_and_expunges_its_main_interface_as_exec_would_call_it()
+    {
+        // AmigaOS 4's interface calls on a host x86-64: a global register variable (r14) needs gcc, and r14 x86-64.
+        if (!HasGcc || Cc.Contains("clang", StringComparison.Ordinal) || !OperatingSystem.IsLinux()
+            || System.Runtime.InteropServices.RuntimeInformation.ProcessArchitecture != System.Runtime.InteropServices.Architecture.X64) return;
+        var c = "#define __amigaos4__ 1\n" + CompileLibraryFor(Targets.Os4).C!;
+        const string main = @"
+typedef uintptr_t (*es_f1)(struct Interface *, uintptr_t);
+typedef uintptr_t (*es_f0)(struct Interface *);
+typedef struct Interface *(*es_clone)(struct Interface *);
+/* What GetInterface does with the private main interface: its Clone, then Obtain. */
+static struct Interface *shim_get(struct Interface *m)
+{
+    struct Interface *c = ((es_clone)m->v[3])(m);
+    if (c != NULL) ((es_f0)c->v[0])(c);
+    return c;
+}
+int main(void)
+{
+    /* What exec does with an RTF_AUTOINIT Resident: CreateLibrary from its tags, the interfaces, then the init function. */
+    const struct Resident *res = &es_lib_romtag;
+    if (res->rt_MatchWord != RTC_MATCHWORD || res->rt_MatchTag != res || (res->rt_Flags & (RTF_NATIVE | RTF_AUTOINIT)) != (RTF_NATIVE | RTF_AUTOINIT)
+        || res->rt_Type != NT_LIBRARY) return 2;
+    const struct TagItem *create = (const struct TagItem *)res->rt_Init;
+    struct Library *base = (struct Library *)calloc(1, shim_tag(create, CLT_DataSize));
+    const struct TagItem *const *ifaces = (const struct TagItem *const *)shim_tag(create, CLT_Interfaces);
+    for (int k = 0; k < 2; k++) shim_lib_ifaces[k] = MakeInterface(base, ifaces[k]);
+    struct Node list = { NULL, NULL, 0, 0, NULL };
+    base->lib_Node.ln_Pred = &list;
+    list.ln_Succ = &base->lib_Node;
+    base = ((struct Library *(*)(struct Library *, APTR, struct Interface *))shim_tag(create, CLT_InitFunc))(base, (APTR)0x1234, (struct Interface *)&shim_exec);
+    struct Interface *mgr = shim_lib_ifaces[0], *mainif = shim_lib_ifaces[1];
+    if (base == NULL || ifaces[2] != NULL || strcmp(base->lib_Node.ln_Name, ""test.library"") != 0 || base->lib_Version != 3 || !(mainif->Data.Flags & IFLF_PRIVATE)) return 3;
+
+    /* Two openers: the manager's Open (slot 4), then each its own clone of main; the functions from slot 4 on. */
+    ((struct Library *(*)(struct Interface *, uint32))mgr->v[4])(mgr, 3);
+    ((struct Library *(*)(struct Interface *, uint32))mgr->v[4])(mgr, 3);
+    struct Interface *a = shim_get(mainif), *b = shim_get(mainif);
+    if (a == NULL || b == NULL || a == b || a == mainif) return 4;
+    int a1 = (int)((es_f1)a->v[4])(a, 5);
+    int a2 = (int)((es_f1)a->v[4])(a, (uintptr_t)(intptr_t)-30);
+    int b1 = (int)((es_f1)b->v[4])(b, 2);
+    printf(""opens %d clones %d add %d %d %d made %d %d pools %d\n"", base->lib_OpenCnt, (a->Data.Flags & (IFLF_CLONED | IFLF_CLONE_EXPUNGE)) == (IFLF_CLONED | IFLF_CLONE_EXPUNGE),
+           a1, a2, b1, (int)((es_f0)a->v[11])(a), (int)((es_f0)b->v[11])(b), shim_live_pools);
+
+    /* A clone that cannot be made, with too small a data area or no memory pool: no clone, nothing torn down that was not set up. */
+    int before = shim_live_ifaces, pools = shim_live_pools;
+    shim_small_data = 1;
+    struct Interface *small = shim_get(mainif);
+    shim_no_pool = 1;
+    struct Interface *nopool = shim_get(mainif);
+    printf(""small %d no pool %d interfaces %d pools %d bad %d\n"", small == NULL, nopool == NULL, shim_live_ifaces - before, shim_live_pools - pools, shim_bad);
+
+    /* The last DropInterface of a clone expunges it with its data; then the closes and the manager's Expunge (slot 6). */
+    DropInterface(a);
+    DropInterface(b);
+    printf(""dropped: interfaces %d pools %d\n"", shim_live_ifaces, shim_live_pools);
+    ((APTR (*)(struct Interface *))mgr->v[5])(mgr);
+    ((APTR (*)(struct Interface *))mgr->v[5])(mgr);
+    APTR seg = ((APTR (*)(struct Interface *))mgr->v[6])(mgr);
+    printf(""expunge %p, in the list %d, interfaces %d, pools %d, bad %d\n"", seg, list.ln_Succ != NULL, shim_live_ifaces, shim_live_pools, shim_bad);
+    return 0;
+}
+";
+        var headers = new Dictionary<string, string> { ["exec/types.h"] = Os4Shim };
+        foreach (var h in new[] { "exec/libraries.h", "exec/interfaces.h", "exec/resident.h", "exec/exectags.h", "exec/execbase.h", "exec/memory.h", "exec/nodes.h" })
+            headers[h] = "#pragma once\n#include <exec/types.h>\n";
+        var (code, output) = RunWithHostGcc(c + main, headers);
+        Assert.True(code == 0, output);
+        Assert.Equal("opens 2 clones 1 add 15 -15 12 made 49 49 pools 2\n" +
+                     "small 1 no pool 1 interfaces 0 pools 0 bad 0\n" +
+                     "dropped: interfaces 2 pools 0\n" +
+                     "expunge 0x1234, in the list 0, interfaces 0, pools 0, bad 0\n", output);
+    }
+
     [Fact]
     public void The_binding_calls_vectors_on_the_Amiga_and_the_library_code_elsewhere()
     {
@@ -265,7 +679,7 @@ public static unsafe class P
     }
 
     [Fact]
-    public void LibraryCall_needs_a_base_registers_for_each_argument_and_m68k()
+    public void LibraryCall_needs_a_base_registers_for_each_argument_and_a_target_with_libraries()
     {
         string Src(string decl) => "using ESharp;\npublic static unsafe class P\n{\n" + decl + "\n[EntryPoint] public static void Main() { F(null, 1); }\n}";
         CompileResult M68k(string s) => EsCompiler.Compile(new[] { new SourceFile("p.cs", s) }, new CompileOptions { Defines = Targets.M68k.Defines, TargetName = "m68k" });
@@ -275,9 +689,19 @@ public static unsafe class P
         Assert.Contains("ES0136", Errors(M68k(Src("[LibraryCall(-30, \"a6\")] static extern int F(void* b, int x);"))));
         Assert.Contains("ES0136", Errors(M68k(Src("[LibraryCall(-30, \"d0\")] static extern long F(void* b, int x);"))));
         Assert.Empty(Errors(M68k(Src("[LibraryCall(-30, \"d2\")] static extern int F(void* b, int x);"))));
+        // AROS x86-64: through the jump table with AROS_LC (vector -30 is LVO 5); AmigaOS 4: through the interface's table (slot 4).
         var aros = EsCompiler.Compile(new[] { new SourceFile("p.cs", Src("[LibraryCall(-30, \"d0\")] static extern int F(void* b, int x);")) },
             new CompileOptions { Defines = Targets.Aros.Defines, TargetName = "aros" });
-        Assert.Contains("ES0099", Errors(aros));
+        Assert.True(aros.Success, string.Join("\n", aros.Diagnostics));
+        Assert.Contains("return (int32_t)AROS_LC1(uintptr_t, es_lib_vector, AROS_LCA(uintptr_t, (uintptr_t)(x), D0), void *, b, 5, EsLib);", aros.C);
+        var os4 = EsCompiler.Compile(new[] { new SourceFile("p.cs", Src("[LibraryCall(-36, \"d0\")] static extern int F(void* b, int x);")) },
+            new CompileOptions { Defines = Targets.Os4.Defines, TargetName = "os4" });
+        Assert.True(os4.Success, string.Join("\n", os4.Diagnostics));
+        Assert.Contains("return (int32_t)((es_fn)es_v[5])(b, (uintptr_t)(x));", os4.C);
+        Assert.Contains("#include <exec/interfaces.h>", os4.C);
+        var morphos = EsCompiler.Compile(new[] { new SourceFile("p.cs", Src("[LibraryCall(-30, \"d0\")] static extern int F(void* b, int x);")) },
+            new CompileOptions { Defines = Targets.MorphOs.Defines, TargetName = "morphos" });
+        Assert.Contains("ES0099", Errors(morphos));
     }
 
     [Fact]
@@ -398,7 +822,16 @@ public class AmigaLibraryCliTests
             Assert.Contains("es_lib_romtag", File.ReadAllText(Path.Combine(lib, "amigalib.c")));
             text = InProcess(() => ESharp.Cli.Program.Build(new[] { Path.Combine(Samples, "amigalib"), "--target", "sdl", "--emit-only", "-o", lib }, out _), out exit);
             Assert.NotEqual(0, exit);
-            Assert.Contains("builds for --target m68k only", text);
+            Assert.Contains("builds for --target m68k, aros (x86-64) and os4, not sdl", text);
+            text = InProcess(() => ESharp.Cli.Program.Build(new[] { Path.Combine(Samples, "amigalib"), "--target", "aros-i386", "--emit-only", "-o", lib }, out _), out exit);
+            Assert.NotEqual(0, exit);
+            Assert.Contains("not aros-i386 so far", text);
+            foreach (var t in new[] { "aros", "os4" })
+            {
+                text = InProcess(() => ESharp.Cli.Program.Build(new[] { Path.Combine(Samples, "amigalib"), "--target", t, "--emit-only", "-o", Path.Combine(work, "lib-" + t) }, out _), out exit);
+                Assert.True(exit == 0, text);
+                Assert.Contains("static const struct Resident es_lib_romtag", File.ReadAllText(Path.Combine(work, "lib-" + t, "amigalib.c")));
+            }
 
             var m68k = Path.Combine(work, "m68k");
             text = InProcess(() => ESharp.Cli.Program.Build(new[] { Path.Combine(Samples, "amigalibdemo"), "--emit-only", "-o", m68k }, out _), out exit);
@@ -415,9 +848,20 @@ public class AmigaLibraryCliTests
             Assert.Contains("Es_AmigaLibSample_Counter_Add(int32_t step)", c);
             Assert.DoesNotContain("jsr", c);
 
+            // AROS and AmigaOS 4 call the .library too: AROS through its jump table, AmigaOS 4 through the opener's main interface.
+            text = InProcess(() => ESharp.Cli.Program.Build(new[] { Path.Combine(Samples, "amigalibdemo"), "--target", "aros", "--emit-only", "-o", Path.Combine(work, "aros") }, out _), out exit);
+            Assert.True(exit == 0, text);
+            c = File.ReadAllText(Path.Combine(work, "aros", "amigalibdemo.c"));
+            Assert.Contains("AROS_LC1(uintptr_t, es_lib_vector, AROS_LCA(uintptr_t, (uintptr_t)(step), D0), void *, libraryBase, 9, EsLib)", c);
+            Assert.DoesNotContain("Es_AmigaLibSample_Counter_Add(int32_t step)", c);
             text = InProcess(() => ESharp.Cli.Program.Build(new[] { Path.Combine(Samples, "amigalibdemo"), "--target", "os4", "--emit-only", "-o", Path.Combine(work, "os4") }, out _), out exit);
+            Assert.True(exit == 0, text);
+            c = File.ReadAllText(Path.Combine(work, "os4", "amigalibdemo.c"));
+            Assert.Contains("((es_fn)es_v[8])(libraryBase, (uintptr_t)(step))", c);
+            Assert.Contains("es_lib_open_main", c);
+            text = InProcess(() => ESharp.Cli.Program.Build(new[] { Path.Combine(Samples, "amigalibdemo"), "--target", "morphos", "--emit-only", "-o", Path.Combine(work, "morphos") }, out _), out exit);
             Assert.NotEqual(0, exit);
-            Assert.Contains("builds for m68k only", text);
+            Assert.Contains("not morphos so far", text);
         }
         finally { if (Directory.Exists(work)) Directory.Delete(work, true); }
     }

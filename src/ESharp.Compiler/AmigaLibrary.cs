@@ -135,6 +135,21 @@ public static class AmigaLibraries
         return result;
     }
 
+    /// <summary>
+    /// Why a .library cannot be built for the target these symbols define, or null: m68k (AmigaOS 3.x), AROS x86-64 and AmigaOS 4 build one,
+    /// and so does a build for no target (the host tests compile its C).
+    /// </summary>
+    public static string? TargetProblem(IReadOnlyCollection<string> defines)
+    {
+        if (defines.Contains("SDL"))
+            return "sdl has no shared libraries; a program that names the library's folder in esharp.include compiles the library's code in on sdl";
+        if (defines.Contains("MORPHOS"))
+            return "a MorphOS .library is not done yet (m68k, AROS x86-64 and AmigaOS 4 are)";
+        if (defines.Contains("AROS") && defines.Contains("I386"))
+            return "an AROS i386 .library is not done yet (AROS x86-64 is: --target aros)";
+        return null;
+    }
+
     /// <summary>True for a type that travels in an address register (a pointer or a string).</summary>
     internal static bool IsPointerLike(ITypeSymbol t) => t is IPointerTypeSymbol || t.SpecialType == SpecialType.System_String;
 

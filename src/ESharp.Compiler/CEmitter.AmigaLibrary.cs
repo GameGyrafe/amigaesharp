@@ -17,8 +17,9 @@ namespace ESharp.Compiler;
 /// block, the opener's data, instead of a C global. Two structs make the block: <c>struct es_rt</c> (the runtime's, defined right after the
 /// includes, so the runtime's helpers can use it) and <c>struct es_user</c> (the program's static fields, after the types they use), at
 /// <c>ES_RT_SIZE</c> in the block. Each name becomes a macro for its member through <c>es_d</c>, the opener's block, so the rest of the
-/// C is the same as a program's. On m68k <c>es_d</c> is a global register variable in a4 (no other code in the file uses a4); each library
-/// function's entry saves the caller's a4, points it at the data block of the opener whose base it was called with (a6), and restores it.
+/// C is the same as a program's. On m68k <c>es_d</c> is a global register variable in a4 (no other code in the file uses a4; AROS x86-64:
+/// r15, AmigaOS 4: r14); each library function's entry saves the caller's register, points it at the data block of the opener whose base
+/// (m68k: in a6; AmigaOS 4: whose interface) it was called with, and restores it.
 /// So two tasks in two openers run at the same time with their own data, and the library never needs a global "current opener".
 /// </para>
 /// <para>
@@ -35,6 +36,12 @@ internal sealed partial class CEmitter
     public AmigaLibraryPlan? AmigaLibrary { get; init; }
 
     private bool LibMode => AmigaLibrary != null;
+
+    /// <summary>
+    /// Which kind of .library the C is for: "aros" (AROS x86-64: AROS_LH entries, a C Resident), "os4" (AmigaOS 4: a manager and a main
+    /// interface, one clone of the main interface per opener) or "m68k" (AmigaOS 3.x, and a build for no target: the host tests).
+    /// </summary>
+    private string LibOs => IsDefined("AROS") && IsDefined("X86_64") ? "aros" : IsDefined("AMIGAOS4") ? "os4" : "m68k";
 
     /// <summary>Stands for the runtime's per-opener struct until the whole preamble (and so every runtime variable) is known.</summary>
     private const string LibRtMarker = "/* ES_LIB_RT */\n";
@@ -83,6 +90,19 @@ internal sealed partial class CEmitter
         sb.AppendLine("#if defined(__mc68000__)");
         sb.AppendLine("/* a4 holds the opener's data while library code runs: each function's entry sets it from the base in a6, and restores the caller's. */");
         sb.AppendLine("register struct es_rt *es_d __asm__(\"a4\");");
+        // AROS x86-64 and AmigaOS 4: the same with a callee-saved register that the system calls the library makes keep for it.
+        if (LibOs == "aros")
+        {
+            sb.AppendLine("#elif defined(__AROS__) && defined(__x86_64__)");
+            sb.AppendLine("/* r15 (callee-saved in the x86-64 ABI) holds the opener's data while library code runs: each entry sets it from the base and restores the caller's. */");
+            sb.AppendLine("register struct es_rt *es_d __asm__(\"r15\");");
+        }
+        else if (LibOs == "os4")
+        {
+            sb.AppendLine("#elif defined(__amigaos4__)");
+            sb.AppendLine("/* r14 (non-volatile in the PowerPC SysV ABI) holds the opener's data while library code runs: each entry sets it from its interface and restores the caller's. */");
+            sb.AppendLine("register struct es_rt *es_d __asm__(\"r14\");");
+        }
         sb.AppendLine("#else");
         sb.AppendLine("static struct es_rt *es_d;   /* not m68k (the host tests): the opener whose data the code uses now */");
         sb.AppendLine("#endif");
@@ -214,8 +234,22 @@ internal sealed partial class CEmitter
         }
         Line("");
 
-        string CString(string s) => "\"" + s.Replace("\\", "\\\\").Replace("\"", "\\\"").Replace("\r", "\\r").Replace("\n", "\\n") + "\"";
         var bases = SharedBases().ToList();
+        switch (LibOs)
+        {
+            case "aros": EmitArosLibrary(o, bases); break;
+            case "os4": EmitOs4Library(o, bases); break;
+            default: EmitM68kLibrary(o, bases); break;
+        }
+        foreach (var l in HostLibraryLines) Line(l);
+    }
+
+    private static string LibCString(string s) => "\"" + s.Replace("\\", "\\\\").Replace("\"", "\\\"").Replace("\r", "\\r").Replace("\n", "\\n") + "\"";
+
+    /// <summary>The m68k .library (AmigaOS 3.x): exec's register conventions, a copy of the base per opener with its data after it.</summary>
+    private void EmitM68kLibrary(AmigaLibraryOptions o, List<(string Base, string Library)> bases)
+    {
+        var plan = AmigaLibrary!;
         foreach (var l in new[]
         {
             "#if defined(__mc68000__)",
@@ -233,9 +267,9 @@ internal sealed partial class CEmitter
             "/* The library base: exec's struct Library, then ours. An opener's copy has its data block right after it. */",
             "struct es_lib_head { struct Library lib; struct es_lib_head *master; uint32_t seglist; uint32_t size; };   /* size: an opener's allocation (lib_PosSize is a UWORD) */",
             "#define ES_LIB_DATA(b) ((void *)((char *)(b) + sizeof(struct es_lib_head)))",
-            $"static const char es_lib_name[] __attribute__((used)) = {CString(o.Name)};",
-            $"static const char es_lib_id[] __attribute__((used)) = {CString(o.IdString + "\r\n")};",
-            $"static const char es_lib_version[] __attribute__((used)) = {CString("$VER: " + o.IdString)};",
+            $"static const char es_lib_name[] __attribute__((used)) = {LibCString(o.Name)};",
+            $"static const char es_lib_id[] __attribute__((used)) = {LibCString(o.IdString + "\r\n")};",
+            $"static const char es_lib_version[] __attribute__((used)) = {LibCString("$VER: " + o.IdString)};",
             "static void es_lib_close_bases(void)",
             "{",
         }) Line(l);
@@ -244,7 +278,7 @@ internal sealed partial class CEmitter
         Line("static int es_lib_open_bases(void)");
         Line("{");
         foreach (var (b, lib) in bases)
-            Line($"    if (({b} = (__typeof__({b}))OpenLibrary((CONST_STRPTR){CString(lib)}, 39)) == NULL) {{ es_lib_close_bases(); return 0; }}");
+            Line($"    if (({b} = (__typeof__({b}))OpenLibrary((CONST_STRPTR){LibCString(lib)}, 39)) == NULL) {{ es_lib_close_bases(); return 0; }}");
         Line("    return 1;");
         Line("}");
         foreach (var l in new[]
@@ -363,6 +397,444 @@ internal sealed partial class CEmitter
             "}",
             "void *memset(void *d, int c, size_t n) { char *a = (char *)d; while (n--) *a++ = (char)c; return d; }",
             "int memcmp(const void *x, const void *y, size_t n) { const unsigned char *a = x, *b = y; for (; n--; a++, b++) if (*a != *b) return *a - *b; return 0; }",
+        }) Line(l);
+    }
+
+    /// <summary>The interface of a shared ROM library on AmigaOS 4 (DOSBase: IDOS), which a library opens itself (it links no libauto).</summary>
+    private static string Os4Interface(string libraryBase) => libraryBase switch
+    {
+        "DOSBase" => "IDOS",
+        "GfxBase" => "IGraphics",
+        "IntuitionBase" => "IIntuition",
+        _ => "I" + libraryBase.Replace("Base", ""),
+    };
+
+    /// <summary>es_lib_open_bases and es_lib_close_bases: the ROM libraries the code calls, opened at the library's init (with their main interfaces on AmigaOS 4).</summary>
+    private void EmitLibraryBases(List<(string Base, string Library)> bases, bool interfaces)
+    {
+        Line("static void es_lib_close_bases(void)");
+        Line("{");
+        foreach (var (b, _) in bases)
+        {
+            if (interfaces) Line($"    if ({Os4Interface(b)} != NULL) {{ DropInterface((struct Interface *){Os4Interface(b)}); {Os4Interface(b)} = NULL; }}");
+            Line($"    if ({b} != NULL) {{ CloseLibrary((struct Library *){b}); {b} = NULL; }}");
+        }
+        Line("}");
+        Line("static int es_lib_open_bases(void)");
+        Line("{");
+        foreach (var (b, lib) in bases)
+        {
+            Line($"    if (({b} = (__typeof__({b}))OpenLibrary((CONST_STRPTR){LibCString(lib)}, 39)) == NULL) {{ es_lib_close_bases(); return 0; }}");
+            if (interfaces)
+                Line($"    if (({Os4Interface(b)} = (__typeof__({Os4Interface(b)}))GetInterface((struct Library *){b}, (CONST_STRPTR)\"main\", 1, NULL)) == NULL) {{ es_lib_close_bases(); return 0; }}");
+        }
+        Line("    return 1;");
+        Line("}");
+    }
+
+    /// <summary>
+    /// What gcc may call for a struct copy or clear when no C library is linked. AROS and AmigaOS 4 (gcc 9 and 11): the loops must not be
+    /// turned back into calls of the very functions they are (-ftree-loop-distribute-patterns, on at -O2 since gcc 10).
+    /// </summary>
+    private static readonly string[] LibraryMemoryFunctions =
+    {
+        "/* What gcc may call for a struct copy or clear (no C library is linked); their loops are not turned into calls of themselves. */",
+        "#define ES_LIB_NOLOOPCALL __attribute__((optimize(\"no-tree-loop-distribute-patterns\")))",
+        "ES_LIB_NOLOOPCALL void *memcpy(void *d, const void *s, size_t n) { char *a = (char *)d; const char *b = (const char *)s; while (n--) *a++ = *b++; return d; }",
+        "ES_LIB_NOLOOPCALL void *memmove(void *d, const void *s, size_t n)",
+        "{",
+        "    char *a = (char *)d; const char *b = (const char *)s;",
+        "    if (a < b) while (n--) *a++ = *b++; else { a += n; b += n; while (n--) *--a = *--b; }",
+        "    return d;",
+        "}",
+        "ES_LIB_NOLOOPCALL void *memset(void *d, int c, size_t n) { char *a = (char *)d; while (n--) *a++ = (char)c; return d; }",
+        "ES_LIB_NOLOOPCALL int memcmp(const void *x, const void *y, size_t n) { const unsigned char *a = x, *b = y; for (; n--; a++, b++) if (*a != *b) return *a - *b; return 0; }",
+    };
+
+    /// <summary>The opener's memory as an exec pool (AROS; AmigaOS 4 makes its pool with AllocSysObject), and the fatal-error stop.</summary>
+    private static readonly string[] LibraryPoolAllocation =
+    {
+        "static __attribute__((unused)) void *es_lib_alloc(size_t n)",
+        "{",
+        "    uint32_t *p = (uint32_t *)AllocPooled(es_d->es_heap, (ULONG)n + 8);   /* 8 bytes in front: the size, and 8-byte alignment */",
+        "    if (p == NULL) return NULL;",
+        "    p[0] = (uint32_t)n + 8;",
+        "    __builtin_memset(p + 2, 0, n);",
+        "    return p + 2;",
+        "}",
+        "static __attribute__((unused)) void es_lib_free(void *q)",
+        "{",
+        "    if (q == NULL) return;",
+        "    uint32_t *p = (uint32_t *)q - 2;",
+        "    FreePooled(es_d->es_heap, p, p[0]);",
+        "}",
+        "/* A fatal error of the E# runtime (out of memory, an index out of range with --debug) in library code: there is no program to end, so",
+        "   a recoverable alert, then the calling task waits for ever. */",
+        "static __attribute__((unused)) void es_lib_fatal(void) { Alert(0x000100E5UL); Wait(0); for (;;) { } }",
+    };
+
+    /// <summary>
+    /// The AROS x86-64 .library. The loader (LDDemon) finds the C struct Resident anywhere in the loaded file; RTF_AUTOINIT makes the base
+    /// from a table of plain function pointers (AROS's jump table holds addresses, LIB_VECTSIZE bytes each, LVO 1 Open, 2 Close, 3 Expunge,
+    /// 4 reserved, 5 the first function). Every function is written with the AROS_LH and AROS_UFH macros of aros/libcall.h and aros/asmcall.h,
+    /// so the base reaches it as the AROS ABI passes it (on x86-64 an ordinary argument after the others). As on m68k, each opener gets a copy
+    /// of the base with its data block after it, and r15 points at that block while library code runs.
+    /// </summary>
+    private void EmitArosLibrary(AmigaLibraryOptions o, List<(string Base, string Library)> bases)
+    {
+        var plan = AmigaLibrary!;
+        foreach (var l in new[]
+        {
+            "#if defined(__AROS__) && defined(__x86_64__)",
+            "/* ---- The library on AROS: its Resident, init, open, close, expunge and the vectors' entries (AROS_LH: the base comes as the AROS ABI",
+            "   passes it). Our own code: no C startup is linked. */",
+            "#include <exec/types.h>",
+            "#include <exec/libraries.h>",
+            "#include <exec/execbase.h>",
+            "#include <exec/memory.h>",
+            "#include <exec/nodes.h>",
+            "#include <exec/resident.h>",
+            "#include <aros/libcall.h>",
+            "#include <aros/asmcall.h>",
+            "#include <proto/exec.h>",
+            "struct ExecBase *SysBase;",
+        }) Line(l);
+        foreach (var (b, _) in bases) Line($"__typeof__({b}) {b};   /* shared by every opener */");
+        foreach (var l in new[]
+        {
+            "/* The library base: exec's struct Library, then ours. An opener's copy has its data block after it (16-byte aligned). */",
+            "struct es_lib_head { struct Library lib; struct es_lib_head *master; BPTR seglist; IPTR size; };   /* size: an opener's allocation (lib_PosSize is a UWORD) */",
+            "#define ES_LIB_HEAD_SIZE ((sizeof(struct es_lib_head) + 15) & ~(size_t)15)",
+            "#define ES_LIB_DATA(b) ((void *)((char *)(b) + ES_LIB_HEAD_SIZE))",
+            $"static const char es_lib_name[] __attribute__((used)) = {LibCString(o.Name)};",
+            $"static const char es_lib_id[] __attribute__((used)) = {LibCString(o.IdString + "\r\n")};",
+            $"static const char es_lib_version[] __attribute__((used)) = {LibCString("$VER: " + o.IdString)};",
+        }) Line(l);
+        EmitLibraryBases(bases, interfaces: false);
+        foreach (var l in new[]
+        {
+            "static void es_lib_free_base(struct es_lib_head *b)",
+            "{",
+            "    FreeMem((char *)b - b->lib.lib_NegSize, b->size != 0 ? b->size : (IPTR)b->lib.lib_NegSize + b->lib.lib_PosSize);",
+            "}",
+            "/* InitResident (RTF_AUTOINIT, after MakeLibrary): the new base, the segment list and SysBase. */",
+            "static AROS_UFH3(struct Library *, es_lib_init, AROS_UFHA(struct es_lib_head *, base, D0), AROS_UFHA(BPTR, seglist, A0), AROS_UFHA(struct ExecBase *, sys, A6))",
+            "{",
+            "    AROS_USERFUNC_INIT",
+            "    SysBase = sys;",
+            "    base->lib.lib_Node.ln_Type = NT_LIBRARY;",
+            "    base->lib.lib_Node.ln_Name = (char *)es_lib_name;",
+            "    base->lib.lib_Flags = LIBF_SUMUSED | LIBF_CHANGED;",
+            $"    base->lib.lib_Version = {o.Version};",
+            $"    base->lib.lib_Revision = {o.Revision};",
+            "    base->lib.lib_IdString = (APTR)es_lib_id;",
+            "    base->master = base;",
+            "    base->seglist = seglist;",
+            "    if (!es_lib_open_bases()) { es_lib_free_base(base); return NULL; }",
+            "    return &base->lib;",
+            "    AROS_USERFUNC_EXIT",
+            "}",
+            "/* Only when nobody has it open; else when the last opener closes. The base may be an opener's copy. */",
+            "static BPTR es_lib_do_expunge(struct es_lib_head *base)",
+            "{",
+            "    base = base->master;",
+            "    if (base->lib.lib_OpenCnt != 0) { base->lib.lib_Flags |= LIBF_DELEXP; return BNULL; }",
+            "    BPTR seglist = base->seglist;",
+            "    Remove(&base->lib.lib_Node);",
+            "    es_lib_close_bases();",
+            "    es_lib_free_base(base);",
+            "    return seglist;",
+            "}",
+            "/* Expunge (LVO 3; its D0 argument is not used). */",
+            "static AROS_LH1(BPTR, es_lib_expunge, AROS_LHA(struct Library *, es_extra, D0), struct es_lib_head *, base, 3, EsLib)",
+            "{",
+            "    AROS_LIBFUNC_INIT",
+            "    (void)es_extra;",
+            "    return es_lib_do_expunge(base);",
+            "    AROS_LIBFUNC_EXIT",
+            "}",
+            "/* Open (LVO 1; the base in exec's list, under Forbid): a copy of the base for this opener, with its own data block. */",
+            "static AROS_LH1(struct Library *, es_lib_open, AROS_LHA(ULONG, version, D0), struct es_lib_head *, base, 1, EsLib)",
+            "{",
+            "    AROS_LIBFUNC_INIT",
+            "    (void)version;   /* exec has checked it against lib_Version */",
+            "    /* Counted first: AllocMem can run low-memory handlers and a static constructor can break Forbid, and an",
+            "       expunge then must see an opener and only mark LIBF_DELEXP, not free the code this runs in. */",
+            "    base->lib.lib_OpenCnt++;",
+            "    base->lib.lib_Flags &= ~LIBF_DELEXP;",
+            "    IPTR neg = base->lib.lib_NegSize, pos = ES_LIB_HEAD_SIZE + ES_LIB_DATA_SIZE;",
+            "    char *mem = (char *)AllocMem(neg + pos, MEMF_PUBLIC | MEMF_CLEAR);",
+            "    if (mem == NULL) { base->lib.lib_OpenCnt--; return NULL; }   /* a pending expunge waits for the next try */",
+            "    CopyMem((char *)base - neg, mem, neg + sizeof(struct es_lib_head));   /* the jump table (addresses) and the head */",
+            "    struct es_lib_head *copy = (struct es_lib_head *)(mem + neg);",
+            "    copy->lib.lib_PosSize = (UWORD)(pos < 65535 ? pos : 65535);",
+            "    copy->size = neg + pos;",
+            "    copy->lib.lib_OpenCnt = 1;",
+            "    copy->master = base;",
+            "    if (!es_lib_data_init(ES_LIB_DATA(copy))) { FreeMem(mem, neg + pos); base->lib.lib_OpenCnt--; return NULL; }   /* no memory pool: nothing else was made */",
+            "    return &copy->lib;",
+            "    AROS_LIBFUNC_EXIT",
+            "}",
+            "/* Close (LVO 2; the opener's copy): its data goes, then the copy; the last close does a pending expunge. */",
+            "static AROS_LH0(BPTR, es_lib_close, struct es_lib_head *, copy, 2, EsLib)",
+            "{",
+            "    AROS_LIBFUNC_INIT",
+            "    struct es_lib_head *base = copy->master;",
+            "    if (copy == base) return BNULL;   /* not an opener's copy */",
+            "    es_lib_data_fini(ES_LIB_DATA(copy));",
+            "    es_lib_free_base(copy);",
+            "    if (base->lib.lib_OpenCnt > 0) base->lib.lib_OpenCnt--;",
+            "    if (base->lib.lib_OpenCnt == 0 && (base->lib.lib_Flags & LIBF_DELEXP)) return es_lib_do_expunge(base);",
+            "    return BNULL;",
+            "    AROS_LIBFUNC_EXIT",
+            "}",
+            "static AROS_LH0(IPTR, es_lib_reserved, struct es_lib_head *, base, 4, EsLib)",
+            "{",
+            "    AROS_LIBFUNC_INIT",
+            "    (void)base;",
+            "    return 0;",
+            "    AROS_LIBFUNC_EXIT",
+            "}",
+        }) Line(l);
+        Line("/* The vectors' entries (LVO 5 on): the arguments and the opener's base as AROS_LH receives them (the registers are those of the .fd file). */");
+        var lvo = 5;
+        foreach (var (m, regs, _) in plan.Functions)
+        {
+            var node = m.DeclaringSyntaxReferences.First().GetSyntax();
+            var pars = string.Concat(m.Parameters.Select((p, i) => $"AROS_LHA(uintptr_t, {p.Name}, {regs[i].ToUpperInvariant()}), "));
+            var args = string.Concat(m.Parameters.Select(p => $", ({CType(p.Type, node)}){p.Name}"));
+            var call = $"es_lib_call_{m.Name}(ES_LIB_DATA(es_base){args})";
+            Line($"static AROS_LH{m.Parameters.Length}({(m.ReturnsVoid ? "void" : "uintptr_t")}, es_lib_entry_{m.Name}, {pars}struct es_lib_head *, es_base, {lvo++}, EsLib)");
+            Line("{");
+            Line("    AROS_LIBFUNC_INIT");
+            Line(m.ReturnsVoid ? $"    {call};" : $"    return (uintptr_t){call};");
+            Line("    AROS_LIBFUNC_EXIT");
+            Line("}");
+        }
+        Line("static const APTR es_lib_vectors[] =");
+        Line("{");
+        Line("    (APTR)AROS_SLIB_ENTRY(es_lib_open, EsLib, 1), (APTR)AROS_SLIB_ENTRY(es_lib_close, EsLib, 2), (APTR)AROS_SLIB_ENTRY(es_lib_expunge, EsLib, 3),");
+        Line("    (APTR)AROS_SLIB_ENTRY(es_lib_reserved, EsLib, 4),");
+        lvo = 5;
+        foreach (var (m, _, _) in plan.Functions) Line($"    (APTR)AROS_SLIB_ENTRY(es_lib_entry_{m.Name}, EsLib, {lvo++}),");
+        Line("    (APTR)-1,");
+        Line("};");
+        foreach (var l in new[]
+        {
+            "/* RTF_AUTOINIT: InitResident calls MakeLibrary with the base size, the vectors and no init struct, then es_lib_init. */",
+            "static const IPTR es_lib_inittab[4] = { sizeof(struct es_lib_head), (IPTR)es_lib_vectors, 0, (IPTR)es_lib_init };",
+            "static const struct Resident es_lib_romtag __attribute__((used)) =",
+            "{",
+            $"    RTC_MATCHWORD, &es_lib_romtag, (APTR)(&es_lib_romtag + 1), RTF_AUTOINIT, {o.Version}, NT_LIBRARY, 0,",
+            "    (CONST_STRPTR)es_lib_name, (CONST_STRPTR)es_lib_id, (APTR)es_lib_inittab,",
+            "};",
+            "/* The opener's memory: an exec pool, so closing frees all of it at once. */",
+            "static __attribute__((unused)) int es_lib_heap_init(void) { es_d->es_heap = CreatePool(MEMF_PUBLIC | MEMF_CLEAR, 4096, 1024); return es_d->es_heap != NULL; }",
+            "static __attribute__((unused)) void es_lib_heap_fini(void) { if (es_d->es_heap != NULL) { DeletePool(es_d->es_heap); es_d->es_heap = NULL; } }",
+        }) Line(l);
+        foreach (var l in LibraryPoolAllocation) Line(l);
+        foreach (var l in LibraryMemoryFunctions) Line(l);
+    }
+
+    /// <summary>
+    /// The AmigaOS 4 .library: a struct Resident with RTF_NATIVE | RTF_AUTOINIT, whose CreateLibrary tags give the base size, the init
+    /// function and two interfaces: the manager "__library" (Open, Close, Expunge) and "main", which holds the library functions after
+    /// Obtain, Release, Expunge and Clone. "main" is private (IFLF_PRIVATE): each opener's GetInterface gets its own clone, made by Clone,
+    /// with the opener's data in the clone's data area (MIT_DataSize, before the interface); DropInterface of the last reference expunges
+    /// the clone (IFLF_CLONE_EXPUNGE), which frees the data. Every function gets the interface it was called through as Self, and r14 points
+    /// at that opener's data while library code runs.
+    /// </summary>
+    private void EmitOs4Library(AmigaLibraryOptions o, List<(string Base, string Library)> bases)
+    {
+        var plan = AmigaLibrary!;
+        foreach (var l in new[]
+        {
+            "#if defined(__amigaos4__)",
+            "/* ---- The library on AmigaOS 4: its Resident, init, the manager interface (open, close, expunge) and the main interface, cloned per opener.",
+            "   Our own code: no C startup and no libauto are linked. */",
+            "#include <exec/types.h>",
+            "#include <exec/libraries.h>",
+            "#include <exec/interfaces.h>",
+            "#include <exec/resident.h>",
+            "#include <exec/exectags.h>",
+            "#include <exec/execbase.h>",
+            "#include <exec/memory.h>",
+            "#include <exec/nodes.h>",
+            "#include <proto/exec.h>",
+            "struct ExecIFace *IExec;",
+        }) Line(l);
+        foreach (var (b, _) in bases)
+        {
+            Line($"__typeof__({b}) {b};   /* shared by every opener */");
+            Line($"__typeof__({Os4Interface(b)}) {Os4Interface(b)};");
+        }
+        foreach (var l in new[]
+        {
+            "/* Run as a command: it is not one. */",
+            "int32_t _start(void) { return -1; }",
+            "/* The library base: exec's struct Library, then ours. */",
+            "struct es_lib_head { struct Library lib; APTR seglist; };",
+            "/* An opener's data: the data area of its clone of the main interface (MIT_DataSize bytes before the interface). */",
+            "#define ES_IFACE_DATA(i) ((void *)((char *)(i) - ((struct Interface *)(i))->Data.NegativeSize))",
+            $"static const char es_lib_name[] __attribute__((used)) = {LibCString(o.Name)};",
+            $"static const char es_lib_id[] __attribute__((used)) = {LibCString(o.IdString + "\r\n")};",
+            $"static const char es_lib_version[] __attribute__((used)) = {LibCString("$VER: " + o.IdString)};",
+        }) Line(l);
+        EmitLibraryBases(bases, interfaces: true);
+        foreach (var l in new[]
+        {
+            "/* CreateLibrary (from the Resident's tags): the new base, the segment list and exec's interface. */",
+            "static struct Library *es_lib_init(struct Library *lib, APTR seglist, struct Interface *exec)",
+            "{",
+            "    struct es_lib_head *base = (struct es_lib_head *)lib;",
+            "    IExec = (struct ExecIFace *)exec;",
+            "    (IExec->Obtain)();   /* interface methods take their interface (Self) implicitly */",
+            "    lib->lib_Node.ln_Type = NT_LIBRARY;",
+            "    lib->lib_Node.ln_Pri = 0;",
+            "    lib->lib_Node.ln_Name = (char *)es_lib_name;",
+            "    lib->lib_Flags = LIBF_SUMUSED | LIBF_CHANGED;",
+            $"    lib->lib_Version = {o.Version};",
+            $"    lib->lib_Revision = {o.Revision};",
+            "    lib->lib_IdString = (APTR)es_lib_id;",
+            "    base->seglist = seglist;",
+            "    if (!es_lib_open_bases()) { (IExec->Release)(); return NULL; }",
+            "    return lib;",
+            "}",
+            "static uint32 es_lib_obtain(struct Interface *self) { return ++self->Data.RefCount; }",
+            "static uint32 es_lib_release(struct Interface *self) { return --self->Data.RefCount; }",
+            "/* Only when nobody has it open; else when the last opener closes. */",
+            "static APTR es_lib_do_expunge(struct es_lib_head *base)",
+            "{",
+            "    if (base->lib.lib_OpenCnt != 0) { base->lib.lib_Flags |= LIBF_DELEXP; return NULL; }",
+            "    APTR seglist = base->seglist;",
+            "    struct ExecIFace *exec = IExec;",
+            "    Remove(&base->lib.lib_Node);",
+            "    es_lib_close_bases();",
+            "    DeleteLibrary(&base->lib);",
+            "    (exec->Release)();",
+            "    return seglist;",
+            "}",
+            "/* The manager interface: Open and Close count the openers (under Forbid: two tasks may open and close at the same time); each",
+            "   opener's data comes with its clone of the main interface. */",
+            "static struct Library *es_lib_open(struct LibraryManagerInterface *self, uint32 version)",
+            "{",
+            "    struct es_lib_head *base = (struct es_lib_head *)self->Data.LibBase;",
+            "    (void)version;   /* exec has checked it against lib_Version */",
+            "    Forbid();",
+            "    base->lib.lib_OpenCnt++;",
+            "    base->lib.lib_Flags &= ~LIBF_DELEXP;",
+            "    Permit();",
+            "    return &base->lib;",
+            "}",
+            "static APTR es_lib_close(struct LibraryManagerInterface *self)",
+            "{",
+            "    struct es_lib_head *base = (struct es_lib_head *)self->Data.LibBase;",
+            "    APTR seglist = NULL;",
+            "    Forbid();",
+            "    if (base->lib.lib_OpenCnt > 0) base->lib.lib_OpenCnt--;",
+            "    if (base->lib.lib_OpenCnt == 0 && (base->lib.lib_Flags & LIBF_DELEXP)) seglist = es_lib_do_expunge(base);",
+            "    Permit();",
+            "    return seglist;",
+            "}",
+            "static APTR es_lib_expunge(struct LibraryManagerInterface *self)",
+            "{",
+            "    Forbid();",
+            "    APTR seglist = es_lib_do_expunge((struct es_lib_head *)self->Data.LibBase);",
+            "    Permit();",
+            "    return seglist;",
+            "}",
+            "static const APTR es_lib_manager_vectors[] =",
+            "{",
+            "    (APTR)es_lib_obtain, (APTR)es_lib_release, NULL, NULL, (APTR)es_lib_open, (APTR)es_lib_close, (APTR)es_lib_expunge, NULL, (APTR)-1,",
+            "};",
+            "static const struct TagItem es_lib_manager_tags[] =",
+            "{",
+            "    { MIT_Name, (Tag)\"__library\" }, { MIT_VectorTable, (Tag)es_lib_manager_vectors }, { MIT_Version, 1 }, { TAG_DONE, 0 },",
+            "};",
+            "static struct Interface *es_lib_clone(struct Interface *self);",
+            "static APTR es_lib_iface_expunge(struct Interface *self);",
+        }) Line(l);
+        Line("/* The library functions: the interface they were called through (an opener's clone), then the arguments. */");
+        foreach (var (m, _, offset) in plan.Functions)
+        {
+            var node = m.DeclaringSyntaxReferences.First().GetSyntax();
+            var pars = string.Concat(m.Parameters.Select(p => $", uintptr_t {p.Name}"));
+            var args = string.Concat(m.Parameters.Select(p => $", ({CType(p.Type, node)}){p.Name}"));
+            var call = $"es_lib_call_{m.Name}(ES_IFACE_DATA(es_self){args})";
+            Line($"static {(m.ReturnsVoid ? "void" : "uintptr_t")} es_lib_entry_{m.Name}(struct Interface *es_self{pars})   /* slot {Os4Slot(offset).ToString(CultureInfo.InvariantCulture)} */");
+            Line(m.ReturnsVoid ? $"{{ {call}; }}" : $"{{ return (uintptr_t){call}; }}");
+        }
+        Line("static const APTR es_lib_main_vectors[] =");
+        Line("{");
+        Line("    (APTR)es_lib_obtain, (APTR)es_lib_release, (APTR)es_lib_iface_expunge, (APTR)es_lib_clone,");
+        foreach (var (m, _, _) in plan.Functions) Line($"    (APTR)es_lib_entry_{m.Name},");
+        Line("    (APTR)-1,");
+        Line("};");
+        foreach (var l in new[]
+        {
+            "static const struct TagItem es_lib_main_tags[] =",
+            "{",
+            "    { MIT_Name, (Tag)\"main\" }, { MIT_VectorTable, (Tag)es_lib_main_vectors }, { MIT_Version, 1 }, { MIT_Flags, IFLF_PRIVATE },",
+            "    { MIT_DataSize, ES_LIB_DATA_SIZE }, { TAG_DONE, 0 },",
+            "};",
+            "static const struct TagItem es_lib_clone_tags[] =",
+            "{",
+            "    { MIT_Name, (Tag)\"main\" }, { MIT_VectorTable, (Tag)es_lib_main_vectors }, { MIT_Version, 1 }, { MIT_DataSize, ES_LIB_DATA_SIZE },",
+            "    { TAG_DONE, 0 },",
+            "};",
+            "static const CONST_APTR es_lib_interfaces[] = { es_lib_manager_tags, es_lib_main_tags, NULL };",
+            "static const struct TagItem es_lib_create_tags[] =",
+            "{",
+            "    { CLT_DataSize, sizeof(struct es_lib_head) }, { CLT_InitFunc, (Tag)es_lib_init }, { CLT_Interfaces, (Tag)es_lib_interfaces }, { TAG_DONE, 0 },",
+            "};",
+            "static const struct Resident es_lib_romtag __attribute__((used)) =",
+            "{",
+            $"    RTC_MATCHWORD, (struct Resident *)&es_lib_romtag, (APTR)(&es_lib_romtag + 1), RTF_NATIVE | RTF_AUTOINIT, {o.Version}, NT_LIBRARY, 0,",
+            "    (CONST_STRPTR)es_lib_name, (CONST_STRPTR)es_lib_id, (APTR)es_lib_create_tags,",
+            "};",
+            "/* The main interface: an opener's clone, with its data; the clone goes (with the data) when its last reference is dropped.",
+            "   IFLF_CLONED and IFLF_CLONE_EXPUNGE only once the data is set up: until then DeleteInterface (which calls Expunge) must not tear",
+            "   down data that was never made, and our Expunge must not delete the clone a second time. */",
+            "static struct Interface *es_lib_clone(struct Interface *self)",
+            "{",
+            "    struct Interface *c = MakeInterface(self->Data.LibBase, es_lib_clone_tags);",
+            "    if (c == NULL) return NULL;",
+            "    c->Data.Flags &= ~(uint32)(IFLF_CLONED | IFLF_CLONE_EXPUNGE);",
+            "    if (c->Data.NegativeSize < ES_LIB_DATA_SIZE) { DeleteInterface(c); return NULL; }",
+            "    __builtin_memset(ES_IFACE_DATA(c), 0, ES_LIB_DATA_SIZE);",
+            "    if (!es_lib_data_init(ES_IFACE_DATA(c))) { DeleteInterface(c); return NULL; }",
+            "    c->Data.Flags |= IFLF_CLONED | IFLF_CLONE_EXPUNGE;",
+            "    return c;",
+            "}",
+            "static APTR es_lib_iface_expunge(struct Interface *self)",
+            "{",
+            "    if ((self->Data.Flags & IFLF_CLONED) == 0) return NULL;   /* the library's own main interface goes with the library */",
+            "    self->Data.Flags &= ~(uint32)(IFLF_CLONED | IFLF_CLONE_EXPUNGE);   /* once: DeleteInterface calls Expunge too */",
+            "    es_lib_data_fini(ES_IFACE_DATA(self));",
+            "    DeleteInterface(self);",
+            "    return NULL;",
+            "}",
+            "/* The opener's memory: an exec pool, so closing frees all of it at once. */",
+            "static __attribute__((unused)) int es_lib_heap_init(void)",
+            "{",
+            "    es_d->es_heap = AllocSysObjectTags(ASOT_MEMPOOL, ASOPOOL_MFlags, MEMF_SHARED | MEMF_CLEAR, ASOPOOL_Puddle, 4096, ASOPOOL_Threshold, 1024, TAG_DONE);",
+            "    return es_d->es_heap != NULL;",
+            "}",
+            "static __attribute__((unused)) void es_lib_heap_fini(void) { if (es_d->es_heap != NULL) { FreeSysObject(ASOT_MEMPOOL, es_d->es_heap); es_d->es_heap = NULL; } }",
+        }) Line(l);
+        foreach (var l in LibraryPoolAllocation) Line(l);
+        foreach (var l in LibraryMemoryFunctions) Line(l);
+    }
+
+    /// <summary>The slot of a library function in an AmigaOS 4 main interface: after Obtain, Release, Expunge and Clone (vector -30: slot 4).</summary>
+    internal static int Os4Slot(int offset) => 4 + (AmigaLibraries.FirstOffset - offset) / 6;
+
+    /// <summary>The AROS LVO of a library function (vector -30: LVO 5).</summary>
+    internal static int ArosLvo(int offset) => -offset / 6;
+
+    /// <summary>The host tests' part of a library's C: the opener's memory as calloc blocks.</summary>
+    private static readonly string[] HostLibraryLines =
+    {
             "#else",
             "/* Not m68k (the host tests): the opener's memory is a list of calloc blocks, freed when the opener closes. */",
             "#include <stdlib.h>",
@@ -393,12 +865,12 @@ internal sealed partial class CEmitter
             "}",
             "static __attribute__((unused)) void es_lib_fatal(void) { abort(); }",
             "#endif",
-        }) Line(l);
-    }
+    };
 
     /// <summary>The start of a library's C: on m68k the first code of the file returns -1 (a library run as a command), and the RomTag follows at once.</summary>
     private string LibraryRomTag()
     {
+        if (LibOs != "m68k") return "";   // AROS and AmigaOS 4: a C struct Resident, which their loaders find anywhere in the file
         var o = AmigaLibrary!.Options;
         // ramlib (Kickstart 3.1) found no RomTag 470 bytes into the hunk, but finds one right after the first two instructions; top-level asm comes
         // before the functions in gcc's output, and this file is the first object of the link (no C startup), so the hunk starts with it.
@@ -420,6 +892,38 @@ internal sealed partial class CEmitter
             "        \"_es_lib_romtag_end:\\n\");",
             "#endif",
             "");
+    }
+
+    /// <summary>
+    /// A [LibraryCall] on AROS x86-64 and AmigaOS 4. AROS: through the jump table with AROS_LC (LVO 5 for vector -30), the base as the
+    /// AROS ABI passes it. AmigaOS 4: the first argument is the opener's main interface; the call goes through its function table (slot 4
+    /// for vector -30, after Obtain, Release, Expunge and Clone) with the interface as Self. Every argument and the result travel as a
+    /// uintptr_t, as the library's entries take and give them.
+    /// </summary>
+    private void EmitLibraryCallThroughTable(IMethodSymbol m, string[] regs, int offset, SyntaxNode node)
+    {
+        var self = m.Parameters[0].Name;
+        var args = m.Parameters.Skip(1).ToList();
+        string Cast(string call) => m.ReturnsVoid ? call + ";" : $"return ({CType(m.ReturnType, node)}){call};";
+        Line(Prototype(m));
+        Line("{");
+        _indent++;
+        if (LibOs == "aros")
+        {
+            _headers.Add("aros/libcall.h");
+            var lca = string.Concat(args.Select((p, i) => $"AROS_LCA(uintptr_t, (uintptr_t)({p.Name}), {regs[i].ToUpperInvariant()}), "));
+            Line(Cast($"AROS_LC{args.Count}({(m.ReturnsVoid ? "void" : "uintptr_t")}, es_lib_vector, {lca}void *, {self}, {ArosLvo(offset).ToString(CultureInfo.InvariantCulture)}, EsLib)"));
+        }
+        else
+        {
+            _headers.Add("exec/interfaces.h");
+            Line($"typedef {(m.ReturnsVoid ? "void" : "uintptr_t")} (*es_fn)(void *{string.Concat(args.Select(_ => ", uintptr_t"))});");
+            Line($"void **es_v = (void **)((char *){self} + sizeof(struct InterfaceData));   /* the function table after the interface's data */");
+            Line(Cast($"((es_fn)es_v[{Os4Slot(offset).ToString(CultureInfo.InvariantCulture)}])({self}{string.Concat(args.Select(p => $", (uintptr_t)({p.Name})"))})"));
+        }
+        _indent--;
+        Line("}");
+        Line("");
     }
 
     // ------------------------------------------------------------------ program side: [LibraryCall]
@@ -460,9 +964,14 @@ internal sealed partial class CEmitter
                 return;
             }
         }
+        if (LibOs == "aros" || LibOs == "os4")
+        {
+            EmitLibraryCallThroughTable(m, regs, offset, node);
+            return;
+        }
         if (!IsDefined("M68K"))
         {
-            Unsupported(node, $"[LibraryCall] '{display}' on this target (vector calls of an E# .library are m68k only for now)");
+            Unsupported(node, $"[LibraryCall] '{display}' on this target (an E# .library is called on m68k, AROS x86-64 and AmigaOS 4)");
             return;
         }
         Line(Prototype(m));

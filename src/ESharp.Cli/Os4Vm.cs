@@ -62,10 +62,11 @@ public static class Os4Vm
     /// ESTEST:esrun, executed with its output in the pipe: the program, then its return code (the shell's RC) as a marker line
     /// straight to the debug port ("ESHARP-RC nonce n"). FailAt is raised here too, so a FAIL return does not end the script first.
     /// </summary>
-    public static string EsRun(string program, string nonce, string? programArgs = null) =>
+    public static string EsRun(string program, string nonce, string? programArgs = null, bool libraries = false) =>
         "; E# os4 run harness: the program and its return code\n" +
         "FailAt 1000000\n" +
         "Stack 1000000\n" +
+        (libraries ? $"Assign LIBS: {Volume}:Libs ADD\n" : "") +   // the E# libraries the program uses (issue #154)
         "CD RAM:\n" +
         $"{Volume}:{program}{(string.IsNullOrWhiteSpace(programArgs) ? "" : " " + programArgs.Trim())}\n" +
         $"{Volume}:estype -t \"ESHARP-RC {nonce} $RC\"\n";
@@ -184,9 +185,16 @@ public static class Os4Vm
         File.Copy(exe, Path.Combine(cd, name));
         // The icon `esharp build` wrote next to the program goes on the CD too, so the program shows (and starts by double-click) on Workbench.
         if (File.Exists(exe + ".info")) File.Copy(exe + ".info", Path.Combine(cd, name + ".info"));
+        // E# Amiga libraries the program uses (issue #154; the build puts them next to it): in ESTEST:Libs, which esrun adds to LIBS:.
+        var libraries = FsUae.LibrariesBeside(exe);
+        if (libraries.Count > 0)
+        {
+            Directory.CreateDirectory(Path.Combine(cd, "Libs"));
+            foreach (var lib in libraries) File.Copy(lib, Path.Combine(cd, "Libs", Path.GetFileName(lib)));
+        }
         var nonce = Guid.NewGuid().ToString("N")[..12];
         File.WriteAllText(Path.Combine(cd, "autorun"), Autorun(name, nonce, programArgs));
-        File.WriteAllText(Path.Combine(cd, "esrun"), EsRun(name, nonce, programArgs));
+        File.WriteAllText(Path.Combine(cd, "esrun"), EsRun(name, nonce, programArgs, libraries.Count > 0));
         var image = docker ?? Program.DefaultImage(ESharp.Compiler.Targets.Os4);
         if (!BuildEstype(runDir, cd, docker, localCc)) return Fail("could not build the estype helper (needs ppc-amigaos-gcc, --toolchain or --docker)");
         var iso = Path.Combine(runDir, "estest.iso");

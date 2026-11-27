@@ -330,10 +330,11 @@ fallback, and for the IDE, the analyzer, the licence checks and `esharp verify-p
 ## Amiga shared libraries (.library)
 
 A project whose csproj sets `EsOutputType` to `AmigaLibrary` builds an AmigaOS shared library instead of a program (issue #154):
-`esharp build` writes `obj/m68k/<name>.library`, its `.fd` file and a C# binding. An E# program opens it with OpenLibrary and calls
-it through the binding like any other Amiga library, and **each opener gets its own copy of the library's data**: two programs (or
-two OpenLibrary calls in one program) never see each other's static fields, objects or counters. m68k AmigaOS 3.x only so far;
-AROS and AmigaOS 4 come later. `samples/amigalib` is a small library and `samples/amigalibdemo` a program that uses it.
+`esharp build` writes `obj/<target>/<name>.library`, its `.fd` file and a C# binding. An E# program opens it with OpenLibrary and
+calls it through the binding like any other Amiga library, and **each opener gets its own copy of the library's data**: two programs
+(or two OpenLibrary calls in one program) never see each other's static fields, objects or counters. Targets: m68k AmigaOS 3.x
+(`--target m68k`), AROS x86-64 (`--target aros`) and AmigaOS 4 (`--target os4`); MorphOS and AROS i386 stop with ES0134 (not done
+yet). `samples/amigalib` is a small library and `samples/amigalibdemo` a program that uses it.
 
 ```xml
 <Project Sdk="Microsoft.NET.Sdk">
@@ -361,6 +362,8 @@ public static class Counter
 ```bash
 esharp build samples/amigalib --docker <m68k image>      # obj/m68k/amigalib.library, amigalib_lib.fd, AmigalibLibrary.cs
 esharp test samples/amigalibdemo --target m68k --docker <m68k image> --model A1200 --kickstart <rom>
+esharp test samples/amigalibdemo --target aros --docker esharp-amiga-toolchain   # hosted AROS x86-64 (esharp-aros-hosted image)
+esharp test samples/amigalibdemo --target os4 --docker esharp-amiga-toolchain    # the AmigaOS 4.1 VM (ESHARP_OS4_VM)
 ```
 
 - **Library functions.** Public static methods marked `[LibraryFunction]`, with a body, not generic. Parameters and results are plain
@@ -402,22 +405,42 @@ esharp test samples/amigalibdemo --target m68k --docker <m68k image> --model A12
   copy it to `LIBS:`. On the **host** (dotnet, `esharp test`) the library's code is compiled into the program and the binding calls it
   directly; each opener still has its own static fields there (the host swaps them in and out around each call and deep-copies the
   start values for every opener, so objects and arrays are the opener's own too). On **sdl** the library's code is compiled into the
-  game as well, but its openers share one copy of the data (per-opener data on sdl is not done yet). `os4`, `morphos`, `aros` and
-  `aros-i386` builds of a program that uses an E# library stop with a message.
+  game as well, but its openers share one copy of the data (per-opener data on sdl is not done yet). On **AROS** and **AmigaOS 4** the
+  program calls the `.library` as on m68k (see the next point); `esharp test --target aros` copies it into the hosted AROS tree's `Libs`
+  drawer, `esharp test` and `run --target os4` put it on the VM's CD in `ESTEST:Libs`, which the run adds to `LIBS:`.
+  `tools/aros-hosted/aros-hosted.sh` copies it too (in the image's fresh tree). `morphos` and `aros-i386` builds of a program that uses
+  an E# library stop with a message.
+- **AROS x86-64 and AmigaOS 4.** The same project and the same binding build there; what differs is how the library is called.
+  - **AROS:** a `struct Resident` that AROS's loader finds in the file, a jump table of function addresses (8 bytes each; the vector at
+    -30 is LVO 5), and every function written with the AROS_LH macros, so the base reaches it as the AROS ABI passes it (on x86-64 an
+    ordinary argument after the others; the register names of the `.fd` file only matter to m68k). The program calls through the jump
+    table of its opener's base (AROS_LC). As on m68k each opener gets a copy of the base with its data after it; inside the library
+    register r15 points at that data (the role a4 has on m68k).
+  - **AmigaOS 4:** the library has a manager interface (`__library`: Open, Close, Expunge) and a main interface (`main`) holding the
+    library functions after Obtain, Release, Expunge and Clone. `Open` on the binding is OpenLibrary and then GetInterface(`main`, 1),
+    and `Base` is the interface: the main interface is private, so exec gives each GetInterface its own clone, and the clone's data
+    area holds that opener's data. Every call goes through the opener's interface (`Self`), and `Close` drops it (its data goes with it)
+    and closes the library. Inside the library r14 points at the data. `FlushUnused` does not expunge there: AmigaOS 4 kept a library
+    nobody had open when an allocation failed (and after `Avail FLUSH`; bullet.library stayed as well), so use `ExpungeWhenClosed`
+    while it is open.
+  - `esharp build` of a library for these targets links it with `-nostartfiles -nostdlib` and libgcc only (no libauto on AmigaOS 4).
 - **Per-opener data.** Every E# variable of the library (all static fields, properties and events, the platform's included, and the
   runtime's state: the text ring of string formatting, the closure counters, the bases a `[LibraryBase]` class opens with `SetBase`) is
-  a member of one data block per opener. OpenLibrary returns a copy of the library base for each opener, with its data block right
-  after it; the library's code reaches the block through register a4, which the entry of each vector sets from the base in a6 and
-  restores for the caller. So two tasks in two openers can run library code at the same time, each with its own data, and the library
+  a member of one data block per opener. On m68k and AROS OpenLibrary returns a copy of the library base for each opener, with its data
+  block right after it; the library's code reaches the block through register a4 (AROS: r15), which the entry of each vector sets from
+  the base (m68k: in a6) and restores for the caller. On AmigaOS 4 the block is the data area of the opener's own main interface, and
+  r14 holds it. So two tasks in two openers can run library code at the same time, each with its own data, and the library
   keeps no "current opener" anywhere. One opener's base should be used by one task at a time (as with bsdsocket.library); the memory
   pool of an opener is not shared between tasks.
-- **Open, Close, Expunge.** Open (on the caller's task, under exec's Forbid, as for every library) makes the copy, a memory pool for the
+- **Open, Close, Expunge.** Open (on the caller's task, under exec's Forbid, as for every library) makes the copy (on AmigaOS 4 the
+  clone of the main interface does, which GetInterface asks for), a memory pool for the
   opener (every object the library's code allocates comes from it), and runs the static initializers and static constructors in the
   new data block, so keep them short and do no DOS I/O there. Close runs the `[AtExit]` methods of the classes the library uses,
-  frees the pool and the copy, and drops the open count of the base in exec's list. Expunge (exec asks for it when memory runs low,
-  or `FlushUnused`, or RemLibrary through `ExpungeWhenClosed`) frees the base when nobody has it open, else it waits for the last Close. exec.library, and dos, graphics and
-  intuition when the code calls them, are opened once at the library's init (version 39) and closed at expunge; they are shared, as
-  they hold no E# data.
+  frees the pool and the copy (on AmigaOS 4 when the opener drops its interface), and drops the open count of the base in exec's list.
+  Expunge (exec asks for it when memory runs low, or `FlushUnused` (not on AmigaOS 4), or RemLibrary through `ExpungeWhenClosed`) frees
+  the base when nobody has it open, else it waits for the last Close. exec.library, and dos, graphics and intuition when the code calls
+  them, are opened once at the library's init (version 39; on AmigaOS 4 with their main interfaces) and closed at expunge; they are
+  shared, as they hold no E# data.
 - **On the caller's task and stack.** Library code runs on the task that calls it, on that task's stack (nothing switches stacks): its
   locals and the calls it makes take the caller's stack, so a deep recursion in the library needs the caller to have the stack
   (`EsStackSize` for an E# program). The library writes nothing of its own to any output. `Dos.PutStr` and friends in library code
@@ -425,15 +448,17 @@ esharp test samples/amigalibdemo --target m68k --docker <m68k image> --model A12
 - **Fatal errors.** An E# runtime error in library code (out of memory in `new`, or an index out of range with `--debug`) cannot end a
   program: the library shows a recoverable alert (0x000100E5) and the calling task then waits for ever.
 - **Not in a library yet (ES0134):** `[EntryPoint]`, `Args`, `[ChipRam]` data (each opener's copy is not in chip RAM), `[Interrupt]`
-  servers and `[HookEntry]` methods (BOOPSI hooks, MUI dispatchers: the system calls them without an opener's data in a4), and
+  servers and `[HookEntry]` methods (BOOPSI hooks, MUI dispatchers: the system calls them without an opener's data in its register), and
   amiga.lib functions (DoMethod). Libraries other than exec, dos, graphics and intuition are opened through a `[LibraryBase]` class
   (`SetBase`), as in a program; those bases are per opener.
-- **What is linked.** The library file is the C of the library alone: our own RomTag (right after a `moveq #-1,d0; rts` at the start of
-  the file, so running it as a command returns at once), init, open, close, expunge and vector entries, no C startup code and no C
+- **What is linked.** The library file is the C of the library alone: our own RomTag (m68k: right after a `moveq #-1,d0; rts` at the
+  start of the file, so running it as a command returns at once; AROS and AmigaOS 4: a C `struct Resident`, which their loaders find
+  anywhere in the file, and on AmigaOS 4 a `_start` that returns -1), init, open, close, expunge and vector entries, no C startup code and no C
   library (`-nostartfiles -nostdlib`; `memcpy`, `memset`, `memmove` and `memcmp`, which gcc may call for struct copies, are our own).
   Only libgcc is linked, for 64-bit maths; it is under the GPL 3 with the GCC Runtime Library Exception, which puts no condition on
   the library's own licence. ramlib on Kickstart 3.1 did not find a RomTag 470 bytes into the code hunk, so the RomTag comes first.
-- **Not covered yet:** AROS, AmigaOS 4 and MorphOS libraries; callers written in other languages (the `.fd` file is there, but no C
+  AROS and AmigaOS 4 (gcc 9 and 11): the loops of our `memcpy` and friends are kept from being turned into calls of themselves.
+- **Not covered yet:** MorphOS and AROS i386 libraries; per-opener data on sdl; callers written in other languages (the `.fd` file is there, but no C
   header or proto file is written, and no C program was tried); `esharp addr` for library code (the `.map` and `.o` are written, but it
   was not tried); the hardware test pack. See docs/STATUS.md for what was run.
 

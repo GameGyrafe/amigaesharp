@@ -128,6 +128,12 @@ jobs:
           for t in m68k os4 morphos aros; do
             dotnet run --project src/ESharp.Cli -- build samples/hello --target $t --docker
           done
+      - name: Build the E# .library sample and the program that opens it for m68k, AROS and AmigaOS 4 (#154)
+        run: |
+          for t in m68k aros os4; do
+            dotnet run --project src/ESharp.Cli -- build samples/amigalibdemo --target $t --docker
+            test -s samples/amigalibdemo/obj/$t/amigalib.library
+          done
       - name: Run hello in FS-UAE (m68k, AROS ROM replacement)
         run: |
           sudo apt-get update -qq

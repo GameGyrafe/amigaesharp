@@ -87,9 +87,10 @@ public static unsafe class Program
                 if (output != 0) Close(output);
                 return false;
             }
-            uint[] tags = new uint[8];
-            tags[0] = SysInput; tags[1] = (uint)input; tags[2] = SysOutput; tags[3] = (uint)output; tags[4] = SysAsynch; tags[5] = 1; tags[6] = 0; tags[7] = 0;
-            fixed (uint* t = tags)
+            // A TagItem is a tag and its data, each as wide as a pointer (AROS x86-64: 8 bytes each; the tag in the low half).
+            nuint[] tags = new nuint[8];
+            tags[0] = SysInput; tags[1] = input; tags[2] = SysOutput; tags[3] = output; tags[4] = SysAsynch; tags[5] = 1; tags[6] = 0; tags[7] = 0;
+            fixed (nuint* t = tags)
             {
                 if (SystemTagList(p, t) != 0)
                 {
@@ -152,8 +153,15 @@ public static unsafe class Program
 #if AMIGA
         // One open and close first: the first load of a disk library may leave buffers behind (dos, ramlib) that are not the library's.
         var warm = AmigalibLibrary.Open(1);
+#if AMIGAOS4
+        // AmigaOS 4 does not expunge a library nobody has open on a memory flush (FlushUnused), so here the expunge is asked for while
+        // it is open: it goes when it closes.
+        AmigalibLibrary.ExpungeWhenClosed();
+        warm.Close();
+#else
         warm.Close();
         AmigalibLibrary.FlushUnused();
+#endif
         nuint freeBefore = Exec.AvailMem(0);
 #endif
         int before = AmigalibLibrary.OpenCount();
@@ -216,8 +224,15 @@ public static unsafe class Program
 
         // Nobody has it open: a memory flush expunges it (its Expunge frees the base, and ramlib unloads the code).
         AmigalibLibrary.FlushUnused();
+#if AMIGAOS4
+        // AmigaOS 4 keeps a library nobody has open when an allocation fails (bullet.library stays too); the delayed expunge below works there.
+        Dos.PutStr("AmigaOS 4: a memory flush does not expunge a library nobody has open\n");
+        Dos.PutStr("skip expunged when nobody has it open\n");
+        Dos.PutStr("skip all memory back after the expunge\n");
+#else
         Check("expunged when nobody has it open", AmigalibLibrary.OpenCount() == -1);
-#if AMIGA
+#endif
+#if AMIGA && !AMIGAOS4
         nuint freeAfter = Exec.AvailMem(0);
         Check("all memory back after the expunge", freeAfter == freeBefore);
         if (freeAfter != freeBefore)
@@ -228,7 +243,7 @@ public static unsafe class Program
             Dos.PutInt((int)freeAfter);
             Dos.PutStr("\n");
         }
-#else
+#elif !AMIGA
         Dos.PutStr("skip all memory back after the expunge\n");
 #endif
         // An expunge asked for while it is open only marks it (LIBF_DELEXP); it goes when the last opener closes.
@@ -240,14 +255,30 @@ public static unsafe class Program
         Separate("the opener still has its data", held.Add(1) == 101);
         held.Close();
         Check("expunged at the last close", AmigalibLibrary.OpenCount() == -1);
-#if AMIGA
+#if AMIGAOS4
+        // AmigaOS 4's free memory moves by hundreds of KB on its own (caches), so an exact before and after says nothing there.
+        Dos.PutStr("skip all memory back after the delayed expunge\n");
+#elif AMIGA
         Check("all memory back after the delayed expunge", Exec.AvailMem(0) == freeBefore);
 #else
         Dos.PutStr("skip all memory back after the delayed expunge\n");
 #endif
 #if AMIGA
         Check("a second process calls the library at the same time, with its own opener", TwoProcesses());
-        Check("open count back to 0 after both processes", AmigalibLibrary.OpenCount() == 0);
+        int afterBoth = AmigalibLibrary.OpenCount();
+#if AMIGAOS4
+        // AmigaOS 4 may ask a library to expunge on its own (one run in three: the expunge came while the processes had it open, so it
+        // went at their last close); not in memory any more (-1) is right then too.
+        Check("open count back to 0 after both processes", afterBoth == 0 || afterBoth == -1);
+#else
+        Check("open count back to 0 after both processes", afterBoth == 0);
+#endif
+        if (afterBoth != 0)
+        {
+            Dos.PutStr("open count after both processes (-1: expunged): ");
+            Dos.PutInt(afterBoth);
+            Dos.PutStr("\n");
+        }
 #else
         Dos.PutStr("skip a second process calls the library at the same time, with its own opener\n");
         Dos.PutStr("skip open count back to 0 after both processes\n");
