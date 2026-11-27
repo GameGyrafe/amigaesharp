@@ -806,11 +806,13 @@ Targets:
             var output = sync.Output;
             Console.WriteLine(sync.Status == ESharp.Assets.AssetBuilder.SyncStatus.Touched ? $"{target} unchanged" : $"Wrote {target}");
             foreach (var r in output.Reports)
-                Console.WriteLine(r.IsSample
+                Console.WriteLine(r.IsFont
+                    ? $"  {r.Name,-16} font, {r.Width}x{r.Height} cells, {r.ChipBytes:N0} bytes of glyph data (not chip RAM)"
+                    : r.IsSample
                     ? $"  {r.Name,-16} sample, {r.ChipBytes:N0} bytes of chip RAM"
                     : $"  {r.Name,-16} {r.Width}x{r.Height}, {r.Depth} bitplanes, {r.ChipBytes:N0} bytes of chip RAM");
             foreach (var w in output.Warnings ?? Array.Empty<string>()) Console.WriteLine($"warning: {w}");
-            Console.WriteLine($"  total            {output.Reports.Sum(r => r.ChipBytes):N0} bytes of chip RAM");
+            Console.WriteLine($"  total            {output.Reports.Where(r => !r.IsFont).Sum(r => r.ChipBytes):N0} bytes of chip RAM");
             return 0;
         }
         catch (Exception e) when (IsAssetError(e))

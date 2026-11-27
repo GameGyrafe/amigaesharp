@@ -7,5 +7,6 @@
   </PropertyGroup>
   <ItemGroup>
     <ProjectReference Include="..\..\src\ESharp.Assets\ESharp.Assets.csproj" />
+    <ProjectReference Include="..\..\src\ESharp.Platform\ESharp.Platform.csproj" />
   </ItemGroup>
 </Project>

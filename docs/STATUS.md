@@ -223,11 +223,49 @@ it is built: docs/ARCHITECTURE.md, "Precompiled binaries".
   `[Interrupt]` or `[HookEntry]` methods or MUI custom classes as binaries, `esharp addr` in binary code (not mapped), real hardware.
   `.library` (part 3 of #154): see "Amiga shared libraries from E#" (m68k).
 
+## Bitmap fonts as assets on every target (part of issue #155, last step)
+
+`assets.json` has a `"fonts"` list: a font image (PNG or ILBM, a grid of equal glyph cells) becomes glyph bits in `Assets.g.cs` and a nested
+static class per font (`Assets.Slant.Draw/DrawChar/DrawInt/Width/Height/Has/Pixel`) that calls `ESharp.Platform.BitmapFont`
+(`src/ESharp.Platform/BitmapFont.cs`); the generator is `src/ESharp.Assets/FontImage.cs` and `AssetBuilder.cs`. The same calls draw text on
+m68k, os4, morphos, aros, sdl and the host, with no diskfont.library and no file at run time, so `Fonts` (Amiga-only) stays what it was. How
+to use it: docs/GUIDE.md, "Assets". Decisions:
+
+- **Fixed cells only.** Every glyph has the same cell, spacing is part of it, a string is `length * CellWidth * scale` wide. Proportional
+  widths were left out (no clean way to say them in a PNG grid without a second input).
+- **Ink** is an opaque pixel that is not the top-left pixel's colour (or any opaque pixel when that one is transparent). Data is 1 bit per pixel,
+  `(CellWidth + 7) / 8` bytes per glyph row, most significant bit leftmost; plain static data, not chip RAM. `esharp assets` reports the size as
+  glyph data and leaves it out of the chip total; a font with no ink pixel at all is a warning.
+- **Drawing.** Amiga: one `BltTemplate` per piece of a line (strip of 640 x 32 pixels in chip RAM: a piece is at most 32 rows high, so scale 3 for a 9-row cell), and the
+  per-run rectangle fallback when a piece does not fit or starts left of or above the screen (the same design as the built-in `Font`);
+  sdl and the host: `Video.FillRect` per run of pixels. The core is static methods that take the glyph data as a `ReadOnlySpan<byte>`
+  because E# arrays cannot be fields of a class (an instance-based `BitmapFont` was tried first and rejected by the emitter, ES0099).
+- **Errors** (generator): cell not 1..64, `first`/`count` outside 0..255, image width not a whole number of cells, columns that do not fit,
+  an image too short for the glyphs, a missing `cellWidth`/`cellHeight`/`count`, a name that is not an identifier.
+- **Sample** `samples/fontasset` (21 checks): the font `slant.png` (a bold, slanted variant of the built-in 5x7 font, 9x9 cells, 95 glyphs, made by
+  `dotnet run --project tools/AssetSamples -- --font samples/fontasset`) drawn at scales 1, 2 and 4, with a newline, `DrawChar`, `DrawInt`, a missing
+  character, text clipped at the left and top, a line wider than one strip, colours; every pixel is compared with the glyph bits of the generated data
+  (decoded in the sample, not through the font code).
+
+**Verified (2026-11-27, Linux dev host):**
+- `dotnet test`: 878 passed, 2 skipped, 0 failed (880). New: `FontAssetTests` (generator: bit order, one and two bytes per row, background rules, every error, the manifest output, the committed
+  `Assets.g.cs` equal to a fresh one; the sample compiles for m68k, os4, morphos, aros, aros-i386 and sdl; the sample built and run headless in the esharp-sdl image
+  with its screenshot compared pixel for pixel with the glyph data) and `HostTargetTests.Fontasset_sample_draws_the_asset_font_on_the_host_framebuffer`.
+- `esharp test samples/fontasset` against the host: m68k on Kickstart 3.1 (40.069), `--model A1200`, FS-UAE: 21 ok, 0 FAIL, return code 0, host and Amiga agree;
+  sdl in the esharp-sdl image: 21 ok, 0 FAIL; hosted AROS x86-64 (`--target aros`, esharp-aros-hosted): 21 ok, 0 FAIL, 0 traps; AmigaOS 4.1 VM (`--target os4`): 21 ok, 0 FAIL.
+- Screenshots checked with the character map tool: sdl (640 x 256, exact frame: the two lines of all 95 characters, the clipped "EF" at the top, the scale 2 and 4 text) and
+  FS-UAE (the emulator window, the screen scaled down, so only the layout and the glyph shapes were looked at; the pixel comparison is the exact check).
+
+**Not verified:** MorphOS and real hardware (compiled for morphos only), aros-i386 run (compiled only), Kickstart 3.0, the speed of the Amiga text path (no timing taken), cell heights above
+32 rows or scales that make a piece taller than the strip on the Amiga (these take the rectangle path; covered at scale 4 for a 9-row cell, 36 rows), font images that are ILBM (the reader is the existing one, no
+font test uses it), proportional fonts (not supported). Found on the way and not changed: a `const string` local compiled for sdl gives gcc's "duplicate 'const' declaration specifier" (a warning that
+`-Werror` makes an error); the sample uses a plain `string` local.
+
 ## File requester on every target: `FileRequester` (part of issue #155, step 3)
 
 `FileRequester.Open(title, drawer, file, pattern)` and `FileRequester.Save(...)` (`src/ESharp.Platform/FileRequester.cs`) return the chosen
 path or null (cancel, no asl.library, no desktop). How to use it: docs/GUIDE.md, "Platform APIs". `Asl` stays the Amiga-level API (ES0102 on sdl);
-`Asl.Pick(title, drawer, file, pattern, save)` is new and `Asl.PickFile` calls it. Fonts as assets are still to come, so #155 stays open.
+`Asl.Pick(title, drawer, file, pattern, save)` is new and `Asl.PickFile` calls it. Fonts as assets are the last step (next section).
 
 - **Amiga (m68k, os4, morphos, aros).** asl.library: `ASLFR_TitleText`, `InitialDrawer`, `InitialFile`, `InitialPattern` + `DoPatterns`
   (when a pattern is given), `DoSaveMode`, and the `Video` window when one is open. The path is drawer and file joined with dos.library
@@ -1073,7 +1111,7 @@ sdl3`, run under `sh -c`; `--docker` without a name picks `esharp-sdl` for this 
   `Intuition`, `Graphics`, `CyberGfx`, `Utility`, `Keymap`, `TimerDevice`, `Layout`) are not compiled for SDL: using one is the C# unknown-name
   error plus **ES0102** "'Gui' is Amiga-only and does not exist on target 'sdl'; put the code in #if AMIGA". `HasAga()` is true (256
   colours always work), `HasRtg`/`OpenRtg`/`IsRtg` are false (no RTG card: programs take their fallback path). `samples/controls`, `gui`,
-  `asl`, `fonts` therefore do not build for sdl (`iff` does since the IFF step of #155, "IFF in E#").
+  `asl`, `fonts` therefore do not build for sdl (`iff` does since the IFF step of #155, "IFF in E#"). Bitmap font assets (`Assets.<Name>.Draw`, see "Bitmap fonts as assets") are the sdl-capable way to draw fonts.
 - **CLI:** `esharp run --target sdl [--docker [esharp-sdl]] [--headless]`: headless runs the binary inside the image (or on this machine
   without `--docker`) with `SDL_VIDEODRIVER=offscreen SDL_AUDIODRIVER=dummy`; without `--headless` the static binary runs on this desktop.
   `--input` takes the FS-UAE syntax (`click X,Y;rel DX,DY;press;key N[+M]`, plus `close` on this target: a window close request followed by SDL's quit event, which counts as one Esc, X11 key codes) with X,Y in the game's screen pixels; the CLI

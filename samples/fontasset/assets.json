@@ -1,0 +1,7 @@
+{
+  "namespace": "FontAssetSample",
+  "class": "Assets",
+  "fonts": [
+    { "name": "Slant", "file": "slant.png", "cellWidth": 9, "cellHeight": 9, "first": 32, "count": 95, "columns": 16 }
+  ]
+}

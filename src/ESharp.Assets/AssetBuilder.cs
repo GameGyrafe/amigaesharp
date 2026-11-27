@@ -13,6 +13,9 @@ namespace ESharp.Assets;
 /// <code>{ "namespace": "Game", "class": "Assets", "images": [ { "name": "Card", "file": "card.png", "colors": 16, "mask": true } ] }</code>
 /// An image may be a PNG or an IFF ILBM file, and <c>"dither": "fs"</c> or <c>"ordered"</c> spreads the colour error when colours are reduced (default none).
 /// A <c>"samples"</c> list of WAV or 8SVX files is embedded as 8-bit signed mono chip data: <c>NameData</c>, <c>NameLength</c>, <c>NameRate</c>.
+/// A <c>"fonts"</c> list of font images (a grid of equal glyph cells, see <see cref="FontImage"/>) is embedded as glyph bits for <c>ESharp.Platform.BitmapFont</c>:
+/// <c>{ "name": "Mini", "file": "mini.png", "cellWidth": 9, "cellHeight": 9, "first": 32, "count": 95, "columns": 16 }</c> (first defaults to 32, columns to as many as fit)
+/// writes a nested static class <c>Mini</c> (<c>CellWidth</c>, <c>CellHeight</c>, <c>First</c>, <c>Count</c>, <c>Glyphs</c>, and <c>Has</c>, <c>Pixel</c>, <c>Width</c>, <c>Height</c>, <c>Draw</c>, <c>DrawChar</c>, <c>DrawInt</c> that call <c>ESharp.Platform.BitmapFont</c>).
 /// For each image it writes <c>NameWidth</c>, <c>NameHeight</c>, <c>NameDepth</c>, <c>NamePlanes</c> and <c>NamePalette</c>, and <c>NameMask</c> when the entry has <c>"mask": true</c>.
 /// </summary>
 public static class AssetBuilder
@@ -21,7 +24,9 @@ public static class AssetBuilder
 
     public sealed record SampleEntry(string Name, string File);
 
-    public sealed record Report(string Name, int Width, int Height, int Depth, int ChipBytes, bool IsSample = false);
+    public sealed record FontEntry(string Name, string File, int CellWidth, int CellHeight, int First, int Count, int Columns);
+
+    public sealed record Report(string Name, int Width, int Height, int Depth, int ChipBytes, bool IsSample = false, bool IsFont = false);
 
     public sealed record Output(string Source, IReadOnlyList<Report> Reports, IReadOnlyList<string>? Warnings = null);
 
@@ -46,6 +51,17 @@ public static class AssetBuilder
         if (root.TryGetProperty("samples", out var samples))
             foreach (var e in samples.EnumerateArray())
                 sampleEntries.Add(new SampleEntry(e.GetProperty("name").GetString()!, e.GetProperty("file").GetString()!));
+        var fontEntries = new List<FontEntry>();
+        if (root.TryGetProperty("fonts", out var fonts))
+            foreach (var e in fonts.EnumerateArray())
+            {
+                int Int(string key, int fallback) => e.TryGetProperty(key, out var v) ? v.GetInt32() : fallback;
+                var fontName = e.GetProperty("name").GetString()!;
+                if (!e.TryGetProperty("cellWidth", out _) || !e.TryGetProperty("cellHeight", out _))
+                    throw new InvalidDataException($"font '{fontName}' needs \"cellWidth\" and \"cellHeight\"");
+                if (!e.TryGetProperty("count", out _)) throw new InvalidDataException($"font '{fontName}' needs \"count\"");
+                fontEntries.Add(new FontEntry(fontName, e.GetProperty("file").GetString()!, Int("cellWidth", 0), Int("cellHeight", 0), Int("first", 32), Int("count", 0), Int("columns", 0)));
+            }
         var warnings = new List<string>();
 
         // "if": "AROS" wraps the whole file in #if, so an asset set that only some targets use costs the others nothing.
@@ -55,10 +71,12 @@ public static class AssetBuilder
         // The inputs this file was made from, by content: a library build (ESL011) compares them with the files as they are now,
         // which file times cannot do (a fresh clone gives every file the time of the checkout, in no useful order).
         sb.Append($"// input sha256:{InputHash(File.ReadAllBytes(manifestPath), text: true)} {Path.GetFileName(manifestPath)}\n");
-        foreach (var file in entries.Select(e => e.File).Concat(sampleEntries.Select(e => e.File)))
+        foreach (var file in entries.Select(e => e.File).Concat(sampleEntries.Select(e => e.File)).Concat(fontEntries.Select(e => e.File)))
             sb.Append($"// input sha256:{InputHash(File.ReadAllBytes(Path.Combine(dir, file)), text: false)} {file}\n");
         if (condition != null) sb.Append($"#if {condition}\n");
-        sb.Append("using ESharp;\n\n");
+        sb.Append("using ESharp;\n");
+        if (fontEntries.Count > 0) sb.Append("using ESharp.Platform;\n");
+        sb.Append("\n");
         sb.Append($"namespace {ns};\n\n");
         sb.Append($"public static class {cls}\n{{\n");
         var reports = new List<Report>();
@@ -113,6 +131,31 @@ public static class AssetBuilder
                 sb.Append("        " + string.Join(", ", bytes.Skip(i).Take(16).Select(b => "0x" + b.ToString("X2"))) + ",\n");
             sb.Append("    };\n\n");
         }
+        foreach (var f in fontEntries)
+        {
+            if (!IsIdentifier(f.Name)) throw new InvalidDataException($"asset name '{f.Name}' is not a C# identifier");
+            var glyphs = FontImage.Convert(ImageFile.Read(File.ReadAllBytes(Path.Combine(dir, f.File))), f.CellWidth, f.CellHeight, f.First, f.Count, f.Columns);
+            if (glyphs.InkPixels == 0) warnings.Add($"{f.File}: no ink pixel in any glyph (every pixel is the background colour of the top-left corner)");
+            reports.Add(new Report(f.Name, f.CellWidth, f.CellHeight, 1, glyphs.Data.Length, IsFont: true));
+            sb.Append($"    // {f.File}: {f.Count} glyphs of {f.CellWidth}x{f.CellHeight} from character {f.First}, 1 bit per pixel, {(f.CellWidth + 7) / 8} byte(s) per row\n");
+            sb.Append($"    public static class {f.Name}\n    {{\n");
+            sb.Append($"        public const int CellWidth = {f.CellWidth};\n");
+            sb.Append($"        public const int CellHeight = {f.CellHeight};\n");
+            sb.Append($"        public const int First = {f.First};\n");
+            sb.Append($"        public const int Count = {f.Count};\n");
+            sb.Append("        public static byte[] Glyphs =\n        {\n");
+            for (var i = 0; i < glyphs.Data.Length; i += 16)
+                sb.Append("            " + string.Join(", ", glyphs.Data.Skip(i).Take(16).Select(b => "0x" + b.ToString("X2"))) + ",\n");
+            sb.Append("        };\n\n");
+            sb.Append("        public static bool Has(char c) { return BitmapFont.Has(First, Count, c); }\n");
+            sb.Append("        public static bool Pixel(char c, int x, int y) { return BitmapFont.Pixel(Glyphs, CellWidth, CellHeight, First, Count, c, x, y); }\n");
+            sb.Append("        public static int Width(string text, int scale) { return BitmapFont.Width(CellWidth, text, scale); }\n");
+            sb.Append("        public static int Height(string text, int scale) { return BitmapFont.Height(CellHeight, text, scale); }\n");
+            sb.Append("        public static void Draw(string text, int x, int y, int color, int scale) { BitmapFont.Draw(Glyphs, CellWidth, CellHeight, First, Count, text, x, y, color, scale); }\n");
+            sb.Append("        public static void DrawChar(char c, int x, int y, int color, int scale) { BitmapFont.DrawChar(Glyphs, CellWidth, CellHeight, First, Count, c, x, y, color, scale); }\n");
+            sb.Append("        public static int DrawInt(int value, int x, int y, int color, int scale) { return BitmapFont.DrawInt(Glyphs, CellWidth, CellHeight, First, Count, value, x, y, color, scale); }\n");
+            sb.Append("    }\n\n");
+        }
         sb.Append("}\n");
         if (condition != null) sb.Append("#endif\n");
         return new Output(sb.ToString(), reports, warnings);
@@ -152,7 +195,7 @@ public static class AssetBuilder
         var dir = Path.GetDirectoryName(Path.GetFullPath(manifestPath))!;
         var list = new List<string> { Path.GetFullPath(manifestPath) };
         using var doc = JsonDocument.Parse(File.ReadAllText(manifestPath), new JsonDocumentOptions { CommentHandling = JsonCommentHandling.Skip });
-        foreach (var key in new[] { "images", "samples" })
+        foreach (var key in new[] { "images", "samples", "fonts" })
             if (doc.RootElement.TryGetProperty(key, out var images))
                 foreach (var e in images.EnumerateArray())
                     if (e.TryGetProperty("file", out var f) && f.GetString() is { } name)
