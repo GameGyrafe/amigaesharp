@@ -16,8 +16,10 @@ A project with `EsOutputType` `AmigaLibrary` builds an AmigaOS shared library: `
 `.fd` file and a C# binding, and an E# program that names the library's folder in `esharp.include` opens it with OpenLibrary and calls
 it through the binding. Each opener has its own copy of the library's E# data (the maintainer's decision). How to use it:
 docs/GUIDE.md, "Amiga shared libraries (.library)"; how it is built: docs/ARCHITECTURE.md, "Amiga shared libraries". m68k AmigaOS 3.x
-first (below), then AROS x86-64 and AmigaOS 4 (2026-11-27, see "AROS x86-64 and AmigaOS 4" further down). MorphOS, AROS i386 and
-per-opener data on sdl are not done (ES0134 for a library build for MorphOS, AROS i386 or sdl; no invalid output).
+first (below), then AROS x86-64 and AmigaOS 4 (2026-11-27, see "AROS x86-64 and AmigaOS 4" further down), then per-opener data on
+sdl and AROS i386 (2026-11-27, see "Per-opener data on sdl, and AROS i386"). MorphOS is not done (ES0134 for a library build for
+MorphOS, and for sdl, which has no shared libraries; no invalid output): there is no MorphOS system or emulator here to run one on, and
+the issue's plan named m68k, AROS and AmigaOS 4 only.
 
 - **Exported functions:** public static methods marked `[LibraryFunction]` (new attribute), plain values only (integers up to 32 bits,
   `bool`, `string`, pointers to numbers, void, pointers and structs of fields); anything else is ES0130-ES0133 or ES0135. Vectors in
@@ -40,8 +42,8 @@ per-opener data on sdl are not done (ES0134 for a library build for MorphOS, ARO
   emitter writes the register call (`jsr offset(a6)`); ES0136 for a bad declaration, ES0099 off m68k. `SharedLibrary` (platform) opens,
   closes, counts (`FindName` in exec's list under Forbid), flushes (an allocation exec cannot satisfy, so it expunges unused
   libraries) and asks an open library to go at its last Close (`ExpungeWhenClosed`: RemLibrary). On the host the library's code is compiled into the program and each opener gets a deep copy of the start values of the
-  library's statics, swapped in and out around each call. On sdl the library's code is compiled in too, but its openers share one copy
-  of the data (not done; the demo skips those checks there).
+  library's statics, swapped in and out around each call. On sdl the library's code is compiled in too, and since 2026-11-27 each opener
+  has its own copy of the library's statics in C (see "Per-opener data on sdl, and AROS i386").
 - **ES0134 (not in a library yet):** `[EntryPoint]`, `Args`, `[ChipRam]`, `[Interrupt]`, `[HookEntry]` (so BOOPSI hooks and MUI
   dispatchers), amiga.lib functions. A fatal runtime error in library code is a recoverable alert (0x000100E5) and the calling task
   waits.
@@ -64,7 +66,8 @@ per-opener data on sdl are not done (ES0134 for a library build for MorphOS, ARO
   the segment list our Close returns is unloaded), a second process (the demo started again with `CHILD` through `SystemTagList`, asynchronous)
   making 20000 calls with its own opener while the first made 1300 with its own (both counts right), open count 0 after both, and a
   fresh load after the expunge. The same with Kickstart 3.0 (39.106): Amiga 36 ok, 0 FAIL (the first process made 1100 calls).
-  `--target sdl --docker esharp-sdl`: 21 ok, 0 FAIL, 15 skipped (the 11 checks that need per-opener data and the 4 Amiga-only ones), "Host and SDL agree".
+  `--target sdl --docker esharp-sdl` at the time: 21 ok, 0 FAIL, 15 skipped (the 11 checks that need per-opener data and the 4
+  Amiga-only ones), "Host and SDL agree" (now 32 ok, 4 skipped: see "Per-opener data on sdl, and AROS i386").
   Found on the way: a memory flush (FlushUnused) while the library is open does not reach its Expunge on Kickstart 3.1, so the delayed
   expunge is asked for with RemLibrary.
   Text output only, no screenshots.
@@ -111,21 +114,59 @@ per-opener data on sdl are not done (ES0134 for a library build for MorphOS, ARO
     Kickstart 3.1 (40.069), A1200, host 32 ok + 4 skipped, Amiga 36 ok, 0 FAIL, "Host and Amiga agree"; the m68k library's C, the
     `.library`, the `.fd`, the binding and the demo's executable are byte for byte what main builds.
   - `dotnet test`: 861 passed, 2 skipped (the SDK-backed BindGen test and the OS4 VM test), 0 failed.
-  - Tests: `AmigaLibraryTests` builds the library for every target (ES0134 with the reason for aros-i386, morphos and sdl, and no C),
+  - Tests: `AmigaLibraryTests` builds the library for every target (ES0134 with the reason for aros-i386 (built since, see below), morphos and sdl, and no C),
     checks the AROS and AmigaOS 4 C (Resident, AROS_LH entries and LVOs, the interfaces and their tags, r15 and r14), runs the AROS and
     AmigaOS 4 library C's openers with the host gcc, and runs the AROS part itself on the x86-64 host against a stand-in of the few AROS
     headers it includes (gcc on Linux x86-64 only: a global register variable needs gcc): what InitResident does with the Resident
     (MakeLibrary from the init table, init), two openers through LVO 1, the functions through their LVOs with the base after the
     arguments, close, an expunge while open (LIBF_DELEXP) and the delayed expunge at the last close giving the segment list back with
     every block and pool freed. The program side: AROS_LC with the LVO, the AmigaOS 4 call through the interface's table, ES0099 for
-    MorphOS. `AmigaLibraryCliTests`: emit-only builds of the library and the demo for aros and os4, refusals for aros-i386 and morphos.
+    MorphOS. `AmigaLibraryCliTests`: emit-only builds of the library and the demo for aros and os4, refusals for aros-i386 (built since) and morphos.
     CI's toolchain job builds the demo and its library for m68k, aros and os4.
   - **Not verified on AROS and AmigaOS 4:** a library that calls graphics or intuition (only dos was used), `[LibraryBase]` classes in
     a library, callers that are not E# programs, `esharp addr` on library code, native AROS (not hosted) and real AmigaOS 4 hardware,
     AmigaOS 4 versions other than the VM's, and whether AmigaOS 4 unloads the segment list our last Close returns (the free memory
-    could not be compared exactly there). On AROS i386 and MorphOS a library is not built (ES0134).
-- **Not verified:** MorphOS and AROS i386 libraries (not built: ES0134), per-opener data on sdl (not done),
-  callers that are not E# programs (C or assembler with the `.fd` file: not tried; no C header or proto file is written), real hardware,
+    could not be compared exactly there). On MorphOS a library is not built (ES0134); AROS i386: see the next point.
+- **Per-opener data on sdl, and AROS i386 (2026-11-27):**
+  - **sdl:** the game compiles the library's code in (as before), and now each `Open` gets its own copy of the static fields,
+    properties and events of the library's types. The binding's struct carries a new attribute, `[LibraryBinding(name, types)]`
+    (the types the binding already listed for the host); on sdl the compiler (`CEmitter.Openers.cs`) makes those statics members of
+    `struct es_ol_<n>`, one per library, reached through a pointer that the binding's `SharedLibrary.Enter`/`Leave` set around each
+    call to the calling opener's block (and back to a zeroed "no opener" block after it). `Open` allocates the block, copies the
+    constant start values in and runs the other static initializers and the static constructors of the library's types there (not at
+    the start of the game); `Close` runs their `[AtExit]` methods with that opener's data (not at the end of the game) and frees every
+    object the library's code made during that opener's calls (`es_new` links an object made during a call into its opener's list;
+    `Heap.Free` unlinks it), then the block. The open count, `FlushUnused` and `ExpungeWhenClosed` stay as they were. No global
+    "current opener" is kept between calls, so any number of openers can be alive at once; the game is one thread, and the demo's
+    second process is Amiga-only, so no threads were added. The platform's and the runtime's own state (text ring, closure counters)
+    stay the game's, unlike in a `.library`. With precompiled package binaries linked into the game, an opener's objects are not
+    freed at its `Close` (the binaries free objects with the C library's `free`), the data is still per opener: not run, only read
+    through. The host is unchanged (statics swapped by reflection; the host never runs `[AtExit]` methods).
+  - **AROS i386:** `--target aros-i386` now builds the `.library`, from the same C as AROS x86-64: the i386 SDK in the
+    esharp-aros-i386 image has its own `AROS_LH` and `AROS_LC` macros, which pass the base in eax (regparm(1)) and the arguments on the
+    stack, and the jump table holds 4-byte addresses. The only i386 differences in the C are the `#if` guard and the register for the
+    opener's data: esi, callee-saved in the i386 ABI (r15 on x86-64). The library's own structs (`struct es_lib_head`) come from the
+    SDK's headers, so no `Layout.g.cs` offsets are needed for it. The x86-64 C is unchanged (the i386 text is written only for an
+    i386 build).
+  - **Verified (Linux x86-64, 2026-11-27):** `esharp test samples/amigalibdemo --target sdl --docker esharp-sdl`: host 32 ok, 0 FAIL,
+    4 skipped; SDL 32 ok, 0 FAIL, 4 skipped (the memory and second-process checks are Amiga-only), return code 0, "Host and SDL agree
+    on every check"; the 11 checks that need per-opener data, which were skipped on sdl before, now run (separate counters, call
+    counts, history objects, statistics, reset of one opener, a third opener starting fresh, the other opener still working after a
+    close, the opener keeping its data through a delayed expunge, a fresh load after the expunge). `esharp test samples/amigalibdemo
+    --target aros-i386 --docker esharp-aros-i386` (hosted AROS i386 in the esharp-aros-hosted-i386 image): host 32 ok, 4 skipped;
+    AROS 36 ok, 0 FAIL, return code 0, 0 traps, "Host and AROS agree on every check", among them the second process (20000 calls with
+    its own opener while the first made 2100) and the expunges with the free memory exactly as before. m68k, AROS x86-64 and AmigaOS 4
+    were not run again: their output is the same as main's, byte for byte, built with the same images (the demo's executable and
+    `amigalib.library` for m68k, aros and os4; the generated C of the library is identical, the demo's C differs only in `#line`
+    numbers: the demo's source lost the lines only sdl compiled, which moved the lines after them).
+  - `dotnet test`: 886 passed, 2 skipped (the SDK-backed BindGen test and the OS4 VM test), 0 failed.
+  - Tests: `AmigaLibraryTests.On_sdl_each_opener_has_its_own_statics_static_constructor_objects_and_AtExit` compiles a library with
+    statics, an array, objects, an auto-property, a static constructor, a static event and an `[AtExit]` method into an sdl program
+    and runs the C with the host gcc under AddressSanitizer and LeakSanitizer (two openers, objects replaced with `Heap.Free`, a close
+    while another opener stays open, a third opener starting fresh, every opener's objects freed by its Close);
+    `The_AROS_i386_library_C_is_the_AROS_library_with_esi_for_the_openers_data` (the i386 C is the x86-64 C apart from the guard and
+    the register); `AmigaLibraryCliTests` builds the library and the demo for aros-i386 and checks the sdl demo's per-opener C.
+- **Not verified:** MorphOS libraries (not built: ES0134), callers that are not E# programs (C or assembler with the `.fd` file: not tried; no C header or proto file is written), real hardware,
   `esharp addr` on library code, a library with `[LibraryBase]` classes (bases per opener) or with graphics or intuition calls in the
   emulator, very large per-opener data, and the hardware test pack (the demo is not in it).
 
@@ -2126,7 +2167,7 @@ Open work as of 2026-11-14 (the GitHub issues are the live list; the v1 tracker 
 - **Windows (#11):** CI now runs a `windows` job (windows-latest, PR head): `dotnet test` (439 passed, 2 skipped, 0 failed; the runner has a MinGW gcc, so the generated-C tests run there and only the Docker/VM/SDK-dependent tests skip), emit-only builds of `samples/hello` and `samples/cards`, `esharp test samples/linq`, a clean `git status` afterwards, and a package round trip against the PR's own packages (`dotnet pack`, install the tool from the folder into a tool path, a nuget.config with the local feed, version and PackageReference checked, NU1603 fails the step, `esharp new`, `dotnet run`, `esharp test`, `esharp build --emit-only`). A `.gitattributes` keeps the working tree LF (the runner has `core.autocrlf=true`), and the native test output is read CRLF-tolerant. Still needs a person on a real Windows machine: Docker Desktop with `--docker` builds, FS-UAE for Windows, VS Code, and Windows with a different (or no) C compiler. `tools/aros-hosted` is Linux-only. macOS was checked, see "VS Code support".
 - **Bindings (#19, #40):** GadTools wrappers (v1), the BOOPSI core with hooks (#40 part 1, see "BOOPSI core and hooks") and the MUI wrappers on it (#40 part 2, see "MUI wrappers") are done. MUI custom classes (#93, see "MUI custom classes") are done too. Open: ReAction (last, if at all).
 - **Display design (not implemented):** [design/DISPLAY.md](design/DISPLAY.md) proposes logical coordinates with an integer scale, mode choice that follows the Workbench's monitor family (MODE option, asl screen-mode requester), 256 colours with a shared palette, a gradient pen (copper on AGA), window mode on the Workbench and multi-scale art. Nothing in it is built or verified yet; it waits for the maintainer's approval.
-- **v2:** AROS i386 (#4: toolchain, target and hosted runs done, see "AROS i386"; the MUI crashes on hosted i386 were an AROS bug, worked around (#105); open: native pc-i386), E# library source packages on NuGet (#31: parts 1 to 4 done, see "E# library packages, part 1", "part 2: assets in packages", "part 3: C files and headers in packages" and "part 4: classes derived from package classes"; the `AmigaESharp.*` id prefix is reserved on nuget.org for the maintainer's account since 2026-11-24, so #31 is done; the library project template `esharp new --library` is done, see "Library project template"; the later pieces from its proposal are in #154: precompiled per-target binaries are done, see "Precompiled per-target libraries in E# packages"; the `.library` for m68k, AROS x86-64 and AmigaOS 4 is done, see "Amiga shared libraries from E#", open: per-opener data on sdl, and MorphOS and AROS i386 libraries), user classes deriving from platform classes (#42: done for `GtWindow`, see "Classes derived from platform classes"). Capturing lambdas stored in fields and events (#41): done (PR #83), see "Heap closures and events".
+- **v2:** AROS i386 (#4: toolchain, target and hosted runs done, see "AROS i386"; the MUI crashes on hosted i386 were an AROS bug, worked around (#105); open: native pc-i386), E# library source packages on NuGet (#31: parts 1 to 4 done, see "E# library packages, part 1", "part 2: assets in packages", "part 3: C files and headers in packages" and "part 4: classes derived from package classes"; the `AmigaESharp.*` id prefix is reserved on nuget.org for the maintainer's account since 2026-11-24, so #31 is done; the library project template `esharp new --library` is done, see "Library project template"; the later pieces from its proposal are in #154: precompiled per-target binaries are done, see "Precompiled per-target libraries in E# packages"; the `.library` for m68k, AROS x86-64 and i386, and AmigaOS 4 is done, with per-opener data on sdl, see "Amiga shared libraries from E#"; a MorphOS library is not done (ES0134), as there is nothing here to run it on), user classes deriving from platform classes (#42: done for `GtWindow`, see "Classes derived from platform classes"). Capturing lambdas stored in fields and events (#41): done (PR #83), see "Heap closures and events".
 - **Local toolchains (#122):** part 1 done (configuration, `esharp doctor`, VS Code tasks, a local m68k build in CI; see
   "Local toolchains, part 1"). Open: macOS and Windows by hand, and whether os4, morphos and AROS get a local route
   ([design/TOOLCHAINS.md](design/TOOLCHAINS.md) has the options; the maintainer picks).

@@ -10,7 +10,7 @@ namespace ESharp.Cli;
 
 /// <summary>
 /// Amiga shared libraries from E# (issue #154). A project whose csproj sets <c>EsOutputType</c> to <c>AmigaLibrary</c> builds a <c>.library</c>
-/// (m68k AmigaOS 3.x, AROS x86-64 or AmigaOS 4), its <c>.fd</c> file and a C# binding. Its other properties (literal values, as for the icon, IconStep):
+/// (m68k AmigaOS 3.x, AROS x86-64 or i386, or AmigaOS 4), its <c>.fd</c> file and a C# binding. Its other properties (literal values, as for the icon, IconStep):
 /// <c>EsLibraryName</c> (default: the folder's name in lower case + .library), <c>EsLibraryVersion</c> and <c>EsLibraryRevision</c>
 /// (default: the first two numbers of <c>Version</c>, else 1.0), <c>EsLibraryDate</c> (dd.mm.yyyy; default: today) and <c>EsLibraryBinding</c>
 /// (the binding's C# struct). A program uses the library by naming its folder in <c>esharp.include</c>: on the host and on sdl the library's
@@ -64,8 +64,8 @@ internal static class AmigaLibraryStep
         return new Project(Path.GetFullPath(dir), Path.GetFileNameWithoutExtension(csproj), options);
     }
 
-    /// <summary>The targets a .library builds for: m68k (AmigaOS 3.x), aros (AROS x86-64) and os4 (AmigaOS 4).</summary>
-    public static bool BuildsFor(TargetInfo target) => target == Targets.M68k || target == Targets.Aros || target == Targets.Os4;
+    /// <summary>The targets a .library builds for: m68k (AmigaOS 3.x), aros (AROS x86-64), aros-i386 and os4 (AmigaOS 4).</summary>
+    public static bool BuildsFor(TargetInfo target) => target == Targets.M68k || target == Targets.Aros || target == Targets.ArosI386 || target == Targets.Os4;
 
     /// <summary>The AmigaLibrary projects among the folders that a program's <c>esharp.include</c> names.</summary>
     public static List<Project> Referenced(string programPath)

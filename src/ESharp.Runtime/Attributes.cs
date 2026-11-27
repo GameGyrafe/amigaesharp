@@ -215,9 +215,9 @@ public sealed class LibraryFunctionAttribute : Attribute
 /// A <c>static extern</c> method that calls the library vector at <paramref name="offset"/> (negative, as in an <c>.fd</c> file's bias:
 /// -30, -36, ...) of the library base it gets as its first parameter, with the other parameters in the registers named in
 /// <paramref name="registers"/> (comma separated, <c>"d0,d1,a0"</c>), and the result from d0. The bindings that <c>esharp build</c> writes
-/// for an E# <c>.library</c> use it, so each opener's base is passed explicitly. On AROS x86-64 the call goes through the base's jump
+/// for an E# <c>.library</c> use it, so each opener's base is passed explicitly. On AROS (x86-64 and i386) the call goes through the base's jump
 /// table (vector -30 is LVO 5) and on AmigaOS 4 the first parameter is the opener's main interface, called through its function table;
-/// the registers then only matter to m68k. ES0099 on MorphOS and AROS i386.
+/// the registers then only matter to m68k. ES0099 on MorphOS.
 /// </summary>
 [AttributeUsage(AttributeTargets.Method)]
 public sealed class LibraryCallAttribute : Attribute
@@ -226,4 +226,21 @@ public sealed class LibraryCallAttribute : Attribute
 
     public int Offset { get; }
     public string Registers { get; }
+}
+
+/// <summary>
+/// Marks the C# binding that <c>esharp build</c> writes for an E# Amiga library (issue #154): <paramref name="library"/> is the library's
+/// name and <paramref name="types"/> its top-level types (full names, separated by <c>;</c>). On sdl, where the library's code is compiled
+/// into the program, the compiler keeps the static fields, properties and events of those types (and of their nested types) apart for
+/// each opener, as the Amiga does: each <c>SharedLibrary.Open</c> gets its own copy, set up by the types' static initializers and
+/// constructors; the objects the library's code makes during a call belong to the opener, and its <c>[AtExit]</c> methods run, and its
+/// objects are freed, when that opener closes. On the Amiga targets and the host the attribute changes nothing.
+/// </summary>
+[AttributeUsage(AttributeTargets.Struct)]
+public sealed class LibraryBindingAttribute : Attribute
+{
+    public LibraryBindingAttribute(string library, string types) { Library = library; Types = types; }
+
+    public string Library { get; }
+    public string Types { get; }
 }

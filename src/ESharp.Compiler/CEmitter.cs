@@ -248,6 +248,7 @@ internal sealed partial class CEmitter
             if (BaseClass(c) != null || c.GetMembers().OfType<IMethodSymbol>().Any(IsDynamic) || (Split.Active && IsExtensible(c))) _polyRoots.Add(RootClass(c));
         var enums = types.Where(t => t.TypeKind == TypeKind.Enum).ToList();
         var statics = types.Where(t => t.TypeKind is TypeKind.Class or TypeKind.Struct).ToList();
+        FindOpenerLibraries(types);
 
         var reachable = ReachableMethods(types);
         var usedStatics = new HashSet<ISymbol>(SymbolEqualityComparer.Default);
@@ -304,10 +305,15 @@ internal sealed partial class CEmitter
         {
             _usesClosures = true;
             if (LibMode) LibStatic($"es_event {StaticEventName(ev)}", StaticEventName(ev), null);
+            else if (OpenerOf(ev) is { } evLibrary) OpenerStatic(evLibrary, $"es_event {StaticEventName(ev)}", StaticEventName(ev), null);
             else Line(IsExternal(ev) ? $"extern es_event {StaticEventName(ev)};" : $"{Storage}es_event {StaticEventName(ev)};");
         }
         if (LibMode) EmitLibraryUserData();
-        else if (fields.Count + staticProps.Count + staticEvents.Count > 0) Line("");
+        else
+        {
+            if (fields.Count + staticProps.Count + staticEvents.Count > 0) Line("");
+            EmitOpenerData();
+        }
 
         var methods0 = types.SelectMany(t => t.GetMembers().OfType<IMethodSymbol>()).Where(m => !m.IsGenericMethod).ToList();
         var methods = types.SelectMany(t => t.GetMembers().OfType<IMethodSymbol>())
@@ -370,6 +376,7 @@ internal sealed partial class CEmitter
         else
         {
             EmitBinaryDelegateWrappers(methods.Where(m => !IsExternal(m)));
+            EmitOpenerGlue();
             EmitMain();
         }
         EmitInterruptEntries();
@@ -635,12 +642,17 @@ internal sealed partial class CEmitter
                 result.AppendLine("#include <stdlib.h>");
             }
             if (!_usesBounds) AppendFatalHelper(result);
-            result.AppendLine(SplitHelper + "void *es_new(size_t n)");
-            result.AppendLine("{");
-            result.AppendLine(LibMode ? "    void *p = es_lib_alloc(n);" : "    void *p = calloc(1, n);");
-            result.AppendLine("    if (p == NULL) { es_errstr(\"out of memory\\n\"); es_fatal(); }");
-            result.AppendLine("    return p;");
-            result.AppendLine("}");
+            if (OpenerHeap) foreach (var l in OpenerHeapLines) result.AppendLine(l);
+            else
+            {
+                result.AppendLine(SplitHelper + "void *es_new(size_t n)");
+                result.AppendLine("{");
+                result.AppendLine(LibMode ? "    void *p = es_lib_alloc(n);" : "    void *p = calloc(1, n);");
+                result.AppendLine("    if (p == NULL) { es_errstr(\"out of memory\\n\"); es_fatal(); }");
+                result.AppendLine("    return p;");
+                result.AppendLine("}");
+            }
+            result.Append(OpenerPreamble());
             result.AppendLine("#define ES_NEW(T) ((T *)es_new(sizeof(T)))");
             if (_usesClosures) AppendClosureRuntime(result);
         }
@@ -2142,9 +2154,10 @@ static __attribute__((unused)) int32_t MUI_DeleteCustomClass(void *mcc)
             Line(f.Type is IArrayTypeSymbol arrType ? $"extern {(f.IsVolatile ? "volatile " : "")}{ArrayDeclarator(arrType, FieldName(f), init, decl, withItems: false)};" : $"extern {text};");
             return;
         }
-        if (LibMode)
+        if (LibMode || OpenerOf(f) is not null)
         {
             // An Amiga library: a member of the opener's data; a constant initial value is copied in from a template when an opener opens.
+            // sdl: the same for a static of an Amiga library compiled into the program (CEmitter.Openers.cs).
             var member = f.Type is IArrayTypeSymbol arrM ? (f.IsVolatile ? "volatile " : "") + ArrayDeclarator(arrM, FieldName(f), init, decl, withItems: false) : text;
             string? template = null;
             if (!deferred && init != null)
@@ -2153,7 +2166,8 @@ static __attribute__((unused)) int32_t MUI_DeleteCustomClass(void *mcc)
                 else template = $"{Decl(f.Type, FieldName(f) + "__init", decl)} = {Expr(init, top: true)}";
             }
             if (deferred) _deferredStatics.Add((f, FieldName(f), init!));
-            LibStatic(member, FieldName(f), template);
+            if (OpenerOf(f) is { } library) OpenerStatic(library, member, FieldName(f), template);
+            else LibStatic(member, FieldName(f), template);
             return;
         }
         if (HasAttribute(f, "ChipRamAttribute") && IsDefined("M68K"))
@@ -2210,7 +2224,7 @@ static __attribute__((unused)) int32_t MUI_DeleteCustomClass(void *mcc)
         {
             if (!done.Add(d.Symbol)) return;
             foreach (var n in d.Init.DescendantNodesAndSelf().OfType<IdentifierNameSyntax>())
-                if (Model(n).GetSymbolInfo(n).Symbol is { } used && byField.TryGetValue(used, out var dep)) Emit(dep);
+                if (Model(n).GetSymbolInfo(n).Symbol is { } used && byField.TryGetValue(used, out var dep) && (which == null || which(dep.Symbol))) Emit(dep);
             if (d.Symbol is IFieldSymbol { Type: IArrayTypeSymbol } && ArrayItems(d.Init) is { } items)
             {
                 for (var i = 0; i < items.Expressions.Count; i++) Line($"{d.Target}[{i}] = {Expr(items.Expressions[i], top: true)};");
@@ -2234,11 +2248,13 @@ static __attribute__((unused)) int32_t MUI_DeleteCustomClass(void *mcc)
         var name = $"{TypeName(p.ContainingType)}_{p.Name}";
         var text = Decl(p.Type, name, decl);
         if (IsExternal(p)) { Line($"extern {text};"); return; }
-        if (LibMode)
+        if (LibMode || OpenerOf(p) is not null)
         {
             var deferredInit = decl.Initializer != null && !IsCConstant(decl.Initializer.Value);
             if (deferredInit) _deferredStatics.Add((p, name, decl.Initializer!.Value));
-            LibStatic(text, name, decl.Initializer != null && !deferredInit ? $"{Decl(p.Type, name + "__init", decl)} = {Expr(decl.Initializer.Value, top: true)}" : null);
+            var template = decl.Initializer != null && !deferredInit ? $"{Decl(p.Type, name + "__init", decl)} = {Expr(decl.Initializer.Value, top: true)}" : null;
+            if (OpenerOf(p) is { } library) OpenerStatic(library, text, name, template);
+            else LibStatic(text, name, template);
             return;
         }
         if (decl.Initializer != null && !IsCConstant(decl.Initializer.Value))

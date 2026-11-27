@@ -136,7 +136,7 @@ public static class AmigaLibraries
     }
 
     /// <summary>
-    /// Why a .library cannot be built for the target these symbols define, or null: m68k (AmigaOS 3.x), AROS x86-64 and AmigaOS 4 build one,
+    /// Why a .library cannot be built for the target these symbols define, or null: m68k (AmigaOS 3.x), AROS (x86-64 and i386) and AmigaOS 4 build one,
     /// and so does a build for no target (the host tests compile its C).
     /// </summary>
     public static string? TargetProblem(IReadOnlyCollection<string> defines)
@@ -144,9 +144,7 @@ public static class AmigaLibraries
         if (defines.Contains("SDL"))
             return "sdl has no shared libraries; a program that names the library's folder in esharp.include compiles the library's code in on sdl";
         if (defines.Contains("MORPHOS"))
-            return "a MorphOS .library is not done yet (m68k, AROS x86-64 and AmigaOS 4 are)";
-        if (defines.Contains("AROS") && defines.Contains("I386"))
-            return "an AROS i386 .library is not done yet (AROS x86-64 is: --target aros)";
+            return "a MorphOS .library is not done yet (m68k, AROS x86-64, AROS i386 and AmigaOS 4 are)";
         return null;
     }
 
@@ -374,12 +372,13 @@ public static class AmigaLibraries
         L($"    /// One opener of {o.Name} (version {o.Version}.{o.Revision}): <c>Open</c> gives this opener's library base, and each opener has its own copy");
         L($"    /// of the library's data. The methods call the library's functions through this opener's base.");
         L($"    /// </summary>");
+        L($"    [LibraryBinding(\"{o.Name}\", \"{string.Join(";", typeNames)}\")]   // sdl: these types' static data is kept per opener");
         L($"    public unsafe struct {b}");
         L("    {");
         L($"        public const string LibraryName = \"{o.Name}\";");
         L($"        public const int LibraryVersion = {o.Version};");
         L($"        public const int LibraryRevision = {o.Revision};");
-        L($"        private const string Types = \"{string.Join(";", typeNames)}\";   // the host keeps their static fields apart per opener");
+        L($"        private const string Types = \"{string.Join(";", typeNames)}\";   // the host keeps their static fields apart per opener (sdl: [LibraryBinding])");
         L();
         L("        /// <summary>This opener's library base, or null when it is not open.</summary>");
         L("        public void* Base;");

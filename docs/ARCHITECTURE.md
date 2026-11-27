@@ -242,7 +242,7 @@ and two precompiles in different folders (same bytes).
 
 ## Amiga shared libraries
 
-A project with `EsOutputType` `AmigaLibrary` (issue #154; m68k AmigaOS 3.x, AROS x86-64 and AmigaOS 4) is compiled as a program without an entry point
+A project with `EsOutputType` `AmigaLibrary` (issue #154; m68k AmigaOS 3.x, AROS x86-64 and i386, and AmigaOS 4) is compiled as a program without an entry point
 (`CompileOptions.AmigaLibrary`). The pieces:
 
 - **Rules, registers, `.fd`, binding:** `src/ESharp.Compiler/AmigaLibrary.cs`. `AmigaLibraries.Plan` finds the `[LibraryFunction]`
@@ -251,7 +251,7 @@ A project with `EsOutputType` `AmigaLibrary` (issue #154; m68k AmigaOS 3.x, AROS
   free registers, never a4/a5). `EsCompiler` runs it before the subset's later steps for the diagnostics, and again on the final
   compilation (generics expanded, C keywords renamed) for the emitter. `Fd` writes the `.fd` file; `Binding` writes the C# binding (a
   struct per opener with `#if AMIGA` vector calls through `[LibraryCall]` externs and, elsewhere, direct calls of the library's methods
-  between `SharedLibrary.Enter` and `Leave`; the boundary structs copied, fields only, for the Amiga build of a program that does not
+  between `SharedLibrary.Enter` and `Leave`; the struct carries `[LibraryBinding(name, types)]` for sdl; the boundary structs copied, fields only, for the Amiga build of a program that does not
   compile the library). `CompileResult.AmigaLibrary` carries them.
 - **The library's C:** `src/ESharp.Compiler/CEmitter.AmigaLibrary.cs` (`LibMode`). The E# data of one opener is one block: the
   runtime's variables (`RuntimeState` and the `[LibraryBase]` bases go into `struct es_rt`, written where the includes end, at
@@ -271,38 +271,51 @@ A project with `EsOutputType` `AmigaLibrary` (issue #154; m68k AmigaOS 3.x, AROS
   before the functions, and the file is the link's first object): `moveq #-1,d0; rts` and the RomTag right after it, because ramlib on
   Kickstart 3.1 did not find one further into the hunk. `CheckLibraryFeatures` reports what a library cannot use yet (ES0134).
   `LibOs` picks the library proper by target: `EmitM68kLibrary` (above, text unchanged so m68k builds are byte for byte the same),
-  `EmitArosLibrary` (under `#if defined(__AROS__) && defined(__x86_64__)`: a C `struct Resident`, an RTF_AUTOINIT table of function
-  addresses, init with `AROS_UFH3`, open, close, expunge and the entries with the `AROS_LH` macros, LVO 5 for vector -30, `es_d` in
-  r15, the same copy-the-base-per-opener scheme) and `EmitOs4Library` (under `#if defined(__amigaos4__)`: a Resident with RTF_NATIVE |
+  `EmitArosLibrary` (under `#if defined(__AROS__) && defined(__x86_64__)`, or `__i386__` for an aros-i386 build: a C `struct Resident`,
+  an RTF_AUTOINIT table of function addresses, init with `AROS_UFH3`, open, close, expunge and the entries with the `AROS_LH` macros,
+  whose i386 form in that SDK passes the base in eax (regparm(1)), LVO 5 for vector -30, `es_d` in r15 (i386: esi), the same
+  copy-the-base-per-opener scheme; the x86-64 C is the same as before i386 was added) and `EmitOs4Library` (under `#if defined(__amigaos4__)`: a Resident with RTF_NATIVE |
   RTF_AUTOINIT and CreateLibrary tags, the manager interface `__library` and the main interface `main` marked IFLF_PRIVATE, whose
   Clone makes each opener's interface with the opener's data in its MIT_DataSize area (the clone flags set only after the data is set
   up, as DeleteInterface calls Expunge) and whose Expunge frees it; entries take the
   interface as Self, `es_d` in r14; `_start` returns -1; no libauto, so the shared ROM libraries' interfaces are got at init).
-  `AmigaLibraries.TargetProblem` turns a library build for MorphOS, AROS i386 or sdl into ES0134.
+  `AmigaLibraries.TargetProblem` turns a library build for MorphOS or sdl into ES0134.
 - **The program side:** a `[LibraryCall(offset, registers)]` extern (`EmitLibraryCall`) is a C function that loads the arguments into
   their registers and a6 from its first parameter, and `jsr offset(a6)` with d0, d1, a0 and a1 as clobbered outputs (ES0136 for a bad
   declaration). On AROS and AmigaOS 4 (`EmitLibraryCallThroughTable`) it is a call through the opener's table, every value as a
   `uintptr_t`: AROS `AROS_LC<n>` with the LVO, AmigaOS 4 the interface's function table after `struct InterfaceData` (slot 4 for
-  vector -30) with the interface as Self; ES0099 on MorphOS and AROS i386. `src/ESharp.Platform/SharedLibrary.cs` opens and closes
+  vector -30) with the interface as Self; ES0099 on MorphOS. `src/ESharp.Platform/SharedLibrary.cs` opens and closes
   (exec on the Amiga; on AmigaOS 4 `es_lib_open_main`/`es_lib_close_main`: OpenLibrary plus GetInterface `main`, DropInterface plus
   CloseLibrary; on the host and sdl a handle), counts (`es_lib_open_count`: FindName in exec's list under Forbid; on AROS the list is
   found from exec's own node, not through `struct ExecBase`, whose SDK layout is not the running nightly's) and, on the host, keeps
   each opener's statics apart by reflection (start values deep-copied per opener, swapped in and out by `Enter`/`Leave`).
+- **sdl, per-opener data in a program:** `src/ESharp.Compiler/CEmitter.Openers.cs`. On sdl `FindOpenerLibraries` reads the
+  `[LibraryBinding]` structs of the program; `OpenerOf` says whether a static belongs to one of those types (or a type nested in one;
+  generic types stay global, as on the host). `EmitStaticField`, `EmitStaticProperty` and the events make such a static a member of
+  `struct es_ol_<n>` (one per library) with a macro through `es_ol_<n>_d`, as `LibStatic` does in a library; `EmitOpenerData` writes the
+  struct, a zeroed block for "no opener" and the macros. Before `main`, `EmitOpenerGlue` takes the library types' static constructors
+  and `[AtExit]` methods out of main's lists and writes `es_ol_<n>_make` (calloc, constant templates, `EmitDeferredStatics` for the
+  library's statics only, the static constructors) and `es_ol_<n>_free` (`[AtExit]`, the opener's objects, the block), and the natives
+  of the sdl `SharedLibrary`: `es_ol_open` (by name), `es_ol_slot`, `es_ol_close`, `es_ol_enter` and `es_ol_leave` (set
+  `es_ol_<n>_d` and `es_ol_heap` around a call). With `OpenerHeap` (no precompiled binaries) `es_new` gives every object a header that
+  links it into `es_ol_heap`'s list when a call is running, and `FreeName` is `es_ol_free`, which unlinks it.
 - **The CLI:** `src/ESharp.Cli/AmigaLibraryStep.cs` reads the csproj properties and finds the AmigaLibrary folders in a program's
   `esharp.include`. `Program.Build` builds a library project (`-nostartfiles -nostdlib ... -lgcc`, output `<name>.library`, plus the
   `.fd`, the binding, the map and the `-g` object), and for a program that uses one: drops the library's files from an Amiga build,
   writes and adds the binding, and after the link builds the library with the same toolchain options and copies it next to the program.
   `esharp test` adds the binding to the host run. `FsUae.Run` copies every `.library` beside the program into `DH0:Libs`, `ArosHosted.Run`
   into the fresh tree's `Libs`, and `Os4Vm.Run` onto the CD's `Libs` drawer, which its `esrun` script adds to `LIBS:`
-  (`AmigaLibraryStep.BuildsFor`: m68k, aros, os4).
+  (`AmigaLibraryStep.BuildsFor`: m68k, aros, aros-i386, os4).
 
 Tests: `AmigaLibraryTests.cs` (registers, the rules, the `.fd` read back by BindGen's parser, the binding compiled into a program for
-m68k and sdl, `[LibraryCall]` checks for m68k, AROS and AmigaOS 4, and the library's C built with the host gcc, with AddressSanitizer
+m68k and sdl, the sdl program's per-opener data built with the host gcc and run under AddressSanitizer and LeakSanitizer (statics,
+static constructors, objects, events and `[AtExit]` per opener), the AROS i386 C against the x86-64 C, `[LibraryCall]` checks for
+m68k, AROS and AmigaOS 4, and the library's C built with the host gcc, with AddressSanitizer
 and LeakSanitizer when they are there: two openers called through `es_lib_call_<F>`, each with its own data, then torn down with
 nothing left; the AROS library proper run on an x86-64 host with gcc against a stand-in of the AROS headers it includes, called
 through its jump table as InitResident, OpenLibrary and CloseLibrary would), the host side of `SharedLibrary` (`SharedLibraryHostTests`)
-and `AmigaLibraryCliTests` (`esharp build` of samples/amigalib and samples/amigalibdemo for m68k, sdl, aros and os4, refusals for
-aros-i386 and morphos, `esharp test` of the demo on the host, and with the pinned m68k image the RomTag at the start of the built file).
+and `AmigaLibraryCliTests` (`esharp build` of samples/amigalib and samples/amigalibdemo for m68k, sdl, aros, aros-i386 and os4, refusals for
+sdl (the library itself) and morphos, `esharp test` of the demo on the host, and with the pinned m68k image the RomTag at the start of the built file).
 
 ## Packaging
 

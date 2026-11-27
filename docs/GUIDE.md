@@ -333,8 +333,9 @@ A project whose csproj sets `EsOutputType` to `AmigaLibrary` builds an AmigaOS s
 `esharp build` writes `obj/<target>/<name>.library`, its `.fd` file and a C# binding. An E# program opens it with OpenLibrary and
 calls it through the binding like any other Amiga library, and **each opener gets its own copy of the library's data**: two programs
 (or two OpenLibrary calls in one program) never see each other's static fields, objects or counters. Targets: m68k AmigaOS 3.x
-(`--target m68k`), AROS x86-64 (`--target aros`) and AmigaOS 4 (`--target os4`); MorphOS and AROS i386 stop with ES0134 (not done
-yet). `samples/amigalib` is a small library and `samples/amigalibdemo` a program that uses it.
+(`--target m68k`), AROS x86-64 (`--target aros`), AROS i386 (`--target aros-i386`) and AmigaOS 4 (`--target os4`); MorphOS stops with
+ES0134 (not done: there is no way to run it here). On the host and sdl a program that uses the library compiles its code in, and each
+opener still has its own data. `samples/amigalib` is a small library and `samples/amigalibdemo` a program that uses it.
 
 ```xml
 <Project Sdk="Microsoft.NET.Sdk">
@@ -363,6 +364,8 @@ public static class Counter
 esharp build samples/amigalib --docker <m68k image>      # obj/m68k/amigalib.library, amigalib_lib.fd, AmigalibLibrary.cs
 esharp test samples/amigalibdemo --target m68k --docker <m68k image> --model A1200 --kickstart <rom>
 esharp test samples/amigalibdemo --target aros --docker esharp-amiga-toolchain   # hosted AROS x86-64 (esharp-aros-hosted image)
+esharp test samples/amigalibdemo --target aros-i386 --docker esharp-aros-i386    # hosted AROS i386 (esharp-aros-hosted-i386 image)
+esharp test samples/amigalibdemo --target sdl --docker esharp-sdl                # the library's code compiled in, per-opener data in C
 esharp test samples/amigalibdemo --target os4 --docker esharp-amiga-toolchain    # the AmigaOS 4.1 VM (ESHARP_OS4_VM)
 ```
 
@@ -405,17 +408,18 @@ esharp test samples/amigalibdemo --target os4 --docker esharp-amiga-toolchain   
   copy it to `LIBS:`. On the **host** (dotnet, `esharp test`) the library's code is compiled into the program and the binding calls it
   directly; each opener still has its own static fields there (the host swaps them in and out around each call and deep-copies the
   start values for every opener, so objects and arrays are the opener's own too). On **sdl** the library's code is compiled into the
-  game as well, but its openers share one copy of the data (per-opener data on sdl is not done yet). On **AROS** and **AmigaOS 4** the
-  program calls the `.library` as on m68k (see the next point); `esharp test --target aros` copies it into the hosted AROS tree's `Libs`
-  drawer, `esharp test` and `run --target os4` put it on the VM's CD in `ESTEST:Libs`, which the run adds to `LIBS:`.
-  `tools/aros-hosted/aros-hosted.sh` copies it too (in the image's fresh tree). `morphos` and `aros-i386` builds of a program that uses
-  an E# library stop with a message.
-- **AROS x86-64 and AmigaOS 4.** The same project and the same binding build there; what differs is how the library is called.
-  - **AROS:** a `struct Resident` that AROS's loader finds in the file, a jump table of function addresses (8 bytes each; the vector at
-    -30 is LVO 5), and every function written with the AROS_LH macros, so the base reaches it as the AROS ABI passes it (on x86-64 an
-    ordinary argument after the others; the register names of the `.fd` file only matter to m68k). The program calls through the jump
-    table of its opener's base (AROS_LC). As on m68k each opener gets a copy of the base with its data after it; inside the library
-    register r15 points at that data (the role a4 has on m68k).
+  game as well, and each opener has its own copy of the library's data there too (see "Per-opener data on sdl" below). On **AROS**
+  (x86-64 and i386) and **AmigaOS 4** the program calls the `.library` as on m68k (see the next point); `esharp test --target aros` or
+  `aros-i386` copies it into the hosted AROS tree's `Libs` drawer, `esharp test` and `run --target os4` put it on the VM's CD in
+  `ESTEST:Libs`, which the run adds to `LIBS:`. `tools/aros-hosted/aros-hosted.sh` copies it too (in the image's fresh tree). A
+  `morphos` build of a program that uses an E# library stops with a message.
+- **AROS and AmigaOS 4.** The same project and the same binding build there; what differs is how the library is called.
+  - **AROS (x86-64 and i386):** a `struct Resident` that AROS's loader finds in the file, a jump table of function addresses (a pointer
+    each; the vector at -30 is LVO 5), and every function written with the AROS_LH macros, so the base reaches it as the AROS ABI passes
+    it (on x86-64 an ordinary argument after the others, on i386 in eax; the register names of the `.fd` file only matter to m68k). The
+    program calls through the jump table of its opener's base (AROS_LC). As on m68k each opener gets a copy of the base with its data
+    after it; inside the library register r15 (i386: esi) points at that data (the role a4 has on m68k). The i386 library is the same C
+    as the x86-64 one, built with the i386 SDK of the esharp-aros-i386 image, whose AROS_LH and AROS_LC macros give the i386 calls.
   - **AmigaOS 4:** the library has a manager interface (`__library`: Open, Close, Expunge) and a main interface (`main`) holding the
     library functions after Obtain, Release, Expunge and Clone. `Open` on the binding is OpenLibrary and then GetInterface(`main`, 1),
     and `Base` is the interface: the main interface is private, so exec gives each GetInterface its own clone, and the clone's data
@@ -427,7 +431,7 @@ esharp test samples/amigalibdemo --target os4 --docker esharp-amiga-toolchain   
 - **Per-opener data.** Every E# variable of the library (all static fields, properties and events, the platform's included, and the
   runtime's state: the text ring of string formatting, the closure counters, the bases a `[LibraryBase]` class opens with `SetBase`) is
   a member of one data block per opener. On m68k and AROS OpenLibrary returns a copy of the library base for each opener, with its data
-  block right after it; the library's code reaches the block through register a4 (AROS: r15), which the entry of each vector sets from
+  block right after it; the library's code reaches the block through register a4 (AROS: r15, i386 esi), which the entry of each vector sets from
   the base (m68k: in a6) and restores for the caller. On AmigaOS 4 the block is the data area of the opener's own main interface, and
   r14 holds it. So two tasks in two openers can run library code at the same time, each with its own data, and the library
   keeps no "current opener" anywhere. One opener's base should be used by one task at a time (as with bsdsocket.library); the memory
@@ -458,7 +462,18 @@ esharp test samples/amigalibdemo --target os4 --docker esharp-amiga-toolchain   
   Only libgcc is linked, for 64-bit maths; it is under the GPL 3 with the GCC Runtime Library Exception, which puts no condition on
   the library's own licence. ramlib on Kickstart 3.1 did not find a RomTag 470 bytes into the code hunk, so the RomTag comes first.
   AROS and AmigaOS 4 (gcc 9 and 11): the loops of our `memcpy` and friends are kept from being turned into calls of themselves.
-- **Not covered yet:** MorphOS and AROS i386 libraries; per-opener data on sdl; callers written in other languages (the `.fd` file is there, but no C
+- **Per-opener data on sdl.** The sdl program is the library's only caller, so the library is not a separate file there: its code is
+  compiled into the game, and the compiler keeps the static fields, properties and events of the library's types apart for each
+  opener (the binding's struct carries `[LibraryBinding(name, types)]`, which tells it which types are the library's). Each
+  `Open` gets its own block of them, with the constant start values copied in and the types' other static initializers and static
+  constructors run in it (not at the start of the game); each call through the binding points the library's code at the caller's
+  block; objects the library's code makes during a call belong to that opener and are freed at its `Close`, after its `[AtExit]`
+  methods run with its data (not at the end of the game). The open count, `FlushUnused` and `ExpungeWhenClosed` behave as on the
+  Amiga. Unlike the Amiga, the platform's and the runtime's state (the text ring, the closure counters) stay the game's, and
+  the game is one thread. When the game links precompiled package binaries, an opener's objects are not freed at its `Close` (the
+  binaries free objects with the C library's `free`, which cannot take the header that marks an opener's object; the data is still per
+  opener). On the host the binding swaps each opener's statics in and out instead; the host never runs `[AtExit]` methods.
+- **Not covered yet:** MorphOS libraries; callers written in other languages (the `.fd` file is there, but no C
   header or proto file is written, and no C program was tried); `esharp addr` for library code (the `.map` and `.o` are written, but it
   was not tried); the hardware test pack. See docs/STATUS.md for what was run.
 
