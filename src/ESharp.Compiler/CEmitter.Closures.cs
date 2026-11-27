@@ -1048,13 +1048,14 @@ internal sealed partial class CEmitter
             ReportOnce(a, $"+= or -= on '{sym.Name}', which is also given a copy of another delegate (a variable, field, parameter or a call that may return one): that copy shares the other owner's reference, which += would drop; give it only lambdas, methods or null, or build the list in a variable of its own");
         if (owns && CopyOutlivesCompound(sym) is { } why)
         {
-            ReportOnce(a, why);
+            if (_copyReported.Add(sym)) ReportOnce(a, why);   // once per variable, not once per += / -= on it
             return false;
         }
         return owns;
     }
 
     private readonly Dictionary<ISymbol, string?> _copyChecks = new(SymbolEqualityComparer.Default);
+    private readonly HashSet<ISymbol> _copyReported = new(SymbolEqualityComparer.Default);
 
     /// <summary>
     /// += and -= release the list the variable pointed at, so a copy of the variable taken before (<c>e = d</c>, <c>Field = d</c>, an
@@ -1082,6 +1083,7 @@ internal sealed partial class CEmitter
             if ((x.IsKind(SyntaxKind.AddAssignmentExpression) || x.IsKind(SyntaxKind.SubtractAssignmentExpression))
                 && x.Parent is not ExpressionStatementSyntax && SymbolEqualityComparer.Default.Equals(Model(x).GetSymbolInfo(x.Left).Symbol, d))
                 copies.Add((x, null));
+        if (BorrowOrOrderProblem(d, fn, nodes, copies) is { } problem) return problem;
         if (copies.Count == 0) return null;
         if (fn == null) fn = OnlyFunctionOf(d, copies);
         const string fix = "; read the copy before the +=, take it after the last +=, or build the list in a variable of its own";
@@ -1125,6 +1127,56 @@ internal sealed partial class CEmitter
                 if (c != null) work.Enqueue(c.Value);
             }
         }
+        return null;
+    }
+
+    private bool IsCompoundOn(SyntaxNode n, ISymbol d) =>
+        n is AssignmentExpressionSyntax x && (x.IsKind(SyntaxKind.AddAssignmentExpression) || x.IsKind(SyntaxKind.SubtractAssignmentExpression))
+        && SymbolEqualityComparer.Default.Equals(Model(x).GetSymbolInfo(x.Left).Symbol, d);
+
+    private bool Reads(SyntaxNode n, ISymbol d) =>
+        n is IdentifierNameSyntax u && u.Identifier.Text == d.Name && SymbolEqualityComparer.Default.Equals(Model(u).GetSymbolInfo(u).Symbol, d);
+
+    /// <summary>
+    /// Two ways a read of d that is not a copy can still outlive the list: d passed to a call (a borrowed parameter) while a += / -= on d
+    /// can run inside that call (from a lambda, a local function or, for a field, another method), and a += / -= whose value is used in
+    /// an expression that also reads d elsewhere (C does not fix the order of that read and the release). Returns the message, or null.
+    /// </summary>
+    private string? BorrowOrOrderProblem(ISymbol d, SyntaxNode? fn, IEnumerable<SyntaxNode> nodes, List<(SyntaxNode At, ISymbol? Dest)> copies)
+    {
+        var sites = nodes.Where(n => IsCompoundOn(n, d)).Cast<AssignmentExpressionSyntax>().ToList();
+        foreach (var x in sites)
+        {
+            if (x.Parent is ExpressionStatementSyntax) continue;
+            SyntaxNode top = x;
+            while (top.Parent is ExpressionSyntax or ArgumentSyntax or BaseArgumentListSyntax) top = top.Parent;
+            foreach (var r in top.DescendantNodes())
+                if (Reads(r, d) && !x.Span.Contains(r.Span))
+                    return $"+= or -= on '{d.Name}' is used as a value in an expression that also reads '{d.Name}': C does not fix the order of that read and the release of the old list, so it could read freed memory; write the += or -= as a statement of its own";
+        }
+        if (sites.Count == 0) return null;
+        var args = new List<(SyntaxNode At, ISymbol? Dest)>();
+        foreach (var r in nodes)
+        {
+            if (!Reads(r, d)) continue;
+            SyntaxNode expr = r.Parent is MemberAccessExpressionSyntax ma && ma.Name == r ? ma : r;
+            var node = ValueSite(expr, out var parent);
+            if (parent is ArgumentSyntax arg && arg.Expression == node && !arg.RefKindKeyword.IsKind(SyntaxKind.RefKeyword) && !arg.RefKindKeyword.IsKind(SyntaxKind.OutKeyword)
+                && arg.Parent?.Parent is InvocationExpressionSyntax or ObjectCreationExpressionSyntax or ImplicitObjectCreationExpressionSyntax
+                && !(arg.Parent?.Parent is ObjectCreationExpressionSyntax oc && Model(oc).GetTypeInfo(oc).Type?.TypeKind == TypeKind.Delegate))
+                args.Add((r, null));
+        }
+        if (args.Count == 0) return null;
+        const string why = "the parameter borrows the list, which that += or -= releases, so using it afterwards in the call would read freed memory; do the += or -= where the call cannot reach it, or pass a delegate of its own";
+        if (fn != null)
+        {
+            foreach (var x in sites)
+                if (Nested(x, fn))
+                    return $"'{d.Name}' is passed to a call, and a += or -= on '{d.Name}' in a lambda or local function (line {x.GetLocation().GetLineSpan().StartLinePosition.Line + 1}) may run during that call: {why}";
+            return null;
+        }
+        if (OnlyFunctionOf(d, copies.Concat(args).ToList()) == null)
+            return $"'{d.Name}' is passed to a call, and a += or -= on '{d.Name}' in another method, lambda or local function may run during that call (this check cannot follow a field, static or property across methods): {why}";
         return null;
     }
 
@@ -1181,10 +1233,14 @@ internal sealed partial class CEmitter
         return false;
     }
 
-    /// <summary>True when <paramref name="s"/> (a += / -= on d) can run after the copy at <paramref name="at"/> was taken.</summary>
+    /// <summary>
+    /// True when <paramref name="s"/> (a += / -= on d) can run after the copy at <paramref name="at"/> was taken. A copy taken inside
+    /// the operand of that += / -= (<c>d -= (e = d)</c>) is taken before the old list is released, so the site follows it.
+    /// </summary>
     private bool MayFollow(SyntaxNode at, SyntaxNode s, SyntaxNode fn, ISymbol d)
     {
         if (Nested(at, fn) || Nested(s, fn)) return true;
+        if (at != s && s.Span.Contains(at.Span)) return true;
         var decl = d is ILocalSymbol ? d.DeclaringSyntaxReferences.FirstOrDefault()?.GetSyntax() : null;
         if (CommonLoop(at, s, fn, decl ?? fn)) return true;
         return s.SpanStart >= at.Span.End && !OnOtherBranch(at, s);

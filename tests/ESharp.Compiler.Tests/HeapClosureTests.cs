@@ -278,6 +278,18 @@ Check(Heap.LiveClosures() == base0, ""still nothing leaks"");
     [InlineData("System.Action d = A; System.Action f = null; System.Action e = true ? (f = d) : null; d += B; e();", "something this check cannot follow")]
     [InlineData("System.Action d = A; System.Action e = (d += A); d += B; e();", "something this check cannot follow")]
     [InlineData("System.Func<System.Action> g = null; System.Action d = A; g = () => d; var e = g(); d += B; e();", "something this check cannot follow")]
+    [InlineData("System.Action d = A; d += B; System.Action e = null; d += (e = d); e();", "something this check cannot follow")]
+    [InlineData("System.Action d = A; d += B; System.Action e = null; d -= (e ??= d); e();", "something this check cannot follow")]
+    [InlineData("System.Action d = A; d += B; d -= (Fld = d); Fld();", "something this check cannot follow")]
+    [InlineData("System.Action d = A; System.Action e = null; d -= (e = d); e();", "something this check cannot follow")]
+    [InlineData("System.Action d = A; d += B; System.Action e = null; d += e = d; e();", "something this check cannot follow")]
+    [InlineData("System.Action d = A; d += B; System.Action e = null; System.Action f = null; d -= (e = (f = d)); f();", "something this check cannot follow")]
+    [InlineData("System.Action d = A; d += B; System.Action e = null; d -= (true ? (e = d) : null); e();", "something this check cannot follow")]
+    [InlineData("System.Action d = A; d += B; System.Action[] arr = new System.Action[1]; d -= (arr[0] = d); arr[0]();", "something this check cannot follow")]
+    [InlineData("System.Action d = A; d += B; System.Action e = null; d -= (d is System.Action f ? (e = f) : null); e();", "something this check cannot follow")]
+    [InlineData("System.Action d = A; d += B; System.Action e = null; d += (e = d) == null ? A : B; e();", "something this check cannot follow")]
+    [InlineData("Fld = A; Fld += B; System.Action e = null; Fld -= (e = Fld); e();", "something this check cannot follow")]
+    [InlineData("System.Action d = A; d += B; bool same = (d += B) == d;", "used as a value in an expression that also reads 'd'")]
     public void A_copy_used_after_compound_assignment_on_the_original_is_ES0099(string body, string message)
     {
         var r = Compile(Program(CopyMembers, body));
@@ -294,6 +306,28 @@ Check(Heap.LiveClosures() == base0, ""still nothing leaks"");
     {
         var r = Compile(Program(CopyMembers + members, body));
         Assert.Contains(r.Diagnostics, d => d.Id == "ES0099" && d.Severity == Microsoft.CodeAnalysis.DiagnosticSeverity.Error);
+    }
+
+    [Theory]
+    [InlineData("static void Use(System.Action a) { Fld += B; a(); }", "Fld = A; Fld += B; Use(Fld);", "'Fld' is passed to a call, and a += or -= on 'Fld' in another method")]
+    [InlineData("static void Use(System.Action a) { Fld -= B; a(); }", "Fld = A; Fld += B; Use(Fld);", "'Fld' is passed to a call, and a += or -= on 'Fld' in another method")]
+    [InlineData("static void Use(in System.Action a) { Fld += B; a(); }", "Fld = A; Fld += B; Use(in Fld);", "'Fld' is passed to a call, and a += or -= on 'Fld' in another method")]
+    [InlineData("class H { public System.Action X; public void Run(System.Action a) { X += B; a(); } }", "var h = new H(); h.X = A; h.X += B; h.Run(h.X);", "'X' is passed to a call")]
+    [InlineData("static void Use(System.Action a, System.Action g) { g(); a(); }", "System.Action d = A; d += B; Use(d, () => { d += B; });", "'d' is passed to a call, and a += or -= on 'd' in a lambda or local function")]
+    [InlineData("static void Call2(System.Action a, System.Action b) { a(); b(); }", "System.Action d = A; d += B; Call2(d, d += B);", "used as a value in an expression that also reads 'd'")]
+    [InlineData("static void Call2(System.Action a, System.Action b) { a(); b(); }", "System.Action d = A; d += B; Call2(d, d -= B);", "used as a value in an expression that also reads 'd'")]
+    public void A_delegate_passed_to_a_call_that_can_release_it_is_ES0099(string members, string body, string message)
+    {
+        var r = Compile(Program(CopyMembers + members, body));
+        var found = r.Diagnostics.Where(d => d.Id == "ES0099" && d.Severity == Microsoft.CodeAnalysis.DiagnosticSeverity.Error && d.GetMessage().Contains(message)).ToList();
+        Assert.Single(found);
+    }
+
+    [Fact]
+    public void The_copy_check_reports_once_per_variable()
+    {
+        var r = Compile(Program(CopyMembers, "System.Action d = A; System.Action e = d; d += B; d += A; d -= B; e();"));
+        Assert.Single(r.Diagnostics, d => d.Id == "ES0099" && d.GetMessage().Contains("is a copy of 'd'"));
     }
 
     [Fact]
@@ -333,6 +367,11 @@ static void M4() { System.Action d = A; d += B; System.Action e = d; bool same =
 static void M5(bool c) { System.Action d = A; System.Action e = null; if (c) { e = d; e(); } else { d += B; } Heap.Free(ref d); }
 static void M7() { System.Action d = A; d += B; if (d is System.Action f) f(); Heap.Free(ref d); }
 static void M8() { for (int i = 0; i < 2; i++) { System.Action d = A; System.Action e = d; e(); d += B; Heap.Free(ref d); } }
+static void M9() { System.Action d = A; d += B; d += d; d(); Heap.Free(ref d); }
+static void M10() { System.Action d = A; d += B; d -= d; if (d == null) log = 7; }
+static void M11() { System.Action d = A; d += B; d += (log == 0 ? d : A); d(); Heap.Free(ref d); }
+static void Use(System.Action a) { a(); }
+static void M12() { System.Action d = A; Use(d); d += B; Use(d); Heap.Free(ref d); }
 ";
         const string body = @"
 int base0 = Heap.LiveClosures();
@@ -344,12 +383,18 @@ log = 0; M5(true); M5(false); Check(log == 1, ""the copy and the += on different
 log = 0; M7(); Check(log == 12, ""a pattern variable taken after the last +="");
 log = 0; Fld = A; Fld += B; System.Action ef = Fld; ef(); Heap.Free(ref Fld); Check(log == 12, ""a field copy taken after the last += in a method nothing calls"");
 log = 0; M8(); Check(log == 11, ""a copy per iteration of a loop that declares both"");
+log = 0; M9(); Check(log == 1212, ""d += d"");
+log = 0; M10(); Check(log == 7, ""d -= d"");
+log = 0; M11(); Check(log == 1212, ""d += (c ? d : A)"");
+log = 0; M12(); Check(log == 112, ""d passed to a call before and after its +="");
+log = 0; Fld2 = A; Fld2 += B; Use(Fld2); Fld2 += B; Use(Fld2); Heap.Free(ref Fld2); Check(log == 12122, ""a field passed to a call in the one method that adds to it"");
 Check(Heap.LiveClosures() == base0, ""nothing leaks"");
 ";
         var (code, output) = Run(members, body);
         Assert.Equal(OkLines("a copy taken after the last +=", "a copy used before the +=", "a copy never used afterwards", "a copy taken after += and not used after -=",
             "the copy and the += on different branches", "a pattern variable taken after the last +=", "a field copy taken after the last += in a method nothing calls",
-            "a copy per iteration of a loop that declares both", "nothing leaks"), output);
+            "a copy per iteration of a loop that declares both", "d += d", "d -= d", "d += (c ? d : A)", "d passed to a call before and after its +=",
+            "a field passed to a call in the one method that adds to it", "nothing leaks"), output);
         Assert.Equal(0, code);
     }
 

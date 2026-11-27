@@ -493,10 +493,13 @@ attributes (`[EntryPoint]`, `[AmigaLib]`, `[ChipRam]`, ...) and a small intrinsi
   does, so using it after `d += x` or `d -= x` (which release the list the copy points at) would be a use after free, and the
   compiler refuses it with ES0099. For a local or parameter the check follows the order: a copy taken after the last `+=`, or
   not used after it, is fine; a copy stored anywhere the compiler cannot follow (a field, an array element, a tuple, an `out`
-  parameter) is refused when a `+=` or `-=` can run after it, and so is one used in a lambda or around a loop that also holds the
+  parameter, the value of an assignment, a copy taken inside the operand of a `+=` on the same variable such as `d -= (e = d)`)
+  is refused when a `+=` or `-=` can run after it, and so is one used in a lambda or around a loop that also holds the
   `+=`. For a field, static or auto-property the check is coarser: it follows the order only in the one method that holds every `+=`/`-=` and
-  every copy, when nothing calls that method (the entry point); otherwise any copy of it makes `+=`/`-=` ES0099. Call `d`
-  itself, or copy it after the last change. A kept variable you add
+  every copy, when nothing calls that method (the entry point); otherwise any copy of it makes `+=`/`-=` ES0099. Passing `d` to
+  a call is refused when a `+=` on it can run inside the call (a lambda or local function that adds to it, or for a field another
+  method), and so is `Call(d, d += x)` (C leaves the order of the two open). Not checked: using a copy after `Heap.Free(ref d)`.
+  Call `d` itself, or copy it after the last change. A kept variable you add
   (`d += h`) keeps its own reference, so free it too. Given to an `[Owned]` parameter or a setter at its last use, `d` hands
   its whole list over, as a lambda local does. `==` and `!=` on delegates compare the function and the closure; multicast
   delegates are equal when their entries are.
