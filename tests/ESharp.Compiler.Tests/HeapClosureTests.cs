@@ -255,6 +255,104 @@ Check(Heap.LiveClosures() == base0, ""still nothing leaks"");
         Assert.Contains(r.Diagnostics, d => d.Id == "ES0099" && d.Severity == Microsoft.CodeAnalysis.DiagnosticSeverity.Error && d.GetMessage().Contains(message));
     }
 
+    private const string CopyMembers = "static int log; static void A() { log = log * 10 + 1; } static void B() { log = log * 10 + 2; } static System.Action Fld; static System.Action Fld2 = A; static void Take(out System.Action o) { o = null; }";
+
+    [Theory]
+    [InlineData("System.Action d = A; System.Action e = d; d += B; e();", "is a copy of 'd'")]
+    [InlineData("System.Action d = A; System.Action e = null; e = d; d -= B; e();", "is a copy of 'd'")]
+    [InlineData("System.Action d = null; d ??= A; System.Action e = null; e ??= d; d += B; e();", "is a copy of 'd'")]
+    [InlineData("System.Action d = A; System.Action e = (System.Action)d; System.Action f = e; d += B; f();", "is a copy of")]
+    [InlineData("System.Action d = A; System.Action e = new System.Action(d); d += B; e();", "is a copy of 'd'")]
+    [InlineData("System.Action d = A; System.Action e = d as System.Action; d += B; e();", "is a copy of 'd'")]
+    [InlineData("System.Action d = A; System.Action e = true ? d : null; d += B; e();", "is a copy of 'd'")]
+    [InlineData("System.Action d = A; System.Action e = d; for (int i = 0; i < 2; i++) { e(); d += B; }", "is a copy of 'd'")]
+    [InlineData("System.Action d = A; System.Action e = d; d += B; System.Action g = () => e(); g();", "is a copy of 'd'")]
+    [InlineData("System.Action d = A; Fld = d; d += B;", "something this check cannot follow")]
+    [InlineData("System.Action d = A; System.Action[] arr = { d }; d += B; arr[0]();", "something this check cannot follow")]
+    [InlineData("System.Action d = A; Take(out Fld); Fld = d; d -= B; Fld();", "something this check cannot follow")]
+    [InlineData("System.Action d = A; if (d is System.Action f) { d += B; f(); }", "something this check cannot follow")]
+    [InlineData("System.Action d = A; Fld = d; for (int i = 0; i < 2; i++) { d += B; }", "something this check cannot follow")]
+    [InlineData("Fld = A; System.Action e = Fld; Fld += B; e();", "is a copy of 'Fld'")]
+    [InlineData("System.Action d = A; System.Action f = null; System.Action e = null; e = f = d; d += B; e();", "something this check cannot follow")]
+    [InlineData("System.Action d = A; System.Action f = null; System.Action e = (f = d); d += B; e();", "something this check cannot follow")]
+    [InlineData("System.Action d = A; System.Action f = null; System.Action e = true ? (f = d) : null; d += B; e();", "something this check cannot follow")]
+    [InlineData("System.Action d = A; System.Action e = (d += A); d += B; e();", "something this check cannot follow")]
+    [InlineData("System.Func<System.Action> g = null; System.Action d = A; g = () => d; var e = g(); d += B; e();", "something this check cannot follow")]
+    public void A_copy_used_after_compound_assignment_on_the_original_is_ES0099(string body, string message)
+    {
+        var r = Compile(Program(CopyMembers, body));
+        Assert.Contains(r.Diagnostics, d => d.Id == "ES0099" && d.Severity == Microsoft.CodeAnalysis.DiagnosticSeverity.Error && d.GetMessage().Contains(message));
+    }
+
+    [Theory]
+    [InlineData("static System.Action Get() => Fld;", "Fld = A; Fld += A; var e = Get(); Fld += B; e();")]
+    [InlineData("static System.Action Get() { return Fld; }", "Fld = A; Fld += A; var e = Get(); Fld += B; e();")]
+    [InlineData("static System.Action Prop => Fld;", "Fld = A; Fld += A; var e = Prop; Fld += B; e();")]
+    [InlineData("static System.Func<int> FI; static System.Func<int> GetI() => FI; static int One() => 1;", "FI = One; FI += One; var e = GetI(); FI += One; e();")]
+    [InlineData("class C { public System.Action X; public System.Action Get() => X; }", "var c = new C(); c.X = A; c.X += A; var e = c.Get(); c.X += B; e();")]
+    public void A_copy_returned_from_a_method_or_property_is_ES0099(string members, string body)
+    {
+        var r = Compile(Program(CopyMembers + members, body));
+        Assert.Contains(r.Diagnostics, d => d.Id == "ES0099" && d.Severity == Microsoft.CodeAnalysis.DiagnosticSeverity.Error);
+    }
+
+    [Fact]
+    public void A_field_copy_is_refused_when_another_method_can_run_the_compound_assignment()
+    {
+        // Two methods add to the field, or the method is called: the order cannot be followed, so every copy is refused.
+        foreach (var (extra, body) in new[]
+        {
+            ("static void Other() { Fld += B; }", "Fld = A; Other(); System.Action e = Fld; e();"),
+            ("static void Other() { Fld += B; System.Action e = Fld; e(); }", "Other();"),
+            ("static void Other() { Fld += B; System.Action e = Fld; e(); } static void Cb(System.Action f) { f(); }", "Cb(Other);"),
+            ("static void Other() { Fld += B; Fld += B; System.Action e = () => { }; e = Fld; } static void Third() { Fld -= B; }", ""),
+        })
+        {
+            var r = Compile(Program(CopyMembers + extra, body));
+            Assert.Contains(r.Diagnostics, d => d.Id == "ES0099" && d.GetMessage().Contains("this check cannot follow a field"));
+        }
+    }
+
+    [Fact]
+    public void A_copy_used_after_compound_assignment_in_a_parameter_is_ES0099()
+    {
+        var r = Compile(Program(CopyMembers + " static void Pp([Owned] System.Action d) { System.Action e = d; d += B; e(); }", ""));
+        Assert.Contains(r.Diagnostics, d => d.Id == "ES0099" && d.GetMessage().Contains("is a copy of 'd'"));
+    }
+
+    [Fact]
+    public void Copies_taken_after_the_last_compound_assignment_or_never_used_afterwards_run_clean()
+    {
+        if (!HasGcc) return;
+        const string members = CopyMembers + @"
+static void C() { log = log * 10 + 3; }
+static void M1() { System.Action d = A; d += B; System.Action e = d; e(); Heap.Free(ref d); }
+static void M2() { System.Action d = A; System.Action e = d; e(); d += B; d += C; Heap.Free(ref d); }
+static void M3() { System.Action d = A; System.Action e = d; e(); d += B; e = null; Heap.Free(ref d); }
+static void M4() { System.Action d = A; d += B; System.Action e = d; bool same = e == d; d -= B; if (!same) log = 99; Heap.Free(ref d); }
+static void M5(bool c) { System.Action d = A; System.Action e = null; if (c) { e = d; e(); } else { d += B; } Heap.Free(ref d); }
+static void M7() { System.Action d = A; d += B; if (d is System.Action f) f(); Heap.Free(ref d); }
+static void M8() { for (int i = 0; i < 2; i++) { System.Action d = A; System.Action e = d; e(); d += B; Heap.Free(ref d); } }
+";
+        const string body = @"
+int base0 = Heap.LiveClosures();
+log = 0; M1(); Check(log == 12, ""a copy taken after the last +="");
+log = 0; M2(); Check(log == 1, ""a copy used before the +="");
+log = 0; M3(); Check(log == 1, ""a copy never used afterwards"");
+log = 0; M4(); Check(log == 0, ""a copy taken after += and not used after -="");
+log = 0; M5(true); M5(false); Check(log == 1, ""the copy and the += on different branches"");
+log = 0; M7(); Check(log == 12, ""a pattern variable taken after the last +="");
+log = 0; Fld = A; Fld += B; System.Action ef = Fld; ef(); Heap.Free(ref Fld); Check(log == 12, ""a field copy taken after the last += in a method nothing calls"");
+log = 0; M8(); Check(log == 11, ""a copy per iteration of a loop that declares both"");
+Check(Heap.LiveClosures() == base0, ""nothing leaks"");
+";
+        var (code, output) = Run(members, body);
+        Assert.Equal(OkLines("a copy taken after the last +=", "a copy used before the +=", "a copy never used afterwards", "a copy taken after += and not used after -=",
+            "the copy and the += on different branches", "a pattern variable taken after the last +=", "a field copy taken after the last += in a method nothing calls",
+            "a copy per iteration of a loop that declares both", "nothing leaks"), output);
+        Assert.Equal(0, code);
+    }
+
     [Theory]
     [InlineData("static void A() { } static void B() { }", "System.Action d = A; System.Action e = d + B; e();", "binary + on delegates")]
     [InlineData("static void A() { } static void B() { }", "System.Action d = A; d += B; System.Action e = d - B; e();", "binary - on delegates")]

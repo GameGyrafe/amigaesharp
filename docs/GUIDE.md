@@ -488,9 +488,15 @@ attributes (`[EntryPoint]`, `[AmigaLib]`, `[ChipRam]`, ...) and a small intrinsi
   releases them all, and `+=` and `-=` drop the reference of the value they replace, so the variable must own it: a variable that is
   ever given a copy of another delegate (`d = e`, `d = Field`, `d ??= e`, a parameter, a call that may return one) or that may be
   written some other way (passed as `ref` or `out`, taken by `ref`, a deconstruction, declared by a pattern or `out var`) is ES0099
-  for `+=`/`-=`, and so is a parameter that is not `[Owned]`. The other direction is not checked: a copy of `d` (`e = d`,
-  `Field = d`) shares d's reference, as any delegate copy in E# does, so do not use it after `d += x` or `d -= x` (that releases
-  the list the copy points at, a use after free); call `d` itself, or copy it again after the change. A kept variable you add
+  for `+=`/`-=`, and so is a parameter that is not `[Owned]`. The other direction is checked too: a copy of `d` (`e = d`,
+  `Field = d`, an initializer, a tuple element, `new Action(d)`, a pattern variable, a returned value, the value of an assignment) shares d's reference, as any delegate copy in E#
+  does, so using it after `d += x` or `d -= x` (which release the list the copy points at) would be a use after free, and the
+  compiler refuses it with ES0099. For a local or parameter the check follows the order: a copy taken after the last `+=`, or
+  not used after it, is fine; a copy stored anywhere the compiler cannot follow (a field, an array element, a tuple, an `out`
+  parameter) is refused when a `+=` or `-=` can run after it, and so is one used in a lambda or around a loop that also holds the
+  `+=`. For a field, static or auto-property the check is coarser: it follows the order only in the one method that holds every `+=`/`-=` and
+  every copy, when nothing calls that method (the entry point); otherwise any copy of it makes `+=`/`-=` ES0099. Call `d`
+  itself, or copy it after the last change. A kept variable you add
   (`d += h`) keeps its own reference, so free it too. Given to an `[Owned]` parameter or a setter at its last use, `d` hands
   its whole list over, as a lambda local does. `==` and `!=` on delegates compare the function and the closure; multicast
   delegates are equal when their entries are.

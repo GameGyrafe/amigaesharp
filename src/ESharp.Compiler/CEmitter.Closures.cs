@@ -1046,7 +1046,215 @@ internal sealed partial class CEmitter
             _ownsValues[sym] = owns = AllValuesFresh(sym);
         if (!owns)
             ReportOnce(a, $"+= or -= on '{sym.Name}', which is also given a copy of another delegate (a variable, field, parameter or a call that may return one): that copy shares the other owner's reference, which += would drop; give it only lambdas, methods or null, or build the list in a variable of its own");
+        if (owns && CopyOutlivesCompound(sym) is { } why)
+        {
+            ReportOnce(a, why);
+            return false;
+        }
         return owns;
+    }
+
+    private readonly Dictionary<ISymbol, string?> _copyChecks = new(SymbolEqualityComparer.Default);
+
+    /// <summary>
+    /// += and -= release the list the variable pointed at, so a copy of the variable taken before (<c>e = d</c>, <c>Field = d</c>, an
+    /// initializer, a tuple element, a pattern variable, <c>new Action(d)</c>) must not be used after them. For a local or parameter the
+    /// check is flow-sensitive: a copy is refused only when a += / -= can run after it was taken and the copy (or a copy of it) is used
+    /// after that += / -= (by position, around a loop, or inside a lambda or local function); copies taken after the last += / -= and
+    /// copies not used afterwards stay allowed. A copy stored anywhere but a local (a field, element, out parameter, tuple) cannot be
+    /// followed, so it is refused when a += / -= can run after it. A field, static or auto-property can be changed from any method, so
+    /// there the check is flow-insensitive: += / -= is refused when the symbol is read as a copy anywhere. Returns the message, or null.
+    /// </summary>
+    private string? CopyOutlivesCompound(ISymbol d)
+    {
+        if (_copyChecks.TryGetValue(d, out var known)) return known;
+        return _copyChecks[d] = CopyOutlivesCompoundCore(d);
+    }
+
+    private string? CopyOutlivesCompoundCore(ISymbol d)
+    {
+        SyntaxNode? fn = null;
+        if (d is ILocalSymbol { RefKind: RefKind.None } or IParameterSymbol { RefKind: RefKind.None }) FrameScopeOf(d, out fn);
+        var nodes = fn != null ? fn.DescendantNodes() : _compilation.SyntaxTrees.SelectMany(t => t.GetRoot().DescendantNodes());
+        var copies = CopiesOf(d, nodes);
+        // A += / -= whose value is used (Action e = (d += A)) hands out a copy of the new list too.
+        foreach (var x in nodes.OfType<AssignmentExpressionSyntax>())
+            if ((x.IsKind(SyntaxKind.AddAssignmentExpression) || x.IsKind(SyntaxKind.SubtractAssignmentExpression))
+                && x.Parent is not ExpressionStatementSyntax && SymbolEqualityComparer.Default.Equals(Model(x).GetSymbolInfo(x.Left).Symbol, d))
+                copies.Add((x, null));
+        if (copies.Count == 0) return null;
+        if (fn == null) fn = OnlyFunctionOf(d, copies);
+        const string fix = "; read the copy before the +=, take it after the last +=, or build the list in a variable of its own";
+        if (fn == null)
+            return $"+= or -= on '{d.Name}', which is also read as a copy elsewhere (an assignment, initializer, tuple element or pattern variable): the copy shares the list's reference, which += or -= releases, so using it afterwards would read freed memory; this check cannot follow a field, static or property across methods, so it refuses every such copy{fix}";
+        if (fn.DescendantNodes().Any(n => n is GotoStatementSyntax or LabeledStatementSyntax))
+            return $"+= or -= on '{d.Name}', which is also read as a copy, in a method with goto or labels (the order of the copy and the += cannot be followed)";
+        var sites = fn.DescendantNodes().OfType<AssignmentExpressionSyntax>().Where(x =>
+            (x.IsKind(SyntaxKind.AddAssignmentExpression) || x.IsKind(SyntaxKind.SubtractAssignmentExpression))
+            && SymbolEqualityComparer.Default.Equals(Model(x).GetSymbolInfo(x.Left).Symbol, d)).ToList();
+        var seen = new HashSet<(ISymbol?, SyntaxNode)>();
+        var work = new Queue<(SyntaxNode At, ISymbol? Dest)>(copies);
+        while (work.Count > 0)
+        {
+            var (at, dest) = work.Dequeue();
+            if (!seen.Add((dest, at))) continue;
+            foreach (var s in sites)
+            {
+                if (!MayFollow(at, s, fn, d)) continue;
+                if (dest == null)
+                    return $"+= or -= on '{d.Name}' can run after '{d.Name}' was copied into something this check cannot follow (a field, element, out parameter, tuple or pattern variable): the copy shares the list's reference, which += or -= releases, so using it afterwards would read freed memory{fix}";
+                FrameScopeOf(dest, out var efn);
+                if (efn != fn)
+                    return $"+= or -= on '{d.Name}' can run after '{d.Name}' was copied into '{dest.Name}' of another function{fix}";
+                var decl = dest.DeclaringSyntaxReferences.FirstOrDefault()?.GetSyntax();
+                foreach (var u in fn.DescendantNodes().OfType<IdentifierNameSyntax>())
+                {
+                    if (u.Identifier.Text != dest.Name || !SymbolEqualityComparer.Default.Equals(Model(u).GetSymbolInfo(u).Symbol, dest)) continue;
+                    var node = ValueSite(u, out var parent);
+                    if (parent is AssignmentExpressionSyntax { RawKind: (int)SyntaxKind.SimpleAssignmentExpression } w && w.Left == node) continue;   // only written
+                    if (UsedAfter(u, s, fn, decl))
+                        return $"'{dest.Name}' is a copy of '{d.Name}' and is used after '{d.Name}' += or -= (line {s.GetLocation().GetLineSpan().StartLinePosition.Line + 1}), which releases the list the copy points at: a use after free{fix}";
+                }
+            }
+            if (dest == null) continue;
+            // A copy of the copy: it dies with the same list.
+            foreach (var u in fn.DescendantNodes().OfType<IdentifierNameSyntax>())
+            {
+                if (u.Identifier.Text != dest.Name || !SymbolEqualityComparer.Default.Equals(Model(u).GetSymbolInfo(u).Symbol, dest)) continue;
+                var c = CopyAt(u);
+                if (c != null) work.Enqueue(c.Value);
+            }
+        }
+        return null;
+    }
+
+    /// <summary>
+    /// For a field, static or property: the one method that holds every += / -= on it and every copy of it, when nothing can run in
+    /// between from outside: a plain method with no attributes (but [EntryPoint]) that nothing calls (the entry point, say), so it cannot be re-entered
+    /// through a call, a delegate or an override. Null otherwise (the check is then flow-insensitive).
+    /// </summary>
+    private SyntaxNode? OnlyFunctionOf(ISymbol d, List<(SyntaxNode At, ISymbol? Dest)> copies)
+    {
+        SyntaxNode? only = null;
+        foreach (var tree in _compilation.SyntaxTrees)
+            foreach (var x in tree.GetRoot().DescendantNodes().OfType<AssignmentExpressionSyntax>())
+            {
+                if (!(x.IsKind(SyntaxKind.AddAssignmentExpression) || x.IsKind(SyntaxKind.SubtractAssignmentExpression))) continue;
+                if (!SymbolEqualityComparer.Default.Equals(Model(x).GetSymbolInfo(x.Left).Symbol, d)) continue;
+                var f = FunctionOf(x);
+                if (f is not MethodDeclarationSyntax || only != null && only != f) return null;
+                only = f;
+            }
+        if (only == null) return null;
+        foreach (var (at, _) in copies) if (FunctionOf(at) != only) return null;
+        var m = Model(only).GetDeclaredSymbol(only) as IMethodSymbol;
+        if (m == null || m.GetAttributes().Any(at => at.AttributeClass?.Name != "EntryPointAttribute") || m.IsVirtual || m.IsOverride || m.IsAbstract || m.ExplicitInterfaceImplementations.Length > 0) return null;
+        if (m.ContainingType.AllInterfaces.Any(i => i.GetMembers().Any(im => SymbolEqualityComparer.Default.Equals(m.ContainingType.FindImplementationForInterfaceMember(im), m)))) return null;
+        foreach (var tree in _compilation.SyntaxTrees)
+            foreach (var id in tree.GetRoot().DescendantNodes().OfType<SimpleNameSyntax>())
+                if (id.Identifier.Text == m.Name && SymbolEqualityComparer.Default.Equals(Model(id).GetSymbolInfo(id).Symbol?.OriginalDefinition, m.OriginalDefinition)) return null;
+        return only;
+    }
+
+    private bool Nested(SyntaxNode n, SyntaxNode fn)
+    {
+        for (var anc = n.Parent; anc != null && anc != fn; anc = anc.Parent)
+            if (IsFunctionNode(anc)) return true;
+        return false;
+    }
+
+    private static bool CommonLoop(SyntaxNode a, SyntaxNode b, SyntaxNode fn, SyntaxNode? declOutside)
+    {
+        for (var anc = a.Parent; anc != null && anc != fn; anc = anc.Parent)
+        {
+            var body = anc switch
+            {
+                WhileStatementSyntax w => w.Statement,
+                DoStatementSyntax dd => dd.Statement,
+                ForStatementSyntax f => f.Statement,
+                CommonForEachStatementSyntax fe => fe.Statement,
+                _ => null,
+            };
+            if (body == null || !anc.Span.Contains(b.Span)) continue;
+            if (declOutside == null || !body.Span.Contains(declOutside.Span)) return true;   // the variable outlives one iteration
+        }
+        return false;
+    }
+
+    /// <summary>True when <paramref name="s"/> (a += / -= on d) can run after the copy at <paramref name="at"/> was taken.</summary>
+    private bool MayFollow(SyntaxNode at, SyntaxNode s, SyntaxNode fn, ISymbol d)
+    {
+        if (Nested(at, fn) || Nested(s, fn)) return true;
+        var decl = d is ILocalSymbol ? d.DeclaringSyntaxReferences.FirstOrDefault()?.GetSyntax() : null;
+        if (CommonLoop(at, s, fn, decl ?? fn)) return true;
+        return s.SpanStart >= at.Span.End && !OnOtherBranch(at, s);
+    }
+
+    /// <summary>True when the use <paramref name="u"/> of a copy can run after <paramref name="s"/>.</summary>
+    private bool UsedAfter(SyntaxNode u, SyntaxNode s, SyntaxNode fn, SyntaxNode? aliasDecl)
+    {
+        if (Nested(u, fn) || Nested(s, fn)) return true;
+        if (CommonLoop(u, s, fn, aliasDecl ?? fn)) return true;
+        return u.SpanStart >= s.SpanStart && !OnOtherBranch(u, s);
+    }
+
+    /// <summary>The places where the delegate variable <paramref name="d"/> is read and the copy lives on in a variable, field or other store.</summary>
+    private List<(SyntaxNode At, ISymbol? Dest)> CopiesOf(ISymbol d, IEnumerable<SyntaxNode> nodes)
+    {
+        var result = new List<(SyntaxNode, ISymbol?)>();
+        foreach (var u in nodes.OfType<IdentifierNameSyntax>())
+        {
+            if (u.Identifier.Text != d.Name || !SymbolEqualityComparer.Default.Equals(Model(u).GetSymbolInfo(u).Symbol, d)) continue;
+            if (CopyAt(u) is { } c) result.Add(c);
+        }
+        return result;
+    }
+
+    /// <summary>Whether the read of a delegate variable at <paramref name="u"/> copies it: the node and the local it lands in (null: somewhere else).</summary>
+    private (SyntaxNode At, ISymbol? Dest)? CopyAt(IdentifierNameSyntax u)
+    {
+        SyntaxNode expr = u.Parent is MemberAccessExpressionSyntax ma && ma.Name == u ? ma : u;
+        while (true)
+        {
+            var node = ValueSite(expr, out var parent);
+            switch (parent)
+            {
+                case ArgumentSyntax { Parent: BaseArgumentListSyntax { Parent: ObjectCreationExpressionSyntax oc } } arg
+                    when arg.Expression == node && Model(oc).GetTypeInfo(oc).Type?.TypeKind == TypeKind.Delegate:
+                    expr = oc;   // new Action(d) is a copy
+                    continue;
+                case BinaryExpressionSyntax { RawKind: (int)SyntaxKind.AsExpression } asx when asx.Left == node:
+                    expr = asx;
+                    continue;
+                case ArgumentSyntax { Parent: TupleExpressionSyntax }:
+                case InitializerExpressionSyntax:
+                case ReturnStatementSyntax:
+                case ArrowExpressionClauseSyntax:
+                case YieldStatementSyntax:
+                    return (u, null);
+                case SimpleLambdaExpressionSyntax sl when sl.Body == node:
+                case ParenthesizedLambdaExpressionSyntax pl when pl.Body == node:
+                    return (u, null);
+                case IsPatternExpressionSyntax ip when ip.Expression == node && ip.Pattern.DescendantNodesAndSelf().OfType<SingleVariableDesignationSyntax>().Any():
+                    return (u, null);
+                case SwitchStatementSyntax sw when sw.Expression == node && sw.Sections.Any(sec => sec.Labels.Any(l => l.DescendantNodes().OfType<SingleVariableDesignationSyntax>().Any())):
+                case SwitchExpressionSyntax se when se.GoverningExpression == node && se.Arms.Any(arm => arm.Pattern.DescendantNodesAndSelf().OfType<SingleVariableDesignationSyntax>().Any()):
+                    return (u, null);
+                case EqualsValueClauseSyntax { Parent: VariableDeclaratorSyntax vd }:
+                    return (u, Model(vd).GetDeclaredSymbol(vd) is ILocalSymbol { RefKind: RefKind.None } l && vd.Parent?.Parent is LocalDeclarationStatementSyntax ? l : null);
+                case EqualsValueClauseSyntax:
+                    return (u, null);
+                case AssignmentExpressionSyntax a when a.Right == node && (a.IsKind(SyntaxKind.SimpleAssignmentExpression) || a.IsKind(SyntaxKind.CoalesceAssignmentExpression)):
+                {
+                    var left = Model(a).GetSymbolInfo(a.Left).Symbol;
+                    if (left is IPropertySymbol ps && IsHandoverSetter(ps)) return null;   // the setter takes its own reference
+                    if (a.Parent is not ExpressionStatementSyntax) return (u, null);   // the value of the assignment is used: not followed
+                    return (u, left is ILocalSymbol { RefKind: RefKind.None } or IParameterSymbol { RefKind: RefKind.None } ? left : null);
+                }
+                default:
+                    return null;
+            }
+        }
     }
 
     /// <summary>
