@@ -84,7 +84,11 @@ per-opener data on sdl are not done (ES0134 for a library build for MorphOS, ARO
     `Open` is OpenLibrary plus GetInterface(`main`, 1), `Base` is that interface, every call goes through its function table with it as
     Self, and `Close` is DropInterface (the clone and its data go in its Expunge) plus CloseLibrary. Found on the way: DeleteInterface
     calls the interface's Expunge, so our Expunge clears the clone flags before it calls DeleteInterface (it recursed until the stack ran
-    out before). The library links no libauto: it opens dos (and graphics, intuition when used) and their main interfaces itself.
+    out before). For the same reason a clone gets IFLF_CLONED and IFLF_CLONE_EXPUNGE only once its data is set up: a clone whose data
+    area is too small, or whose memory pool cannot be made, is deleted without tearing down data that was never made (review of #169;
+    the host test `The_AmigaOS_4_library_clones_and_expunges_its_main_interface_as_exec_would_call_it` runs the AmigaOS 4 C on x86-64
+    against a stand-in for exec's interface calls, both failure paths included). The library links no libauto: it opens dos (and graphics, intuition when used) and their main
+    interfaces itself.
   - Only the facts (macro names, struct and tag names, vector order) were taken from the AROS and AmigaOS 4 headers in the toolchain
     image; no SDK or autodoc text is in the repository.
   - **Verified (Linux x86-64):** `esharp test samples/amigalibdemo --target aros --docker esharp-amiga-toolchain` (hosted AROS x86-64 in

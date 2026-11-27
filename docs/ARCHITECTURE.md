@@ -275,7 +275,8 @@ A project with `EsOutputType` `AmigaLibrary` (issue #154; m68k AmigaOS 3.x, AROS
   addresses, init with `AROS_UFH3`, open, close, expunge and the entries with the `AROS_LH` macros, LVO 5 for vector -30, `es_d` in
   r15, the same copy-the-base-per-opener scheme) and `EmitOs4Library` (under `#if defined(__amigaos4__)`: a Resident with RTF_NATIVE |
   RTF_AUTOINIT and CreateLibrary tags, the manager interface `__library` and the main interface `main` marked IFLF_PRIVATE, whose
-  Clone makes each opener's interface with the opener's data in its MIT_DataSize area and whose Expunge frees it; entries take the
+  Clone makes each opener's interface with the opener's data in its MIT_DataSize area (the clone flags set only after the data is set
+  up, as DeleteInterface calls Expunge) and whose Expunge frees it; entries take the
   interface as Self, `es_d` in r14; `_start` returns -1; no libauto, so the shared ROM libraries' interfaces are got at init).
   `AmigaLibraries.TargetProblem` turns a library build for MorphOS, AROS i386 or sdl into ES0134.
 - **The program side:** a `[LibraryCall(offset, registers)]` extern (`EmitLibraryCall`) is a C function that loads the arguments into
