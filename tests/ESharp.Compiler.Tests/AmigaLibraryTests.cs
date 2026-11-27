@@ -219,11 +219,11 @@ int main(void)
         EsCompiler.Compile(new[] { new SourceFile("lib.cs", source) }, new CompileOptions { Defines = target.Defines, TargetName = target.Name, AmigaLibrary = Options });
 
     [Fact]
-    public void A_library_builds_for_m68k_AROS_x86_64_and_AmigaOS_4_and_says_why_not_elsewhere()
+    public void A_library_builds_for_m68k_AROS_and_AmigaOS_4_and_says_why_not_elsewhere()
     {
-        foreach (var t in new[] { Targets.M68k, Targets.Aros, Targets.Os4 })
+        foreach (var t in new[] { Targets.M68k, Targets.Aros, Targets.ArosI386, Targets.Os4 })
             Assert.True(CompileLibraryFor(t).Success, t.Name + ": " + string.Join("\n", CompileLibraryFor(t).Diagnostics));
-        foreach (var (t, why) in new[] { (Targets.ArosI386, "AROS i386"), (Targets.MorphOs, "MorphOS"), (Targets.Sdl, "sdl has no shared libraries") })
+        foreach (var (t, why) in new[] { (Targets.MorphOs, "MorphOS"), (Targets.Sdl, "sdl has no shared libraries") })
         {
             var r = CompileLibraryFor(t);
             Assert.False(r.Success);
@@ -250,6 +250,27 @@ int main(void)
         var m68k = CompileLibraryFor(Targets.M68k).C!;
         Assert.DoesNotContain("r15", m68k);
         Assert.DoesNotContain("AROS_LH", m68k);
+        Assert.DoesNotContain("__i386__", c);   // nor the x86-64 C by i386's
+    }
+
+    [Fact]
+    public void The_AROS_i386_library_C_is_the_AROS_library_with_esi_for_the_openers_data()
+    {
+        var r = CompileLibraryFor(Targets.ArosI386);
+        Assert.True(r.Success, string.Join("\n", r.Diagnostics));
+        var c = r.C!;
+        // The same AROS_LH entries (the i386 SDK's macros take the base in eax, regparm(1)); the opener's data in esi, callee-saved there.
+        Assert.Contains("#elif defined(__AROS__) && defined(__i386__)\n", c);
+        Assert.Contains("register struct es_rt *es_d __asm__(\"esi\");", c);
+        Assert.DoesNotContain("r15", c);
+        Assert.DoesNotContain("__x86_64__", c);
+        Assert.Contains("#if defined(__AROS__) && defined(__i386__)\n/* ---- The library on AROS:", c);
+        Assert.Contains("static AROS_LH2(void, es_lib_entry_Move, AROS_LHA(uintptr_t, p, A0), AROS_LHA(uintptr_t, dx, D0), struct es_lib_head *, es_base, 8, EsLib)", c);
+        Assert.Contains("static const struct Resident es_lib_romtag __attribute__((used)) =", c);
+        // Apart from the guard and the register, the i386 C is the x86-64 C.
+        static string Neutral(string text) => text.Replace("__i386__", "CPU").Replace("__x86_64__", "CPU").Replace("\"esi\"", "REG").Replace("\"r15\"", "REG");
+        static string[] Lines(string text) => Neutral(text).Split('\n').Where(l => !l.StartsWith("/* r15", StringComparison.Ordinal) && !l.StartsWith("/* esi", StringComparison.Ordinal)).ToArray();
+        Assert.Equal(Lines(CompileLibraryFor(Targets.Aros).C!), Lines(c));
     }
 
     [Fact]
@@ -712,6 +733,109 @@ public static unsafe class P
         Assert.Equal("es_AslBase", CEmitter.DeclaredName("struct Library *es_AslBase"));
         Assert.Equal("Es_T_X_f", CEmitter.DeclaredName("volatile int32_t Es_T_X_f[4] = {0}"));
     }
+
+    /// <summary>A library class whose [AtExit] method reports its opener's value, and a static event: per opener on sdl too.</summary>
+    private const string ByeLib = @"
+public static class Bye
+{
+    private static int _n = 3;
+    private static int _closed;
+    private static Box _made = new Box();
+    public static event System.Action Poked;
+
+    [LibraryFunction] public static int Touch(int k) { _n += k; _made.V++; Poked += Count; Poked += Count; return _n; }
+    [LibraryFunction] public static int Pokes() { Poked?.Invoke(); return _made.V; }
+    [LibraryFunction] public static int Swap() { Heap.Free(ref _made); _made = new Box(); _made.V = 50; return _made.V; }
+    [LibraryFunction] public static int Closed() { return _closed; }
+    private static void Count() { _made.V += 100; }
+
+    [AtExit]
+    public static void Done()
+    {
+        _closed++;
+        Dos.PutStr(""bye "");
+        Dos.PutInt(_n);
+        Dos.PutStr("" "");
+        Dos.PutInt(_made.V);
+        Dos.PutStr(""\n"");
+    }
+}
+";
+
+    [Fact]
+    public void On_sdl_each_opener_has_its_own_statics_static_constructor_objects_and_AtExit()
+    {
+        var lib = CompileLibrary(Lib + ByeLib);
+        Assert.True(lib.Success, string.Join("\n", lib.Diagnostics));
+        var binding = lib.AmigaLibrary!.Binding;
+        Assert.Contains("[LibraryBinding(\"test.library\", \"T.Box;T.Bye;T.Counter;T.Point\")]", binding);
+        const string program = @"using ESharp;
+using ESharp.Platform;
+using T;
+public static unsafe class P
+{
+    private static void Show(string what, int v) { Dos.PutStr(what); Dos.PutStr("" ""); Dos.PutInt(v); Dos.PutStr(""\n""); }
+
+    [EntryPoint]
+    public static int Main()
+    {
+        var a = TestLibrary.Open(3);
+        var b = TestLibrary.Open(3);
+        Show(""count"", TestLibrary.OpenCount());
+        Show(""a add"", a.Add(5));
+        Show(""a add"", a.Add(1));
+        Show(""b add"", b.Add(2));
+        Show(""a boxed"", a.Boxed());
+        Show(""b boxed"", b.Boxed());
+        Show(""a table"", a.Table(1));
+        Show(""a table"", a.Table(1));
+        Show(""b table"", b.Table(1));
+        Point p;
+        p.X = 3;
+        p.Y = 4;
+        a.Move(&p, 10);
+        Show(""point"", p.X);
+        Show(""a made"", a.MadeCount());   // Made 8 + the static constructor's 42, in a's data only
+        Show(""b made"", b.MadeCount());
+        Show(""a touch"", a.Touch(1));
+        Show(""b touch"", b.Touch(10));
+        Show(""a pokes"", a.Pokes());   // a's event has a's two handlers: 1 + 200
+        Show(""b pokes"", b.Pokes());
+        Show(""b swap"", b.Swap());
+        a.Close();                     // a's [AtExit] with a's data; a's objects go
+        Show(""count"", TestLibrary.OpenCount());
+        Show(""b closed"", b.Closed());
+        Show(""b add"", b.Add(1));
+        var c = TestLibrary.Open(3);
+        Show(""c add"", c.Add(0));     // a new opener starts fresh
+        Show(""c made"", c.MadeCount());
+        c.Close();
+        b.Close();
+        Show(""count"", TestLibrary.OpenCount());
+        return 0;
+    }
+}";
+        var sdl = EsCompiler.Compile(new[] { new SourceFile("binding.cs", binding), new SourceFile("lib.cs", Lib + ByeLib), new SourceFile("p.cs", program) },
+            new CompileOptions { Defines = Targets.Sdl.Defines, TargetName = "sdl" });
+        Assert.True(sdl.Success, string.Join("\n", sdl.Diagnostics));
+        var c = sdl.C!;
+        Assert.Contains("#define Es_T_Counter__value (es_ol_0_d->Es_T_Counter__value)", c);
+        Assert.DoesNotContain("static int32_t Es_T_Counter__value = 10;", c);   // not a C global
+        var main = c[c.IndexOf("int main(void)", StringComparison.Ordinal)..];
+        var make = c[c.IndexOf("static void *es_ol_0_make(void)", StringComparison.Ordinal)..];
+        Assert.Contains("Es_T_Counter_cctor();", make[..make.IndexOf("\n}", StringComparison.Ordinal)]);
+        Assert.DoesNotContain("Es_T_Counter_cctor", main);   // the static constructor runs per opener, not at start-up
+        Assert.Contains("Es_T_Bye_Done();", c);
+        Assert.DoesNotContain("Es_T_Bye_Done", main);        // the [AtExit] method runs at each opener's Close, not after Main
+        if (!HasGcc) return;
+        // AddressSanitizer and LeakSanitizer: each opener's objects (the boxes, the event's handler list, the replaced box) are freed at its Close.
+        var (code, output) = HasSanitizers ? RunSanitized(c) : RunWithHostGcc(c);
+        Assert.True(code == 0, output);
+        Assert.Equal(string.Join("\n",
+            "count 2", "a add 15", "a add 16", "b add 12", "a boxed 2", "b boxed 1", "a table 12", "a table 22", "b table 12", "point 13",
+            "a made 50", "b made 49", "a touch 4", "b touch 13", "a pokes 201", "b pokes 201", "b swap 50",
+            "bye 4 201", "count 1", "b closed 0", "b add 13", "c add 10", "c made 49", "bye 3 0", "bye 13 50", "count 0", ""), output.Replace("\r\n", "\n"));
+    }
 }
 
 /// <summary>The host side of the bindings: each opener of a library keeps its own copy of the library types' static fields.</summary>
@@ -763,6 +887,7 @@ public unsafe class SharedLibraryHostTests
         ESharp.Platform.SharedLibrary.Leave(c);
         ESharp.Platform.SharedLibrary.Close(c);
     }
+
 }
 
 /// <summary>esharp build and test with samples/amigalib (EsOutputType AmigaLibrary) and samples/amigalibdemo (a program that names it in esharp.include).</summary>
@@ -822,11 +947,8 @@ public class AmigaLibraryCliTests
             Assert.Contains("es_lib_romtag", File.ReadAllText(Path.Combine(lib, "amigalib.c")));
             text = InProcess(() => ESharp.Cli.Program.Build(new[] { Path.Combine(Samples, "amigalib"), "--target", "sdl", "--emit-only", "-o", lib }, out _), out exit);
             Assert.NotEqual(0, exit);
-            Assert.Contains("builds for --target m68k, aros (x86-64) and os4, not sdl", text);
-            text = InProcess(() => ESharp.Cli.Program.Build(new[] { Path.Combine(Samples, "amigalib"), "--target", "aros-i386", "--emit-only", "-o", lib }, out _), out exit);
-            Assert.NotEqual(0, exit);
-            Assert.Contains("not aros-i386 so far", text);
-            foreach (var t in new[] { "aros", "os4" })
+            Assert.Contains("builds for --target m68k, aros, aros-i386 and os4, not sdl", text);
+            foreach (var t in new[] { "aros", "aros-i386", "os4" })
             {
                 text = InProcess(() => ESharp.Cli.Program.Build(new[] { Path.Combine(Samples, "amigalib"), "--target", t, "--emit-only", "-o", Path.Combine(work, "lib-" + t) }, out _), out exit);
                 Assert.True(exit == 0, text);
@@ -847,11 +969,19 @@ public class AmigaLibraryCliTests
             c = File.ReadAllText(Path.Combine(sdl, "amigalibdemo.c"));
             Assert.Contains("Es_AmigaLibSample_Counter_Add(int32_t step)", c);
             Assert.DoesNotContain("jsr", c);
+            // Each opener has its own copy of the library's statics on sdl (CEmitter.Openers.cs).
+            Assert.Contains("#define Es_AmigaLibSample_Counter__value (es_ol_0_d->Es_AmigaLibSample_Counter__value)", c);
+            Assert.Contains("es_ol_same(name, \"amigalib.library\")", c);
 
             // AROS and AmigaOS 4 call the .library too: AROS through its jump table, AmigaOS 4 through the opener's main interface.
             text = InProcess(() => ESharp.Cli.Program.Build(new[] { Path.Combine(Samples, "amigalibdemo"), "--target", "aros", "--emit-only", "-o", Path.Combine(work, "aros") }, out _), out exit);
             Assert.True(exit == 0, text);
             c = File.ReadAllText(Path.Combine(work, "aros", "amigalibdemo.c"));
+            Assert.Contains("AROS_LC1(uintptr_t, es_lib_vector, AROS_LCA(uintptr_t, (uintptr_t)(step), D0), void *, libraryBase, 9, EsLib)", c);
+            Assert.DoesNotContain("Es_AmigaLibSample_Counter_Add(int32_t step)", c);
+            text = InProcess(() => ESharp.Cli.Program.Build(new[] { Path.Combine(Samples, "amigalibdemo"), "--target", "aros-i386", "--emit-only", "-o", Path.Combine(work, "aros-i386") }, out _), out exit);
+            Assert.True(exit == 0, text);
+            c = File.ReadAllText(Path.Combine(work, "aros-i386", "amigalibdemo.c"));
             Assert.Contains("AROS_LC1(uintptr_t, es_lib_vector, AROS_LCA(uintptr_t, (uintptr_t)(step), D0), void *, libraryBase, 9, EsLib)", c);
             Assert.DoesNotContain("Es_AmigaLibSample_Counter_Add(int32_t step)", c);
             text = InProcess(() => ESharp.Cli.Program.Build(new[] { Path.Combine(Samples, "amigalibdemo"), "--target", "os4", "--emit-only", "-o", Path.Combine(work, "os4") }, out _), out exit);

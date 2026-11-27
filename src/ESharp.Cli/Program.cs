@@ -521,10 +521,10 @@ Targets:
         }
         catch (InvalidDataException e) { return Fail(e.Message); }
         if (libraryProject != null && !AmigaLibraryStep.BuildsFor(target))
-            return Fail($"{projectDir} is an Amiga shared library (EsOutputType AmigaLibrary, {libraryProject.Options.Name}): it builds for --target m68k, aros (x86-64) " +
+            return Fail($"{projectDir} is an Amiga shared library (EsOutputType AmigaLibrary, {libraryProject.Options.Name}): it builds for --target m68k, aros, aros-i386 " +
                         $"and os4, not {target.Name} so far; a program that names its folder in esharp.include also builds for the host and sdl, with the library's code compiled in");
         if (libraryRefs.Count > 0 && target.IsAmiga && !AmigaLibraryStep.BuildsFor(target))
-            return Fail($"this program uses the E# Amiga library {string.Join(", ", libraryRefs.Select(r => r.Options.Name))} (esharp.include), which builds for m68k, aros (x86-64) " +
+            return Fail($"this program uses the E# Amiga library {string.Join(", ", libraryRefs.Select(r => r.Options.Name))} (esharp.include), which builds for m68k, aros, aros-i386 " +
                         $"and os4, not {target.Name} so far; build the program for one of those, sdl or the host");
         var bindingDir = Path.Combine(outDir ?? Path.Combine(projectDir, "obj", target.Name), "esharp-amigalib");
         foreach (var r in libraryRefs)

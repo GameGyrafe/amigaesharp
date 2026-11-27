@@ -12,7 +12,7 @@ namespace ESharp.Platform;
 /// AROS); on AmigaOS 4 an opener is the library's main interface, which the library clones for each opener, and the calls go through
 /// it. On the host and on sdl the library's code is compiled into the program and the binding calls it directly; the host then keeps
 /// each opener's static fields apart (Enter and Leave swap them in and out around a call), so the program sees what it sees on the
-/// Amiga. sdl does not yet: there every opener shares one copy of the library's data.
+/// Amiga. sdl does the same in C: there each opener has its own copy of the library's static data (CEmitter.Openers.cs).
 /// </summary>
 public static unsafe class SharedLibrary
 {
@@ -77,11 +77,12 @@ public static unsafe class SharedLibrary
         if (p != null) Exec.FreeVec(p);
     }
 #elif SDL
-    // sdl: the library's code is part of the program; openers are only counted (no per-opener data yet).
+    // sdl: the library's code is part of the program. Each opener has its own copy of the library's static data, set up and torn down
+    // by the compiler's es_ol_* functions (CEmitter.Openers.cs, from the binding's [LibraryBinding]); Enter and Leave around each call
+    // make the library's code use the calling opener's copy. The open count is kept here, per library name.
     private static string[] _names = new string[16];
     private static int[] _counts = new int[16];
     private static bool[] _expungeAsked = new bool[16];
-    private static int _serial;
 
     public static void* Open(string name, int version, int libraryVersion, string types)
     {
@@ -91,24 +92,32 @@ public static unsafe class SharedLibrary
         {
             if (_names[i] != null && _names[i] == name) { slot = i; break; }
         }
+        bool loaded = false;
         if (slot < 0)
         {
             for (int i = 0; i < 16; i++)
             {
-                if (_names[i] == null) { _names[i] = name; slot = i; break; }
+                if (_names[i] == null) { _names[i] = name; slot = i; loaded = true; break; }
             }
         }
         if (slot < 0) return null;
+        // Counted first, as the Amiga library's Open does; the opener's data is set up (its static constructors run) in OpenerOpen.
         _counts[slot]++;
         _expungeAsked[slot] = false;
-        _serial++;
-        return (void*)(nint)(((slot + 1) << 16) | (_serial & 0xFFFF));
+        void* opener = OpenerOpen(name, slot);
+        if (opener == null)
+        {
+            _counts[slot]--;
+            if (loaded) _names[slot] = null;   // as if it had not loaded (no memory)
+        }
+        return opener;
     }
 
     public static void Close(void* library)
     {
         if (library == null) return;
-        int slot = (int)(((nint)library >> 16) & 0xFF) - 1;
+        int slot = OpenerSlot(library);
+        OpenerClose(library);   // the opener's [AtExit] methods, its objects and its data
         if (slot < 0 || slot >= 16 || _counts[slot] == 0) return;
         _counts[slot]--;
         if (_counts[slot] == 0 && _expungeAsked[slot]) { _names[slot] = null; _expungeAsked[slot] = false; }
@@ -123,9 +132,11 @@ public static unsafe class SharedLibrary
         return -1;
     }
 
-    public static void Enter(void* library) { }
+    /// <summary>Before a call into the library: its code uses this opener's data, and the objects it makes are this opener's.</summary>
+    public static void Enter(void* library) { OpenerEnter(library); }
 
-    public static void Leave(void* library) { }
+    /// <summary>After the call: no opener's data is in use.</summary>
+    public static void Leave(void* library) { OpenerLeave(library); }
 
     public static bool ExpungeWhenClosed(string name)
     {
@@ -144,6 +155,21 @@ public static unsafe class SharedLibrary
             if (_names[i] != null && _counts[i] == 0) _names[i] = null;
         }
     }
+
+    [Native("es_ol_open")]
+    private static extern void* OpenerOpen(string name, int slot);
+
+    [Native("es_ol_slot")]
+    private static extern int OpenerSlot(void* opener);
+
+    [Native("es_ol_close")]
+    private static extern void OpenerClose(void* opener);
+
+    [Native("es_ol_enter")]
+    private static extern void OpenerEnter(void* opener);
+
+    [Native("es_ol_leave")]
+    private static extern void OpenerLeave(void* opener);
 #else
     // The host: each opener has its own copy of the static fields of the library's types (as on the Amiga, where each opener has its own
     // data block). The first Open of a library takes the fields' values after the types' static constructors as the start values, and every

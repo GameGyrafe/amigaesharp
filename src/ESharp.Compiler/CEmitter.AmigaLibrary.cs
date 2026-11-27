@@ -17,7 +17,7 @@ namespace ESharp.Compiler;
 /// block, the opener's data, instead of a C global. Two structs make the block: <c>struct es_rt</c> (the runtime's, defined right after the
 /// includes, so the runtime's helpers can use it) and <c>struct es_user</c> (the program's static fields, after the types they use), at
 /// <c>ES_RT_SIZE</c> in the block. Each name becomes a macro for its member through <c>es_d</c>, the opener's block, so the rest of the
-/// C is the same as a program's. On m68k <c>es_d</c> is a global register variable in a4 (no other code in the file uses a4; AROS x86-64:
+/// C is the same as a program's. On m68k <c>es_d</c> is a global register variable in a4 (no other code in the file uses a4; AROS i386: esi, AROS x86-64:
 /// r15, AmigaOS 4: r14); each library function's entry saves the caller's register, points it at the data block of the opener whose base
 /// (m68k: in a6; AmigaOS 4: whose interface) it was called with, and restores it.
 /// So two tasks in two openers run at the same time with their own data, and the library never needs a global "current opener".
@@ -38,10 +38,10 @@ internal sealed partial class CEmitter
     private bool LibMode => AmigaLibrary != null;
 
     /// <summary>
-    /// Which kind of .library the C is for: "aros" (AROS x86-64: AROS_LH entries, a C Resident), "os4" (AmigaOS 4: a manager and a main
+    /// Which kind of .library the C is for: "aros" (AROS x86-64 and i386: AROS_LH entries, a C Resident), "os4" (AmigaOS 4: a manager and a main
     /// interface, one clone of the main interface per opener) or "m68k" (AmigaOS 3.x, and a build for no target: the host tests).
     /// </summary>
-    private string LibOs => IsDefined("AROS") && IsDefined("X86_64") ? "aros" : IsDefined("AMIGAOS4") ? "os4" : "m68k";
+    private string LibOs => IsDefined("AROS") ? "aros" : IsDefined("AMIGAOS4") ? "os4" : "m68k";
 
     /// <summary>Stands for the runtime's per-opener struct until the whole preamble (and so every runtime variable) is known.</summary>
     private const string LibRtMarker = "/* ES_LIB_RT */\n";
@@ -51,7 +51,7 @@ internal sealed partial class CEmitter
     private readonly List<(string Name, string Template)> _libInit = new();   // a static's initial value: the template that is copied in
 
     /// <summary>The C function that frees what es_new gave: the opener's pool in a library, else the C library's free.</summary>
-    private string FreeName => LibMode ? "es_lib_free" : "free";
+    private string FreeName => LibMode ? "es_lib_free" : OpenerHeap ? "es_ol_free" : "free";
 
     private static readonly Regex FunctionPointerName = new(@"\(\s*\*\s*(\w+)\s*\)", RegexOptions.CultureInvariant);
     private static readonly Regex VariableName = new(@"(\w+)\s*(\[[^\]]*\]\s*)*$", RegexOptions.CultureInvariant);
@@ -90,12 +90,21 @@ internal sealed partial class CEmitter
         sb.AppendLine("#if defined(__mc68000__)");
         sb.AppendLine("/* a4 holds the opener's data while library code runs: each function's entry sets it from the base in a6, and restores the caller's. */");
         sb.AppendLine("register struct es_rt *es_d __asm__(\"a4\");");
-        // AROS x86-64 and AmigaOS 4: the same with a callee-saved register that the system calls the library makes keep for it.
+        // AROS (x86-64, i386) and AmigaOS 4: the same with a callee-saved register that the system calls the library makes keep for it.
         if (LibOs == "aros")
         {
-            sb.AppendLine("#elif defined(__AROS__) && defined(__x86_64__)");
-            sb.AppendLine("/* r15 (callee-saved in the x86-64 ABI) holds the opener's data while library code runs: each entry sets it from the base and restores the caller's. */");
-            sb.AppendLine("register struct es_rt *es_d __asm__(\"r15\");");
+            if (IsDefined("I386"))
+            {
+                sb.AppendLine("#elif defined(__AROS__) && defined(__i386__)");
+                sb.AppendLine("/* esi (callee-saved in the i386 ABI; AROS i386 passes a library's base in eax, regparm(1)) holds the opener's data while library code runs: each entry sets it from the base and restores the caller's. */");
+                sb.AppendLine("register struct es_rt *es_d __asm__(\"esi\");");
+            }
+            else
+            {
+                sb.AppendLine("#elif defined(__AROS__) && defined(__x86_64__)");
+                sb.AppendLine("/* r15 (callee-saved in the x86-64 ABI) holds the opener's data while library code runs: each entry sets it from the base and restores the caller's. */");
+                sb.AppendLine("register struct es_rt *es_d __asm__(\"r15\");");
+            }
         }
         else if (LibOs == "os4")
         {
@@ -474,18 +483,18 @@ internal sealed partial class CEmitter
     };
 
     /// <summary>
-    /// The AROS x86-64 .library. The loader (LDDemon) finds the C struct Resident anywhere in the loaded file; RTF_AUTOINIT makes the base
+    /// The AROS .library (x86-64 and i386: the same C, the AROS_LH macros of each SDK pass the base as that CPU's AROS ABI does). The loader (LDDemon) finds the C struct Resident anywhere in the loaded file; RTF_AUTOINIT makes the base
     /// from a table of plain function pointers (AROS's jump table holds addresses, LIB_VECTSIZE bytes each, LVO 1 Open, 2 Close, 3 Expunge,
     /// 4 reserved, 5 the first function). Every function is written with the AROS_LH and AROS_UFH macros of aros/libcall.h and aros/asmcall.h,
-    /// so the base reaches it as the AROS ABI passes it (on x86-64 an ordinary argument after the others). As on m68k, each opener gets a copy
-    /// of the base with its data block after it, and r15 points at that block while library code runs.
+    /// so the base reaches it as the AROS ABI passes it (on x86-64 an ordinary argument after the others, on i386 in eax: regparm(1)). As on m68k, each opener gets a copy
+    /// of the base with its data block after it, and r15 (i386: esi) points at that block while library code runs.
     /// </summary>
     private void EmitArosLibrary(AmigaLibraryOptions o, List<(string Base, string Library)> bases)
     {
         var plan = AmigaLibrary!;
         foreach (var l in new[]
         {
-            "#if defined(__AROS__) && defined(__x86_64__)",
+            IsDefined("I386") ? "#if defined(__AROS__) && defined(__i386__)" : "#if defined(__AROS__) && defined(__x86_64__)",
             "/* ---- The library on AROS: its Resident, init, open, close, expunge and the vectors' entries (AROS_LH: the base comes as the AROS ABI",
             "   passes it). Our own code: no C startup is linked. */",
             "#include <exec/types.h>",
@@ -895,7 +904,7 @@ internal sealed partial class CEmitter
     }
 
     /// <summary>
-    /// A [LibraryCall] on AROS x86-64 and AmigaOS 4. AROS: through the jump table with AROS_LC (LVO 5 for vector -30), the base as the
+    /// A [LibraryCall] on AROS (x86-64, i386) and AmigaOS 4. AROS: through the jump table with AROS_LC (LVO 5 for vector -30), the base as the
     /// AROS ABI passes it. AmigaOS 4: the first argument is the opener's main interface; the call goes through its function table (slot 4
     /// for vector -30, after Obtain, Release, Expunge and Clone) with the interface as Self. Every argument and the result travel as a
     /// uintptr_t, as the library's entries take and give them.
@@ -971,7 +980,7 @@ internal sealed partial class CEmitter
         }
         if (!IsDefined("M68K"))
         {
-            Unsupported(node, $"[LibraryCall] '{display}' on this target (an E# .library is called on m68k, AROS x86-64 and AmigaOS 4)");
+            Unsupported(node, $"[LibraryCall] '{display}' on this target (an E# .library is called on m68k, AROS and AmigaOS 4)");
             return;
         }
         Line(Prototype(m));

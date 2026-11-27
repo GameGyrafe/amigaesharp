@@ -7,7 +7,7 @@ namespace AmigaLibDemo;
 /// <summary>
 /// Opens amigalib.library (samples/amigalib, an E# .library) twice and shows that the two openers keep their own data: counters,
 /// objects in the library's memory and statistics. Calls every function of the library, closes both openers and checks the open count.
-/// On the host the library's code is compiled into this program and the binding keeps the two openers' statics apart.
+/// On the host and sdl the library's code is compiled into this program and each opener still has its own copy of the library's data.
 /// </summary>
 public static unsafe class Program
 {
@@ -22,18 +22,12 @@ public static unsafe class Program
     }
 
     /// <summary>
-    /// A check that needs each opener's own data. On sdl the library's code is part of the program and its openers share one copy of
-    /// the data (not done yet), so there these checks are skipped.
+    /// A check that needs each opener's own data: on the Amiga each opener has its own data block, on the host the binding swaps each
+    /// opener's statics in and out, and on sdl each opener has its own copy of the library's static data in C.
     /// </summary>
     private static void Separate(string name, bool ok)
     {
-#if SDL
-        Dos.PutStr("skip ");
-        Dos.PutStr(name);
-        Dos.PutStr("\n");
-#else
         Check(name, ok);
-#endif
     }
 
 #if AMIGA
@@ -144,9 +138,6 @@ public static unsafe class Program
     {
 #if AMIGA
         if (Args.Has("CHILD")) return Child();
-#endif
-#if SDL
-        Dos.PutStr("sdl: the library's code is part of this program and its openers share one copy of its data, so the checks that need their own are skipped\n");
 #endif
         // The first line of output also makes dos.library allocate the output's buffer, before the free memory is measured.
         Dos.PutStr("amigalibdemo: two openers of amigalib.library\n");
