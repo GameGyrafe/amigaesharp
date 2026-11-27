@@ -84,6 +84,7 @@ public static class ArosHosted
         A=$(mktemp -d); trap 'rm -rf "$A"' EXIT
         cp -a "$AROS_HOSTED_COPY/." "$A/" && cd "$A" || exit 4
         cp /esrun/prog "./$prog" && chmod +x "./$prog" || exit 4
+        if [ -d /esrun/libs ]; then cp /esrun/libs/*.library ./Libs/ || exit 4; fi
         python3 -I - /esrun/startup.txt <<'P' || exit 4
         import sys
         p = 'S/Startup-Sequence'; t = open(p).read(); add = open(sys.argv[1]).read()
@@ -119,6 +120,13 @@ public static class ArosHosted
         if (Directory.Exists(runDir)) Directory.Delete(runDir, recursive: true);
         Directory.CreateDirectory(runDir);
         File.Copy(exe, Path.Combine(runDir, "prog"));
+        // E# Amiga libraries the program uses (issue #154; the build puts them next to it): into the tree's Libs drawer (LIBS:).
+        var libraries = FsUae.LibrariesBeside(exe);
+        if (libraries.Count > 0)
+        {
+            Directory.CreateDirectory(Path.Combine(runDir, "libs"));
+            foreach (var lib in libraries) File.Copy(lib, Path.Combine(runDir, "libs", Path.GetFileName(lib)));
+        }
         File.WriteAllText(Path.Combine(runDir, "startup.txt"), StartupLines(name, programArgs));
         File.WriteAllText(Path.Combine(runDir, "run.sh"), Script.Replace("\r\n", "\n") + "\n");
 

@@ -18,7 +18,7 @@ Usage:
                                     at this tool's version (--package), or, with --source or when this esharp runs from an
                                     E# checkout, that checkout's projects (for contributors; ESHARP_ROOT names one)
   esharp build [path] [options]     Check the subset, emit C, and run the target C compiler (a project whose csproj sets
-                                    EsOutputType AmigaLibrary: an Amiga shared library, its .fd file and C# binding; m68k)
+                                    EsOutputType AmigaLibrary: an Amiga shared library, its .fd file and C# binding; m68k, aros, os4)
   esharp run [path] [options]       Build for m68k and run it in FS-UAE (or --target sdl: run it through SDL;
                                     --target os4: run it in the AmigaOS 4.1 QEMU VM named by ESHARP_OS4_VM)
   esharp assets [dir|assets.json] [--force]
@@ -520,12 +520,12 @@ Targets:
             libraryRefs = libraryProject == null ? AmigaLibraryStep.Referenced(path) : new List<AmigaLibraryStep.Project>();
         }
         catch (InvalidDataException e) { return Fail(e.Message); }
-        if (libraryProject != null && target != Targets.M68k)
-            return Fail($"{projectDir} is an Amiga shared library (EsOutputType AmigaLibrary, {libraryProject.Options.Name}): it builds for --target m68k only so far " +
-                        "(AROS and AmigaOS 4 later); a program that names its folder in esharp.include also builds for the host and sdl, with the library's code compiled in");
-        if (libraryRefs.Count > 0 && target.IsAmiga && target != Targets.M68k)
-            return Fail($"this program uses the E# Amiga library {string.Join(", ", libraryRefs.Select(r => r.Options.Name))} (esharp.include), which builds for m68k only so far; " +
-                        "build the program for m68k, sdl or the host");
+        if (libraryProject != null && !AmigaLibraryStep.BuildsFor(target))
+            return Fail($"{projectDir} is an Amiga shared library (EsOutputType AmigaLibrary, {libraryProject.Options.Name}): it builds for --target m68k, aros (x86-64) " +
+                        $"and os4, not {target.Name} so far; a program that names its folder in esharp.include also builds for the host and sdl, with the library's code compiled in");
+        if (libraryRefs.Count > 0 && target.IsAmiga && !AmigaLibraryStep.BuildsFor(target))
+            return Fail($"this program uses the E# Amiga library {string.Join(", ", libraryRefs.Select(r => r.Options.Name))} (esharp.include), which builds for m68k, aros (x86-64) " +
+                        $"and os4, not {target.Name} so far; build the program for one of those, sdl or the host");
         var bindingDir = Path.Combine(outDir ?? Path.Combine(projectDir, "obj", target.Name), "esharp-amigalib");
         foreach (var r in libraryRefs)
         {
@@ -669,7 +669,7 @@ Targets:
             // The packages' binaries after the program's C (the linker takes from an archive what the objects before it need, and the
             // archives' own references to the platform code are already defined by then), before the system libraries.
             if (withNative && link) compilerArgs.AddRange(archives);
-            if (link) compilerArgs.AddRange(target.Libs.Split(' ', StringSplitOptions.RemoveEmptyEntries));
+            if (link && libraryProject == null) compilerArgs.AddRange(target.Libs.Split(' ', StringSplitOptions.RemoveEmptyEntries));   // a library links no libauto (os4)
             if (link && libraryProject != null) compilerArgs.Add("-lgcc");
 
             ProcessStartInfo psi;
@@ -727,7 +727,7 @@ Targets:
 
         Console.WriteLine($"Built {exe}");
         // The E# libraries the program uses, built for the target with the same toolchain and put next to the program (FS-UAE copies them to LIBS:).
-        foreach (var r in libraryRefs.Where(_ => target.IsM68k))
+        foreach (var r in libraryRefs.Where(_ => target.IsAmiga))
         {
             Console.WriteLine($"Building the library {r.Options.Name} ({r.Dir}):");
             if (Build(passthrough.Prepend(r.Dir).Concat(new[] { "--target", target.Name }).ToArray(), out var libraryFile) != 0 || libraryFile == null)

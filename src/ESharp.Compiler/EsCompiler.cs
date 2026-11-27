@@ -70,6 +70,8 @@ public static class EsCompiler
         if (options.LibraryBuild == null && options.AmigaLibrary == null) CheckEntryPoint(compilation, new HashSet<SyntaxTree>(userTrees), diagnostics);
         // An Amiga shared library (issue #154): its [LibraryFunction] methods, checked, with their registers.
         var amigaLibrary = options.AmigaLibrary is { } libOptions ? AmigaLibraries.Plan(compilation, userTrees, libOptions, diagnostics) : null;
+        if (options.AmigaLibrary != null && AmigaLibraries.TargetProblem(options.Defines) is { } targetProblem)
+            diagnostics.Add(Diagnostic.Create(Descriptors.LibraryUnsupported, Location.None, "this target", targetProblem));
         if (options.AmigaLibrary != null && options.LibraryBuild != null)
             diagnostics.Add(Diagnostic.Create(Descriptors.LibraryUnsupported, Location.None, "a package build", "an E# library package (EsLibrary) is not an Amiga shared library (EsOutputType AmigaLibrary)"));
         PackageChecks.Sources(compilation, userTrees, packageOf, diagnostics);

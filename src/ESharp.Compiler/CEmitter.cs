@@ -882,14 +882,29 @@ internal sealed partial class CEmitter
         if (_natives.Contains("es_lib_open_count") || _natives.Contains("es_lib_expunge_when_closed"))
         {
             // SharedLibrary.OpenCount (the bindings of E# .library files): the open count of a library in exec's list, -1 when it is not loaded.
-            result.AppendLine("#if defined(__mc68000__) || defined(__AROS__)");
+            result.AppendLine("#if defined(__mc68000__) || defined(__AROS__) || defined(__amigaos4__)");
             result.AppendLine("#include <proto/exec.h>");
             result.AppendLine("#include <exec/execbase.h>");
+            // exec's library list. AROS: found from exec's own node in it (the list's header ends the ln_Pred chain), not through
+            // struct ExecBase, whose layout in the SDK headers is not that of every AROS build (a hosted nightly has more before LibList).
+            result.AppendLine("#if defined(__AROS__)");
+            result.AppendLine("static struct List *es_lib_list(void)");
+            result.AppendLine("{");
+            result.AppendLine("    struct Node *n = &SysBase->LibNode.lib_Node;");
+            result.AppendLine("    while (n->ln_Pred != NULL) n = n->ln_Pred;");
+            result.AppendLine("    return (struct List *)n;");
+            result.AppendLine("}");
+            result.AppendLine("#define ES_LIB_LIST es_lib_list()");
+            result.AppendLine("#elif defined(__amigaos4__)");
+            result.AppendLine("#define ES_LIB_LIST (&((struct ExecBase *)IExec->Data.LibBase)->LibList)");
+            result.AppendLine("#else");
+            result.AppendLine("#define ES_LIB_LIST (&SysBase->LibList)");
+            result.AppendLine("#endif");
             result.AppendLine("static __attribute__((unused)) int32_t es_lib_open_count(const char *name)");
             result.AppendLine("{");
             result.AppendLine("    int32_t n = -1;");
             result.AppendLine("    Forbid();");
-            result.AppendLine("    struct Node *node = FindName(&SysBase->LibList, (CONST_STRPTR)name);");
+            result.AppendLine("    struct Node *node = FindName(ES_LIB_LIST, (CONST_STRPTR)name);");
             result.AppendLine("    if (node != NULL) n = ((struct Library *)node)->lib_OpenCnt;");
             result.AppendLine("    Permit();");
             result.AppendLine("    return n;");
@@ -900,7 +915,7 @@ internal sealed partial class CEmitter
             result.AppendLine("{");
             result.AppendLine("    int32_t done = 0;");
             result.AppendLine("    Forbid();");
-            result.AppendLine("    struct Node *node = FindName(&SysBase->LibList, (CONST_STRPTR)name);");
+            result.AppendLine("    struct Node *node = FindName(ES_LIB_LIST, (CONST_STRPTR)name);");
             result.AppendLine("    if (node != NULL && ((struct Library *)node)->lib_OpenCnt > 0) { RemLibrary((struct Library *)node); done = 1; }");
             result.AppendLine("    Permit();");
             result.AppendLine("    return done;");
@@ -908,6 +923,33 @@ internal sealed partial class CEmitter
             result.AppendLine("#else");
             result.AppendLine("static __attribute__((unused)) int32_t es_lib_open_count(const char *name) { (void)name; return -1; }   /* not done on this target yet */");
             result.AppendLine("static __attribute__((unused)) int32_t es_lib_expunge_when_closed(const char *name) { (void)name; return 0; }");
+            result.AppendLine("#endif");
+            result.AppendLine();
+        }
+        if (_natives.Contains("es_lib_open_main") || _natives.Contains("es_lib_close_main"))
+        {
+            // SharedLibrary.Open and Close on AmigaOS 4 (the bindings of E# .library files): an opener is the library opened and its main
+            // interface, which the library clones for each GetInterface (so each opener has its own data); calls go through the interface.
+            result.AppendLine("#if defined(__amigaos4__)");
+            result.AppendLine("#include <proto/exec.h>");
+            result.AppendLine("#include <exec/interfaces.h>");
+            result.AppendLine("static __attribute__((unused)) void *es_lib_open_main(const char *name, int32_t version)");
+            result.AppendLine("{");
+            result.AppendLine("    struct Library *lib = OpenLibrary((CONST_STRPTR)name, (ULONG)version);");
+            result.AppendLine("    if (lib == NULL) return NULL;");
+            result.AppendLine("    struct Interface *iface = GetInterface(lib, (CONST_STRPTR)\"main\", 1, NULL);");
+            result.AppendLine("    if (iface == NULL) CloseLibrary(lib);");
+            result.AppendLine("    return iface;");
+            result.AppendLine("}");
+            result.AppendLine("static __attribute__((unused)) void es_lib_close_main(void *iface)");
+            result.AppendLine("{");
+            result.AppendLine("    struct Library *lib = ((struct Interface *)iface)->Data.LibBase;");
+            result.AppendLine("    DropInterface((struct Interface *)iface);");
+            result.AppendLine("    CloseLibrary(lib);");
+            result.AppendLine("}");
+            result.AppendLine("#else");
+            result.AppendLine("static __attribute__((unused)) void *es_lib_open_main(const char *name, int32_t version) { (void)name; (void)version; return NULL; }   /* AmigaOS 4 only */");
+            result.AppendLine("static __attribute__((unused)) void es_lib_close_main(void *iface) { (void)iface; }");
             result.AppendLine("#endif");
             result.AppendLine();
         }
