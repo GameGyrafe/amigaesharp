@@ -258,7 +258,7 @@ int main(void)
     {
         var r = CompileLibraryFor(Targets.ArosI386);
         Assert.True(r.Success, string.Join("\n", r.Diagnostics));
-        var c = r.C!;
+        var c = r.C!.Replace("\r\n", "\n");   // line-ending neutral (AppendLine gives CRLF on Windows)
         // The same AROS_LH entries (the i386 SDK's macros take the base in eax, regparm(1)); the opener's data in esi, callee-saved there.
         Assert.Contains("#elif defined(__AROS__) && defined(__i386__)\n", c);
         Assert.Contains("register struct es_rt *es_d __asm__(\"esi\");", c);
@@ -270,7 +270,7 @@ int main(void)
         // Apart from the guard and the register, the i386 C is the x86-64 C.
         static string Neutral(string text) => text.Replace("__i386__", "CPU").Replace("__x86_64__", "CPU").Replace("\"esi\"", "REG").Replace("\"r15\"", "REG");
         static string[] Lines(string text) => Neutral(text).Split('\n').Where(l => !l.StartsWith("/* r15", StringComparison.Ordinal) && !l.StartsWith("/* esi", StringComparison.Ordinal)).ToArray();
-        Assert.Equal(Lines(CompileLibraryFor(Targets.Aros).C!), Lines(c));
+        Assert.Equal(Lines(CompileLibraryFor(Targets.Aros).C!.Replace("\r\n", "\n")), Lines(c));
     }
 
     [Fact]
@@ -818,7 +818,7 @@ public static unsafe class P
         var sdl = EsCompiler.Compile(new[] { new SourceFile("binding.cs", binding), new SourceFile("lib.cs", Lib + ByeLib), new SourceFile("p.cs", program) },
             new CompileOptions { Defines = Targets.Sdl.Defines, TargetName = "sdl" });
         Assert.True(sdl.Success, string.Join("\n", sdl.Diagnostics));
-        var c = sdl.C!;
+        var c = sdl.C!.Replace("\r\n", "\n");
         Assert.Contains("#define Es_T_Counter__value (es_ol_0_d->Es_T_Counter__value)", c);
         Assert.DoesNotContain("static int32_t Es_T_Counter__value = 10;", c);   // not a C global
         var main = c[c.IndexOf("int main(void)", StringComparison.Ordinal)..];
