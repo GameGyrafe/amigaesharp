@@ -740,6 +740,16 @@ public class HostTargetTests
     }
 
     [Fact]
+    public void Fontasset_sample_draws_the_asset_font_on_the_host_framebuffer()
+    {
+        using var console = HostConsole.Capture();
+        FontAssetSample.Program.Main();
+        Assert.DoesNotContain("FAIL", console.Output);
+        Assert.Equal(21, console.Output.Split('\n').Count(l => l.StartsWith("ok ")));
+        Assert.StartsWith("ok asset constants\n", console.Output);
+    }
+
+    [Fact]
     public void Operators_sample_runs_on_the_host()
     {
         using var console = HostConsole.Capture();

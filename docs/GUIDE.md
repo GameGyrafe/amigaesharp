@@ -499,19 +499,21 @@ classes called `Window` or `List`); see `samples/names`.
 `src/ESharp.Platform` is parsed together with your code. The same public signatures exist on every target; the
 implementation is chosen with `#if AMIGA` / `#elif SDL` / `#else` (the dotnet host fake). Amiga-only classes (Gui, Asl,
 Fonts, BOOPSI, MUI and the raw library bindings such as `LowLevel`) do not exist on `sdl`: using them is error `ES0102`.
-`Joystick`, the message box `Requester`, the file requester `FileRequester` and `Iff` exist on every target (below).
+`Joystick`, the message box `Requester`, the file requester `FileRequester` and `Iff` exist on every target (below), and so do
+bitmap fonts made from font images by `esharp assets` ([Assets](#assets)), which replace `Fonts` where a game wants the same
+text on the Amiga and on `sdl` without diskfont.library.
 
 | Area | Classes | Sample |
 |---|---|---|
 | Program | `Dos` (output, delays), `Args` (arguments and Workbench tool types), `Trace`, `Files` | `hello`, `mainargs`, `trace` |
 | Memory | `Mem`, `Arena`, `Pool<T>`, `Vec<T>`, `Heap`, `Dictionary`, `HashSet`, `StringMap` | `memory`, `collections` |
-| Graphics | `Video` (screens, blits, palettes, double buffer, AGA 24-bit palettes, RTG), `Font`, `Frame`/`FrameTimer` | `screen`, `aga`, `dbuffer`, `rtg`, `timing` |
+| Graphics | `Video` (screens, blits, palettes, double buffer, AGA 24-bit palettes, RTG), `Font`, bitmap font assets (`Assets.<Name>.Draw`), `Frame`/`FrameTimer` | `screen`, `aga`, `dbuffer`, `rtg`, `timing`, `fontasset` |
 | Input and time | `Input` (mouse, keyboard), `Keys` (keymap), `Joystick` (lowlevel; SDL gamepads), `Clock` (timer) | `cards`, `keys`, `controls` |
 | Message box | `Requester.Show` (EasyRequest; SDL_ShowMessageBox) | `requester` |
 | File requester | `FileRequester.Open`/`Save` (asl.library; SDL file dialogs) | `filereq` |
 | Sound | `Sample`, `Sound` (audio.device) | `sound`, `assets` |
 | Utility | `Date`, `Strings` (case-insensitive text, utility.library), `Rng`, `Deck` | `dates`, `cards` |
-| Files and formats | `Iff` (E# code; iffparse.library when it is there on the Amiga), `Fonts` (diskfont), `Asl` (file requester) | `iff`, `fonts`, `asl` |
+| Files and formats | `Iff` (E# code; iffparse.library when it is there on the Amiga), `Fonts` (diskfont; Amiga only, see bitmap font assets for every target), `Asl` (file requester) | `iff`, `fonts`, `asl` |
 | GUI | `GtWindow` and gadgets (GadTools), `BoopsiObject` and typed attributes, hooks, `Mui*` wrappers | `gui`, `guiclass`, `boopsi`, `mui` |
 | System | `Exec`, `Graphics`, `Intuition`, `CyberGfx` and other `[AmigaLib]` bindings, `Interrupts`, `TagList` | `interrupts`, `hwinfo` |
 
@@ -603,10 +605,33 @@ Details in docs/STATUS.md ("Asset dithering, ILBM and sound assets"):
   `"ordered"` (4x4 Bayer) is optional per image.
 - `"samples"` take WAV (PCM 8/16 bit, mono/stereo) or 8SVX and write 8-bit signed mono `[ChipRam]` data with its length and
   rate; play it with `Sound.Play(in s, Sound.PeriodForRate(rate), vol, n)`.
+- `"fonts"` take a font image, a grid of equal glyph cells (a PNG or ILBM, read left to right and top to bottom), and write a
+  nested class per font in `Assets.g.cs`: `{ "name": "Slant", "file": "slant.png", "cellWidth": 9, "cellHeight": 9, "first": 32,
+  "count": 95, "columns": 16 }` (`first` defaults to 32, `columns` to as many cells as fit across the image; cells up to 64x64;
+  `first + count` at most 256). A pixel is ink when it is opaque and not the colour of the image's top-left pixel (keep the first
+  cell's corner empty; with a transparent top-left pixel every opaque pixel is ink), so black on white, white on black and a
+  transparent background all work. The image must be as wide as a whole number of cells and as high as the rows of cells need;
+  anything else is an error that names the sizes. The font has a fixed cell: the gap between characters and between lines is part of
+  it (proportional fonts are not supported). The code is the same on every target, no diskfont.library and no file at run time:
+
+  ```csharp
+  Assets.Slant.Draw("Score 120", 8, 8, 3, 1);          // text, x, y, colour index, scale; '\n' starts a new line
+  int w = Assets.Slant.Width("Score 120", 2);          // pixels: the widest line, length * CellWidth * scale
+  int h = Assets.Slant.Height("a\nb", 2);              // lines * CellHeight * scale
+  Assets.Slant.DrawChar('A', 8, 40, 3, 1);  Assets.Slant.DrawInt(-305, 8, 60, 3, 1);   // DrawInt returns its width
+  bool ink = Assets.Slant.Pixel('A', 2, 3);            // one glyph pixel; Has(c) says whether the font has the character
+  ```
+
+  The glyphs are drawn in one colour on a transparent background, like the built-in `Font`; characters outside `First` .. `First + Count - 1`
+  take their place and draw nothing. On the Amiga a line is one `BltTemplate` call per piece of up to 640 pixels (32 rows; anything that
+  does not fit, or would start left of or above the screen, is drawn as one filled rectangle per run of pixels), on `sdl` and the host
+  the same pixels are filled directly. The drawing code is `ESharp.Platform.BitmapFont`; the generated nested class passes the font's
+  glyph data and cell size to it. Glyph data is ordinary static data, not chip RAM. `samples/fontasset` shows it (its font image is made
+  by `tools/AssetSamples --font`).
 - `--chip-budget <n>` fails a build when constant chip RAM reservations exceed `n` bytes (68k; only constant sizes are counted).
 
-`samples/screen`, `samples/aga` and `samples/assets` show each of these. The inputs of `samples/assets` are made by
-`tools/AssetSamples`, the card sprite sheet by `tools/CardArt`.
+`samples/screen`, `samples/aga`, `samples/assets` and `samples/fontasset` show each of these. The inputs of `samples/assets` and
+`samples/fontasset` are made by `tools/AssetSamples`, the card sprite sheet by `tools/CardArt`.
 
 ## Workbench icons
 

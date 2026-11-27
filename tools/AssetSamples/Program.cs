@@ -10,6 +10,17 @@ using ESharp.Assets;
 //   ball.png      16x16 shaded ball in three colours, transparent outside the circle (a masked sprite)
 //   blip.wav      8-bit mono PCM at 8000 Hz, 480 samples of a falling square-ish tone with a decay
 // Usage: dotnet run --project tools/AssetSamples -- --tween samples/packages/Tween
+// With --font, the font image of samples/fontasset instead: a bold, slanted variant of the built-in 5x7 font (made here from its
+// glyph table, so it is original to this repository), 95 glyphs (32..126) of 9x9 cells in 16 columns, black on white.
+// Usage: dotnet run --project tools/AssetSamples -- --font samples/fontasset
+if (args.Length > 0 && args[0] == "--font")
+{
+    var fontDir = args.Length > 1 ? args[1] : "samples/fontasset";
+    Directory.CreateDirectory(fontDir);
+    WriteFont(Path.Combine(fontDir, "slant.png"));
+    Console.WriteLine($"Wrote slant.png to {fontDir}");
+    return;
+}
 if (args.Length > 0 && args[0] == "--tween")
 {
     var tweenDir = args.Length > 1 ? args[1] : "samples/packages/Tween";
@@ -110,4 +121,26 @@ static void WriteBlip(string path)
         wav.Add((byte)(128 + (phase % 1.0 < 0.5 ? level : -level)));
     }
     File.WriteAllBytes(path, wav.ToArray());
+}
+
+// The font image: ink where the built-in glyph has a pixel or the pixel to its left (bold), the top three rows shifted one pixel right (slant).
+static void WriteFont(string path)
+{
+    const int CW = 9, CH = 9, Cols = 16, First = 32, Count = 95;
+    const int Rows = (Count + Cols - 1) / Cols;
+    var w = Cols * CW;
+    var h = Rows * CH;
+    var px = new byte[w * h * 4];
+    for (var i = 0; i < px.Length; i++) px[i] = 255;
+    for (var g = 0; g < Count; g++)
+        for (var y = 0; y < ESharp.Platform.Font.GlyphHeight; y++)
+            for (var x = 0; x < CW; x++)
+            {
+                var gx = x - (y < 3 ? 1 : 0);
+                var on = ESharp.Platform.Font.Pixel((char)(First + g), gx, y) || ESharp.Platform.Font.Pixel((char)(First + g), gx - 1, y);
+                if (!on) continue;
+                var o = ((g / Cols * CH + y) * w + g % Cols * CW + x) * 4;
+                px[o] = px[o + 1] = px[o + 2] = 0;
+            }
+    File.WriteAllBytes(path, Png.Write(new RgbaImage(w, h, px)));
 }
