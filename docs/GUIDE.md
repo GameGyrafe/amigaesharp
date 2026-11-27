@@ -503,9 +503,18 @@ attributes (`[EntryPoint]`, `[AmigaLib]`, `[ChipRam]`, ...) and a small intrinsi
   releases them all, and `+=` and `-=` drop the reference of the value they replace, so the variable must own it: a variable that is
   ever given a copy of another delegate (`d = e`, `d = Field`, `d ??= e`, a parameter, a call that may return one) or that may be
   written some other way (passed as `ref` or `out`, taken by `ref`, a deconstruction, declared by a pattern or `out var`) is ES0099
-  for `+=`/`-=`, and so is a parameter that is not `[Owned]`. The other direction is not checked: a copy of `d` (`e = d`,
-  `Field = d`) shares d's reference, as any delegate copy in E# does, so do not use it after `d += x` or `d -= x` (that releases
-  the list the copy points at, a use after free); call `d` itself, or copy it again after the change. A kept variable you add
+  for `+=`/`-=`, and so is a parameter that is not `[Owned]`. The other direction is checked too: a copy of `d` shares the list's pointer,
+  and `d += x` or `d -= x` release that list. So a delegate variable that has `+=`/`-=` may only be read in these ways
+  (anywhere in the program for a field, static or auto-property): written (`d = x`, `d ??= x`, `d += x`) as a statement; called
+  (`d(...)`, `d.Invoke(...)`, `d?.Invoke(...)`) with arguments that run no code; compared (`==`, `!=`, `is null`); added to or
+  removed from a delegate or event (`g += d`, `E -= d`); freed with `Heap.Free(ref d)`; given to an `[Owned]` parameter or a setter
+  with a body; or moved, `Action x = d;` directly followed by `d = null;` (the way to free an auto-property's list; each link
+  of the path before `d` must be `this`, a local, a parameter or a field). Any other read, such as `e = d`, passing `d` to a call,
+  a property pattern `{ F: var e }` or an operator, makes every `+=`/`-=` on it ES0099, also when it comes after the last `+=`
+  (the message names the read's line). "Runs no code" means literals, locals, parameters, fields, auto-properties, built-in
+  operators and conversions (not user-defined ones), `?:`, `??`, lambdas and method groups. Not checked: a `+=` on a shared
+  field from an interrupt server or another task, using a copy after `Heap.Free(ref d)`, `ref` locals, and a `-=` that removes
+  the running delegate from inside its own call (`d -= d` in a closure that `d` holds alone frees it while it runs). A kept variable you add
   (`d += h`) keeps its own reference, so free it too. Given to an `[Owned]` parameter or a setter at its last use, `d` hands
   its whole list over, as a lambda local does. `==` and `!=` on delegates compare the function and the closure; multicast
   delegates are equal when their entries are.
