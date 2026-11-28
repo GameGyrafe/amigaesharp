@@ -195,4 +195,41 @@ static void Plain() { System.Action d = Make(2); d(); System.Action x = Make(3);
         Assert.Contains("es_frame_hold(", Fn("Held"));
         Assert.DoesNotContain("es_frame_hold(", Fn("Plain"));
     }
+
+    private const string DiscardMembers = @"
+static int log;
+static System.Func<int> MakeN() { int n = 0; return () => { n++; log = log * 10 + n; return n; }; }
+static void D1() { System.Func<int> f = MakeN(); f(); f.Invoke(); for (int i = 0; i < 2; f()) i++; System.Action a = () => f(); a(); Heap.Free(ref a); int r = f(); Check(r == 6 && log == 123456, ""a held Func called as a statement, a for incrementor and a void lambda body""); f -= f; }
+static int Kept() { System.Func<int> f = MakeN(); int r = f() + f(); Heap.Free(ref f); return r; }
+";
+
+    /// <summary>
+    /// A held call of a delegate that returns a value, where the value is thrown away (an expression statement, a for incrementor, the
+    /// body of a void lambda), takes the void form: a statement expression that ends in an unused result is -Wunused-value, an error
+    /// under clang -Wall -Werror (the CI's second pass).
+    /// </summary>
+    [Fact]
+    public void A_held_call_whose_value_is_thrown_away_does_not_end_in_an_unused_result()
+    {
+        const string body = @"
+int base0 = Heap.LiveClosures();
+log = 0; D1();
+log = 0; Check(Kept() == 3 && log == 12, ""a held call whose value is read"");
+Check(Heap.LiveClosures() == base0, ""nothing leaks"");
+";
+        RunBoth(DiscardMembers, body, OkLines("a held Func called as a statement, a for incrementor and a void lambda body",
+            "a held call whose value is read", "nothing leaks"));
+        var c = CompileOk(Program(DiscardMembers + Check, ""));
+        string Fn(string head)
+        {
+            var start = c.IndexOf(head, StringComparison.Ordinal);
+            Assert.True(start >= 0, head);
+            return c.Substring(start, c.IndexOf("\n}\n", start, StringComparison.Ordinal) - start);
+        }
+        var d1 = Fn("P_D1(void)\n{");
+        Assert.Contains("es_frame_hold(", d1);
+        // Only the one call whose value is read (int r = f()) ends in its result.
+        Assert.Single(System.Text.RegularExpressions.Regex.Matches(d1, @"_r[0-9]+; \}\)"));
+        Assert.Matches(@"_r[0-9]+; \}\)", Fn("P_Kept(void)\n{"));
+    }
 }

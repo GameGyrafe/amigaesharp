@@ -1241,10 +1241,10 @@ internal sealed partial class CEmitter
     }
 
     /// <summary>
-    /// True when the value of the assignment is thrown away: an expression statement, a for initializer or incrementor, an object
-    /// initializer entry, or the expression body of a void method, accessor, local function or lambda.
+    /// True when the value of the assignment (or call) is thrown away: an expression statement, a for initializer or incrementor, an
+    /// object initializer entry, or the expression body of a void method, accessor, local function or lambda.
     /// </summary>
-    private bool ValueDiscarded(AssignmentExpressionSyntax x)
+    private bool ValueDiscarded(ExpressionSyntax x)
     {
         switch (x.Parent)
         {
@@ -1462,7 +1462,9 @@ internal sealed partial class CEmitter
         var call = $"{t}.fn({string.Join(", ", args.Prepend($"{t}.env"))})";
         var head = $"{CType(type, at)} {t} = {value}; ";
         if (skipNull) return $"({{ {head}if ({t}.fn != NULL) {{ es_frame_hold({t}.env); {call}; es_frame_release({t}.env); }} }})";
-        if (invoke.ReturnsVoid) return $"({{ {head}es_frame_hold({t}.env); {call}; es_frame_release({t}.env); }})";
+        // A value nobody reads (c(); as a statement) takes the void form: a statement expression ending in an unused _r is
+        // -Wunused-value, an error under clang -Werror.
+        if (invoke.ReturnsVoid || at is ExpressionSyntax e && ValueDiscarded(e)) return $"({{ {head}es_frame_hold({t}.env); {call}; es_frame_release({t}.env); }})";
         var r = $"_r{++_temp}";
         return $"({{ {head}es_frame_hold({t}.env); {Decl(invoke.ReturnType, r, at)} = {call}; es_frame_release({t}.env); {r}; }})";
     }
