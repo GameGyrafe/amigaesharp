@@ -513,10 +513,15 @@ attributes (`[EntryPoint]`, `[AmigaLib]`, `[ChipRam]`, ...) and a small intrinsi
   a property pattern `{ F: var e }` or an operator, makes every `+=`/`-=` on it ES0099, also when it comes after the last `+=`
   (the message names the read's line). "Runs no code" means literals, locals, parameters, fields, auto-properties, built-in
   operators and conversions (not user-defined ones), `?:`, `??`, lambdas and method groups. Not checked: a `+=` on a shared
-  field from an interrupt server or another task, using a copy after `Heap.Free(ref d)`, `ref` locals, and a `-=` that removes
-  the running delegate from inside its own call (`d -= d` in a closure that `d` holds alone frees it while it runs). A kept variable you add
+  field from an interrupt server or another task, using a copy after `Heap.Free(ref d)`, and `ref` locals. Removing or freeing
+  the running delegate from inside its own call (`d -= d` or `Heap.Free(ref d)` in a closure that `d` calls) is safe: a call of a
+  variable that some `-=` or `Heap.Free` can empty holds the closure until the call returns, and, as in dotnet, the call runs the
+  value `d` had when it started (the rest of a multicast list still runs; an entry added meanwhile waits for the next call). A kept variable you add
   (`d += h`) keeps its own reference, so free it too. Given to an `[Owned]` parameter or a setter at its last use, `d` hands
-  its whole list over, as a lambda local does. `==` and `!=` on delegates compare the function and the closure; multicast
+  its whole list over, as a lambda local does. A use on another branch of the same `if`, `?:` or switch does not count, but a
+  condition, an `&&`/`||`/`??` operand and a switch section's `case ... when` guard run before the branches (a failed guard goes on
+  to the later sections and to `default`), so a hand-over there is not the last use of anything those may run: the callee then takes
+  a reference of its own and `d` keeps its one. `==` and `!=` on delegates compare the function and the closure; multicast
   delegates are equal when their entries are.
   Not supported (ES0099): binary `d + x` and `d - x` (use `+=`/`-=` on a variable), a property with accessors, a `ref` variable,
   a delegate type with `ref`/`out` parameters, and precompiled packages and Amiga libraries. A static field of reference type
