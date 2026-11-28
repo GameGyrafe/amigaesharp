@@ -505,21 +505,33 @@ attributes (`[EntryPoint]`, `[AmigaLib]`, `[ChipRam]`, ...) and a small intrinsi
   written some other way (passed as `ref` or `out`, taken by `ref`, a deconstruction, declared by a pattern or `out var`) is ES0099
   for `+=`/`-=`, and so is a parameter that is not `[Owned]`. The other direction is checked too: a copy of `d` shares the list's pointer,
   and `d += x` or `d -= x` release that list. So a delegate variable that has `+=`/`-=` may only be read in these ways
-  (anywhere in the program for a field, static or auto-property): written (`d = x`, `d ??= x`, `d += x`) as a statement; called
-  (`d(...)`, `d.Invoke(...)`, `d?.Invoke(...)`) with arguments that run no code; compared (`==`, `!=`, `is null`); added to or
+  (anywhere in the program for a field, static or auto-property): written (`d = x`, `d ??= x`, `d += x`, `d += Make()`) as a
+  statement; called (`d(...)`, `d.Invoke(...)`, `d?.Invoke(...)`, also with arguments that run code, such as `d(Get())` or
+  `Changed?.Invoke(Score)` with a property that has a body); compared (`==`, `!=`, `is null`, `is { }`, `is not { }`); added to or
   removed from a delegate or event (`g += d`, `E -= d`); freed with `Heap.Free(ref d)`; given to an `[Owned]` parameter or a setter
-  with a body; or moved, `Action x = d;` directly followed by `d = null;` (the way to free an auto-property's list; each link
-  of the path before `d` must be `this`, a local, a parameter or a field). Any other read, such as `e = d`, passing `d` to a call,
-  a property pattern `{ F: var e }` or an operator, makes every `+=`/`-=` on it ES0099, also when it comes after the last `+=`
-  (the message names the read's line). "Runs no code" means literals, locals, parameters, fields, auto-properties, built-in
-  operators and conversions (not user-defined ones), `?:`, `??`, lambdas and method groups. Not checked: a `+=` on a shared
-  field from an interrupt server or another task, using a copy after `Heap.Free(ref d)`, and `ref` locals. Removing or freeing
-  the running delegate from inside its own call (`d -= d` or `Heap.Free(ref d)` in a closure that `d` calls) is safe for a direct
-  call `d(...)`, `d.Invoke(...)` or `d?.Invoke(...)`: such a call of a variable that some `-=` or `Heap.Free` can empty holds the
-  closure until the call returns, and, as in dotnet, the call runs the value `d` had when it started (the rest of a multicast list
-  still runs; an entry added meanwhile waits for the next call). Not covered, for a variable that is only `Heap.Free`d (with a `-=`
-  these shapes are ES0099): a call inside an inlined LINQ operator (`arr.Where(d)` where `d` frees itself) and a call through a
-  borrowed parameter (`Run(d)` where `Run` calls its parameter and `d` frees itself): there the closure is still freed while it runs. A kept variable you add
+  with a body; given to a borrowed (not `[Owned]`) delegate parameter, `Fire(d)`, of a method, local function or delegate of the
+  program (by value and by position, one argument per parameter, on a receiver that runs no code; for a delegate, the arguments
+  before `d` run no code either); given to an inlined LINQ operator (`arr.Count(d)`, `arr.Where(d)`, the source, the steps
+  before it and the call's earlier arguments, such as the `Aggregate` seed, running no code); or moved, `Action x = d;` directly followed by `d = null;` (the way to free an auto-property's list;
+  each link of the path before `d` must be `this`, a local, a parameter or a field). Any other read, such as `e = d`, passing `d`
+  to a constructor, an `in` parameter or a named argument, a property pattern `{ F: var e }` or an operator, makes every
+  `+=`/`-=` on it ES0099, also when it comes after the last `+=` (the message names the read's line). In the shapes that run code
+  next to `d`, the list `d` holds is kept alive until that code is done, and things happen in C#'s order, so the result is
+  dotnet's: `Fire(d)` holds the list until `Fire` returns (a `+=`, `-=` or `Heap.Free` on `d` made inside cannot free what `Fire`
+  was given); `d(Get())` loads `d` first, then runs the arguments in order, and calls the list it loaded (a `+=` in `Get` shows on
+  the next call; `?.Invoke` on null runs no argument); `d += Make()` loads `d`, runs `Make`, and adds to the loaded value (a `+=`
+  that `Make` makes on `d` is lost, as in dotnet); a LINQ loop loads `d` once and calls that value for every element. "Runs no
+  code" means literals, locals, parameters, fields, auto-properties, built-in operators and conversions (not user-defined ones),
+  `?:`, `??`, lambdas and method groups. Not checked: a `+=` on a shared field from an interrupt server or another task, using a
+  copy after `Heap.Free(ref d)`, and `ref` locals. Removing or freeing the running delegate from inside its own call (`d -= d` or
+  `Heap.Free(ref d)` in a closure that `d` calls) is safe for a direct call `d(...)`, `d.Invoke(...)` or `d?.Invoke(...)`, for a
+  call through a borrowed parameter (`Run(d)`) and for an inlined LINQ operator (`arr.Where(d)`): a variable that some `+=`, `-=`
+  or `Heap.Free` can change is held there until the call (or the loop) is done, and, as in dotnet, the value `d` had when it
+  started runs (the rest of a multicast list still runs; an entry added meanwhile waits for the next call). Not covered, for a
+  variable that is only `Heap.Free`d (with a `+=` or `-=` these shapes are ES0099): a constructor argument, an argument of a
+  call on a receiver that runs code, a LINQ argument after code that runs (`arr.Take(N()).Count(d)`, `arr.Aggregate(Seed(), d)`:
+  `d` is read in the loop, after `N()` or `Seed()`, as dotnet reads it), and the other shapes above outside the covered forms (there the closure is still freed
+  while it runs). A kept variable you add
   (`d += h`) keeps its own reference, so free it too. Given to an `[Owned]` parameter or a setter at its last use, `d` hands
   its whole list over, as a lambda local does. A use on another branch of the same `if`, `?:` or switch does not count, but a
   condition, an `&&`/`||`/`??` operand and a switch section's `case ... when` guard run before the branches (a failed guard goes on

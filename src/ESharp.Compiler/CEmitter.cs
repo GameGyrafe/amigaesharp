@@ -3983,6 +3983,9 @@ ADD2SET(es_aros_wbstart, PROGRAM_ENTRIES, -50)
 
         if (IsLinqCall(inv, out var linqMethod, out var linqReceiver)) return Linq(inv, linqMethod, linqReceiver);
 
+        // Issue #175: a delegate variable that += / -= or Heap.Free can release, given to a borrowed parameter, is held until the call returns.
+        if (!_heldArgCalls.Contains(inv) && HeldArguments(inv, m) is { } heldArgs) return HeldArgumentCall(inv, m, heldArgs);
+
         if (m.ContainingType?.SpecialType == SpecialType.System_String && m.Name == "Equals")
         {
             // string.Equals(a, b) and a.Equals(b): by the characters, like ==. (A null receiver gives false here, not an exception.)
@@ -4061,8 +4064,8 @@ ADD2SET(es_aros_wbstart, PROGRAM_ENTRIES, -50)
             var callee = inv.Expression is MemberAccessExpressionSyntax { Name.Identifier.Text: "Invoke" } inva ? inva.Expression : inv.Expression;
             if (Model(callee).GetSymbolInfo(callee).Symbol is IEventSymbol raised)
                 return EventRaise(raised, callee, inv.ArgumentList, m, inv);
-            if (IsSimple(callee) && HoldsAroundCall(callee, m))
-                return HeldCall(Expr(callee, top: true), Model(callee).GetTypeInfo(callee).Type!, inv.ArgumentList.Arguments.Select(a => Argument(a, m)).ToList(), m, inv, skipNull: false);
+            if (IsSimple(callee) && (HoldsAroundCall(callee, m) || ArgumentsRunCode(inv.ArgumentList) && HoldsWhenShared(callee)))
+                return HeldCall(Expr(callee, top: true), Model(callee).GetTypeInfo(callee).Type!, inv.ArgumentList.Arguments, m, inv, skipNull: false);
             var d = Expr(callee);
             if (!IsSimple(callee))
             {
@@ -4439,6 +4442,7 @@ ADD2SET(es_aros_wbstart, PROGRAM_ENTRIES, -50)
     /// <summary>One call argument; ref/out/in parameters take the address of the argument.</summary>
     private string Argument(ArgumentSyntax a, IMethodSymbol m)
     {
+        if (_argOverride.TryGetValue(a, out var loaded)) return loaded;   // evaluated before the call (HeldArgumentCall)
         IParameterSymbol? param = null;
         if (a.NameColon != null)
             param = m.Parameters.FirstOrDefault(p => p.Name == a.NameColon.Name.Identifier.Text);

@@ -218,13 +218,48 @@ internal sealed partial class CEmitter
         var type = Model(fn).GetTypeInfo(fn).Type;
         if (type?.TypeKind == TypeKind.Delegate && IsSimple(fn))
         {
-            var d = Expr(fn);
+            var d = _linqSnap.TryGetValue(fn, out var snap) ? snap : Expr(fn);
             return $"{d}.fn({string.Join(", ", values.Prepend($"{d}.env"))})";
         }
         if (Model(fn).GetSymbolInfo(fn).Symbol is IMethodSymbol { IsStatic: true } group && Model(fn).GetTypeInfo(fn).ConvertedType?.TypeKind == TypeKind.Delegate)
             return $"{FuncName(group)}({string.Join(", ", values)})";
         return Unsupported(fn, "this kind of LINQ argument; use a lambda, a static method or a delegate variable");
     }
+
+    private readonly Dictionary<ExpressionSyntax, string> _linqSnap = new();
+
+    /// <summary>
+    /// Issue #175: a delegate variable that is a step, key or the function of a chain (<c>a.Where(d)</c>), and that += / -= or Heap.Free can
+    /// release (see <see cref="HoldsWhenShared"/>), is loaded once before the loop and held until it ends, as dotnet keeps the value it was
+    /// given: a += / -= or Heap.Free(ref d) made while the loop runs (by d itself, or by the body of a foreach over the chain) cannot free
+    /// what the loop calls, and the loop goes on calling that value. <paramref name="scoped"/>: the hold is dropped by a cleanup when the
+    /// enclosing block ends (a foreach body may leave by return or break); else the caller releases the returned temporaries.
+    /// </summary>
+    private List<string> LinqSnapshots(IEnumerable<ExpressionSyntax?> fns, bool scoped)
+    {
+        var held = new List<string>();
+        foreach (var f in fns)
+        {
+            if (f == null) continue;
+            var fn = Unparen(f);
+            if (_linqSnap.ContainsKey(fn) || Model(fn).GetTypeInfo(fn).Type is not { TypeKind: TypeKind.Delegate } dt || !IsSimple(fn) || !HoldsWhenShared(fn)) continue;
+            // Loaded before the loop, so before the source, the Take / Skip counts and the seed: only when none of what C# evaluates
+            // before d runs code. Else a variable that is only freed is read in the loop, as before (one with += / -= is refused then).
+            if (!LinqReadFirst(fn)) continue;
+            _usesClosures = true;
+            var t = $"_q{++_temp}";
+            Line($"{CType(dt, fn)} {t} = {Expr(fn, top: true)};");
+            if (scoped) Line($"void *{t}_h __attribute__((cleanup(es_frame_drop))) = {t}.env;");
+            Line(scoped ? $"es_frame_hold({t}_h);" : $"es_frame_hold({t}.env);");
+            _linqSnap[fn] = t;
+            held.Add(t);
+        }
+        return held;
+    }
+
+    private static IEnumerable<ExpressionSyntax?> StageFns(List<LinqStage> stages) =>
+        stages.SelectMany(st => st.Kind is StageKind.Where or StageKind.WhereNot or StageKind.Select ? new[] { st.Fn }
+            : st.Kind == StageKind.OrderBy && st.Keys != null ? st.Keys.Select(k => (ExpressionSyntax?)k.Fn) : Array.Empty<ExpressionSyntax?>());
 
     private static int FnParameterCount(ExpressionSyntax fn) => Unparen(fn) switch
     {
@@ -462,6 +497,7 @@ internal sealed partial class CEmitter
         Action<string, ITypeSymbol> sink;
         var pre = new List<string>();
         var extra = (string?)null;
+        ExpressionSyntax? aggregateFn = null;
 
         switch (m.Name)
         {
@@ -515,6 +551,7 @@ internal sealed partial class CEmitter
             case "Aggregate" when args.Count is 1 or 2:
             {
                 var fn = args[^1].Expression;
+                aggregateFn = fn;
                 var seeded = args.Count == 2;
                 if (seeded) init = $"{decl} = {Expr(args[0].Expression, top: true)};";
                 else pre.Add($"bool {H} = 0;");
@@ -546,9 +583,11 @@ internal sealed partial class CEmitter
 
         return AsStatementExpression(() =>
         {
+            var held = LinqSnapshots(StageFns(stages).Append(aggregateFn), scoped: false);
             Line(init);
             foreach (var p in pre) Line(p);
             EmitLoop(source, stages, sink);
+            foreach (var h in held) { Line($"es_frame_release({h}.env);"); _linqSnap.Remove(_linqSnap.First(kv => kv.Value == h).Key); }
         }, R);
     }
 
@@ -557,6 +596,9 @@ internal sealed partial class CEmitter
     {
         if (!ParseChain(fe.Expression, out var source, out var stages)) return;
         var local = (ILocalSymbol)Model(fe).GetDeclaredSymbol(fe)!;
+        var block = StageFns(stages).Any(f => f != null && Unparen(f) is var u && IsSimple(u) && Model(u).GetTypeInfo(u).Type?.TypeKind == TypeKind.Delegate && HoldsWhenShared(u) && LinqReadFirst(u));
+        if (block) { Line("{"); _indent++; }
+        var held = LinqSnapshots(StageFns(stages), scoped: true);
         EmitLoop(source, stages, (cur, _) =>
         {
             Line("{");
@@ -566,5 +608,7 @@ internal sealed partial class CEmitter
             _indent--;
             Line("}");
         });
+        foreach (var h in held) _linqSnap.Remove(_linqSnap.First(kv => kv.Value == h).Key);
+        if (block) { _indent--; Line("}"); }
     }
 }
