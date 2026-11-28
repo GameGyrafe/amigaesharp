@@ -592,7 +592,9 @@ internal sealed partial class CEmitter
 
     /// <summary>
     /// True when <paramref name="a"/> and <paramref name="b"/> are on different branches of the same <c>if</c>/<c>else</c>, <c>?:</c>,
-    /// switch statement or switch expression, so at most one of them runs (a loop around both is handled by the caller).
+    /// switch statement or switch expression, so at most one of them runs (a loop around both is handled by the caller). A condition,
+    /// a switch expression's pattern or when clause and a switch section's when guard (see <see cref="SectionsExclusive"/>) run before
+    /// the branches they pick from, so they are not a branch.
     /// </summary>
     private static bool OnOtherBranch(SyntaxNode a, SyntaxNode b)
     {
@@ -604,11 +606,28 @@ internal sealed partial class CEmitter
             IfStatementSyntax i => In(i.Statement, a) && In(i.Else, b) || In(i.Else, a) && In(i.Statement, b),
             ConditionalExpressionSyntax c => In(c.WhenTrue, a) && In(c.WhenFalse, b) || In(c.WhenFalse, a) && In(c.WhenTrue, b),
             SwitchStatementSyntax sw => sw.Sections.FirstOrDefault(x => In(x, a)) is { } sa && sw.Sections.FirstOrDefault(x => In(x, b)) is { } sb && sa != sb
-                && !sa.DescendantNodes().OfType<GotoStatementSyntax>().Any() && !sb.DescendantNodes().OfType<GotoStatementSyntax>().Any(),
+                && !sa.DescendantNodes().OfType<GotoStatementSyntax>().Any() && !sb.DescendantNodes().OfType<GotoStatementSyntax>().Any()
+                && SectionsExclusive(sw, sa, InLabels(sa, a), sb, InLabels(sb, b)),
             SwitchExpressionSyntax se => se.Arms.FirstOrDefault(x => In(x, a)) is { } ea && se.Arms.FirstOrDefault(x => In(x, b)) is { } eb && ea != eb
                 && !In(ea.WhenClause, a) && !In(eb.WhenClause, b) && !In(ea.Pattern, a) && !In(eb.Pattern, b),
             _ => false,
         };
+    }
+
+    private static bool InLabels(SwitchSectionSyntax s, SyntaxNode n) => s.Labels.Any(l => l.Span.Contains(n.Span));
+
+    /// <summary>
+    /// Issue #173: the bodies of two switch sections never both run, but a label's <c>when</c> guard runs before every later section
+    /// is matched (and before the default section, wherever it is written), and when it fails control goes on to them. So code in a
+    /// guard and code in another section are exclusive only when that other section is an earlier one without a default label (its
+    /// body ran instead of the guard), and two guards in different sections never are.
+    /// </summary>
+    private static bool SectionsExclusive(SwitchStatementSyntax sw, SwitchSectionSyntax sa, bool aInGuard, SwitchSectionSyntax sb, bool bInGuard)
+    {
+        if (!aInGuard && !bInGuard) return true;
+        if (aInGuard && bInGuard) return false;
+        var (guard, body) = aInGuard ? (sa, sb) : (sb, sa);
+        return sw.Sections.IndexOf(body) < sw.Sections.IndexOf(guard) && !body.Labels.Any(l => l is DefaultSwitchLabelSyntax);
     }
 
     private readonly HashSet<ISymbol> _unfreedWarned = new(SymbolEqualityComparer.Default);
@@ -1141,9 +1160,8 @@ internal sealed partial class CEmitter
                 return IsCompoundOn(a, d) && Pure(a.Right);
             // A call of d, d.Invoke(...) or d?.Invoke(...): a multicast value is called through the trampoline, which holds its own
             // reference to the list while the entries run, so a += / -= made by an entry cannot free the list under the call. The
-            // arguments must run no code, because C may load d before it evaluates them. Not covered (as before this check): a single
-            // closure is called as d.fn(d.env) with no reference held, so a -= that empties d from inside its own call (d -= d) frees
-            // the running closure; d += x inside the call is safe (the add retains the entries before it releases the old value).
+            // arguments must run no code, because C may load d before it evaluates them. A single closure is held around the call too
+            // (see HoldsAroundCall), so a -= that empties d from inside its own call (d -= d) frees it when the call returns (issue #174).
             case InvocationExpressionSyntax inv when inv.Expression == outer:
                 return inv.ArgumentList.Arguments.All(x => x.RefKindKeyword.IsKind(SyntaxKind.None) && Pure(x.Expression));
             case MemberAccessExpressionSyntax { Name.Identifier.Text: "Invoke", Parent: InvocationExpressionSyntax inv2 } m when m.Expression == outer && inv2.Expression == m:
@@ -1223,10 +1241,10 @@ internal sealed partial class CEmitter
     }
 
     /// <summary>
-    /// True when the value of the assignment is thrown away: an expression statement, a for initializer or incrementor, an object
-    /// initializer entry, or the expression body of a void method, accessor, local function or lambda.
+    /// True when the value of the assignment (or call) is thrown away: an expression statement, a for initializer or incrementor, an
+    /// object initializer entry, or the expression body of a void method, accessor, local function or lambda.
     /// </summary>
-    private bool ValueDiscarded(AssignmentExpressionSyntax x)
+    private bool ValueDiscarded(ExpressionSyntax x)
     {
         switch (x.Parent)
         {
@@ -1389,6 +1407,68 @@ internal sealed partial class CEmitter
         return (add, sub);
     }
 
+    /// <summary>
+    /// Issue #174: a call of a delegate variable that some <c>-=</c> or <c>Heap.Free(ref ...)</c> can empty (a local or parameter in its
+    /// own function, a field, static or auto-property anywhere in the program) holds the closure's frame (a single closure's environment,
+    /// or a multicast list) for the length of the call, so that code run by the call that removes or frees the running closure (d -= d,
+    /// Heap.Free(ref d), through another closure) only drops the variable's reference: the frame is freed when the call returns, and the
+    /// rest of the call reads live memory. As in dotnet, the call runs the value the variable had when it started (a multicast list is a
+    /// snapshot: its later entries still run). The variable owns every value it holds (the += / -= check, or every value new for one only
+    /// freed), so its environment is a heap frame or null, never a stack closure. A delegate type with a ref return is left as it was.
+    /// </summary>
+    private bool HoldsAroundCall(ExpressionSyntax callee, IMethodSymbol invoke)
+    {
+        if (invoke.ReturnsByRef || invoke.ReturnsByRefReadonly) return false;
+        var sym = Model(callee).GetSymbolInfo(callee).Symbol;
+        switch (sym)
+        {
+            case ILocalSymbol { RefKind: RefKind.None } or IParameterSymbol { RefKind: RefKind.None } or IFieldSymbol:
+                break;
+            case IPropertySymbol p when IsAutoProperty(p):
+                break;
+            default:
+                return false;
+        }
+        sym = sym.OriginalDefinition;
+        if (_holds.TryGetValue(sym, out var known)) return known;
+        return _holds[sym] = EmptiedSomewhere(sym);
+    }
+
+    private readonly Dictionary<ISymbol, bool> _holds = new(SymbolEqualityComparer.Default);
+
+    private bool EmptiedSomewhere(ISymbol d)
+    {
+        SyntaxNode? fn = null;
+        if (d is ILocalSymbol or IParameterSymbol) FrameScopeOf(d, out fn);
+        var nodes = fn != null ? fn.DescendantNodes() : _compilation.SyntaxTrees.SelectMany(t => t.GetRoot().DescendantNodes());
+        var freed = false;
+        foreach (var n in nodes)
+        {
+            if (n is AssignmentExpressionSyntax { RawKind: (int)SyntaxKind.SubtractAssignmentExpression } x
+                && SymbolEqualityComparer.Default.Equals(Model(x).GetSymbolInfo(x.Left).Symbol?.OriginalDefinition, d))
+                return true;   // the += / -= check makes the variable own every value it holds (else the program does not build)
+            if (n is ArgumentSyntax arg && IsHeapFreeArgument(arg)
+                && SymbolEqualityComparer.Default.Equals(Model(arg).GetSymbolInfo(Strip(arg.Expression)).Symbol?.OriginalDefinition, d))
+                freed = true;
+        }
+        return freed && !IsBorrowedParameter(d) && AllValuesFresh(d);
+    }
+
+    /// <summary>The call <c>value.fn(value.env, args)</c> with the frame held around it (see <see cref="HoldsAroundCall"/>); <paramref name="skipNull"/>: ?.Invoke, nothing when fn is null.</summary>
+    private string HeldCall(string value, ITypeSymbol type, IEnumerable<string> args, IMethodSymbol invoke, SyntaxNode at, bool skipNull)
+    {
+        _usesClosures = true;
+        var t = $"_d{++_temp}";
+        var call = $"{t}.fn({string.Join(", ", args.Prepend($"{t}.env"))})";
+        var head = $"{CType(type, at)} {t} = {value}; ";
+        if (skipNull) return $"({{ {head}if ({t}.fn != NULL) {{ es_frame_hold({t}.env); {call}; es_frame_release({t}.env); }} }})";
+        // A value nobody reads (c(); as a statement) takes the void form: a statement expression ending in an unused _r is
+        // -Wunused-value, an error under clang -Werror.
+        if (invoke.ReturnsVoid || at is ExpressionSyntax e && ValueDiscarded(e)) return $"({{ {head}es_frame_hold({t}.env); {call}; es_frame_release({t}.env); }})";
+        var r = $"_r{++_temp}";
+        return $"({{ {head}es_frame_hold({t}.env); {Decl(invoke.ReturnType, r, at)} = {call}; es_frame_release({t}.env); {r}; }})";
+    }
+
     /// <summary>Raising an event: every handler in order, on a snapshot of the count (handlers added meanwhile wait for the next raise; removals are deferred).</summary>
     private string EventRaise(IEventSymbol ev, ExpressionSyntax callee, ArgumentListSyntax args, IMethodSymbol invoke, SyntaxNode at)
     {
@@ -1419,6 +1499,8 @@ internal sealed partial class CEmitter
             return EventRaise(ev, ca.Expression, inv.ArgumentList, invoke, ca);
         if (!invoke.ReturnsVoid) return Unsupported(ca, "?.Invoke on a delegate that returns a value");
         var type = Model(ca.Expression).GetTypeInfo(ca.Expression).Type!;
+        if (IsSimple(ca.Expression) && HoldsAroundCall(ca.Expression, invoke))
+            return HeldCall(Expr(ca.Expression, top: true), type, inv.ArgumentList.Arguments.Select(a => Argument(a, invoke)).ToList(), invoke, ca, skipNull: true);
         var t = $"_d{++_temp}";
         var args = inv.ArgumentList.Arguments.Select(a => Argument(a, invoke)).Prepend($"{t}.env");
         return $"({{ {CType(type, ca)} {t} = {Expr(ca.Expression, top: true)}; if ({t}.fn != NULL) {t}.fn({string.Join(", ", args)}); }})";
@@ -1456,6 +1538,8 @@ internal sealed partial class CEmitter
             "    }",
             "}",
             "static __attribute__((unused)) void es_frame_drop(void *slot) { es_frame_release(*(void **)slot); }",
+            "/* A call of a delegate variable that -= or Heap.Free can empty holds the closure's frame while it runs (issue #174). */",
+            "static __attribute__((unused)) void es_frame_hold(void *p) { if (p != NULL) ((es_frame *)p)->rc++; }",
             "/* References held by closures (a stored lambda, or an event's copy of a delegate), for Heap.LiveClosures(). */",
             RuntimeState("int32_t es_closures_live;"),
             "static __attribute__((unused)) void *es_closure_retain(void *p)",

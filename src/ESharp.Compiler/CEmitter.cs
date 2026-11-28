@@ -4061,6 +4061,8 @@ ADD2SET(es_aros_wbstart, PROGRAM_ENTRIES, -50)
             var callee = inv.Expression is MemberAccessExpressionSyntax { Name.Identifier.Text: "Invoke" } inva ? inva.Expression : inv.Expression;
             if (Model(callee).GetSymbolInfo(callee).Symbol is IEventSymbol raised)
                 return EventRaise(raised, callee, inv.ArgumentList, m, inv);
+            if (IsSimple(callee) && HoldsAroundCall(callee, m))
+                return HeldCall(Expr(callee, top: true), Model(callee).GetTypeInfo(callee).Type!, inv.ArgumentList.Arguments.Select(a => Argument(a, m)).ToList(), m, inv, skipNull: false);
             var d = Expr(callee);
             if (!IsSimple(callee))
             {
