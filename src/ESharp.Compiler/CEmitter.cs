@@ -1332,6 +1332,25 @@ static __attribute__((unused)) int32_t MUI_DeleteCustomClass(void *mcc)
         }
     }
 
+    /// <summary>An argument of object.Equals / ReferenceEquals (or an override): ObjectEquals compares the values itself, nothing is boxed.</summary>
+    private bool IsObjectEqualsArgument(ExpressionSyntax e) =>
+        e.Parent is ArgumentSyntax { Parent: ArgumentListSyntax { Parent: InvocationExpressionSyntax inv } }
+        && Model(inv.SyntaxTree).GetSymbolInfo(inv).Symbol is IMethodSymbol m
+        && m.Name is "Equals" or "ReferenceEquals" && m.Parameters.All(p => p.Type.SpecialType == SpecialType.System_Object);
+
+    /// <summary>An operand of string concatenation or an interpolation hole: the emitter formats the value, nothing is boxed.</summary>
+    private static bool IsStringBuildingOperand(ExpressionSyntax e)
+    {
+        SyntaxNode? up = e.Parent;
+        while (up is ParenthesizedExpressionSyntax) up = up.Parent;
+        return IsStringBuildingParent(up);
+    }
+
+    private static bool IsStringBuildingParent(SyntaxNode? parent) =>
+        parent is InterpolationSyntax
+        || parent is BinaryExpressionSyntax { RawKind: (int)SyntaxKind.AddExpression }
+        || parent is AssignmentExpressionSyntax { RawKind: (int)SyntaxKind.AddAssignmentExpression };
+
     private string Unsupported(SyntaxNode node, string what)
     {
         _diagnostics.Add(Diagnostic.Create(Descriptors.Unsupported, node.GetLocation(), what));
@@ -1644,6 +1663,11 @@ static __attribute__((unused)) int32_t MUI_DeleteCustomClass(void *mcc)
             case SpecialType.System_Single: return "float";
             case SpecialType.System_Double: return "double";
             case SpecialType.System_String: return "const char *";
+            case SpecialType.System_Object:
+            case SpecialType.System_ValueType:
+            case SpecialType.System_Enum:
+                Unsupported(at, $"type '{t.ToDisplayString()}': E# has no object type and no boxing of value types; use the concrete type, a generic, or an interface");
+                return "int32_t";
         }
 
         switch (t)
@@ -3154,6 +3178,13 @@ ADD2SET(es_aros_wbstart, PROGRAM_ENTRIES, -50)
             return $"(({CType(info.ConvertedType!, e)}){{0}})";
 
         var text = ExprCore(e, top);
+
+        // A value converted to object, System.ValueType or System.Enum: boxing, which E# has no model for.
+        if (info.ConvertedType is { SpecialType: SpecialType.System_Object or SpecialType.System_ValueType or SpecialType.System_Enum }
+            && info.Type is { IsValueType: true }
+            && !(e is LiteralExpressionSyntax { RawKind: (int)SyntaxKind.NullLiteralExpression })
+            && !IsObjectEqualsArgument(e) && !IsStringBuildingOperand(e))
+            return Unsupported(e, $"converting '{info.Type.ToDisplayString()}' to '{info.ConvertedType.ToDisplayString()}' (boxing); E# has no object type");
 
         // A class converted to an interface it implements: pair the object with that class's function table.
         if (IsInterfaceType(info.ConvertedType) && info.Type != null && !IsInterfaceType(info.Type))
