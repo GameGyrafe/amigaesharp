@@ -297,7 +297,7 @@ A project with `EsOutputType` `AmigaLibrary` (issue #154; m68k AmigaOS 3.x, AROS
   and `[AtExit]` methods out of main's lists and writes `es_ol_<n>_make` (calloc, constant templates, `EmitDeferredStatics` for the
   library's statics only, the static constructors) and `es_ol_<n>_free` (`[AtExit]`, the opener's objects, the block), and the natives
   of the sdl `SharedLibrary`: `es_ol_open` (by name), `es_ol_slot`, `es_ol_close`, `es_ol_enter` and `es_ol_leave` (set
-  `es_ol_<n>_d` and `es_ol_heap` around a call). With `OpenerHeap` (no precompiled binaries) `es_new` gives every object a header that
+  `es_ol_<n>_d` and `es_ol_heap` around a call; Enter pushes the previous values on `es_ol_stack` and Leave pops them, so calls nest). With `OpenerHeap` (no precompiled binaries) `es_new` gives every object a header that
   links it into `es_ol_heap`'s list when a call is running, and `FreeName` is `es_ol_free`, which unlinks it.
 - **The CLI:** `src/ESharp.Cli/AmigaLibraryStep.cs` reads the csproj properties and finds the AmigaLibrary folders in a program's
   `esharp.include`. `Program.Build` builds a library project (`-nostartfiles -nostdlib ... -lgcc`, output `<name>.library`, plus the

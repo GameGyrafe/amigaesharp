@@ -132,16 +132,27 @@ the issue's plan named m68k, AROS and AmigaOS 4 only.
     properties and events of the library's types. The binding's struct carries a new attribute, `[LibraryBinding(name, types)]`
     (the types the binding already listed for the host); on sdl the compiler (`CEmitter.Openers.cs`) makes those statics members of
     `struct es_ol_<n>`, one per library, reached through a pointer that the binding's `SharedLibrary.Enter`/`Leave` set around each
-    call to the calling opener's block (and back to a zeroed "no opener" block after it). `Open` allocates the block, copies the
+    call to the calling opener's block (and, after it, back to what it was before: Enter pushes the library's previous opener and the running object list on a small stack of 256 levels and Leave pops them, so a call into one opener from inside another's call, as a callback from a library function into the program that calls a second opener does, puts the first opener's data back instead of the zeroed "no opener" block; issue #178, run with host gcc under the sanitizers: `On_sdl_Enter_and_Leave_nest_and_restore_the_previous_opener`, which fails without the stack). `Open` allocates the block, copies the
     constant start values in and runs the other static initializers and the static constructors of the library's types there (not at
     the start of the game); `Close` runs their `[AtExit]` methods with that opener's data (not at the end of the game) and frees every
     object the library's code made during that opener's calls (`es_new` links an object made during a call into its opener's list;
-    `Heap.Free` unlinks it), then the block. The open count, `FlushUnused` and `ExpungeWhenClosed` stay as they were. No global
-    "current opener" is kept between calls, so any number of openers can be alive at once; the game is one thread, and the demo's
+    `Heap.Free` unlinks it), then the block. The open count, `FlushUnused` and `ExpungeWhenClosed` stay as they were. No opener
+    stays current between calls (outside a call the pointer is the zeroed block), so any number of openers can be alive at once; the game is one thread, and the demo's
     second process is Amiga-only, so no threads were added. The platform's and the runtime's own state (text ring, closure counters)
     stay the game's, unlike in a `.library`. With precompiled package binaries linked into the game, an opener's objects are not
     freed at its `Close` (the binaries free objects with the C library's `free`), the data is still per opener: not run, only read
     through. The host is unchanged (statics swapped by reflection; the host never runs `[AtExit]` methods).
+  - **Review leftovers (issue #178):** the AmigaOS 4 manager's Close already ignored a close at open count 0 (`if (lib_OpenCnt > 0)`;
+    the field is unsigned, so a stray close could not show as -1); the host-gcc test of the generated OS4 C now makes two stray closes
+    after the matching ones and checks the count stays 0, then the expunge still works. The AROS library's comment about the data
+    block's 16-byte alignment did not match the AROS headers (`LIB_VECTSIZE` is a pointer, 8 on x86-64, 4 on i386, so a copy's base
+    is only pointer aligned inside the 16-aligned AllocMem block); the comment now says so, the data needs no more, and no code
+    changed. The generated m68k C of `samples/amigalib` and `samples/amigalibdemo` is identical to main's apart from `#line` paths
+    and the linked `amigalibdemo` and `amigalib.library` are byte-identical (so no emulator run was needed); the OS4 C is unchanged
+    (the VM was not run) and the AROS C differs by a comment only (hosted AROS was not re-run). `esharp test samples/amigalibdemo
+    --target sdl --docker esharp-sdl`: 32 ok, 0 FAIL, 4 skipped, host and SDL agree. `samples/filereq` on Kickstart 3.1 with the exact
+    line now in AGENTS.md: Cancel gives "result: cancelled" (2 ok), OK with `EXPECT=RAM:filereq-hello.txt` gives "picked
+    RAM:filereq-hello.txt" (2 ok). The sdl file dialog's new filter name was not seen on a desktop (not verified).
   - **AROS i386:** `--target aros-i386` now builds the `.library`, from the same C as AROS x86-64: the i386 SDK in the
     esharp-aros-i386 image has its own `AROS_LH` and `AROS_LC` macros, which pass the base in eax (regparm(1)) and the arguments on the
     stack, and the jump table holds 4-byte addresses. The only i386 differences in the C are the `#if` guard and the register for the
@@ -178,7 +189,7 @@ the issue's plan named m68k, AROS and AmigaOS 4 only.
 
 ## `object` and boxing refused with ES0099 (issue #172)
 
-- E# has no `object` type: `object k = 1;` and a type pattern on it gave C that gcc rejected (`unknown type name 'Es_System_Object'`). Now ES0099, before any C is emitted, for the type `object`, `System.ValueType` and `System.Enum` anywhere a C type is needed (locals, fields, statics, parameters, returns, arrays) and for a value type converted to one of them (boxing; also bool, char, enums, structs). Not refused: `object.Equals` / `ReferenceEquals` arguments, string concatenation and interpolation, `null`.
+- E# has no `object` type: `object k = 1;` and a type pattern on it gave C that gcc rejected (`unknown type name 'Es_System_Object'`). Now ES0099, before any C is emitted, for the type `object`, `System.ValueType` and `System.Enum` anywhere a C type is needed (locals, fields, statics, parameters, returns, arrays) and for a value type converted to one of them (boxing; also bool, char, enums, structs). Not refused: string concatenation and interpolation, `null`, and `object.Equals` / `ReferenceEquals` on class references (reference equality). `Equals` / `ReferenceEquals` with value-type arguments are refused by the `ObjectEquals` check with its own ES0099 message ("Equals on a struct or enum ..." or "... with a value that is not a class reference (boxing)"), not by the object-type message.
 - Boxing itself (a heap box with an owner, unboxing, `is`/`as`/type patterns on `object`) is not supported; deliberately refused instead of half-built.
 - Verified: `CEmitterTests.Object_and_boxing_are_refused_with_ES0099_never_invalid_C` (12 shapes, message checked); full `dotnet test` 988 passed, 2 skipped. The generated C of samples/language, objects and patterns (m68k, `--emit-only`) is byte-identical to main, so no emulator run was needed. Not verified: shapes that reach `object` only through library code, other than those in the test.
 
@@ -383,7 +394,7 @@ path or null (cancel, no asl.library, no desktop). How to use it: docs/GUIDE.md,
   offsets are in `Layout.g.cs` (`tools/BindGen/structs.txt`; the tag values are the same on every target).
 - **sdl.** `es_sdl_file_dialog` in `es_sdl.h`: `SDL_ShowFileDialogWithProperties` (open or save, no multiple selection, the title, the start
   folder and file, the game's window as parent). The callback only copies the path and sets a flag (it may run on another thread); the caller pumps events
-  and waits. `#?.png` and `#?.(png|jpg)` become the filter `png` / `png;jpg`, other patterns show all files. With the dummy or offscreen video driver
+  and waits. `#?.png` and `#?.(png|jpg)` become the filter `png` / `png;jpg`, named "Files (*.png)" / "Files (*.png, *.jpg)" (not the raw AmigaDOS pattern, issue #178; the name is not seen on a desktop here), other patterns show all files. With the dummy or offscreen video driver
   (headless runs) it returns null at once and prints the reason to standard error instead of waiting for a callback that never comes.
 - **Host.** `FileRequester.HostPick` is the scripted answer (null until set), with the arguments of the last call recorded.
 - **Sample** `samples/filereq`: writes `RAM:filereq-hello.txt` on the Amiga, prints SHOT, shows Open (Save with `SAVE`) starting in `RAM:`/`/tmp` with that name and the pattern `#?.txt`,

@@ -46,8 +46,20 @@ public class CEmitterTests
     {
         var r = Compile(Program(members, body));
         Assert.Contains("ES0099", ErrorIds(r));
-        Assert.Contains(r.Diagnostics, d => d.Id == "ES0099" && (d.GetMessage().Contains("no object type") || d.GetMessage().Contains("boxing")));
+        Assert.Contains(r.Diagnostics, d => d.Id == "ES0099" && d.GetMessage().Contains("E# has no object type"));   // the #172 message, not the struct-to-interface one
+        Assert.DoesNotContain(r.Diagnostics, d => d.GetMessage().Contains("a struct to an interface"));
         Assert.False(r.Success);
+    }
+
+    [Theory]
+    [InlineData("int a = 1, b = 2; bool e = object.Equals(a, b);")]
+    [InlineData("int a = 1; bool e = object.ReferenceEquals(a, a);")]
+    public void Equals_and_ReferenceEquals_with_value_type_arguments_are_refused(string body)
+    {
+        var r = Compile(Program("", body));
+        Assert.False(r.Success);
+        Assert.Contains(r.Diagnostics, d => d.Id == "ES0099");
+        Assert.Contains(r.Diagnostics, d => d.Id == "ES0099" && d.GetMessage().Contains("Equals on a struct or enum"));
     }
 
     [Fact]

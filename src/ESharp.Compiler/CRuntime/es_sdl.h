@@ -772,7 +772,7 @@ static void SDLCALL es_sdl_file_cb(void *user, const char *const *list, int filt
 static __attribute__((unused)) int32_t es_sdl_file_dialog(const char *title, const char *drawer, const char *file, const char *pattern,
                                                           bool save, uint8_t *path, int32_t capacity)
 {
-    char location[1100], extensions[256];
+    char location[1100], extensions[256], filter_name[320];
     SDL_DialogFileFilter filter;
     EsSdlFileResult r;
     int32_t n;
@@ -795,7 +795,19 @@ static __attribute__((unused)) int32_t es_sdl_file_dialog(const char *title, con
             else extensions[k++] = *e == '|' ? ';' : *e;
         extensions[k] = 0;
     }
-    filter.name = extensions[0] != 0 ? pattern : "All files";
+    /* A readable name for the filter: "Files (*.png, *.jpg)" for "png;jpg" (the raw AmigaDOS pattern means nothing to a user). */
+    if (extensions[0] != 0)
+    {
+        size_t k = (size_t)SDL_snprintf(filter_name, sizeof filter_name, "Files (*.");
+        for (const char *e = extensions; *e != 0 && k < sizeof filter_name - 4; e++)
+        {
+            if (*e == ';') k += (size_t)SDL_snprintf(filter_name + k, sizeof filter_name - k, ", *.");
+            else filter_name[k++] = *e;
+        }
+        filter_name[k] = 0;
+        SDL_strlcat(filter_name, ")", sizeof filter_name);
+    }
+    filter.name = extensions[0] != 0 ? filter_name : "All files";
     filter.pattern = extensions[0] != 0 ? extensions : "*";
     SDL_snprintf(location, sizeof location, "%s%s%s", drawer != NULL ? drawer : "",
         drawer != NULL && drawer[0] != 0 && drawer[strlen(drawer) - 1] != '/' && file != NULL && file[0] != 0 ? "/" : "", file != NULL ? file : "");

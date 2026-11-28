@@ -22,7 +22,8 @@ namespace ESharp.Compiler;
 /// <c>Heap.Free</c> unlinks it. Objects made outside a call are not in any list.</item>
 /// </list>
 /// The sdl program is one thread, so the one pointer per library is enough with any number of openers alive: every call sets it from
-/// its own opener. The runtime's own state (the text ring, the closure counters) stays the program's, as do the platform's statics.
+/// its own opener. Enter and Leave nest (a stack of the previous pointers and object list), so a call made from inside another opener's call
+/// puts that opener back at its Leave (issue #178). The runtime's own state (the text ring, the closure counters) stays the program's, as do the platform's statics.
 /// When the program links precompiled package binaries (whose objects are freed with the C library's free), objects are not given
 /// the header: the static data is still per opener, but an opener's objects are then not freed at its Close.
 /// </summary>
@@ -170,6 +171,7 @@ internal sealed partial class CEmitter
         foreach (var l in new[]
         {
             "/* SharedLibrary on sdl: an opener is the library's number, the SharedLibrary slot and its data. */",
+            "#define ES_OL_DEPTH 256   /* the deepest nesting of library calls */",
             "struct es_ol_opener { int32_t lib; int32_t slot; void *data; };",
             "static __attribute__((unused)) int es_ol_same(const char *a, const char *b) { while (*a != 0 && *a == *b) { a++; b++; } return *a == *b; }",
             "static __attribute__((unused)) void *es_ol_open(const char *name, int32_t slot)",
@@ -193,18 +195,29 @@ internal sealed partial class CEmitter
             $"    switch (o->lib) {{{Cases(l => $"{l.Struct}_free(o->data);")} default: break; }}",
             "    free(o);",
             "}",
+            "/* Enter and Leave nest: a library call can call another opener's function (directly or through a callback into the program), so Enter",
+            "   pushes the library's current opener and the running heap list, and Leave puts them back (not the \"no opener\" state). */",
+            "struct es_ol_saved { int32_t lib; void *d; void **heap; };",
+            "static struct es_ol_saved es_ol_stack[ES_OL_DEPTH];",
+            "static int es_ol_depth;",
             "static __attribute__((unused)) void es_ol_enter(void *p)",
             "{",
             "    struct es_ol_opener *o = (struct es_ol_opener *)p;",
             "    if (o == NULL) return;",
-            $"    switch (o->lib) {{{Cases(l => $"{l.Struct}_d = (struct {l.Struct} *)o->data; es_ol_heap = {(OpenerHeap ? $"&{l.Struct}_d->es_heap" : "NULL")};")} default: break; }}",
+            "    if (es_ol_depth >= ES_OL_DEPTH) { es_errstr(\"E# library calls nested too deeply\\n\"); es_fatal(); }",
+            "    struct es_ol_saved *s = &es_ol_stack[es_ol_depth++];",
+            "    s->lib = o->lib;",
+            "    s->heap = es_ol_heap;",
+            "    s->d = NULL;",
+            $"    switch (o->lib) {{{Cases(l => $"s->d = {l.Struct}_d; {l.Struct}_d = (struct {l.Struct} *)o->data; es_ol_heap = {(OpenerHeap ? $"&{l.Struct}_d->es_heap" : "NULL")};")} default: break; }}",
             "}",
             "static __attribute__((unused)) void es_ol_leave(void *p)",
             "{",
             "    struct es_ol_opener *o = (struct es_ol_opener *)p;",
-            "    if (o == NULL) return;",
-            $"    switch (o->lib) {{{Cases(l => $"{l.Struct}_d = &{l.Struct}_none;")} default: break; }}",
-            "    es_ol_heap = NULL;",
+            "    if (o == NULL || es_ol_depth <= 0) return;",
+            "    struct es_ol_saved *s = &es_ol_stack[--es_ol_depth];",
+            $"    switch (s->lib) {{{Cases(l => $"{l.Struct}_d = (struct {l.Struct} *)s->d;")} default: break; }}",
+            "    es_ol_heap = s->heap;",
             "}",
             "",
         }) Line(l);
