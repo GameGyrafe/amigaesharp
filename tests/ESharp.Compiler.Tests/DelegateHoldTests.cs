@@ -157,6 +157,37 @@ Check(Heap.LiveClosures() == base0, ""nothing leaks"");
         Assert.Contains("cleanup(es_frame_drop))) = _q", Fn(c, "P_Early("));
     }
 
+    private const string ReadOrderMembers = @"
+static int log;
+static int[] Arr = { 1, 2, 3 };
+static System.Func<int, bool> Pr2;
+static System.Func<int, int, int> Ag2;
+static System.Func<int, bool> MakeP(int k, int lim) { return x => { log = log * 10 + k; return x < lim; }; }
+static System.Func<int, int, int> MakeAg(int k) { return (a, x) => a * k + x; }
+static int N() { Heap.Free(ref Pr2); Pr2 = MakeP(3, 3); return 3; }
+static int Seed() { Heap.Free(ref Ag2); Ag2 = MakeAg(10); return 0; }
+";
+
+    /// <summary>
+    /// Review of #180: C# reads a LINQ delegate argument after the chain's source, the earlier steps' arguments and the Aggregate seed.
+    /// When one of those runs code that frees and replaces a variable that is only freed, the loop must call the new value, as dotnet
+    /// does, so the delegate is not loaded before the loop then (a variable with += / -= is refused instead, see Shapes_not_covered_stay_ES0099).
+    /// </summary>
+    [Fact]
+    public void A_LINQ_delegate_is_read_after_the_code_CSharp_runs_before_it()
+    {
+        const string body = @"
+int base0 = Heap.LiveClosures();
+Pr2 = MakeP(1, 2); log = 0; int n = Arr.Take(N()).Count(Pr2); Check(n == 2 && log == 333, ""Take(N()).Count(d): the predicate N() put in"");
+Heap.Free(ref Pr2); Pr2 = MakeP(1, 2); log = 0; int k = 0; foreach (var v in Arr.Take(N()).Where(Pr2)) k += v; Check(k == 3 && log == 333, ""foreach over Take(N()).Where(d)"");
+Ag2 = MakeAg(1); int s = Arr.Aggregate(Seed(), Ag2); Check(s == 123, ""Aggregate(Seed(), d): the function Seed() put in"");
+Heap.Free(ref Pr2); Heap.Free(ref Ag2);
+Check(Heap.LiveClosures() == base0, ""nothing leaks"");
+";
+        RunBoth(ReadOrderMembers, body, OkLines("Take(N()).Count(d): the predicate N() put in", "foreach over Take(N()).Where(d)",
+            "Aggregate(Seed(), d): the function Seed() put in", "nothing leaks"));
+    }
+
     private const string LinqMembers = Common + @"
 static System.Func<int, bool> Q;
 static System.Action Hook;
@@ -289,6 +320,9 @@ Heap.Free(ref d);
     [InlineData("static int N() { return 1; } static void Take(int k, [Owned] System.Action a) { Heap.Free(ref a); }", "Fld = A; Fld += B; Take(N(), Fld);")]
     [InlineData("", "Fld = A; Fld += B; if (Fld is { } e) e();")]
     [InlineData("static System.Func<int, bool> Q; static int N() { return 1; }", "Q = (int x) => x > 0; Q += (int x) => x > 1; int[] arr = { 1, 2 }; int n = arr.Take(N()).Count(Q);")]
+    // The Aggregate seed runs code before C# reads the function (review of #180).
+    [InlineData("static System.Func<int, int, int> Ag; static int Seed() { System.Func<int, int, int> y = (int a, int x) => a - x; Ag += y; Heap.Free(ref y); return 0; }",
+        "Ag = (int a, int x) => a + x; Ag += (int a, int x) => a * 2 + x; int[] arr = { 1, 2 }; int r = arr.Aggregate(Seed(), Ag);")]
     public void Shapes_not_covered_stay_ES0099(string members, string body)
     {
         var r = Compile("using System.Linq;\n" + Program(WithField + members, body));

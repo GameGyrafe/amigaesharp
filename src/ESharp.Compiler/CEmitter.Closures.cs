@@ -1219,11 +1219,12 @@ internal sealed partial class CEmitter
                 && Model(hcall).GetSymbolInfo(hcall).Symbol is IMethodSymbol hm && HeldArguments(hcall, hm) is { } held && held.Contains(hlist.Arguments.IndexOf(arg)):
                 return true;
             // A delegate argument of an inlined LINQ operator (a.Where(d), a.Count(d)): the loop loads d once and holds it until it ends
-            // (issue #175, LinqSnapshots). The source and the steps before this one must run no code, as C# evaluates them before d.
+            // (issue #175, LinqSnapshots). The source, the steps before this one and the call's own earlier arguments (the Aggregate
+            // seed) must run no code, as C# evaluates them before d and the loop loads d before any of them (LinqReadFirst).
             case ArgumentSyntax arg when arg.Expression == outer && arg.RefKindKeyword.IsKind(SyntaxKind.None) && IsSimple(outer)
-                && arg.Parent is ArgumentListSyntax { Parent: InvocationExpressionSyntax lcall } && IsLinqCall(lcall, out _, out var lrecv)
+                && arg.Parent is ArgumentListSyntax { Parent: InvocationExpressionSyntax lcall } && IsLinqCall(lcall, out _, out _)
                 && ParameterOf(arg)?.OriginalDefinition.Type.TypeKind == TypeKind.Delegate:
-                return lrecv != null && LinqLinksRunNoCode(lrecv);
+                return LinqReadFirst(outer);
             // A setter with a body takes a reference of its own in the same way, when the value of the assignment is thrown away.
             case AssignmentExpressionSyntax a when a.Right == outer && IsHandoverSite(outer, a):
                 return ValueDiscarded(a) && (a.Left is not MemberAccessExpressionSyntax target || Pure(target.Expression));
@@ -1265,6 +1266,23 @@ internal sealed partial class CEmitter
             default:
                 return false;
         }
+    }
+
+    /// <summary>
+    /// <paramref name="fn"/> is a by-value argument of a LINQ call, and nothing C# evaluates
+    /// before it runs code: the chain's source, the arguments of the steps before, and the call's earlier arguments (the Aggregate seed, or the source of Enumerable.Count(a, d)).
+    /// The loop of the chain loads a held delegate before all of them (LinqSnapshots), which then gives the value C# reads.
+    /// </summary>
+    private bool LinqReadFirst(ExpressionSyntax fn)
+    {
+        SyntaxNode node = fn;
+        while (node.Parent is ParenthesizedExpressionSyntax p) node = p;
+        if (node.Parent is not ArgumentSyntax arg || !arg.RefKindKeyword.IsKind(SyntaxKind.None)
+            || arg.Parent is not ArgumentListSyntax { Parent: InvocationExpressionSyntax call } list
+            || !IsLinqCall(call, out _, out var recv))
+            return false;
+        var index = list.Arguments.IndexOf(arg);
+        return list.Arguments.Take(index).All(x => x.RefKindKeyword.IsKind(SyntaxKind.None) && RunsNoCode(x.Expression)) && (recv == null || LinqLinksRunNoCode(recv));
     }
 
     /// <summary>The source of a LINQ chain and the arguments of its steps up to <paramref name="recv"/> run no code (Range included).</summary>

@@ -233,7 +233,7 @@ internal sealed partial class CEmitter
     /// release (see <see cref="HoldsWhenShared"/>), is loaded once before the loop and held until it ends, as dotnet keeps the value it was
     /// given: a += / -= or Heap.Free(ref d) made while the loop runs (by d itself, or by the body of a foreach over the chain) cannot free
     /// what the loop calls, and the loop goes on calling that value. <paramref name="scoped"/>: the hold is dropped by a cleanup when the
-    /// enclosing block ends (a foreach body may leave by return, break or goto); else the caller releases the returned temporaries.
+    /// enclosing block ends (a foreach body may leave by return or break); else the caller releases the returned temporaries.
     /// </summary>
     private List<string> LinqSnapshots(IEnumerable<ExpressionSyntax?> fns, bool scoped)
     {
@@ -243,6 +243,9 @@ internal sealed partial class CEmitter
             if (f == null) continue;
             var fn = Unparen(f);
             if (_linqSnap.ContainsKey(fn) || Model(fn).GetTypeInfo(fn).Type is not { TypeKind: TypeKind.Delegate } dt || !IsSimple(fn) || !HoldsWhenShared(fn)) continue;
+            // Loaded before the loop, so before the source, the Take / Skip counts and the seed: only when none of what C# evaluates
+            // before d runs code. Else a variable that is only freed is read in the loop, as before (one with += / -= is refused then).
+            if (!LinqReadFirst(fn)) continue;
             _usesClosures = true;
             var t = $"_q{++_temp}";
             Line($"{CType(dt, fn)} {t} = {Expr(fn, top: true)};");
@@ -593,7 +596,7 @@ internal sealed partial class CEmitter
     {
         if (!ParseChain(fe.Expression, out var source, out var stages)) return;
         var local = (ILocalSymbol)Model(fe).GetDeclaredSymbol(fe)!;
-        var block = StageFns(stages).Any(f => f != null && Unparen(f) is var u && IsSimple(u) && Model(u).GetTypeInfo(u).Type?.TypeKind == TypeKind.Delegate && HoldsWhenShared(u));
+        var block = StageFns(stages).Any(f => f != null && Unparen(f) is var u && IsSimple(u) && Model(u).GetTypeInfo(u).Type?.TypeKind == TypeKind.Delegate && HoldsWhenShared(u) && LinqReadFirst(u));
         if (block) { Line("{"); _indent++; }
         var held = LinqSnapshots(StageFns(stages), scoped: true);
         EmitLoop(source, stages, (cur, _) =>

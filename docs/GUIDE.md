@@ -511,8 +511,8 @@ attributes (`[EntryPoint]`, `[AmigaLib]`, `[ChipRam]`, ...) and a small intrinsi
   removed from a delegate or event (`g += d`, `E -= d`); freed with `Heap.Free(ref d)`; given to an `[Owned]` parameter or a setter
   with a body; given to a borrowed (not `[Owned]`) delegate parameter, `Fire(d)`, of a method, local function or delegate of the
   program (by value and by position, one argument per parameter, on a receiver that runs no code; for a delegate, the arguments
-  before `d` run no code either); given to an inlined LINQ operator (`arr.Count(d)`, `arr.Where(d)`, the source and the steps
-  before it running no code); or moved, `Action x = d;` directly followed by `d = null;` (the way to free an auto-property's list;
+  before `d` run no code either); given to an inlined LINQ operator (`arr.Count(d)`, `arr.Where(d)`, the source, the steps
+  before it and the call's earlier arguments, such as the `Aggregate` seed, running no code); or moved, `Action x = d;` directly followed by `d = null;` (the way to free an auto-property's list;
   each link of the path before `d` must be `this`, a local, a parameter or a field). Any other read, such as `e = d`, passing `d`
   to a constructor, an `in` parameter or a named argument, a property pattern `{ F: var e }` or an operator, makes every
   `+=`/`-=` on it ES0099, also when it comes after the last `+=` (the message names the read's line). In the shapes that run code
@@ -529,7 +529,8 @@ attributes (`[EntryPoint]`, `[AmigaLib]`, `[ChipRam]`, ...) and a small intrinsi
   or `Heap.Free` can change is held there until the call (or the loop) is done, and, as in dotnet, the value `d` had when it
   started runs (the rest of a multicast list still runs; an entry added meanwhile waits for the next call). Not covered, for a
   variable that is only `Heap.Free`d (with a `+=` or `-=` these shapes are ES0099): a constructor argument, an argument of a
-  call on a receiver that runs code, and the other shapes above outside the covered forms (there the closure is still freed
+  call on a receiver that runs code, a LINQ argument after code that runs (`arr.Take(N()).Count(d)`, `arr.Aggregate(Seed(), d)`:
+  `d` is read in the loop, after `N()` or `Seed()`, as dotnet reads it), and the other shapes above outside the covered forms (there the closure is still freed
   while it runs). A kept variable you add
   (`d += h`) keeps its own reference, so free it too. Given to an `[Owned]` parameter or a setter at its last use, `d` hands
   its whole list over, as a lambda local does. A use on another branch of the same `if`, `?:` or switch does not count, but a
