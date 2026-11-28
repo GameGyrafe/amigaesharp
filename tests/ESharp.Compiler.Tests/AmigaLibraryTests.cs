@@ -634,6 +634,10 @@ int main(void)
     printf(""dropped: interfaces %d pools %d\n"", shim_live_ifaces, shim_live_pools);
     ((APTR (*)(struct Interface *))mgr->v[5])(mgr);
     ((APTR (*)(struct Interface *))mgr->v[5])(mgr);
+    printf(""open count %d\n"", base->lib_OpenCnt);
+    ((APTR (*)(struct Interface *))mgr->v[5])(mgr);   /* a close without an open: ignored, the count stays 0 (it is unsigned: -1 would show as 65535) */
+    ((APTR (*)(struct Interface *))mgr->v[5])(mgr);
+    printf(""stray closes: open count %d\n"", base->lib_OpenCnt);
     APTR seg = ((APTR (*)(struct Interface *))mgr->v[6])(mgr);
     printf(""expunge %p, in the list %d, interfaces %d, pools %d, bad %d\n"", seg, list.ln_Succ != NULL, shim_live_ifaces, shim_live_pools, shim_bad);
     return 0;
@@ -647,6 +651,7 @@ int main(void)
         Assert.Equal("opens 2 clones 1 add 15 -15 12 made 49 49 pools 2\n" +
                      "small 1 no pool 1 interfaces 0 pools 0 bad 0\n" +
                      "dropped: interfaces 2 pools 0\n" +
+                     "open count 0\nstray closes: open count 0\n" +
                      "expunge 0x1234, in the list 0, interfaces 0, pools 0, bad 0\n", output);
     }
 
@@ -835,6 +840,71 @@ public static unsafe class P
             "count 2", "a add 15", "a add 16", "b add 12", "a boxed 2", "b boxed 1", "a table 12", "a table 22", "b table 12", "point 13",
             "a made 50", "b made 49", "a touch 4", "b touch 13", "a pokes 201", "b pokes 201", "b swap 50",
             "bye 4 201", "count 1", "b closed 0", "b add 13", "c add 10", "c made 49", "bye 3 0", "bye 13 50", "count 0", ""), output.Replace("\r\n", "\n"));
+    }
+
+    /// <summary>
+    /// Enter and Leave nest (issue #178): a call into one opener that calls into another (here the program, running inside a's call, calls
+    /// b's functions: what a callback from a library function does) must put a's data and a's object list back at b's Leave, not the
+    /// "no opener" state. Run with host gcc, under the sanitizers when there are: an object made after the inner Leave is a's, and
+    /// freed at a's Close, so a wrong list would leak it or free it twice.
+    /// </summary>
+    [Fact]
+    public void On_sdl_Enter_and_Leave_nest_and_restore_the_previous_opener()
+    {
+        var lib = CompileLibrary(Lib);
+        Assert.True(lib.Success, string.Join("\n", lib.Diagnostics));
+        const string program = @"using ESharp;
+using ESharp.Platform;
+using T;
+public static unsafe class P
+{
+    private static void Show(string what, int v) { Dos.PutStr(what); Dos.PutStr("" ""); Dos.PutInt(v); Dos.PutStr(""\n""); }
+
+    [EntryPoint]
+    public static int Main()
+    {
+        var a = TestLibrary.Open(3);
+        var b = TestLibrary.Open(3);
+        Point p;
+        p.X = 0;
+        p.Y = 0;
+        a.Move(&p, 1);
+        SharedLibrary.Enter(a.Base);
+        Show(""a made"", Counter.Made);
+        Box first = new Box();
+        first.V = 1;
+        b.Move(&p, 1);                 // nested: b's call inside a's
+        b.Move(&p, 1);
+        Show(""a made after b"", Counter.Made);
+        Box second = new Box();        // still a's list
+        second.V = 2;
+        SharedLibrary.Enter(b.Base);   // two levels, then back out one at a time
+        SharedLibrary.Enter(a.Base);
+        Show(""a inside"", Counter.Made);
+        SharedLibrary.Leave(a.Base);
+        Show(""b inside"", Counter.Made);
+        SharedLibrary.Leave(b.Base);
+        Show(""a again"", Counter.Made);
+        SharedLibrary.Leave(a.Base);
+        SharedLibrary.Enter(b.Base);
+        Show(""b made"", Counter.Made);
+        SharedLibrary.Leave(b.Base);
+        Show(""boxes"", first.V + second.V);
+        a.Close();                     // frees first and second
+        b.Close();
+        return 0;
+    }
+}";
+        var sdl = EsCompiler.Compile(new[] { new SourceFile("binding.cs", lib.AmigaLibrary!.Binding), new SourceFile("lib.cs", Lib), new SourceFile("p.cs", program) },
+            new CompileOptions { Defines = Targets.Sdl.Defines, TargetName = "sdl" });
+        Assert.True(sdl.Success, string.Join("\n", sdl.Diagnostics));
+        var c = sdl.C!.Replace("\r\n", "\n");
+        
+        Assert.Contains("es_ol_stack", c);
+        if (!HasGcc) return;
+        var (code, output) = HasSanitizers ? RunSanitized(c) : RunWithHostGcc(c);
+        Assert.True(code == 0, output);
+        Assert.Equal(string.Join("\n", "a made 8", "a made after b 8", "a inside 8", "b inside 9", "a again 8", "b made 9", "boxes 3", ""), output.Replace("\r\n", "\n"));
     }
 }
 

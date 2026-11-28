@@ -511,7 +511,9 @@ internal sealed partial class CEmitter
         foreach (var (b, _) in bases) Line($"__typeof__({b}) {b};   /* shared by every opener */");
         foreach (var l in new[]
         {
-            "/* The library base: exec's struct Library, then ours. An opener's copy has its data block after it (16-byte aligned). */",
+            "/* The library base: exec's struct Library, then ours. An opener's copy has its data block after it, at the head's size rounded up to 16.",
+            "   The block is aligned as the copy is: AllocMem gives AROS_WORSTALIGN (16) and the copy sits NegSize bytes in, a multiple of",
+            "   LIB_VECTSIZE (a pointer: 8 on x86-64, 4 on i386), so only pointer alignment is promised, which is all the data needs. */",
             "struct es_lib_head { struct Library lib; struct es_lib_head *master; BPTR seglist; IPTR size; };   /* size: an opener's allocation (lib_PosSize is a UWORD) */",
             "#define ES_LIB_HEAD_SIZE ((sizeof(struct es_lib_head) + 15) & ~(size_t)15)",
             "#define ES_LIB_DATA(b) ((void *)((char *)(b) + ES_LIB_HEAD_SIZE))",
