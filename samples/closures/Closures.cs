@@ -1,4 +1,5 @@
 using System;
+using System.Linq;
 using ESharp;
 using ESharp.Platform;
 
@@ -119,6 +120,15 @@ public static class Program
 
     static void Note(int digit) { log = log * 10 + digit; }
     static void Hit() { log = log * 10 + 9; }
+
+    // Issue #175: delegates with += whose list is used while code of the program changes them.
+    static Action? Hooks;
+    static Action<int>? Sink;
+    static Func<int, bool>? Odd;
+    static Action MakeNote(int d) => () => Note(d);
+    static void RunGrowing(Action a) { Hooks += MakeNote(3); a(); }
+    static int GrowSink() { Sink += v => Note(v + 1); return 5; }
+    static Action MoreHooks() { Hooks += MakeNote(6); return MakeNote(7); }
 
     [EntryPoint]
     public static void Main()
@@ -303,6 +313,38 @@ public static class Program
         Lookup.OnUse += () => used += 10;
         Check(l.Get() == 5 && used == 11, "a static array and a static delegate in a struct");
         Heap.Free(ref Lookup.OnUse);
+
+        // Issue #175: the list of a delegate with += / -= is held while code of the program runs next to it: given to a borrowed
+        // parameter, called with an argument that runs code, the target of a += whose operand runs code, and given to an inlined
+        // LINQ operator. As in dotnet, that code changing the variable does not change the list already taken.
+        Hooks = MakeNote(1);
+        Hooks += MakeNote(2);
+        log = 0;
+        RunGrowing(Hooks!);
+        Check(log == 12, "a delegate given to a borrowed parameter runs the list it was given while the callee adds to it");
+        log = 0;
+        Hooks!();
+        Check(log == 123, "the entry the callee added runs next time");
+        Sink = v => Note(v);
+        log = 0;
+        Sink!(GrowSink());
+        Check(log == 5, "an argument that adds to the delegate runs after the delegate is loaded");
+        log = 0;
+        Sink!(1);
+        Check(log == 12, "the added entry runs next time");
+        Heap.Free(ref Hooks);
+        Hooks = MakeNote(1);
+        Hooks += MoreHooks();
+        log = 0;
+        Hooks!();
+        Check(log == 17, "a += whose operand adds to the same delegate adds to the value it loaded, as in dotnet");
+        int[] nums = { 1, 2, 3, 4, 5 };
+        Odd = v => v > 100;
+        Odd += v => v % 2 == 1;
+        Check(nums.Count(Odd!) == 3 && Odd is { }, "a multicast predicate given to an inlined LINQ operator");
+        Heap.Free(ref Hooks);
+        Heap.Free(ref Sink);
+        Heap.Free(ref Odd);
 
         b.Dispose();
         Heap.Free(ref b);

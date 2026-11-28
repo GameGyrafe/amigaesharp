@@ -350,14 +350,8 @@ Check(Heap.LiveClosures() == base0, ""still nothing leaks"");
     }
 
     [Theory]
-    [InlineData("static void Use(System.Action a) { Fld += B; a(); }", "Fld = A; Fld += B; Use(Fld);")]
-    [InlineData("static void Use(System.Action a) { Fld -= B; a(); }", "Fld = A; Fld += B; Use(Fld);")]
+    // An in parameter is a reference to the variable, not a borrowed value: still a copy (issue #175 holds only by-value parameters).
     [InlineData("static void Use(in System.Action a) { Fld += B; a(); }", "Fld = A; Fld += B; Use(in Fld);")]
-    [InlineData("class H { public System.Action X; public void Run(System.Action a) { X += B; a(); } }", "var h = new H(); h.X = A; h.X += B; h.Run(h.X);")]
-    [InlineData("static void Use(System.Action a, System.Action g) { g(); a(); }", "System.Action d = A; d += B; Use(d, () => { d += B; });")]
-    // Passing the variable to a call is a copy now, also where no += can run inside the call (the earlier run tests).
-    [InlineData("static void Use(System.Action a) { a(); }", "System.Action d = A; Use(d); d += B; Use(d);")]
-    [InlineData("static void Use(System.Action a) { a(); }", "Fld2 = A; Fld2 += B; Use(Fld2); Fld2 += B; Use(Fld2);")]
     public void A_delegate_passed_to_a_call_is_ES0099(string members, string body)
     {
         var r = Compile(Program(CopyMembers + members, body));
@@ -366,15 +360,36 @@ Check(Heap.LiveClosures() == base0, ""still nothing leaks"");
 
     private const string ConversionMembers = "public class Bx { public static implicit operator int(Bx b) { Fld += B; return 1; } public static implicit operator System.Action(Bx b) { Fld += B; return A; } }";
 
+    /// <summary>
+    /// Issue #175: shapes #171 refused, now built with the list held (DelegateHoldTests has the behaviour tests): passing the variable to
+    /// a borrowed parameter, calling it with arguments that run code (also a user-defined conversion applied to an argument), and a
+    /// += / -= whose operand runs code. Each builds and runs clean under the sanitizers.
+    /// </summary>
     [Theory]
-    // A call of the variable whose arguments run code: C may load the variable before the arguments.
-    [InlineData("static System.Action<int> G; static int Grow() { G += (int x) => { }; return 1; }", "G = (int x) => { }; G += (int x) => { }; G(Grow());")]
-    // A += / -= whose operand runs code: C may load the old list before the operand.
-    [InlineData("static System.Action Make() { Fld += B; return A; }", "Fld = A; Fld += Make();")]
-    // A user-defined implicit conversion that the argument, operand or += applies runs code too.
-    [InlineData(ConversionMembers, "System.Action<int> F1 = (int x) => { }; F1 += (int x) => { }; Bx bx = new Bx(); F1(bx);")]
-    [InlineData(ConversionMembers, "System.Action<int, int> F2 = (int x, int y) => { }; F2 += (int x, int y) => { }; Bx bx = new Bx(); F2(3, bx);")]
-    [InlineData(ConversionMembers, "Fld = A; Fld += B; Bx bx = new Bx(); Fld += bx;")]
+    [InlineData("static void Use(System.Action a) { Fld += B; a(); }", "Fld = A; Fld += B; Use(Fld); Heap.Free(ref Fld);")]
+    [InlineData("static void Use(System.Action a) { Fld -= B; a(); }", "Fld = A; Fld += B; Use(Fld); Heap.Free(ref Fld);")]
+    [InlineData("class H { public System.Action X; public void Run(System.Action a) { X += B; a(); } }", "var h = new H(); h.X = A; h.X += B; h.Run(h.X); Heap.Free(ref h.X); Heap.Free(ref h);")]
+    [InlineData("static void Use(System.Action a, System.Action g) { g(); a(); }", "System.Action d = A; d += B; Use(d, () => { d += B; }); Heap.Free(ref d);")]
+    [InlineData("static void Use(System.Action a) { a(); }", "System.Action d = A; Use(d); d += B; Use(d); Heap.Free(ref d);")]
+    // The first += on the variable is in a lambda given to the same call (the copy check runs while that call is emitted).
+    [InlineData("static void Use(System.Action a, System.Action g) { g(); a(); }", "System.Action d = A; Use(d, () => { d += B; }); Heap.Free(ref d);")]
+    [InlineData("static void Use(System.Action a) { a(); }", "Fld2 = A; Fld2 += B; Use(Fld2); Fld2 += B; Use(Fld2); Heap.Free(ref Fld2);")]
+    [InlineData("static System.Action<int> G; static int Grow() { G += (int x) => { }; return 1; }", "G = (int x) => { }; G += (int x) => { }; G(Grow()); Heap.Free(ref G);")]
+    [InlineData("static System.Action Make() { Fld += B; return A; }", "Fld = A; Fld += Make(); Heap.Free(ref Fld);")]
+    [InlineData(ConversionMembers, "System.Action<int> F1 = (int x) => { }; F1 += (int x) => { }; Bx bx = new Bx(); F1(bx); Heap.Free(ref F1); Heap.Free(ref Fld); Heap.Free(ref bx);")]
+    [InlineData(ConversionMembers, "System.Action<int, int> F2 = (int x, int y) => { }; F2 += (int x, int y) => { }; Bx bx = new Bx(); F2(3, bx); Heap.Free(ref F2); Heap.Free(ref Fld); Heap.Free(ref bx);")]
+    [InlineData(ConversionMembers, "Fld = A; Fld += B; Bx bx = new Bx(); Fld += bx; Heap.Free(ref Fld); Heap.Free(ref bx);")]
+    public void Shapes_the_copy_check_refused_before_issue_175_build_and_run_clean(string members, string body)
+    {
+        var c = CompileOk(Program(CopyMembers + members + Check, "if (Fld == null) log = 0; " + body + " Check(Heap.LiveClosures() == 0, \"nothing leaks\");"));
+        if (!HasGcc) return;
+        var (code, output) = HasSanitizers ? RunSanitized(c) : RunWithHostGcc(c);
+        Assert.Equal("ok nothing leaks\n", output);
+        Assert.Equal(0, code);
+    }
+
+    [Theory]
+    // A read next to an operand that runs code where nothing loads and holds the list first (a delegate comparison).
     [InlineData(ConversionMembers, "System.Action d = A; d += B; Bx bx = new Bx(); bool same = bx == d; if (same) log = 1;")]
     public void A_read_next_to_an_argument_or_operand_that_runs_code_is_ES0099(string members, string body)
     {
@@ -2026,6 +2041,12 @@ internal static class ClosuresExpected
         "a field and an auto-property",
         "a Func gives the last result",
         "a static array and a static delegate in a struct",
+        "a delegate given to a borrowed parameter runs the list it was given while the callee adds to it",
+        "the entry the callee added runs next time",
+        "an argument that adds to the delegate runs after the delegate is loaded",
+        "the added entry runs next time",
+        "a += whose operand adds to the same delegate adds to the value it loaded, as in dotnet",
+        "a multicast predicate given to an inlined LINQ operator",
         "every stored closure was freed",
     };
 }

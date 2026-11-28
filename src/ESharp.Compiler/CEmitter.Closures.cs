@@ -1027,9 +1027,10 @@ internal sealed partial class CEmitter
         _usesMulticast = true;
         var dt = CType(del, a);
         var (add, sub) = MulticastHelpers(del, invoke, dt, a);
+        if (IsNullConstant(a.Right)) return "((void)0)";   // adding or removing null changes nothing
+        if (!RunsNoCode(a.Right)) return HeldCompound(a, dt, add, sub);
         var l = Expr(a.Left);
         string call;
-        if (IsNullConstant(a.Right)) return "((void)0)";   // adding or removing null changes nothing
         if (a.IsKind(SyntaxKind.SubtractAssignmentExpression)) call = $"{sub}({l}, {Expr(a.Right, top: true)})";
         else
         {
@@ -1041,6 +1042,29 @@ internal sealed partial class CEmitter
     }
 
     private bool _usesMulticast;
+
+    /// <summary>
+    /// Issue #175: <c>d += Make()</c> (or -=) whose operand runs code, in C#'s order: the place of d is taken once, its value is loaded and
+    /// held, then the operand runs, and the new value is the loaded one with the operand added (or removed), as in dotnet, where a += or
+    /// -= the operand makes on d is lost. The operand cannot free the loaded list (it is held), and whatever d holds by then (the loaded
+    /// value, or one the operand put there) gives up d's reference only after the new value is made, so an operand that reads d keeps it.
+    /// </summary>
+    private string HeldCompound(AssignmentExpressionSyntax a, string dt, string add, string sub)
+    {
+        var id = ++_temp;
+        string p = $"_cp{id}", o = $"_co{id}", v = $"_cv{id}", c = $"_cc{id}";
+        var place = Expr(a.Left, top: true);
+        string op;
+        var value = Expr(a.Right, top: true);
+        if (a.IsKind(SyntaxKind.SubtractAssignmentExpression)) op = $"{sub}({o}, {v})";
+        else
+        {
+            if (IsFreshDelegate(a.Right) is not bool fresh) return "0";
+            op = $"{add}({o}, {v}, {(fresh ? 1 : 0)})";
+        }
+        return $"({{ __typeof__(&({place})) {p} = &({place}); {dt} {o} = *{p}; es_frame_hold({o}.env); {dt} {v} = {value}; {dt} {c} = *{p}; "
+            + $"es_closure_retain({o}.env); *{p} = {op}; es_closure_release({c}.env); es_frame_release({o}.env); }})";
+    }
 
     private readonly Dictionary<ISymbol, bool> _ownsValues = new(SymbolEqualityComparer.Default);
 
@@ -1105,13 +1129,16 @@ internal sealed partial class CEmitter
             if (_impureSeen) { runsCode ??= u; continue; }
             return Where(u) + " in a way that may copy it: "
                 + "a copy shares the list's pointer, which += or -= releases, so using the copy afterwards would read freed memory. "
-                + $"A delegate variable that has += or -= may only be {(fn != null ? "" : "(anywhere in the program) ")}called (with arguments that run no code), compared, "
+                + $"A delegate variable that has += or -= may only be {(fn != null ? "" : "(anywhere in the program) ")}called, compared or tested for null, "
                 + "assigned, added to or removed from a delegate or event, freed with Heap.Free, given to an [Owned] parameter or a setter with a body, "
+                + "given to a borrowed delegate parameter of a method or delegate of the program (by value and by position, the receiver running no code), "
+                + "given to an inlined LINQ operator, "
                 + "or moved into a local by 'x = v;' directly followed by 'v = null;'; build the list in a variable that is only used that way";
         }
         if (runsCode != null)
             return Where(runsCode) + " next to an argument or operand that runs code (a call, a property with a body, a user-defined operator or conversion, an assignment): "
-                + $"C evaluates '{d.Name}' and that code in either order, so a += or -= the code makes could free the list '{d.Name}' was read as; "
+                + $"C evaluates '{d.Name}' and that code in either order, so a += or -= the code makes could free the list '{d.Name}' was read as "
+                + "(a call of it, a borrowed argument before the code, and the operand of a += / -= are held; this form is not); "
                 + "evaluate the argument or operand into a local first";
         return null;
     }
@@ -1152,30 +1179,30 @@ internal sealed partial class CEmitter
         switch (outer.Parent)
         {
             // A write: d = x, d ??= x (also a null test) and d += x / d -= x as the target, when the value of the assignment is thrown
-            // away (else that value is a copy). The compound itself releases the old list and builds the new one; its operand must run no
-            // code, because C evaluates the old pointer and the operand in either order (a call that does d += y in between would free it).
+            // away (else that value is a copy). The compound itself releases the old list and builds the new one; an operand that runs
+            // code (d += Make()) is evaluated after the old value is loaded and held (HeldCompound), so a += it makes cannot free that list.
             case AssignmentExpressionSyntax a when a.Left == outer:
                 if (!ValueDiscarded(a)) return false;
                 if (a.IsKind(SyntaxKind.SimpleAssignmentExpression) || a.IsKind(SyntaxKind.CoalesceAssignmentExpression)) return true;
-                return IsCompoundOn(a, d) && Pure(a.Right);
+                return IsCompoundOn(a, d);
             // A call of d, d.Invoke(...) or d?.Invoke(...): a multicast value is called through the trampoline, which holds its own
-            // reference to the list while the entries run, so a += / -= made by an entry cannot free the list under the call. The
-            // arguments must run no code, because C may load d before it evaluates them. A single closure is held around the call too
-            // (see HoldsAroundCall), so a -= that empties d from inside its own call (d -= d) frees it when the call returns (issue #174).
+            // reference to the list while the entries run, so a += / -= made by an entry cannot free the list under the call. A single
+            // closure is held around the call too (see HoldsAroundCall), so a -= that empties d from inside its own call (d -= d) frees it
+            // when the call returns (issue #174). Arguments that run code (by value, positional) are evaluated after d is loaded and held,
+            // into temporaries in order (HeldCall, issue #175), so a += / -= they make cannot free the list being called.
             case InvocationExpressionSyntax inv when inv.Expression == outer:
-                return inv.ArgumentList.Arguments.All(x => x.RefKindKeyword.IsKind(SyntaxKind.None) && Pure(x.Expression));
+                return CallArgumentsOk(inv.ArgumentList, outer);
             case MemberAccessExpressionSyntax { Name.Identifier.Text: "Invoke", Parent: InvocationExpressionSyntax inv2 } m when m.Expression == outer && inv2.Expression == m:
-                return inv2.ArgumentList.Arguments.All(x => x.RefKindKeyword.IsKind(SyntaxKind.None) && Pure(x.Expression));
+                return CallArgumentsOk(inv2.ArgumentList, outer);
             case ConditionalAccessExpressionSyntax { WhenNotNull: InvocationExpressionSyntax { Expression: MemberBindingExpressionSyntax { Name.Identifier.Text: "Invoke" } } inv3 } ca when ca.Expression == outer:
-                return inv3.ArgumentList.Arguments.All(x => x.RefKindKeyword.IsKind(SyntaxKind.None) && Pure(x.Expression));
+                return CallArgumentsOk(inv3.ArgumentList, outer);
             // A null test (d == null, d != null) or a delegate comparison (d == e, d != e): the built-in operator compares the pointer or
             // the entries while it runs and keeps nothing; the other operand must run no code, because C evaluates both in either order.
             case BinaryExpressionSyntax b when (b.IsKind(SyntaxKind.EqualsExpression) || b.IsKind(SyntaxKind.NotEqualsExpression))
                 && Model(b).GetSymbolInfo(b).Symbol is not IMethodSymbol { MethodKind: MethodKind.UserDefinedOperator }:
                 return IsNullConstant(b.Left == outer ? b.Right : b.Left) || Pure(b.Left == outer ? b.Right : b.Left);
-            case IsPatternExpressionSyntax ip when ip.Expression == outer
-                && (ip.Pattern is ConstantPatternSyntax cp && IsNullConstant(cp.Expression)
-                    || ip.Pattern is UnaryPatternSyntax { Pattern: ConstantPatternSyntax cp2 } up && up.OperatorToken.IsKind(SyntaxKind.NotKeyword) && IsNullConstant(cp2.Expression)):
+            // d is null, d is not null, d is { } and d is not { } (issue #175): a test of the pointer that keeps nothing.
+            case IsPatternExpressionSyntax ip when ip.Expression == outer && NullTestPattern(ip.Pattern, top: true):
                 return true;
             // Heap.Free(ref d) releases the list (a copy used after it is not checked, as for any delegate).
             case ArgumentSyntax arg when arg.Expression == outer && arg.RefKindKeyword.IsKind(SyntaxKind.RefKeyword) && IsHeapFreeArgument(arg):
@@ -1186,18 +1213,73 @@ internal sealed partial class CEmitter
                 return arg.Parent is ArgumentListSyntax { Parent: InvocationExpressionSyntax call } list
                     && list.Arguments.All(x => x == arg || x.RefKindKeyword.IsKind(SyntaxKind.None) && Pure(x.Expression))
                     && (call.Expression is not MemberAccessExpressionSyntax recv || Pure(recv.Expression));
+            // A borrowed (not [Owned]) delegate parameter of a call that holds the list until it returns (issue #175, HeldArguments): a
+            // borrowed parameter cannot be kept past the call (ES0012), so a += / -= on d inside the callee cannot free what it uses.
+            case ArgumentSyntax arg when arg.Expression == outer && arg.Parent is ArgumentListSyntax { Parent: InvocationExpressionSyntax hcall } hlist
+                && Model(hcall).GetSymbolInfo(hcall).Symbol is IMethodSymbol hm && HeldArguments(hcall, hm) is { } held && held.Contains(hlist.Arguments.IndexOf(arg)):
+                return true;
+            // A delegate argument of an inlined LINQ operator (a.Where(d), a.Count(d)): the loop loads d once and holds it until it ends
+            // (issue #175, LinqSnapshots). The source and the steps before this one must run no code, as C# evaluates them before d.
+            case ArgumentSyntax arg when arg.Expression == outer && arg.RefKindKeyword.IsKind(SyntaxKind.None) && IsSimple(outer)
+                && arg.Parent is ArgumentListSyntax { Parent: InvocationExpressionSyntax lcall } && IsLinqCall(lcall, out _, out var lrecv)
+                && ParameterOf(arg)?.OriginalDefinition.Type.TypeKind == TypeKind.Delegate:
+                return lrecv != null && LinqLinksRunNoCode(lrecv);
             // A setter with a body takes a reference of its own in the same way, when the value of the assignment is thrown away.
             case AssignmentExpressionSyntax a when a.Right == outer && IsHandoverSite(outer, a):
                 return ValueDiscarded(a) && (a.Left is not MemberAccessExpressionSyntax target || Pure(target.Expression));
             // The operand of a += / -= on a delegate variable or an event, d itself included (d += d, g -= d, E += d, d += (c ? d : x)):
             // the add and remove helpers take references of their own to the operand's entries while they run and keep no pointer to
-            // its list. The value must be thrown away and the operand must run no code (C evaluates it and the target in either order).
+            // its list. The value must be thrown away. An operand that runs code (d += (Ready() ? d : x)) is evaluated into a temporary
+            // before the add or remove (HeldCompound, and an event's add), and d is its value, read last: nothing runs between that read
+            // and the helper, which takes references of its own.
             default:
                 var node = ValueSite(outer, out var parent);
                 if (parent is AssignmentExpressionSyntax self && self.Right == node
                     && (self.IsKind(SyntaxKind.AddAssignmentExpression) || self.IsKind(SyntaxKind.SubtractAssignmentExpression)))
-                    return ValueDiscarded(self) && Pure(self.Right);
+                    return ValueDiscarded(self);
                 return IsMove(read, outer);
+        }
+    }
+
+    /// <summary>The arguments of a call of d: by value; when one runs code, positional too and d a name or a path (HeldCall's temporaries).</summary>
+    private bool CallArgumentsOk(ArgumentListSyntax list, ExpressionSyntax callee)
+    {
+        if (!list.Arguments.All(x => x.RefKindKeyword.IsKind(SyntaxKind.None))) return false;
+        if (list.Arguments.All(x => RunsNoCode(x.Expression))) return true;
+        return IsSimple(callee) && list.Arguments.All(x => x.NameColon == null);
+    }
+
+    /// <summary>d is null, not null, { } (no type, clauses or designation) and not { }, through parentheses.</summary>
+    private bool NullTestPattern(PatternSyntax p, bool top)
+    {
+        switch (p)
+        {
+            case ParenthesizedPatternSyntax pp:
+                return NullTestPattern(pp.Pattern, top);
+            case ConstantPatternSyntax cp:
+                return IsNullConstant(cp.Expression);
+            case RecursivePatternSyntax { Type: null, PositionalPatternClause: null, PropertyPatternClause.Subpatterns.Count: 0 } rp:
+                return rp.Designation is null or DiscardDesignationSyntax;
+            case UnaryPatternSyntax up when up.OperatorToken.IsKind(SyntaxKind.NotKeyword) && top:
+                return NullTestPattern(up.Pattern, top: false);
+            default:
+                return false;
+        }
+    }
+
+    /// <summary>The source of a LINQ chain and the arguments of its steps up to <paramref name="recv"/> run no code (Range included).</summary>
+    private bool LinqLinksRunNoCode(ExpressionSyntax recv)
+    {
+        for (var e = Strip(recv); ; )
+        {
+            if (e is InvocationExpressionSyntax li && IsLinqCall(li, out _, out var r))
+            {
+                if (!li.ArgumentList.Arguments.All(x => x.RefKindKeyword.IsKind(SyntaxKind.None) && RunsNoCode(x.Expression))) return false;
+                if (r == null) return true;
+                e = Strip(r);
+                continue;
+            }
+            return e is not QueryExpressionSyntax && RunsNoCode(e);
         }
     }
 
@@ -1416,10 +1498,25 @@ internal sealed partial class CEmitter
     /// snapshot: its later entries still run). The variable owns every value it holds (the += / -= check, or every value new for one only
     /// freed), so its environment is a heap frame or null, never a stack closure. A delegate type with a ref return is left as it was.
     /// </summary>
-    private bool HoldsAroundCall(ExpressionSyntax callee, IMethodSymbol invoke)
+    private bool HoldsAroundCall(ExpressionSyntax callee, IMethodSymbol invoke) =>
+        !invoke.ReturnsByRef && !invoke.ReturnsByRefReadonly && HoldInfo(callee) is { Emptied: true };
+
+    /// <summary>
+    /// Issue #175: a delegate variable whose list a += or -= can replace (and so release), or that -= or Heap.Free can empty, is held
+    /// wherever its value is used while code of the program runs: around a call that receives it as a borrowed argument (<c>Fire(d)</c>),
+    /// around a call of it whose arguments run code (<c>d(Get())</c>), around an inlined LINQ operator that calls it (<c>a.Where(d)</c>),
+    /// and around a += / -= on it whose operand runs code (<c>d += Make()</c>). The variable owns every value it holds (the += / -= check,
+    /// or every value new for one that is only freed), so its environment is a heap frame or null.
+    /// </summary>
+    private bool HoldsWhenShared(ExpressionSyntax e) =>
+        Model(e).GetTypeInfo(Strip(e)).Type is INamedTypeSymbol { TypeKind: TypeKind.Delegate, DelegateInvokeMethod: { ReturnsByRef: false, ReturnsByRefReadonly: false } }
+        && HoldInfo(e) is { Changed: true };
+
+    /// <summary>For a local or parameter (not ref), a field or an auto-property: Emptied (some -= or Heap.Free), Changed (that, or some +=).</summary>
+    private (bool Changed, bool Emptied)? HoldInfo(ExpressionSyntax e)
     {
-        if (invoke.ReturnsByRef || invoke.ReturnsByRefReadonly) return false;
-        var sym = Model(callee).GetSymbolInfo(callee).Symbol;
+        e = Strip(e);
+        var sym = Model(e).GetSymbolInfo(e).Symbol;
         switch (sym)
         {
             case ILocalSymbol { RefKind: RefKind.None } or IParameterSymbol { RefKind: RefKind.None } or IFieldSymbol:
@@ -1427,46 +1524,176 @@ internal sealed partial class CEmitter
             case IPropertySymbol p when IsAutoProperty(p):
                 break;
             default:
-                return false;
+                return null;
         }
         sym = sym.OriginalDefinition;
         if (_holds.TryGetValue(sym, out var known)) return known;
-        return _holds[sym] = EmptiedSomewhere(sym);
+        return _holds[sym] = ScanChanges(sym);
     }
 
-    private readonly Dictionary<ISymbol, bool> _holds = new(SymbolEqualityComparer.Default);
+    private readonly Dictionary<ISymbol, (bool Changed, bool Emptied)> _holds = new(SymbolEqualityComparer.Default);
 
-    private bool EmptiedSomewhere(ISymbol d)
+    private (bool Changed, bool Emptied) ScanChanges(ISymbol d)
     {
         SyntaxNode? fn = null;
         if (d is ILocalSymbol or IParameterSymbol) FrameScopeOf(d, out fn);
         var nodes = fn != null ? fn.DescendantNodes() : _compilation.SyntaxTrees.SelectMany(t => t.GetRoot().DescendantNodes());
-        var freed = false;
+        bool added = false, removed = false, freed = false;
         foreach (var n in nodes)
         {
-            if (n is AssignmentExpressionSyntax { RawKind: (int)SyntaxKind.SubtractAssignmentExpression } x
+            // The += / -= check makes the variable own every value it holds (else the program does not build).
+            if (n is AssignmentExpressionSyntax x && (x.IsKind(SyntaxKind.SubtractAssignmentExpression) || x.IsKind(SyntaxKind.AddAssignmentExpression))
                 && SymbolEqualityComparer.Default.Equals(Model(x).GetSymbolInfo(x.Left).Symbol?.OriginalDefinition, d))
-                return true;   // the += / -= check makes the variable own every value it holds (else the program does not build)
+            {
+                if (x.IsKind(SyntaxKind.SubtractAssignmentExpression)) removed = true; else added = true;
+            }
             if (n is ArgumentSyntax arg && IsHeapFreeArgument(arg)
                 && SymbolEqualityComparer.Default.Equals(Model(arg).GetSymbolInfo(Strip(arg.Expression)).Symbol?.OriginalDefinition, d))
                 freed = true;
         }
-        return freed && !IsBorrowedParameter(d) && AllValuesFresh(d);
+        var emptied = removed || freed && !IsBorrowedParameter(d) && AllValuesFresh(d);
+        return (emptied || added, emptied);
     }
 
-    /// <summary>The call <c>value.fn(value.env, args)</c> with the frame held around it (see <see cref="HoldsAroundCall"/>); <paramref name="skipNull"/>: ?.Invoke, nothing when fn is null.</summary>
-    private string HeldCall(string value, ITypeSymbol type, IEnumerable<string> args, IMethodSymbol invoke, SyntaxNode at, bool skipNull)
+    /// <summary>Pure without marking the read as refused for code next to it (for the checks that allow such code).</summary>
+    private bool RunsNoCode(ExpressionSyntax e)
+    {
+        var seen = _impureSeen;
+        var pure = Pure(e);
+        _impureSeen = seen;
+        return pure;
+    }
+
+    /// <summary>The arguments of a call of a delegate run code and can go into temporaries: no ref, out or in, no names.</summary>
+    private bool ArgumentsRunCode(ArgumentListSyntax list) =>
+        list.Arguments.Any(x => !RunsNoCode(x.Expression)) && list.Arguments.All(x => x.RefKindKeyword.IsKind(SyntaxKind.None) && x.NameColon == null);
+
+    /// <summary>
+    /// The call <c>value.fn(value.env, args)</c> with the frame held around it (see <see cref="HoldsAroundCall"/>); <paramref name="skipNull"/>:
+    /// ?.Invoke, nothing when fn is null. When an argument runs code (issue #175), the delegate is loaded and held first and the arguments
+    /// go into temporaries in order, as C# evaluates them (the delegate, then the arguments, which ?.Invoke skips on null), so a += / -= or
+    /// Heap.Free that an argument makes cannot free the list being called, and the call runs the value the variable had, as in dotnet.
+    /// </summary>
+    private string HeldCall(string value, ITypeSymbol type, SeparatedSyntaxList<ArgumentSyntax> arguments, IMethodSymbol invoke, SyntaxNode at, bool skipNull)
     {
         _usesClosures = true;
         var t = $"_d{++_temp}";
+        var temps = arguments.Count > 0 && ArgumentsRunCode((ArgumentListSyntax)arguments[0].Parent!);
+        var pre = new StringBuilder();
+        var args = new List<string>();
+        for (var i = 0; i < arguments.Count; i++)
+        {
+            var value1 = Argument(arguments[i], invoke);
+            if (!temps) { args.Add(value1); continue; }
+            var a = $"_a{++_temp}";
+            pre.Append($"{Decl(invoke.Parameters[i].Type, a, at)} = {value1}; ");
+            args.Add(a);
+        }
         var call = $"{t}.fn({string.Join(", ", args.Prepend($"{t}.env"))})";
         var head = $"{CType(type, at)} {t} = {value}; ";
-        if (skipNull) return $"({{ {head}if ({t}.fn != NULL) {{ es_frame_hold({t}.env); {call}; es_frame_release({t}.env); }} }})";
+        if (skipNull) return $"({{ {head}if ({t}.fn != NULL) {{ es_frame_hold({t}.env); {pre}{call}; es_frame_release({t}.env); }} }})";
         // A value nobody reads (c(); as a statement) takes the void form: a statement expression ending in an unused _r is
         // -Wunused-value, an error under clang -Werror.
-        if (invoke.ReturnsVoid || at is ExpressionSyntax e && ValueDiscarded(e)) return $"({{ {head}es_frame_hold({t}.env); {call}; es_frame_release({t}.env); }})";
+        if (invoke.ReturnsVoid || at is ExpressionSyntax e && ValueDiscarded(e)) return $"({{ {head}es_frame_hold({t}.env); {pre}{call}; es_frame_release({t}.env); }})";
         var r = $"_r{++_temp}";
-        return $"({{ {head}es_frame_hold({t}.env); {Decl(invoke.ReturnType, r, at)} = {call}; es_frame_release({t}.env); {r}; }})";
+        return $"({{ {head}es_frame_hold({t}.env); {pre}{Decl(invoke.ReturnType, r, at)} = {call}; es_frame_release({t}.env); {r}; }})";
+    }
+
+    private readonly HashSet<InvocationExpressionSyntax> _heldArgCalls = new();
+    private readonly Dictionary<ArgumentSyntax, string> _argOverride = new();
+
+    /// <summary>
+    /// Issue #175: the arguments of a call that are delegate variables held around it (see <see cref="HoldsWhenShared"/>) because they are
+    /// given to borrowed parameters (not [Owned], not ref, out or in, of a delegate type, not a type parameter): the callee may call its
+    /// parameter after a += / -= or Heap.Free on the variable (made by the callee or by code it runs) released the list it was given. A
+    /// borrowed parameter cannot be kept past the call (ES0012), so holding the list until the call returns is enough. Null when the call
+    /// has no such argument, or a shape this does not cover: then the arguments are emitted as before (a variable with += / -= is refused
+    /// there by the copy check). Covered: a method or local function of the program (not extern, not an extension), with every argument
+    /// by value, positional and one per parameter, and a receiver that runs no code; arguments before the last held one that run code go
+    /// into temporaries first, so everything is evaluated in C#'s order. A call of a delegate, with the callee and every argument before
+    /// the last held one running no code.
+    /// </summary>
+    private List<int>? HeldArguments(InvocationExpressionSyntax inv, IMethodSymbol m)
+    {
+        var args = inv.ArgumentList.Arguments;
+        List<int>? held = null;
+        for (var i = 0; i < args.Count && i < m.Parameters.Length; i++)
+        {
+            var a = args[i];
+            var p = m.Parameters[i];
+            if (a.NameColon != null || !a.RefKindKeyword.IsKind(SyntaxKind.None) || p.IsParams || p.RefKind != RefKind.None || IsHandoverParameter(p)
+                || p.OriginalDefinition.Type.TypeKind != TypeKind.Delegate)
+                continue;
+            var e = Strip(a.Expression);
+            if (!IsSimple(e) || !SymbolEqualityComparer.Default.Equals(Model(e).GetTypeInfo(e).Type, p.Type) || !HoldsWhenShared(e)) continue;
+            (held ??= new List<int>()).Add(i);
+        }
+        if (held == null) return null;
+        if (args.Count != m.Parameters.Length || m.Parameters.Any(p => p.IsParams) || m.ReturnsByRef || m.ReturnsByRefReadonly
+            || args.Any(x => x.NameColon != null || !x.RefKindKeyword.IsKind(SyntaxKind.None)))
+            return null;
+        var last = held.Max();
+        switch (m.MethodKind)
+        {
+            case MethodKind.Ordinary or MethodKind.LocalFunction:
+                if (m.IsExtern || !m.OriginalDefinition.Locations.Any(l => l.IsInSource) || HasAttribute(m, "NativeAttribute") || HasAttribute(m, "AmigaLibAttribute"))
+                    return null;
+                switch (inv.Expression)
+                {
+                    case IdentifierNameSyntax or GenericNameSyntax:
+                        return held;
+                    case MemberAccessExpressionSyntax { RawKind: (int)SyntaxKind.SimpleMemberAccessExpression } ma:
+                        var r = Strip(ma.Expression);
+                        return r is ThisExpressionSyntax or BaseExpressionSyntax || Model(r).GetSymbolInfo(r).Symbol is INamespaceOrTypeSymbol || RunsNoCode(r) ? held : null;
+                    default:
+                        return null;
+                }
+            case MethodKind.DelegateInvoke:
+                var callee = inv.Expression is MemberAccessExpressionSyntax { Name.Identifier.Text: "Invoke" } inva ? inva.Expression : inv.Expression;
+                if (!IsSimple(callee) || Model(callee).GetSymbolInfo(callee).Symbol is IEventSymbol || !RunsNoCode(callee)) return null;
+                return Enumerable.Range(0, last).All(i => held.Contains(i) || RunsNoCode(args[i].Expression)) ? held : null;
+            default:
+                return null;
+        }
+    }
+
+    /// <summary>The call with its held arguments (see <see cref="HeldArguments"/>) loaded into temporaries and held until it returns.</summary>
+    private string HeldArgumentCall(InvocationExpressionSyntax inv, IMethodSymbol m, List<int> held)
+    {
+        _usesClosures = true;
+        var args = inv.ArgumentList.Arguments;
+        var last = held.Max();
+        var temps = m.MethodKind != MethodKind.DelegateInvoke && Enumerable.Range(0, last).Any(i => !held.Contains(i) && !RunsNoCode(args[i].Expression));
+        var sb = new StringBuilder("({ ");
+        var holds = new List<string>();
+        for (var i = 0; i <= last; i++)
+        {
+            if (held.Contains(i))
+            {
+                var h = $"_ha{++_temp}";
+                sb.Append($"{CType(m.Parameters[i].Type, inv)} {h} = {Expr(Strip(args[i].Expression), top: true)}; es_frame_hold({h}.env); ");
+                _argOverride[args[i]] = h;
+                holds.Add(h);
+            }
+            else if (temps)
+            {
+                var t = $"_a{++_temp}";
+                sb.Append($"{Decl(m.Parameters[i].Type, t, inv)} = {Argument(args[i], m)}; ");
+                _argOverride[args[i]] = t;
+            }
+        }
+        string call;
+        _heldArgCalls.Add(inv);
+        try { call = Invocation(inv); }
+        finally
+        {
+            _heldArgCalls.Remove(inv);
+            foreach (var a in args) _argOverride.Remove(a);
+        }
+        var release = string.Concat(holds.Select(h => $"es_frame_release({h}.env); "));
+        if (m.ReturnsVoid || ValueDiscarded(inv)) return $"{sb}{call}; {release}}})";
+        var r = $"_r{++_temp}";
+        return $"{sb}{Decl(m.ReturnType, r, inv)} = {call}; {release}{r}; }})";
     }
 
     /// <summary>Raising an event: every handler in order, on a snapshot of the count (handlers added meanwhile wait for the next raise; removals are deferred).</summary>
@@ -1499,8 +1726,8 @@ internal sealed partial class CEmitter
             return EventRaise(ev, ca.Expression, inv.ArgumentList, invoke, ca);
         if (!invoke.ReturnsVoid) return Unsupported(ca, "?.Invoke on a delegate that returns a value");
         var type = Model(ca.Expression).GetTypeInfo(ca.Expression).Type!;
-        if (IsSimple(ca.Expression) && HoldsAroundCall(ca.Expression, invoke))
-            return HeldCall(Expr(ca.Expression, top: true), type, inv.ArgumentList.Arguments.Select(a => Argument(a, invoke)).ToList(), invoke, ca, skipNull: true);
+        if (IsSimple(ca.Expression) && (HoldsAroundCall(ca.Expression, invoke) || ArgumentsRunCode(inv.ArgumentList) && HoldsWhenShared(ca.Expression)))
+            return HeldCall(Expr(ca.Expression, top: true), type, inv.ArgumentList.Arguments, invoke, ca, skipNull: true);
         var t = $"_d{++_temp}";
         var args = inv.ArgumentList.Arguments.Select(a => Argument(a, invoke)).Prepend($"{t}.env");
         return $"({{ {CType(type, ca)} {t} = {Expr(ca.Expression, top: true)}; if ({t}.fn != NULL) {t}.fn({string.Join(", ", args)}); }})";
