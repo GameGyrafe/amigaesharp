@@ -534,7 +534,7 @@ attributes (`[EntryPoint]`, `[AmigaLib]`, `[ChipRam]`, ...) and a small intrinsi
 - Slow or opt-in: `long`/`ulong` (software 64-bit, rule ES0100 on the 68020), `float`/`double` (off by default, ES0003; `--allow-float`).
 
 **Not supported** (the analyzer or the emitter says so; the emitter reports `ES0099` and never miscompiles): exceptions, `async`,
-reflection, `dynamic`, a garbage collector, generic classes (ES0008; generic structs and methods work), records, `is`/`as` to an interface or struct type, inheritance from generic classes or
+reflection, `dynamic`, a garbage collector, the `object` type and boxing (`object k = 1;`, a boxed value converted to `object`, `System.ValueType` or `System.Enum`, `object` fields, parameters, returns and arrays: ES0099; use the concrete type, a generic or an interface), generic classes (ES0008; generic structs and methods work), records, `is`/`as` to an interface or struct type, inheritance from generic classes or
 from library classes that are not `[Extensible]`, `ToArray`/`ToList`, `foreach` over anything but arrays, spans and struct/class
 `GetEnumerator` types, delegates in struct fields. The exact list of emitter gaps is "Known limits of the emitter" in
 [STATUS.md](STATUS.md).

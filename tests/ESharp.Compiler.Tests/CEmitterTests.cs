@@ -29,6 +29,27 @@ public class CEmitterTests
         Assert.Contains("\"test.cs\"", c);
     }
 
+    [Theory]
+    [InlineData("", "object k = 1; int r = 0; switch (k) { case int i when i > 0: r = i; break; default: r = -1; break; }")]
+    [InlineData("", "object k = true; if (k is bool b) { }")]
+    [InlineData("", "object k = 'c'; if (k is char c) { }")]
+    [InlineData("enum E { A }", "object k = E.A; if (k is E) { }")]
+    [InlineData("struct S { public int V; }", "S s = default; object k = s; if (k is S) { }")]
+    [InlineData("static object F;", "F = 3;")]
+    [InlineData("static int G(object o) { return 0; }", "G(5);")]
+    [InlineData("static object H() { return 2; }", "H();")]
+    [InlineData("", "object[] a = new object[2];")]
+    [InlineData("", "int i = 3; System.ValueType v = i;")]
+    [InlineData("", "object k = 1; int j = (int)k;")]
+    [InlineData("class C { }", "object o = new C();")]
+    public void Object_and_boxing_are_refused_with_ES0099_never_invalid_C(string members, string body)
+    {
+        var r = Compile(Program(members, body));
+        Assert.Contains("ES0099", ErrorIds(r));
+        Assert.Contains(r.Diagnostics, d => d.Id == "ES0099" && (d.GetMessage().Contains("no object type") || d.GetMessage().Contains("boxing")));
+        Assert.False(r.Success);
+    }
+
     [Fact]
     public void Types_map_to_stdint()
     {
